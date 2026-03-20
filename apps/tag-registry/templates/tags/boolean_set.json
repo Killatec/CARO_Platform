@@ -1,0 +1,6 @@
+{
+  "template_type": "tag",
+  "template_name": "boolean_set",
+  "data_type": "bool",
+  "is_setpoint": true
+}

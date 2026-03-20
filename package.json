@@ -1,0 +1,35 @@
+{
+  "name": "caro-platform",
+  "version": "1.0.0",
+  "private": true,
+  "description": "CARO Platform - Industrial Automation System",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:tag-registry": "npm run dev --workspace=@caro/tag-registry",
+    "dev:server": "npm run dev --workspace=@caro/tag-registry-server",
+    "dev:client": "npm run dev --workspace=@caro/tag-registry-client"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@vitejs/plugin-react": "^4.7.0",
+    "autoprefixer": "^10.4.27",
+    "cors": "^2.8.6",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "postcss": "^8.5.8",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tailwindcss": "^4.2.1",
+    "vite": "^6.4.1",
+    "zustand": "^5.0.11"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.2.1",
+    "vitest": "^1.6.1"
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "template_type": "parameter",
+  "template_name": "analog_control",
+  "fields": {
+    "description": {
+      "field_type": "String",
+      "default": "RF_Param"
+    },
+    "eng_min": {
+      "field_type": "Numeric",
+      "default": 51
+    },
+    "eng_max": {
+      "field_type": "Numeric",
+      "default": 100
+    },
+    "Units": {
+      "field_type": "String",
+      "default": "V"
+    }
+  },
+  "children": [
+    {
+      "template_name": "numeric_set",
+      "asset_name": "setpoint",
+      "fields": {}
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "monitor"
+    },
+    {
+      "template_name": "boolean_set",
+      "asset_name": "interlock_enable"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "template_name": "param_sc_1773944649387",
+  "template_type": "parameter",
+  "fields": {},
+  "children": [
+    {
+      "template_name": "tag_sc_1773944649387",
+      "asset_name": "monitor",
+      "fields": {}
+    }
+  ]
+}

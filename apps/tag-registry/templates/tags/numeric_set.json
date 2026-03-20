@@ -1,0 +1,7 @@
+{
+  "template_type": "tag",
+  "template_name": "numeric_set",
+  "data_type": "f64",
+  "is_setpoint": true,
+  "fields": {}
+}

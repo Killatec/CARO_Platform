@@ -1,0 +1,30 @@
+{
+  "template_type": "module",
+  "template_name": "rf_power_module",
+  "fields": {
+    "description": {
+      "field_type": "String",
+      "default": "Rf1"
+    }
+  },
+  "children": [
+    {
+      "template_name": "analog_control",
+      "asset_name": "RF_Fwd",
+      "fields": {
+        "description": "Forward RF power channel",
+        "eng_min": 55
+      }
+    },
+    {
+      "template_name": "analog_control",
+      "asset_name": "RF_Ref",
+      "fields": {}
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "boolean_mon",
+      "fields": {}
+    }
+  ]
+}

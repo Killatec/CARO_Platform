@@ -1,0 +1,23 @@
+{
+  "template_type": "module",
+  "template_name": "Plant1_System_A",
+  "fields": {
+    "description": {
+      "field_type": "String",
+      "default": "Plant1_System_A stage"
+    },
+    "version": {
+      "field_type": "Numeric",
+      "default": 155
+    }
+  },
+  "children": [
+    {
+      "template_name": "rf_power_module",
+      "asset_name": "RFPowerModule",
+      "fields": {
+        "description": "Main RF power"
+      }
+    }
+  ]
+}

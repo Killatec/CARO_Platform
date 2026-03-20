@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c:*)",
+      "Bash(pip install:*)",
+      "Bash(node test-implementation.js:*)",
+      "Bash(wc:*)",
+      "Bash(node test-corrected.js:*)",
+      "Bash(npm install:*)",
+      "Bash(timeout 5 node:*)",
+      "Bash(curl:*)",
+      "Bash(python -m json.tool:*)",
+      "Bash(pkill:*)",
+      "Bash(kill:*)",
+      "Bash(find:*)",
+      "Bash(ls:*)",
+      "Bash(cd:*)",
+      "Bash(grep -r \"ConfirmDialog\\\\|ErrorBanner\\\\|LoadingSpinner\" c:/KillaTec/CARO_Platform/apps --include=*.jsx --include=*.js)",
+      "Bash(grep -r \"client/src\\\\|components/\\\\|pages/\" c:/KillaTec/CARO_Platform/apps/tag-registry/server --include=*.js)",
+      "Bash(npx playwright:*)",
+      "Bash(node -e \"const p = require\\(''./node_modules/@playwright/test/package.json''\\); console.log\\(p.version\\);\")",
+      "Bash(powershell -Command \":*)",
+      "Bash(node debug-dom.js)",
+      "Bash(node debug-select.js)",
+      "Bash(node debug-dom-structure.js)",
+      "Bash(node debug-validation-select.js)",
+      "Bash(npm run:*)",
+      "Bash(node debug-isvalid.js)",
+      "Bash(npm test:*)",
+      "Bash(powershell.exe -Command \"Get-ChildItem ''C:\\\\KillaTec\\\\CARO_Platform\\\\apps\\\\tag-registry\\\\shared'' | Select-Object Name, Length\")",
+      "Bash(powershell.exe -Command \"New-Item -ItemType Directory -Force -Path ''C:\\\\KillaTec\\\\CARO_Platform\\\\apps\\\\tag-registry\\\\shared\\\\__tests__'' | Out-Null; Write-Host ''done''\")",
+      "Bash(powershell.exe -Command \"cd ''C:\\\\KillaTec\\\\CARO_Platform\\\\apps\\\\tag-registry\\\\shared''; npm install 2>&1\")",
+      "Bash(powershell.exe -Command \"cd ''C:\\\\KillaTec\\\\CARO_Platform\\\\apps\\\\tag-registry\\\\shared''; npm test 2>&1\")",
+      "Bash(powershell.exe -Command \"\\(Get-Content ''C:\\\\KillaTec\\\\CARO_Platform\\\\apps\\\\tag-registry\\\\Docs\\\\spec_delta.md''\\).Count\")",
+      "Bash(npx vitest:*)"
+    ]
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "@caro/tag-registry-shared-tests",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "devDependencies": {
+    "vitest": "^1.6.0"
+  }
+}
