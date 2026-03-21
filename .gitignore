@@ -46,3 +46,5 @@ test-results/
 
 # Local env variants
 *.local
+
+apps/tag-registry/e2e/*.txt

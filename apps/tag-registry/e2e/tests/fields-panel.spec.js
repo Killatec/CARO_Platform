@@ -138,4 +138,25 @@ test.describe('Fields Panel', () => {
     // Input should now carry an orange class (dirty override)
     await expect(input).toHaveClass(/orange/);
   });
+
+  // ── Test 8 ─────────────────────────────────────────────────────────────────
+  test('Instance mode: editing asset name turns it orange', async () => {
+    await po.selectRoot(sName);
+    await po.clickSystemTreeNode('mon_channel');
+
+    const assetNameInput = po.fieldsPanel
+      .locator('tr')
+      .filter({ hasText: 'Asset Name' })
+      .locator('input');
+
+    // Initially the asset name is clean — should carry a gray class
+    await expect(assetNameInput).toHaveClass(/gray/);
+
+    // Rename the asset
+    await assetNameInput.clear();
+    await assetNameInput.fill('renamed_param');
+
+    // Input should now carry an orange class (dirty)
+    await expect(assetNameInput).toHaveClass(/orange/);
+  });
 });

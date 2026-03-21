@@ -318,6 +318,7 @@ export function FieldsPanel() {
                 fieldName="Asset Name"
                 value={assetName ?? ''}
                 isOverride={false}
+                isDirtyField={originalChild !== undefined && assetName !== originalChild.asset_name}
                 readOnly={false}
                 onChange={(value) => handleAssetNameChange(value)}
               />

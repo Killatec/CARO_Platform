@@ -71,8 +71,7 @@ test.describe('Save and Cancel', () => {
   });
 
   // ── Test 4 ─────────────────────────────────────────────────────────────────
-  // AppShell does not wire a `disabled` prop to the root dropdown when dirty — skip.
-  test.skip('root dropdown is disabled while dirty', async () => {
+  test('root dropdown is disabled while dirty', async () => {
     await po.expandTemplateFolder('tag');
     await po.clickTemplateLeaf(tName);
 

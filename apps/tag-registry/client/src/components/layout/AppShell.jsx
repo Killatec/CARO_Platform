@@ -115,13 +115,26 @@ export function AppShell({ children }) {
         {/* Root selector */}
         <div className="flex items-center gap-2 flex-shrink-0">
           <label className="text-sm">Root Template:</label>
-          <Dropdown
-            options={rootOptions}
-            value={selectedRoot || ''}
-            onChange={(e) => setSelectedRoot(e.target.value)}
-            placeholder="Select root..."
-            className="w-64"
-          />
+          {isDirty ? (
+            <div title="Save or discard changes before switching root">
+              <Dropdown
+                options={rootOptions}
+                value={selectedRoot || ''}
+                onChange={(e) => setSelectedRoot(e.target.value)}
+                placeholder="Select root..."
+                className="w-64"
+                disabled={true}
+              />
+            </div>
+          ) : (
+            <Dropdown
+              options={rootOptions}
+              value={selectedRoot || ''}
+              onChange={(e) => setSelectedRoot(e.target.value)}
+              placeholder="Select root..."
+              className="w-64"
+            />
+          )}
         </div>
 
         {/* Save / See what's changed / Cancel — only when dirty */}

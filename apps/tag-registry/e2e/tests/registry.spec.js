@@ -86,30 +86,25 @@ test.describe('Registry Page', () => {
 
   // ── Test 5 ─────────────────────────────────────────────────────────────────
   test('error banner shown when graph has validation errors', async ({ page }) => {
-    const brokenName = `mod_broken_${Date.now()}`;
-    created.push(brokenName);
+    // beforeEach ends on the Registry page — navigate back to Editor
+    await po.navigateToEditor();
 
-    // Create a structural template referencing a template that does not exist.
-    // This bypasses server validation by passing confirmed:true.
-    // (If the server rejects INVALID_REFERENCE, this test needs an alternative
-    //  setup: create the referenced template, then delete it before selectRoot.)
-    try {
-      await createStructuralTemplate(brokenName, 'module', [
-        { template_name: 'nonexistent_template_xyz', asset_name: 'broken_child', fields: {} },
-      ]);
-    } catch {
-      // Fallback: create a valid template then immediately break it by
-      // deleting its referenced child before navigating to registry.
-      // If this also fails, the test is skipped with a known limitation note.
-      test.skip(true, 'Server validates INVALID_REFERENCE — broken template cannot be created via API');
-      return;
-    }
+    // Click the parameter node in the system tree (asset_name: 'Chan1' under modMName)
+    await po.clickSystemTreeNode('Chan1');
 
-    await page.goto('/');
-    await po.selectRoot(brokenName);
+    // Append a dot to the asset name — dot is disallowed, triggers INVALID_ASSET_NAME
+    const assetNameInput = po.fieldsPanel.locator('tr').filter({ hasText: 'Asset Name' }).locator('input');
+    const currentValue = await assetNameInput.inputValue();
+    await assetNameInput.fill(currentValue + '.');
+
+    // Navigate to Registry (client-side — Zustand store preserved)
     await po.navigateToRegistry();
 
-    await expect(page.locator('body')).toContainText(/resolve errors/i);
+    // Error banner must be visible, table must be hidden
+    await expect(page.getByText('Resolve errors to view registry')).toBeVisible({ timeout: 5000 });
     await expect(page.locator('table')).not.toBeVisible();
+
+    // ValidationPanel must show the error code
+    await expect(po.validationPanel).toContainText('INVALID_ASSET_NAME');
   });
 });
