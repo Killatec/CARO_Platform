@@ -1,15 +1,23 @@
-/**
- * Registry service - Phase 2 placeholder
- *
- * Phase 2: This service will handle:
- * - Server-side tree resolution (needed for registry apply workflow)
- * - Registry persistence to PostgreSQL
- * - Diff computation between DB and proposed registry
- * - Atomic apply operations
- * - Revision history management
- *
- * Phase 1: No implementation. Registry calculation is client-side only.
- */
+import { query } from '@caro/db';
 
-// Phase 2: Server-side tree resolution will be needed here
-// export async function resolveServerSideTree(templateMap, rootName) { ... }
+/**
+ * Returns the latest active (non-retired) registry row for each tag_id.
+ * Uses DISTINCT ON to get the highest registry_rev per tag_id.
+ *
+ * @returns {Promise<Array<{tag_id, registry_rev, tag_path, data_type, is_setpoint, meta}>>}
+ */
+export async function getActiveRegistry() {
+  const result = await query(`
+    SELECT DISTINCT ON (tag_id)
+      tag_id,
+      registry_rev,
+      tag_path,
+      data_type,
+      is_setpoint,
+      meta
+    FROM tag_registry
+    WHERE retired = false
+    ORDER BY tag_id, registry_rev DESC
+  `);
+  return result.rows;
+}

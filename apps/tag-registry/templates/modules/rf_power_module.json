@@ -13,7 +13,7 @@
       "asset_name": "RF_Fwd",
       "fields": {
         "description": "Forward RF power channel",
-        "eng_min": 55
+        "eng_min": 56
       }
     },
     {

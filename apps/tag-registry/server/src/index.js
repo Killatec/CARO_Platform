@@ -2,6 +2,7 @@ import dotenv from 'dotenv';
 import os from 'os';
 import { createApp } from './app.js';
 import { initializeIndex } from './services/templateService.js';
+import { pool } from '@caro/db';
 
 // Load environment variables
 dotenv.config();
@@ -21,6 +22,15 @@ const PORT = process.env.PORT || 3001;
 // Initialize template index and start server
 async function start() {
   try {
+    // Verify database connectivity
+    try {
+      await pool.query('SELECT 1');
+      console.log('[db] Connected to PostgreSQL (caro_dev)');
+    } catch (err) {
+      console.error('[db] Failed to connect to PostgreSQL:', err.message);
+      process.exit(1);
+    }
+
     console.log('Initializing template index...');
     await initializeIndex();
 

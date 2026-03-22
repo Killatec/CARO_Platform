@@ -196,3 +196,32 @@ The API Spec should clarify: graph validation errors from
 batchSave are returned as VALIDATION_ERROR with the specific
 codes (INVALID_REFERENCE, CIRCULAR_REFERENCE) surfaced in the
 details array — not as top-level error codes.
+
+---
+
+## Phase 2 — Registry Diff Feature
+
+### 10. GET /api/v1/registry added; RegistryPage shows diff colors
+
+**Date:** 2026-03-22
+**Spec:** API Spec v1.13 — Phase 2 registry endpoint (not yet specified in detail)
+         Functional Spec v1.15 — Phase 2 registry diff/apply workflow
+
+**Delta:**
+- `GET /api/v1/registry` implemented: returns all non-retired rows using
+  `DISTINCT ON (tag_id) ORDER BY tag_id, registry_rev DESC`.
+- Client `diffRegistry(proposed, dbTags)` pure utility compares tag_path
+  keys; each row gets `diffStatus`: added / modified / unchanged / retired.
+  Sort order: added → modified → unchanged → retired.
+- `RegistryTable` accepts optional `rows` prop with `diffStatus`; colors:
+  added=bg-green-500/15, modified=bg-amber-500/15, retired=bg-red-500/15.
+- `RegistryTable` has a tag_id column (first), shows "new" for added rows.
+- meta column replaced with a "View" link that opens a Modal showing the
+  meta array as a structured level-by-level list (leaf to root).
+- `RegistryPage` shows a diff summary line (counts per status) and an amber
+  warning banner when the DB is unavailable (falls back to undiffed display).
+- A TODO placeholder comment marks where the "Apply to DB" button will go.
+
+**Action:** API Spec Phase 2 section should document the GET /api/v1/registry
+response shape: `{ ok: true, data: { tags: [...] } }` with the 6 columns
+returned (tag_id, registry_rev, tag_path, data_type, is_setpoint, meta).

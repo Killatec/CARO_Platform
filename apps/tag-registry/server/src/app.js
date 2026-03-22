@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import templatesRouter from './routes/templates.js';
+import registryRouter from './routes/registry.js';
 import { errorHandler } from './middleware/errorHandler.js';
 
 /**
@@ -16,8 +17,7 @@ export function createApp() {
   // Routes
   app.use('/api/v1/templates', templatesRouter);
 
-  // Phase 2: Registry routes will be added here
-  // app.use('/api/v1/registry', registryRouter);
+  app.use('/api/v1/registry', registryRouter);
 
   // Error handler (must be last)
   app.use(errorHandler);
