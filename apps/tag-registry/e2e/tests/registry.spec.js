@@ -52,13 +52,13 @@ test.describe('Registry Page', () => {
   // ── Test 2 ─────────────────────────────────────────────────────────────────
   test('shows registry table after root selection', async ({ page }) => {
     await expect(page.locator('table')).toBeVisible({ timeout: 15000 });
-    await expect(page.locator('body')).toContainText('root.Chan1.setpoint');
+    await expect(page.locator('body')).toContainText(`${modMName}.Chan1.setpoint`);
   });
 
   // ── Test 3 ─────────────────────────────────────────────────────────────────
-  test('tag_path column is present and contains root. prefix', async ({ page }) => {
-    // At least one cell should start with 'root.'
-    const cells = page.locator('td').filter({ hasText: /^root\./ });
+  test('tag_path column is present and prefixed with root template name', async ({ page }) => {
+    // At least one cell should start with the root template name
+    const cells = page.locator('td').filter({ hasText: new RegExp('^' + modMName + '\\.') });
     await expect(cells.first()).toBeVisible({ timeout: 15000 });
   });
 
@@ -68,7 +68,7 @@ test.describe('Registry Page', () => {
 
     // First click — ascending
     await header.click();
-    const cells = page.locator('td').filter({ hasText: /^root\./ });
+    const cells = page.locator('td').filter({ hasText: new RegExp('^' + modMName + '\\.') });
     const firstAsc = await cells.first().textContent();
 
     // Second click — descending

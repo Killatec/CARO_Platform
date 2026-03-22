@@ -41,14 +41,14 @@ describe('null / empty', () => {
 // ── Single tag path ───────────────────────────────────────────────────────────
 
 describe('single tag path', () => {
-  it('module → tag as "myTag" → tag_path "root.myTag"', () => {
+  it('module → tag as "myTag" → tag_path "M.myTag"', () => {
     const tag = makeTag('T');
     const mod = makeStruct('M', 'module', [{ template_name: 'T', asset_name: 'myTag', fields: {} }]);
     const map = { M: wrap(mod), T: wrap(tag) };
 
     const result = resolveRegistry(map, 'M');
     expect(result).toHaveLength(1);
-    expect(result[0].tag_path).toBe('root.myTag');
+    expect(result[0].tag_path).toBe('M.myTag');
   });
 
   it('data_type propagated from tag template', () => {
@@ -71,20 +71,20 @@ describe('single tag path', () => {
 // ── Root prefix ───────────────────────────────────────────────────────────────
 
 describe('root prefix', () => {
-  it('all returned tag_paths begin with "root."', () => {
+  it('all returned tag_paths begin with the root template name', () => {
     const tag = makeTag('T');
     const mod = makeStruct('M', 'module', [{ template_name: 'T', asset_name: 'ch', fields: {} }]);
     const map = { M: wrap(mod), T: wrap(tag) };
 
     const result = resolveRegistry(map, 'M');
-    result.forEach(entry => expect(entry.tag_path.startsWith('root.')).toBe(true));
+    result.forEach(entry => expect(entry.tag_path.startsWith('M.')).toBe(true));
   });
 });
 
 // ── Nested path ───────────────────────────────────────────────────────────────
 
 describe('nested path', () => {
-  it('M → P (as "chan") → T (as "setpoint") → "root.chan.setpoint"', () => {
+  it('M → P (as "chan") → T (as "setpoint") → "M.chan.setpoint"', () => {
     const tag = makeTag('T');
     const param = makeStruct('P', 'parameter', [{ template_name: 'T', asset_name: 'setpoint', fields: {} }]);
     const mod = makeStruct('M', 'module', [{ template_name: 'P', asset_name: 'chan', fields: {} }]);
@@ -92,7 +92,7 @@ describe('nested path', () => {
 
     const result = resolveRegistry(map, 'M');
     expect(result).toHaveLength(1);
-    expect(result[0].tag_path).toBe('root.chan.setpoint');
+    expect(result[0].tag_path).toBe('M.chan.setpoint');
   });
 });
 
@@ -163,8 +163,8 @@ describe('meta field resolution', () => {
 
 describe('tag path too long', () => {
   it('tag whose resolved path exceeds MAX_TAG_PATH_LENGTH is excluded', () => {
-    // 'root.' (5) + 96 'a' chars = 101 > 100
-    const longAssetName = 'a'.repeat(MAX_TAG_PATH_LENGTH - 4); // 96 chars → 'root.' + 96 = 101
+    // 'M.' (2) + 99 'a' chars = 101 > 100
+    const longAssetName = 'a'.repeat(MAX_TAG_PATH_LENGTH - 1); // 99 chars → 'M.' + 99 = 101
     const tag = makeTag('T');
     const mod = makeStruct('M', 'module', [
       { template_name: 'T', asset_name: longAssetName, fields: {} },

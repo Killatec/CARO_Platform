@@ -53,8 +53,8 @@ export function resolveRegistry(templateMap, rootName) {
 
     // If this is a tag, create the tag entry
     if (template.template_type === 'tag') {
-      // Build tag_path: "root." + asset path joined by dots
-      const tag_path = 'root.' + assetPath.join('.');
+      // Build tag_path: rootName + "." + asset path joined by dots
+      const tag_path = rootName + '.' + assetPath.join('.');
 
       // Check tag_path length
       if (tag_path.length > MAX_TAG_PATH_LENGTH) {
