@@ -246,3 +246,122 @@ returned (tag_id, registry_rev, tag_path, data_type, is_setpoint, meta).
 
 **Action:** API Spec should document POST /api/v1/registry/apply request/
 response shapes and error codes. applied_by field needs auth design.
+
+### 12. Registry diff — per-cell highlighting and changedFields/dbMeta
+
+**Date:** 2026-03-23
+**Spec:** Functional Spec v1.15 — Phase 2 registry diff display
+
+**Delta:**
+- Modified rows no longer get a full-row amber background. Instead,
+  `diffRegistry` returns `changedFields: string[]` on modified rows listing
+  which of tag_path/data_type/is_setpoint/meta changed. RegistryTable applies
+  `bg-amber-500/25` per-cell only to changed fields.
+- `diffRegistry` also returns `dbMeta` on modified rows (the db row's meta
+  array) so the meta View modal can show field-level diff highlighting
+  (changed=amber, added=green, removed=red strikethrough).
+- `diffRegistry` comparison uses a key-order-insensitive `deepEqual` so
+  JSONB key reordering from PostgreSQL does not produce false positives.
+- tag_id from the db row is copied onto unchanged/modified/retired rows.
+
+**Action:** Functional Spec Phase 2 diff section should document changedFields
+and dbMeta row properties, and the per-cell vs per-row highlight distinction.
+
+### 13. Save/See changes/Cancel bar hidden on non-Editor tabs
+
+**Date:** 2026-03-23
+**Spec:** Functional Spec v1.15 — § 16.1 (Global Top Bar)
+
+**Delta:**
+- The Save / See what's changed / Cancel button group in AppShell is now
+  conditionally rendered only when `activeTab === 'editor'`. Navigating to
+  Registry or History hides the bar even if the graph is dirty.
+- The root dropdown disabled-while-dirty tooltip and cursor-not-allowed style
+  remain active on all tabs.
+- "Update DB" button is disabled when the graph is dirty (isDirty=true),
+  with a tooltip: "Save or discard changes before updating the registry".
+
+**Action:** Functional Spec should clarify that the save bar is editor-only
+and that the Update DB button checks isDirty.
+
+### 14. History page added — registry revisions list
+
+**Date:** 2026-03-23
+**Spec:** Functional Spec v1.15 — Phase 2 (not yet specified)
+         API Spec v1.13 — Phase 2 (not yet specified)
+
+**Delta:**
+- `GET /api/v1/registry/revisions` — returns all rows from registry_revisions
+  ordered by registry_rev DESC. Response: `{ ok, data: { revisions: [...] } }`.
+- `GET /api/v1/registry/revisions/:rev` — returns all tag_registry rows for
+  that revision ordered by tag_path ASC. 404 if no rows. Response:
+  `{ ok, data: { tags: [...] } }` where each tag includes the `retired` field.
+- History page added as a third nav tab. Shows a revisions table (rev,
+  applied_by, applied_at, comment). Rows are not clickable in current build
+  (modal was added then removed per user request).
+
+**Action:** API Spec Phase 2 section should document both revision endpoints.
+Functional Spec should describe the History page layout.
+
+### 15. Shared utilities — formatDate, MetaModalBody
+
+**Date:** 2026-03-23
+**Spec:** Bootstrap v1.18 — shared utilities section (not yet present)
+
+**Delta:**
+- `client/src/utils/formatDate.js` exports `formatDateTime(v)` (dd-MMM-yyyy
+  HH:mm:ss) and `formatDate(v)` (dd-MMM-yyyy). Accepts Date, ISO string, or
+  PostgreSQL TIMESTAMPTZ. Returns '—' for null/undefined/invalid.
+- `client/src/components/shared/MetaModalBody.jsx` extracted from RegistryTable
+  into a shared component. Used by both RegistryTable and HistoryPage (future).
+  Accepts optional `dbMeta` prop for diff-mode field highlighting.
+
+**Action:** Bootstrap should list these as shared client utilities.
+
+### 16. Phase 2 Vitest unit tests added
+
+**Date:** 2026-03-23
+**Spec:** Test Spec v1.x — Phase 2 test coverage (not yet written)
+
+**Delta:**
+- `client/__tests__/diffRegistry.test.js` — 34 tests for diffRegistry(),
+  covering all classification cases, sort order, tag_id carry-over, and
+  deepEqual key-order insensitivity.
+- `client/__tests__/formatDate.test.js` — 22 tests for formatDateTime/
+  formatDate, including all 12 month abbreviations and zero-padding.
+- `server/__tests__/registryService.test.js` — 18 tests for getActiveRegistry,
+  getRevisions, and getRevisionTags with @caro/db fully mocked.
+- `server/__tests__/registry.test.js` — 19 HTTP route tests using createApp()
+  + node:http + built-in fetch; all service deps mocked with vi.mock.
+  Pattern: no supertest (not installed); uses Node 18+ global fetch.
+- applyRegistry() is not unit-tested (complex transaction logic; reserved for
+  E2E coverage).
+
+**Action:** Test Spec Phase 2 section should document these test files and the
+node:http + fetch pattern used for route tests.
+
+### 17. Phase 2 Playwright E2E tests added
+
+**Date:** 2026-03-23
+**Spec:** Test Spec v1.x — Phase 2 E2E coverage (not yet written)
+
+**Delta:**
+- `e2e/tests/registry-diff.spec.js` — 6 tests for diff display (added/unchanged/
+  modified/retired row colors, cell-level amber highlight, tag_id column "new" label).
+- `e2e/tests/registry-apply.spec.js` — 7 tests for the Update DB apply flow
+  (button enabled/disabled, modal open/close, Confirm gating on comment, successful
+  apply shows banner and resets diff, apply creates revision on History page).
+- `e2e/tests/history.spec.js` — 5 tests for the History page (sidebar nav,
+  column headers, DESC ordering, applied_at date format, comment column content).
+- `e2e/tests/meta-modal.spec.js` — 4 tests for the meta View modal (open, close,
+  diff legend and amber highlighting on modified rows, row switching replaces modal).
+- All Phase 2 API helpers (applyRegistryApi, fetchRevisions, getTemplate) are
+  defined inline per test file — api.js was not modified.
+- History navigation uses `page.getByRole('button', { name: /history/i })` inline
+  — pageObjects.js was not modified.
+- Tests use timestamp-based template names for isolation; DB rows from completed
+  tests are left in place (stale but harmless — unique tag_paths per run).
+
+**Action:** Test Spec Phase 2 section should document the four new spec files,
+the inline helper pattern, and the note that DB rows are not cleaned up after
+each test (append-only schema; stale rows do not interfere).
