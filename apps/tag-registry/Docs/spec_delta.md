@@ -225,3 +225,24 @@ details array — not as top-level error codes.
 **Action:** API Spec Phase 2 section should document the GET /api/v1/registry
 response shape: `{ ok: true, data: { tags: [...] } }` with the 6 columns
 returned (tag_id, registry_rev, tag_path, data_type, is_setpoint, meta).
+
+### 11. POST /api/v1/registry/apply implemented
+
+**Date:** 2026-03-22
+**Spec:** API Spec v1.13 — Phase 2 apply workflow (not yet specified)
+         Functional Spec v1.15 — Phase 2 registry apply workflow
+
+**Delta:**
+- `POST /api/v1/registry/apply` body: `{ rootName, comment }`.
+  Server loads the template graph via `loadRoot`, resolves server-side
+  via `resolveRegistry`, diffs against DB, writes inside a SERIALIZABLE
+  transaction. Returns `{ ok, registry_rev, added, modified, retired }` or
+  `{ ok, registry_rev: null, message: 'No changes to apply' }`.
+- applied_by is hardcoded to `'dev'` — auth is a Phase 2+ item.
+- RegistryPage "Update DB" button + confirmation modal with required comment
+  field, loading state, inline error display, and 4-second success banner.
+- After a successful apply, the client re-fetches the DB registry and
+  re-runs the diff automatically.
+
+**Action:** API Spec should document POST /api/v1/registry/apply request/
+response shapes and error codes. applied_by field needs auth design.

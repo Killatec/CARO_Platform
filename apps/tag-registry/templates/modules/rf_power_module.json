@@ -19,11 +19,20 @@
     {
       "template_name": "analog_control",
       "asset_name": "RF_Ref",
-      "fields": {}
+      "fields": {
+        "eng_min": 52
+      }
     },
     {
-      "template_name": "boolean_mon",
-      "asset_name": "boolean_mon",
+      "template_name": "analog_control",
+      "asset_name": "KLY_Fwd",
+      "fields": {
+        "eng_min": 50
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "numeric_mon",
       "fields": {}
     }
   ]

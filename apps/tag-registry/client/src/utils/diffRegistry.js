@@ -27,7 +27,7 @@ export function diffRegistry(proposed, dbTags) {
     if (!dbTag) {
       rows.push({ ...tag, diffStatus: 'added' });
     } else if (isModified(tag, dbTag)) {
-      rows.push({ ...tag, tag_id: dbTag.tag_id, diffStatus: 'modified', changedFields: getChangedFields(tag, dbTag) });
+      rows.push({ ...tag, tag_id: dbTag.tag_id, diffStatus: 'modified', changedFields: getChangedFields(tag, dbTag), dbMeta: dbTag.meta });
     } else {
       rows.push({ ...tag, tag_id: dbTag.tag_id, diffStatus: 'unchanged' });
     }

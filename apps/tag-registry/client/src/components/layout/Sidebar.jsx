@@ -10,7 +10,8 @@ export function Sidebar() {
 
   const navItems = [
     { id: 'editor', label: 'Editor', icon: '📝' },
-    { id: 'registry', label: 'Registry', icon: '📋' }
+    { id: 'registry', label: 'Registry', icon: '📋' },
+    { id: 'history', label: 'History', icon: '🕓' },
   ];
 
   return (

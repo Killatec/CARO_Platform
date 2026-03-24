@@ -18,11 +18,6 @@
       "fields": {
         "description": "Main RF power"
       }
-    },
-    {
-      "template_name": "boolean_set",
-      "asset_name": "boolean_set",
-      "fields": {}
     }
   ]
 }

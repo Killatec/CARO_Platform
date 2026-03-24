@@ -28,6 +28,7 @@ export function AppShell({ children }) {
 
   const openModal       = useUIStore(state => state.openModal);
   const setPendingBatch = useUIStore(state => state.setPendingBatch);
+  const activeTab       = useUIStore(state => state.activeTab);
 
   const [templates, setTemplates] = useState([]);
 
@@ -116,7 +117,7 @@ export function AppShell({ children }) {
         <div className="flex items-center gap-2 flex-shrink-0">
           <label className="text-sm">Root Template:</label>
           {isDirty ? (
-            <div title="Save or discard changes before switching root">
+            <div title="Save or discard changes before switching root" className="cursor-not-allowed">
               <Dropdown
                 options={rootOptions}
                 value={selectedRoot || ''}
@@ -137,8 +138,8 @@ export function AppShell({ children }) {
           )}
         </div>
 
-        {/* Save / See what's changed / Cancel — only when dirty */}
-        {isDirty && (
+        {/* Save / See what's changed / Cancel — only on Editor tab when dirty */}
+        {activeTab === 'editor' && isDirty && (
           <div className="flex items-center gap-2" data-testid="save-bar">
             <Button variant="primary" disabled={!isValid} onClick={handleSave} data-testid="save-button">
               Save

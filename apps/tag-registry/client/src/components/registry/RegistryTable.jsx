@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Table, TableHeader, TableBody, TableRow, TableHeaderCell, TableCell, Modal } from '@caro/ui/primitives';
 import { TagPathLabel } from '../shared/TagPathLabel.jsx';
+import { MetaModalBody } from '../shared/MetaModalBody.jsx';
 import { useRegistryStore } from '../../stores/useRegistryStore.js';
 
 const DIFF_ROW_CLASS = {
@@ -15,38 +16,6 @@ const MODIFIED_CELL_CLASS = 'bg-amber-500/25';
 const COL_BORDER = 'border-r border-black/30';       // vertical divider (all cols except last)
 const ROW_BORDER = 'border-b border-black/30';       // horizontal divider (all cells)
 const HDR_BORDER = 'border-t border-b border-black/30'; // header: top + bottom
-
-/**
- * Renders the meta array in the modal: one entry per level, leaf (index 0) to root (last).
- */
-function MetaModalBody({ meta }) {
-  if (!Array.isArray(meta) || meta.length === 0) {
-    return <p className="text-sm text-gray-500">No meta data.</p>;
-  }
-  return (
-    <ol className="space-y-4 list-none p-0">
-      {meta.map((entry, i) => (
-        <li key={i} className="border border-gray-200 rounded p-3">
-          <div className="text-sm font-semibold text-gray-700 mb-2">
-            Level {i} ({entry.type ?? '?'}): {entry.name ?? '—'}
-          </div>
-          {entry.fields && Object.keys(entry.fields).length > 0 ? (
-            <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
-              {Object.entries(entry.fields).map(([k, v]) => (
-                <React.Fragment key={k}>
-                  <dt className="text-gray-500 font-mono">{k}</dt>
-                  <dd className="text-gray-900 font-mono">{String(v)}</dd>
-                </React.Fragment>
-              ))}
-            </dl>
-          ) : (
-            <p className="text-sm text-gray-400 italic">No fields</p>
-          )}
-        </li>
-      ))}
-    </ol>
-  );
-}
 
 /**
  * RegistryTable - displays resolved tag registry.
@@ -132,7 +101,13 @@ export function RegistryTable({ rows }) {
                 </TableCell>
                 <TableCell className={`px-4 w-px whitespace-nowrap text-center ${ROW_BORDER} ${cellClass('meta')}`}>
                   <button
-                    onClick={() => setMetaModal({ tag_path: tag.tag_path, meta: tag.meta })}
+                    onClick={() => setMetaModal({
+                      tag_path: tag.tag_path,
+                      meta: tag.meta,
+                      dbMeta: tag.diffStatus === 'modified' && tag.changedFields?.includes('meta')
+                        ? tag.dbMeta
+                        : undefined,
+                    })}
                     className="text-blue-600 hover:underline text-sm"
                   >
                     View
@@ -150,7 +125,7 @@ export function RegistryTable({ rows }) {
         onClose={() => setMetaModal(null)}
         title={metaModal?.tag_path}
       >
-        <MetaModalBody meta={metaModal?.meta} />
+        <MetaModalBody meta={metaModal?.meta} dbMeta={metaModal?.dbMeta} />
         <div className="mt-4 flex justify-end">
           <button
             onClick={() => setMetaModal(null)}
