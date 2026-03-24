@@ -1,6 +1,6 @@
 # Tag Registry Admin Tool — Project Handoff
 
-**Last updated:** 2026-03-19
+**Last updated:** 2026-03-23
 **Monorepo root:** `C:\KillaTec\CARO_Platform`
 **App root:** `apps/tag-registry/`
 
@@ -17,8 +17,9 @@ single-page application for defining and managing industrial
 asset templates and generating tag registries for SCADA/HMI
 systems. It is part of the CARO_Platform monorepo.
 
-Phase 1 is complete. Phase 2 (PostgreSQL persistence, registry
-diff/apply, revision history) is not yet started.
+Phase 1 and Phase 2 are complete. Phase 2 added PostgreSQL
+persistence, registry diff/apply workflow, revision history,
+and a History page.
 
 ---
 
@@ -28,30 +29,40 @@ diff/apply, revision history) is not yet started.
 |---|---|
 | Frontend | React + Vite, Tailwind CSS v4, Zustand |
 | Backend | Node.js + Express |
+| Database | PostgreSQL (Phase 2) via @caro/db workspace package |
 | Language | JavaScript (no TypeScript) |
 | Package manager | npm workspaces |
-| Template storage | JSON files on disk (no database in Phase 1) |
+| Template storage | JSON files on disk |
 | Shared logic | apps/tag-registry/shared/ (pure functions, ESM) |
 
 ---
 
 ## 3. Monorepo structure
 
+```
 CARO_Platform/
-packages/
-ui/                          @caro/ui — generic primitives
-apps/
-tag-registry/
-Docs/                      all spec documents (here)
-shared/                    shared pure functions (client + server)
-server/                    Express API server (port 3001)
-client/                    React/Vite frontend (port 5173)
-e2e/                       Playwright E2E test suite
-templates/                 JSON template files on disk
+  packages/
+    ui/                          @caro/ui — generic primitives
+    db/                          @caro/db — shared PostgreSQL pool
+  db/
+    postgres/
+      migrations/                001, 002, 003
+      seeds/
+      scripts/
+  apps/
+    tag-registry/
+      Docs/                      all spec documents (here)
+      shared/                    shared pure functions (client + server)
+      server/                    Express API server (port 3001)
+      client/                    React/Vite frontend (port 5173)
+      e2e/                       Playwright E2E test suite
+      templates/                 JSON template files on disk
+```
 
 ---
 
 ## 4. How to run
+
 ```powershell
 # Terminal 1 — API server
 cd apps/tag-registry/server
@@ -75,10 +86,10 @@ All documents live in `apps/tag-registry/Docs/`.
 
 | Document | Version | Purpose |
 |---|---|---|
-| `tag_registry_spec_v1_15.md` | v1.15 | Functional specification — UI concepts, workflows, validation rules, data model |
-| `tag_registry_api_spec_v1_13.md` | v1.13 | REST API contract — all endpoints, request/response shapes, error codes |
-| `tag_registry_bootstrap_v1_18.md` | v1.18 | Implementation bootstrap — folder structure, component architecture, store behavior, seed data |
-| `tag_registry_test_spec_v1_0.md` | v1.0 | Test suite specification — E2E and unit test coverage, known gotchas, selector strategy |
+| `tag_registry_spec_v1_16.md` | v1.16 | Functional specification — UI concepts, workflows, validation rules, data model |
+| `tag_registry_api_spec_v1_14.md` | v1.14 | REST API contract — all endpoints, request/response shapes, error codes |
+| `tag_registry_bootstrap_v1_19.md` | v1.19 | Implementation bootstrap — folder structure, component architecture, store behavior, seed data |
+| `tag_registry_test_spec_v1_1.md` | v1.1 | Test suite specification — E2E and unit test coverage, known gotchas, selector strategy |
 | `spec_delta.md` | live | Pending updates to the above docs — read this to know what has diverged from the specs |
 | `HANDOFF.md` | live | This file |
 
@@ -91,14 +102,19 @@ All documents live in `apps/tag-registry/Docs/`.
 
 ## 6. Test suite summary
 
-321 total tests, 0 failures.
+480 total tests/runs, 0 failures.
 
 | Layer | Tool | Tests | Location |
 |---|---|---|---|
 | shared/ pure functions | Vitest | 112 | apps/tag-registry/shared/__tests__/ |
 | server/ templateService | Vitest | 42 | apps/tag-registry/server/__tests__/ |
+| server/ registryService | Vitest | 18 | apps/tag-registry/server/__tests__/ |
+| server/ registry routes | Vitest | 19 | apps/tag-registry/server/__tests__/ |
 | client/ useTemplateGraphStore | Vitest | 47 | apps/tag-registry/client/__tests__/ |
-| Full UI + API (3 browsers) | Playwright | 120 | apps/tag-registry/e2e/tests/ |
+| client/ diffRegistry | Vitest | 34 | apps/tag-registry/client/__tests__/ |
+| client/ formatDate | Vitest | 22 | apps/tag-registry/client/__tests__/ |
+| Phase 1 E2E (7 files, 3 browsers) | Playwright | 120 runs | apps/tag-registry/e2e/tests/ |
+| Phase 2 E2E (4 files, 3 browsers) | Playwright | 66 runs | apps/tag-registry/e2e/tests/ |
 
 Run all unit tests:
 ```powershell
@@ -109,7 +125,7 @@ cd apps/tag-registry/client  && npm test
 
 ---
 
-## 7. Current state and next steps
+## 7. Current state
 
 ### Completed (Phase 1)
 - Template CRUD (create, edit, delete via pending/Save flow)
@@ -117,29 +133,35 @@ cd apps/tag-registry/client  && npm test
 - Client-side cascade simulation and confirmation modal
 - Batch save with hash checking
 - Live client-side registry calculation
-- Full E2E test suite (Playwright, 3 browsers)
-- Full unit test suite (Vitest, shared + server + store)
-- Test specification document
+- Full Phase 1 E2E test suite (Playwright, 3 browsers, 40 tests)
+- Full Phase 1 unit test suite (Vitest, 201 tests)
 
-### Pending spec updates (see spec_delta.md)
-- Bootstrap v1.18 → v1.19 (nodemon config, collapse bug fix,
-  data-testid additions, htmlFor modal fixes, i32_array clarification,
-  batchSave mkdir gap, graph validation error shape)
-- Functional Spec v1.15 → v1.16 (EMPTY_BRANCH Phase 1 status,
-  root dropdown disabled-while-dirty not implemented)
+### Completed (Phase 2)
+- PostgreSQL integration via @caro/db package
+- Registry persistence — append-only tag_registry table
+- GET /api/v1/registry — active tags via DISTINCT ON subquery
+- POST /api/v1/registry/apply — SERIALIZABLE transaction
+- GET /api/v1/registry/revisions and /revisions/:rev
+- Client-side diffRegistry() with per-cell highlighting
+- RegistryPage — diff display, Update DB button, apply modal, success banner
+- HistoryPage — revision log table
+- formatDate utility (dd-MMM-yyyy HH:mm:ss)
+- MetaModalBody shared component with diff highlighting
+- Full Phase 2 E2E test suite (4 spec files, 22 tests × 3 browsers)
+- Full Phase 2 unit test suite (93 additional tests)
 
-### Not started (Phase 2)
-- PostgreSQL database integration
-- Registry persistence and diff/apply workflow
-- Revision history
+### Not started (Phase 3+)
+- Authentication (applied_by hardcoded to 'dev')
 - Stale conflict merging
+- Rename tracking (tag_id preserved across renames)
+- TypeScript migration
 
 ---
 
 ## 8. Known gotchas
 
 These are the non-obvious things that will burn you if you
-don't know them. Full details in tag_registry_test_spec_v1_0.md
+don't know them. Full details in tag_registry_test_spec_v1_1.md
 section 5.
 
 1. **nodemon must not watch templates/** — already fixed in
@@ -167,3 +189,10 @@ section 5.
 
 8. **batchSave does not mkdir -p** — subdirectories must exist
    before saving a new template of that type.
+
+9. **Phase 2 DB rows are not cleaned up after E2E tests** —
+   tag_registry and registry_revisions rows are append-only.
+   Stale rows from prior runs are harmless.
+
+10. **PGPASSWORD must be set in .env** — @caro/db pool.js
+    reads PG* vars; DATABASE_URL is not used anywhere.

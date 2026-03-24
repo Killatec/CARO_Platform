@@ -1,6 +1,6 @@
 # Tag Registry Admin Tool — Functional Specification
-**Draft v1.15** | Generated: 2026-03-17  
-Companion documents: [Bootstrap v1.18](tag_registry_bootstrap_v1_18.md) | [API Spec v1.13](tag_registry_api_spec_v1_13.md)
+**Draft v1.16** | Generated: 2026-03-23
+Companion documents: [Bootstrap v1.19](tag_registry_bootstrap_v1_19.md) | [API Spec v1.14](tag_registry_api_spec_v1_14.md)
 
 ---
 
@@ -16,7 +16,7 @@ Companion documents: [Bootstrap v1.18](tag_registry_bootstrap_v1_18.md) | [API S
 | root template | The template selected by the user as the starting point for tree resolution and registry generation. Any template type may serve as the root. |
 | template graph | The full set of templates reachable from the selected root, held in client memory after a load-root fetch. Used for local cascade simulation and validation. |
 | template hash | A short content hash (SHA-1 of canonical JSON) assigned to each template by the server. Used to detect staleness at batch save time. |
-| tag_path | The canonical runtime address of a tag. Always begins with the literal prefix `root.` followed by the dot-joined chain of `asset_name`s down to the tag leaf. Example: `root.RFPowerModule.ForwardPower.setpoint` |
+| tag_path | The canonical runtime address of a tag. Always begins with the root template's `template_name` (used as its asset_name) followed by a dot, then the dot-joined chain of `asset_name`s down to the tag leaf. Example: `Plant1_System_A.RFPowerModule.ForwardPower.setpoint` |
 | tag_id | A stable numeric identifier assigned to a tag at its first registry generation. Stored only in the database. |
 | registry generation | The process of resolving the selected root template hierarchy into a flat tag list and writing the result to the database. |
 | retired tag | A tag that exists in the database but whose tag_path is no longer present in the resolved hierarchy. |
@@ -204,11 +204,13 @@ See Bootstrap document section 7 for full seed template file specifications.
 
 ### 9.1 tag_path Construction
 
-The `tag_path` is the canonical runtime address of a tag. It always begins with the literal string `root` followed by a dot, then the dot-joined chain of `asset_name`s from the root template's immediate children down to and including the tag's own `asset_name`. The root template itself does not contribute a segment. Template names never appear in a `tag_path`.
+The `tag_path` is the canonical runtime address of a tag. The first segment is the root template's `template_name`, which serves as its own asset_name since the root is not an instance of any parent. This makes the tag_path fully self-describing — any tool reading the database can identify the root template from the first segment without consulting metadata.
 
-Example: `root.RFPowerModule.ForwardPower.setpoint`
+Subsequent segments are the dot-joined chain of `asset_name`s from the root template's immediate children down to and including the tag's own `asset_name`. Template names never appear in a `tag_path` beyond the root prefix.
 
-Dots are not permitted in any `asset_name`. The maximum permitted length of a `tag_path` is configurable via `MAX_TAG_PATH_LENGTH`.
+Example: `Plant1_System_A.RFPowerModule.ForwardPower.setpoint`
+
+Dots are not permitted in any `asset_name` OR `template_name`. `template_name` must not contain a dot character. The maximum permitted length of a `tag_path` is configurable via `MAX_TAG_PATH_LENGTH`.
 
 ### 9.2 tag_id — Stable Numeric Registry Address
 
@@ -239,6 +241,7 @@ Failures block the operation and display a detailed error report in the Validati
 - All template names must be globally unique across the entire `templates/` folder.
 - All `asset_name` values must be non-empty and must not contain a dot (`.`) character.
 - No duplicate `asset_name` values among siblings within the same parent template.
+- `template_name` must not contain a dot (`.`) character. Error code: `INVALID_TEMPLATE_NAME`.
 
 ### 10.3 Reference Rules
 
@@ -267,7 +270,7 @@ Controlled by server environment variables `VALIDATE_REQUIRED_PARENT_TYPES` and 
 ### 10.8 Tool Warnings (Non-Blocking)
 
 - `TYPE_FOLDER_MISMATCH` — template_type does not match subfolder.
-- `EMPTY_BRANCH` — structural template in the root hierarchy contains no tag descendants.
+- `EMPTY_BRANCH` — structural template in the root hierarchy contains no tag descendants. **Note:** `EMPTY_BRANCH` is declared in `shared/constants.js` but is not yet implemented in Phase 1 validation. It is not emitted by `validateGraph`, `validateTemplate`, or `useValidation`. Reserved for future implementation.
 
 ### 10.9 Template Change Propagation
 
@@ -298,9 +301,15 @@ Registry generation uses `resolveRegistry(templateMap, rootName)`. In Phase 1 th
 
 ---
 
-## 12. Diff Review UI *(Phase 2 Only)*
+## 12. Diff Review UI *(Phase 2)*
 
-Color-coded rows: green = added, red = retired, orange = modified. Counts per category shown in header. User must confirm before any changes are written.
+The Registry page shows the resolved registry compared against the database. Comparison is performed client-side by `diffRegistry()` using key-order-insensitive deep equality. Row classification: added (green `bg-green-500/15` full row), retired (red `bg-red-500/15` full row), modified (per-cell amber `bg-amber-500/25` on changed fields only via `changedFields` array), unchanged (no highlight). A summary line shows counts per status (+N added / ~N modified / N unchanged / -N retired).
+
+Modified rows also carry `dbMeta` (the db row's meta array) enabling field-level diff highlighting in the meta View modal: changed fields amber, added fields green, removed fields red strikethrough. A legend is shown in the modal when diff data is present.
+
+An **Update DB** button is enabled when changes exist (added, modified, or retired rows). Clicking it opens a confirmation modal requiring a non-empty comment. The Confirm button is disabled until a comment is entered. On confirm, `POST /api/v1/registry/apply` is called. On success a 4-second banner shows the new revision number and the diff is re-run automatically.
+
+The Update DB button is disabled when `isDirty` is true, with tooltip: "Save or discard changes before updating the registry."
 
 ---
 
@@ -323,13 +332,15 @@ Append-only table. Rows are never updated or deleted.
 | id | SERIAL (PK) | Surrogate primary key. |
 | tag_id | BIGINT NOT NULL | Stable numeric identifier. Never reused. |
 | registry_rev | INTEGER NOT NULL | The registry revision when this row was inserted or last modified. |
-| tag_path | VARCHAR NOT NULL | Full dot-separated path. Always begins with `root.` followed by `asset_name`s to the tag leaf. |
+| tag_path | VARCHAR NOT NULL | Full dot-separated path. Always begins with the root template's `template_name`. |
 | data_type | VARCHAR(40) NOT NULL | Data type enum value (Section 6). |
 | is_setpoint | BOOLEAN NOT NULL | true = setpoint (writable); false = monitor (read-only). |
 | retired | BOOLEAN NOT NULL DEFAULT false | true if the tag is no longer present in the active template hierarchy. |
 | meta | JSONB NOT NULL | Full provenance chain for the tag, ordered leaf-to-root. Array of objects, one per level. Each object has: `type`, `name`, `fields`. |
 
-Constraints: composite (`tag_id`, `registry_rev`) unique. Partial unique index on `tag_path` for active tags. Indexes on `tag_id`, `registry_rev`, `data_type`, `retired`. GIN index on `meta`.
+Constraints: composite (`tag_id`, `registry_rev`) unique. Indexes on `tag_id`, `registry_rev`, `data_type`, `retired`. GIN index on `meta`.
+
+**Note:** The partial unique index on `tag_path` (WHERE retired=false) was removed in migration 003. Uniqueness of active tag_paths is enforced at application level via the `DISTINCT ON` query in `getActiveRegistry()`.
 
 ### 14.2 registry_revisions
 
@@ -364,7 +375,7 @@ Both errors and warnings set `isValid` to `false`. The Save button is disabled w
 
 ### 15.5 Client-Side Checks
 
-`INVALID_ASSET_NAME`, `DUPLICATE_SIBLING_NAME`, `CIRCULAR_REFERENCE`, `INVALID_REFERENCE`, `TAG_PATH_TOO_LONG`, `SCHEMA_VALIDATION_ERROR`, `UNKNOWN_FIELD`, `PARENT_TYPE_MISSING`, `DUPLICATE_PARENT_TYPE`, `EMPTY_BRANCH` (warning).
+`INVALID_ASSET_NAME`, `DUPLICATE_SIBLING_NAME`, `CIRCULAR_REFERENCE`, `INVALID_REFERENCE`, `TAG_PATH_TOO_LONG`, `SCHEMA_VALIDATION_ERROR`, `UNKNOWN_FIELD`, `PARENT_TYPE_MISSING`, `DUPLICATE_PARENT_TYPE`, `EMPTY_BRANCH` (warning — declared but not yet emitted in Phase 1).
 
 ### 15.6 Registry Page Behaviour
 
@@ -376,7 +387,11 @@ Displays errors from the client-side `resolveRegistry` call. When any errors are
 
 ### 16.1 Global Root Selector
 
-A single global dropdown allows the user to select the root template. On selection, the client fetches the full reachable template graph from the server (`GET /api/v1/templates/root/:template_name`) and initialises the local template graph. The root dropdown is **disabled** while `isDirty` is true, showing a tooltip: "Save or discard changes before switching root." This prevents `loadRoot()` from wiping unsaved edits.
+A single global dropdown allows the user to select the root template. On selection, the client fetches the full reachable template graph from the server (`GET /api/v1/templates/root/:template_name`) and initialises the local template graph. The root dropdown wrapper has `cursor-not-allowed` styling while `isDirty` is true, with a tooltip: "Save or discard changes before switching root."
+
+The **Save / See what's changed / Cancel** button group in AppShell is rendered only when `activeTab === 'editor'`. Navigating to the Registry or History tab hides the bar even if the graph is dirty.
+
+The **Update DB** button on the Registry page is disabled when `isDirty` is true, with tooltip: "Save or discard changes before updating the registry."
 
 ### 16.2 System Tree (Left Panel)
 
@@ -439,7 +454,7 @@ The System Tree and Templates Tree maintain a single shared selection cursor. At
 
 ### 16.7 Cascade Preview Modal
 
-A "See what's changed" button is available in the AppShell header whenever the dirty set or pending deletions are non-empty. Clicking it calls `simulateCascade` on the current client-side `templateMap`, passing `originalTemplateMap` as the baseline. Opens `CascadePreviewModal`.
+A "See what's changed" button is available in the AppShell header whenever the dirty set or pending deletions are non-empty (and `activeTab === 'editor'`). Clicking it calls `simulateCascade` on the current client-side `templateMap`, passing `originalTemplateMap` as the baseline. Opens `CascadePreviewModal`.
 
 The modal displays via `CascadeDiffContent`:
 - **New Templates** (purple) — templates in `dirtySet` absent from `originalTemplateMap`.
@@ -459,7 +474,11 @@ Shown when the server returns `requires_confirmation: true` on batch save. Displ
 
 ### 16.9 Registry Preview
 
-The RegistryPage calls `resolveRegistry(templateMap, rootName)` on mount and on every graph change. If validation passes, the resulting flat tag list is displayed immediately. If any validation errors are present, the table is hidden and a 'Resolve errors to view registry' banner is shown.
+The RegistryPage fetches the current database registry via `GET /api/v1/registry` on mount and re-fetches after each successful apply. It compares the database tags against the resolved in-memory registry using `diffRegistry()`. The table displays all rows with diff status coloring (see Section 12). If the DB fetch fails, a warning banner is shown and the table displays the proposed registry without diff coloring. If validation errors are present, the table is hidden and a 'Resolve errors to view registry' banner is shown.
+
+### 16.10 History Page
+
+A History nav tab shows the `registry_revisions` table with columns: rev, applied_by, applied_at (formatted `dd-MMM-yyyy HH:mm:ss`), comment. Rows are ordered most recent first (DESC by `registry_rev`). The page is read-only.
 
 ---
 
@@ -472,7 +491,8 @@ The RegistryPage calls `resolveRegistry(templateMap, rootName)` on mount and on 
 5. Use the System Tree to navigate, edit instance names and field overrides. Drag template leaves from the Templates Tree onto System Tree nodes to add child instances.
 6. ValidationPanel shows live feedback from local simulation.
 7. When ValidationPanel is clear, click Save. If upstream parents are affected, review and confirm the cascade modal.
-8. *(Phase 2)* Trigger registry generation for the selected root. Review the full diff. Confirm to apply.
+8. *(Phase 2)* Navigate to the Registry tab. Review the diff against the database. Click Update DB, enter a comment, and confirm to apply.
+9. *(Phase 2)* View the History tab to see all past registry revisions.
 
 ---
 
@@ -487,11 +507,11 @@ The RegistryPage calls `resolveRegistry(templateMap, rootName)` on mount and on 
 | Batch save | `POST /api/v1/templates/batch` with hash checking, cascade confirm, and deletions array | Same |
 | Template deletion | Pending client-side, committed via batch save `deletions` array | Same |
 | Registry calculation | Client-side via `resolveRegistry`, live on graph change | Same logic, persisted to PostgreSQL on apply |
-| Registry UI | Single table, column-sortable, live client-side, blank on errors | Two-panel: DB registry vs proposed, color-coded diff, Apply button |
+| Registry UI | Single table, live client-side, blank on errors | Client-side diff via `diffRegistry()`, per-cell highlighting for modified rows, Update DB button with comment modal, 4-second success banner, History page for revision log |
 | Registry persistence | Not implemented | `tag_registry` append-only table |
-| Diff / apply workflow | Not implemented | `POST /registry/preview` + `POST /registry/apply` |
-| Revision history | Not implemented | `registry_revisions` table + `GET /registry/revisions` |
-| Retired tags | Not tracked | Detected during apply |
+| Diff / apply workflow | Not implemented | `POST /api/v1/registry/apply` (server resolves server-side, diffs, writes SERIALIZABLE transaction). `GET /api/v1/registry/revisions` and `GET /api/v1/registry/revisions/:rev`. |
+| Revision history | Not implemented | `registry_revisions` table + History page |
+| Retired tags | Not tracked | Detected during apply; shown in diff as red rows |
 | Database | None | node-postgres, SERIALIZABLE transaction |
 | Stale conflict on save | Re-fetch full root, discard local changes | Merge support (future work) |
 
@@ -507,3 +527,4 @@ The RegistryPage calls `resolveRegistry(templateMap, rootName)` on mount and on 
 - **Concurrent edit protection** between simultaneous user sessions is not required at this time.
 - **Bulk import** of existing flat tag lists into the template hierarchy.
 - **Deployment and upgrade strategy** when the tool itself changes.
+- **Authentication:** `applied_by` is currently hardcoded to `'dev'`. A real auth system is a Phase 2+ item.

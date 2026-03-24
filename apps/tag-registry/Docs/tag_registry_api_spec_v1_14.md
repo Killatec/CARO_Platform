@@ -1,6 +1,6 @@
 # Tag Registry Admin Tool — REST API Specification
-**Draft v1.13** | Generated: 2026-03-17  
-Companion documents: [Functional Spec v1.15](tag_registry_spec_v1_15.md) | [Bootstrap v1.18](tag_registry_bootstrap_v1_18.md)
+**Draft v1.14** | Generated: 2026-03-23
+Companion documents: [Functional Spec v1.16](tag_registry_spec_v1_16.md) | [Bootstrap v1.19](tag_registry_bootstrap_v1_19.md)
 
 ---
 
@@ -10,7 +10,7 @@ This document defines the REST API contract between the React frontend and the N
 
 All endpoints are prefixed with `/api/v1`. All request and response bodies are JSON. All timestamps are ISO 8601 UTC strings.
 
-The root template is selected via a global dropdown in the client. On selection, the client fetches the full reachable template graph from the server. All editing is local. The primary write endpoint is `POST /api/v1/templates/batch`, which now handles both changes and deletions atomically.
+The root template is selected via a global dropdown in the client. On selection, the client fetches the full reachable template graph from the server. All editing is local. The primary write endpoint is `POST /api/v1/templates/batch`, which handles both changes and deletions atomically.
 
 ---
 
@@ -52,7 +52,7 @@ Every template returned by the server carries a `hash` field: a 6-character hex 
 
 ### 2.5 Identity
 
-Prototype scope: The `applied_by` field is supplied by the client as a plain string. No authentication required.
+`applied_by` is currently hardcoded to `'dev'` on the server. The client does not supply this field. Authentication and user identity are out of scope for the prototype.
 
 ### 2.6 Configuration
 
@@ -63,9 +63,13 @@ Prototype scope: The `applied_by` field is supplied by the client as a plain str
 | MAX_TAG_PATH_LENGTH | Maximum permitted tag_path character length | 100 | 1+2 |
 | VALIDATE_REQUIRED_PARENT_TYPES | Comma-separated template_type values each tag must have as an ancestor. Empty = disabled. | (unset) | 1+2 |
 | VALIDATE_UNIQUE_PARENT_TYPES | If true, no tag may have more than one ancestor of the same template_type. | false | 1+2 |
-| DATABASE_URL | PostgreSQL connection string | (Phase 2 only) | 2 only |
+| PGHOST | PostgreSQL host | localhost | 2 only |
+| PGPORT | PostgreSQL port | 5432 | 2 only |
+| PGDATABASE | PostgreSQL database name | caro_dev | 2 only |
+| PGUSER | PostgreSQL user | postgres | 2 only |
+| PGPASSWORD | PostgreSQL password | (required) | 2 only |
 
-> **Note:** `DATABASE_URL` must not be referenced anywhere in Phase 1 code.
+> **Note:** `DATABASE_URL` must not be referenced anywhere in Phase 1 or Phase 2 code. Use the five `PG*` variables instead, consumed by `@caro/db` pool.js.
 
 ---
 
@@ -164,6 +168,8 @@ The map includes the root template itself and every template reachable via the c
 4. Run `simulateCascade` on `changes` to identify upstream parent templates not in the submitted batch that are affected by the changes.
 5. If upstream impacts exist and `confirmed` is false → return `requires_confirmation` response (see below). No files written.
 6. If `confirmed` is true or there are no upstream impacts → write all files atomically including cascade updates, and unlink deleted template files. Return success.
+
+Graph validation errors (e.g. `INVALID_REFERENCE`, `CIRCULAR_REFERENCE`) are returned as `VALIDATION_ERROR` with the specific codes in the `details` array — not as top-level error codes.
 
 **Requires-confirmation response (HTTP 200):**
 
@@ -274,41 +280,161 @@ Responses: 200 OK, 404 `TEMPLATE_NOT_FOUND`, 409 `STALE_TEMPLATE` (hash mismatch
 
 ---
 
-## 4. Asset Tree Endpoints (Phase 2)
+## 4. Asset Tree Endpoints (Phase 2 — Not Yet Implemented)
 
-These endpoints support server-side tree resolution needed for the registry apply workflow. They must not be implemented in Phase 1 — no routes, no stubs.
-
-Sections 4.1–4.5 cover Get Asset Tree, Update Node Instance Values, Add Child Instance, Remove Child Instance, and Reorder Children. To be specified in the Phase 2 design document.
+These endpoints were originally planned to support server-side tree resolution. In the implemented Phase 2, registry resolution is performed server-side only during the apply operation (via `loadRoot` + `resolveRegistry`). No separate asset tree manipulation endpoints are implemented.
 
 ---
 
 ## 5. Registry Endpoints (Phase 2)
 
-All registry endpoints are Phase 2 only. In Phase 1, registry calculation is performed entirely client-side using `resolveRegistry` from `@caro/shared`. No registry server endpoints are implemented or stubbed in Phase 1.
+### 5.1 GET /api/v1/registry
 
-### 5.1 Get Current Registry (Phase 2)
+Returns the active tag registry from the database. Uses a subquery to get the latest row per `tag_id` and filter to non-retired rows only:
 
-`GET /api/v1/registry` — Return the current active tag registry from the database. Query parameters: `root_template_name`, `data_type` (filter), `retired` (default false), `page` and `page_size`.
+```sql
+SELECT * FROM (
+  SELECT DISTINCT ON (tag_id) tag_id, registry_rev, tag_path, data_type, is_setpoint, retired, meta
+  FROM tag_registry ORDER BY tag_id, registry_rev DESC
+) latest WHERE retired = false
+```
 
-### 5.2 Preview Registry Generation (Phase 2)
+**Response:**
 
-`POST /api/v1/registry/preview` — Resolve the selected root template and compute the diff without writing anything.
+```json
+{
+  "ok": true,
+  "data": {
+    "tags": [
+      {
+        "tag_id": 1,
+        "registry_rev": 3,
+        "tag_path": "Plant1_System_A.RFPowerModule.RF_Fwd.setpoint",
+        "data_type": "f64",
+        "is_setpoint": true,
+        "retired": false,
+        "meta": [ ... ]
+      }
+    ]
+  }
+}
+```
 
-### 5.3 Apply Registry Generation (Phase 2)
+No query parameters in the current implementation.
 
-`POST /api/v1/registry/apply` — Apply a previewed registry generation to the database.
+### 5.2 Registry Diff (Client-Side)
+
+Registry diff is computed entirely client-side by `diffRegistry(proposed, dbTags)` in `client/src/utils/diffRegistry.js`. No preview endpoint exists on the server.
+
+`diffRegistry` classifies each row as `added`, `modified`, `unchanged`, or `retired`. Modified rows include a `changedFields` array (listing which of `tag_path`, `data_type`, `is_setpoint`, `meta` changed) and a `dbMeta` property (the database row's meta array, for field-level diff highlighting). Comparison uses a key-order-insensitive `deepEqual` so PostgreSQL JSONB key reordering does not produce false positives.
+
+Sort order: added → modified → unchanged → retired.
+
+### 5.3 POST /api/v1/registry/apply
+
+Applies the resolved registry to the database.
+
+**Request body:**
+
+```json
+{ "rootName": "Plant1_System_A", "comment": "Initial tag registry load" }
+```
+
+- `rootName` — required. Must be a valid template name. Returns 400 if missing.
+- `comment` — required. Non-empty string. Returns 400 if missing or empty.
+- Returns 404 if the `rootName` template does not exist on disk.
+
+Server loads the template graph via `loadRoot()`, resolves server-side via `resolveRegistry()`, diffs against `getActiveRegistry()`, writes inside a SERIALIZABLE transaction.
+
+**Success response (HTTP 200):**
+
+```json
+{
+  "ok": true,
+  "data": {
+    "registry_rev": 5,
+    "added": 3,
+    "modified": 1,
+    "retired": 0
+  }
+}
+```
+
+**No-changes response (HTTP 200):**
+
+```json
+{
+  "ok": true,
+  "data": {
+    "registry_rev": null,
+    "message": "No changes to apply"
+  }
+}
+```
+
+**Error response (HTTP 500):**
+
+```json
+{
+  "ok": false,
+  "error": { "message": "Failed to apply registry" }
+}
+```
 
 ---
 
 ## 6. Revision History Endpoints (Phase 2)
 
-### 6.1 List Revisions
+### 6.1 GET /api/v1/registry/revisions
 
-`GET /api/v1/registry/revisions` — Return all registry revisions in reverse chronological order. Phase 2 only.
+Returns all rows from `registry_revisions` ordered by `registry_rev DESC`.
 
-### 6.2 Get Registry at Revision
+**Response:**
 
-`GET /api/v1/registry/revisions/:rev` — Return the full registry state as it existed at a specific revision. Phase 2 only.
+```json
+{
+  "ok": true,
+  "data": {
+    "revisions": [
+      {
+        "registry_rev": 5,
+        "applied_by": "dev",
+        "applied_at": "2026-03-23T14:30:00.000Z",
+        "comment": "Add Chan2 tags"
+      }
+    ]
+  }
+}
+```
+
+### 6.2 GET /api/v1/registry/revisions/:rev
+
+Returns all `tag_registry` rows for a specific revision, ordered by `tag_path ASC`.
+
+**Path parameter:** `:rev` — integer revision number. Returns 400 if non-integer.
+
+**Response:**
+
+```json
+{
+  "ok": true,
+  "data": {
+    "tags": [
+      {
+        "tag_id": 1,
+        "registry_rev": 5,
+        "tag_path": "Plant1_System_A.RFPowerModule.RF_Fwd.setpoint",
+        "data_type": "f64",
+        "is_setpoint": true,
+        "retired": false,
+        "meta": [ ... ]
+      }
+    ]
+  }
+}
+```
+
+Returns 404 if no rows exist for the given revision number.
 
 ---
 
@@ -323,22 +449,24 @@ All registry endpoints are Phase 2 only. In Phase 1, registry calculation is per
 | CIRCULAR_REFERENCE | 422 | Template dependency graph contains a cycle. |
 | SCHEMA_VALIDATION_ERROR | 422 | Template does not conform to its JSON Schema. |
 | INVALID_ASSET_NAME | 422 | asset_name is empty or contains a dot character. |
+| INVALID_TEMPLATE_NAME | 422 | template_name contains a dot (.) character. |
 | DUPLICATE_SIBLING_NAME | 409 | Two siblings within the same parent share an asset_name. |
 | UNKNOWN_FIELD | 422 | Instance sets a field not defined in the child template. |
 | TAG_PATH_COLLISION | 409 | Renaming would create a tag_path that duplicates an active tag. |
 | TAG_PATH_TOO_LONG | 422 | A resolved tag_path exceeds MAX_TAG_PATH_LENGTH. |
 | PARENT_TYPE_MISSING | 422 | A tag is missing a required ancestor type (VALIDATE_REQUIRED_PARENT_TYPES). |
 | DUPLICATE_PARENT_TYPE | 422 | A tag has more than one ancestor of the same type (VALIDATE_UNIQUE_PARENT_TYPES). |
-| EMPTY_BRANCH | warning | A structural template in the root hierarchy contains no tag descendants. |
-| VALIDATION_ERROR | 422 | One or more validation rules failed. See details array. |
+| EMPTY_BRANCH | warning | A structural template in the root hierarchy contains no tag descendants. Declared but not yet emitted in Phase 1 validation. |
+| VALIDATION_ERROR | 422 | One or more validation rules failed. See details array. Graph validation errors from batchSave (INVALID_REFERENCE, CIRCULAR_REFERENCE) are returned as VALIDATION_ERROR with specific codes in the details array — not as top-level error codes. |
 
 ---
 
 ## 8. Open Items
 
-- Authentication and session management are out of scope for the prototype.
+- Authentication and session management are out of scope for the prototype. `applied_by` is hardcoded to `'dev'` until a real auth system is implemented.
 - Stale conflict merging: when a batch is rejected due to `STALE_TEMPLATE`, attempt to merge the client's local changes with the refreshed server state rather than discarding them.
 - WebSocket or SSE endpoint for live notification when another session modifies a template.
 - Bulk import endpoint for loading an existing flat tag list into the template hierarchy.
 - Rate limiting and request size limits are not specified for the prototype.
 - Rename tracking endpoint: future endpoint to rename a `tag_path` in both JSON files and the database while preserving `tag_id` continuity.
+- `data_type` as FK: Phase 2+ consideration — `data_type` column in `tag_registry` intended to become a BIGINT FK referencing a data_types lookup table.

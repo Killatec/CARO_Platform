@@ -1,6 +1,6 @@
 # Tag Registry Admin Tool — Project Bootstrap Document
-**v1.18** | Generated: 2026-03-17  
-Companion documents: [Functional Spec v1.15](tag_registry_spec_v1_15.md) | [API Spec v1.13](tag_registry_api_spec_v1_13.md)
+**v1.19** | Generated: 2026-03-23
+Companion documents: [Functional Spec v1.16](tag_registry_spec_v1_16.md) | [API Spec v1.14](tag_registry_api_spec_v1_14.md)
 
 ---
 
@@ -10,8 +10,8 @@ This document provides the project structure, tooling decisions, component archi
 
 | Phase | Scope |
 |-------|-------|
-| Phase 1 (this document) | Template editing, asset tree editing, client-side cascade simulation, batch save with hash checking and cascade confirmation modal, on-demand in-memory registry calculation displayed as a flat read-only table. No database. |
-| Phase 2 (future) | Registry persistence (PostgreSQL), diff/apply workflow, revision history, retired tag tracking. |
+| Phase 1 (complete) | Template editing, asset tree editing, client-side cascade simulation, batch save with hash checking and cascade confirmation modal, on-demand in-memory registry calculation displayed as a flat read-only table. No database. |
+| Phase 2 (complete) | Registry persistence (PostgreSQL), diff/apply workflow, revision history, retired tag tracking. |
 
 ---
 
@@ -24,16 +24,16 @@ This document provides the project structure, tooling decisions, component archi
 | Frontend bundler | Vite + React |
 | CSS approach | Tailwind CSS utility classes. No component library (shadcn, MUI, etc.). |
 | Backend framework | Node.js + Express |
-| Database | None in Phase 1. Do not install pg, knex, or any database client. |
+| Database | None in Phase 1. Phase 2: PostgreSQL via `@caro/db` workspace package. SERIALIZABLE transactions for registry apply. |
 | Authentication | None. |
 | Pending operation storage | None. The batch save endpoint is stateless — no `pending_id`, no server-side pending store. |
-| Registry storage | In-memory only. Calculated on demand. Never persisted. |
-| Root selection | A single global root dropdown. On selection, the client fetches all reachable templates from the server. Root dropdown is disabled while `isDirty` is true. |
+| Registry storage | Phase 1: in-memory only, calculated on demand. Phase 2: persisted to `tag_registry` PostgreSQL table on apply. |
+| Root selection | A single global root dropdown. On selection, the client fetches all reachable templates from the server. Root dropdown wrapper has `cursor-not-allowed` while `isDirty` is true. |
 | Template type source of truth | The `template_type` field in each JSON file. Subfolders are browsing convenience only. |
 | Shared validation | `apps/tag-registry/shared/` — local directory, not a workspace package. Both server and client import via relative paths. |
 | UI package | `@caro/ui` workspace package. Contains generic primitives and design tokens only. Tag Registry-specific components live in `client/src/components/shared/`. |
 | State management | Zustand stores: `useTemplateGraphStore`, `useRegistryStore`, `useUIStore`. |
-| Tests | None. |
+| Tests | Phase 1: 201 Vitest unit tests (112 shared/, 42 server/, 47 client/). Phase 2 adds: 93 new Vitest tests (34 diffRegistry, 22 formatDate, 18 registryService, 19 registry routes) + 4 new Playwright E2E spec files (22 tests × 3 browsers = 66 additional E2E runs). |
 | Monorepo position | Tag Registry lives at `CARO_Platform/apps/tag-registry/`. The CARO_Platform monorepo root is the npm workspaces root. |
 
 ---
@@ -65,6 +65,29 @@ CARO_Platform/                        # git repository root
           Dropdown.jsx
           index.js
 
+    db/                               # @caro/db — shared PostgreSQL pool
+      package.json                    # name: @caro/db
+      pool.js                         # lazy singleton pg.Pool
+      query.js                        # query() and withTransaction()
+      migrations.js                   # runMigrations()
+      index.js                        # re-exports all
+
+  db/
+    postgres/
+      migrations/
+        001_create_tag_registry.sql
+        002_create_registry_revisions.sql
+        003_drop_active_path_index.sql
+      seeds/dev_seed.sql
+      scripts/
+        setup_dev_db.ps1
+        reset_dev_db.ps1
+      README.md
+    timescale/
+      migrations/.gitkeep
+      seeds/.gitkeep
+      README.md
+
   apps/
     tag-registry/                     # Tag Registry Admin Tool
       Docs/                           # spec documents
@@ -88,10 +111,10 @@ CARO_Platform/                        # git repository root
           app.js                      # Express app factory, router mount
           routes/
             templates.js
-            # registry.js — DO NOT CREATE in Phase 1. Phase 2 only.
+            registry.js               # Phase 2: GET /registry, POST /apply, GET /revisions
           services/
             templateService.js
-            # registryService.js — Phase 2 only
+            registryService.js        # Phase 2: DB queries
           middleware/
             errorHandler.js
             asyncWrap.js
@@ -107,6 +130,7 @@ CARO_Platform/                        # git repository root
           api/
             client.js                 # base fetch wrapper, cache: 'no-store' on all GETs
             templates.js              # loadRoot, batchSave, listTemplates, deleteTemplate
+            registry.js               # fetchRegistry, applyRegistry, fetchRevisions, fetchRevisionTags
           stores/
             useTemplateGraphStore.js
             useRegistryStore.js
@@ -125,12 +149,13 @@ CARO_Platform/                        # git repository root
             registry/
               RegistryTable.jsx
             shared/
-              # Tag Registry-specific UI components (moved from @caro/ui/widgets)
+              # Tag Registry-specific UI components
               TagPathLabel.jsx
               SeverityBadge.jsx
               FieldValueRow.jsx
               JsonViewer.jsx
               TrashIcon.jsx           # shared trash icon SVG component
+              MetaModalBody.jsx       # Phase 2: meta modal body with optional diff highlighting
               # Modals and panels
               CascadeModal.jsx        # cascade confirm — server triggered
               CascadePreviewModal.jsx # cascade preview — client triggered
@@ -143,9 +168,12 @@ CARO_Platform/                        # git repository root
             useRootTemplate.js
           utils/
             resolveTree.js
+            diffRegistry.js           # Phase 2: pure diff utility
+            formatDate.js             # Phase 2: formatDateTime, formatDate
           pages/
             EditorPage.jsx
             RegistryPage.jsx
+            HistoryPage.jsx           # Phase 2: revision history page
 
       scripts/
         migrate_field_types.js        # one-off: converts flat fields to { field_type, default }
@@ -166,12 +194,12 @@ Must be environment-agnostic: no `fs`, no Express, no DOM. Pure functions and co
 
 **Key function signatures:**
 
-- `validateTemplate(template)` — returns `{ valid: bool, errors: [], warnings: [] }`. Each field in `template.fields` must be `{ field_type, default }`. `field_type` ∈ `{ "Numeric", "String", "Boolean" }`. `typeof default` must match. The `i32_array` type is not supported.
+- `validateTemplate(template)` — returns `{ valid: bool, errors: [], warnings: [] }`. Each field in `template.fields` must be `{ field_type, default }`. `field_type` ∈ `{ "Numeric", "String", "Boolean" }`. `typeof default` must match. `template_name` must not contain a dot character (error code: `INVALID_TEMPLATE_NAME`).
 - `validateGraph(templateMap)` — returns `{ valid: bool, errors: [], warnings: [] }`
 - `simulateCascade(currentTemplateMap, proposedChanges, originalTemplateMap?)` — returns `{ requiresConfirmation: bool, diff: { fields_added, fields_removed, fields_changed, instance_fields_changed }, affectedParents: [{ parent_template_name, asset_name, dropped_instance_values }] }`. `affectedParents` is per-instance, not per-template. `fields_changed` reports `.default` scalar values, not full definition objects.
 - `applyFieldCascade(templateMap, changedTemplate)` — returns updated `templateMap`. Pure.
 - `validateParentTypes(templateMap, rootName, options)` — returns `{ errors: [], warnings: [] }`
-- `resolveRegistry(templateMap, rootName)` — returns flat tag list: `[{ tag_path, data_type, is_setpoint, meta }]`. Extracts `.default` from field definitions before merging with instance overrides.
+- `resolveRegistry(templateMap, rootName)` — returns flat tag list: `[{ tag_path, data_type, is_setpoint, meta }]`. Extracts `.default` from field definitions before merging with instance overrides. The first segment of every `tag_path` is `rootName` (not the literal string `'root'`). `rootName` serves as the root template's asset_name.
 - `hashTemplate(template)` — returns 6-character hex SHA-1 string
 - `deepEqual(a, b)` / `deepNotEqual(a, b)` — JSON.stringify-based deep equality (`utils.js`). Used by store and components to avoid inline comparisons.
 
@@ -195,6 +223,7 @@ Must be environment-agnostic: no `fs`, no Express, no DOM. Pure functions and co
 - `templateService.js` maintains an in-memory index of `template_name → { file_path, hash }` mappings, rebuilt on startup. Updated on every write or delete.
 - The `template_type` field in each JSON file is the source of truth.
 - All batch writes are all-or-nothing: validate all hashes first, then write all changed files and unlink all deleted files, then update the index.
+- `batchSave` does not call `mkdir({ recursive: true })` before writing. Subdirectories (`tags/`, `parameters/`, `modules/`) must exist. The seed templates pre-create all required subdirectories. This is a latent bug for new `template_type` values or fresh clones without seed directories.
 
 ### 4.5 Load Root
 
@@ -207,8 +236,8 @@ Must be environment-agnostic: no `fs`, no Express, no DOM. Pure functions and co
 
 `POST /api/v1/templates/batch` accepts `{ changes, deletions, confirmed }`.
 
-**`changes`** — array of `{ template_name, original_hash, template }` for modified/new templates.  
-**`deletions`** — array of `{ template_name, original_hash }` for templates queued for deletion.  
+**`changes`** — array of `{ template_name, original_hash, template }` for modified/new templates.
+**`deletions`** — array of `{ template_name, original_hash }` for templates queued for deletion.
 **`confirmed`** — boolean, `true` when resubmitting after `requires_confirmation`.
 
 Server processing order:
@@ -220,13 +249,15 @@ Server processing order:
 5. If upstream impacts exist and `confirmed` is not `true` → return `requires_confirmation: true` with `diff` and `affectedParents`. No files written.
 6. If `confirmed: true` or no upstream impacts → write all changed files atomically (cascade updates applied), unlink deleted template files, update index. Return `{ ok: true, modified_files, deleted_files }`.
 
+Graph validation errors from batchSave (e.g. `INVALID_REFERENCE`, `CIRCULAR_REFERENCE`) are returned as `VALIDATION_ERROR` with the specific codes surfaced in the `details` array — not as top-level error codes.
+
 > **Note:** No `pending_id` is used. The client holds the full batch in memory and resubmits with `confirmed: true` if required.
 
 ### 4.7 `useTemplateGraphStore`
 
 Central store managing the client-side template graph.
 
-> **`isDirty` is not a store property.** Consumers must use the inline selector:  
+> **`isDirty` is not a store property.** Consumers must use the inline selector:
 > `state.dirtySet.size > 0 || state.pendingDeletions.size > 0`
 
 **State:**
@@ -279,13 +310,15 @@ Called by `save()` success, `save()` `STALE_TEMPLATE`, `confirmSave()` success, 
 
 Runs `validateTemplate`, `validateGraph`, and `validateParentTypes` synchronously on every `templateMap` change. Exposes `messages` and `isValid`. No server call. No debounce.
 
+`EMPTY_BRANCH` is declared in `shared/constants.js` but is not emitted by any Phase 1 validation function. It is reserved for future implementation.
+
 ### 4.9 `CascadeModal` (Confirm) Component
 
 Shown when batch save returns `requires_confirmation: true`. Renders diff content via the shared `CascadeDiffContent` component. Confirm button resubmits the original `{ changes, deletions }` batch with `confirmed: true`. Cancel dismisses without saving. Adds Confirm/Cancel footer.
 
 ### 4.9b `CascadePreviewModal` Component
 
-Triggered client-side by the "See what's changed" button in `AppShell` header when `isDirty` is true. Calls `simulateCascade` on the current `templateMap` with `originalTemplateMap` as the baseline. Renders diff content via the shared `CascadeDiffContent` component. Informational only. Adds Close footer.
+Triggered client-side by the "See what's changed" button in `AppShell` header when `isDirty` is true (and `activeTab === 'editor'`). Calls `simulateCascade` on the current `templateMap` with `originalTemplateMap` as the baseline. Renders diff content via the shared `CascadeDiffContent` component. Informational only. Adds Close footer.
 
 ### 4.9c `TemplatesTree` Component
 
@@ -295,7 +328,7 @@ Renders all templates returned by `GET /api/v1/templates` grouped by `template_t
 
 **Re-fetch trigger:** `useEffect` on `dirtySet` and `pendingDeletions` — re-fetches when **both** are empty (`dirtySet.size === 0 && pendingDeletions.size === 0`). This prevents re-fetch when only `pendingDeletions` is non-empty (which would incorrectly restore deleted templates).
 
-**New template flow:** "New" button opens `NewTemplateModal`. On confirm, calls `addTemplate(template, null)` and updates local `grouped` state.
+**New template flow:** "New" button opens `NewTemplateModal`. Inputs use `id="new-template-name"` and `id="new-template-type"` for `htmlFor`/accessibility linkage and Playwright `getByLabel()` locators. On confirm, calls `addTemplate(template, null)` and updates local `grouped` state.
 
 **Delete flow:**
 - Determines `isNew` as: `templateMap.has(name) && (hashes.get(name) === null || hashes.get(name) === undefined)`. Uses `hashes` map, not `originalTemplateMap`, to avoid treating unfetched-but-saved templates as new.
@@ -315,7 +348,7 @@ Replaces the former `NodePanel`. Derives content from `useUIStore` selections. U
 **Template mode** (`selectedTemplateTree` set):
 - Read-only metadata rows: Template Name, Template Type.
 - Editable default fields via `FieldTableRow`. `isDirtyField` computed per-field: new key (absent from `originalTemplateMap` baseline) or changed default value.
-- `+` button in `PropertiesHeader` opens `AddFieldModal`.
+- `+` button in `PropertiesHeader` opens `AddFieldModal`. Inputs use `id="add-field-name"`, `id="add-field-type"`, `id="add-field-default"` for `htmlFor`/accessibility and Playwright `getByLabel()` locators.
 - Trash icon on each field row removes the field via `updateTemplate()`.
 
 **Instance mode** (`selectedSystemTreeNode` set):
@@ -348,13 +381,15 @@ Shared diff renderer used by both `CascadePreviewModal` and `CascadeModal`. Acce
 
 ### 4.10 Global Root Selection
 
-`useRootTemplate` hook holds the selected root template name. Changing the root calls `loadRoot()` on `useTemplateGraphStore`, which re-fetches the full graph and resets all local state. Root selection is session-only. The root dropdown is disabled while `isDirty` is true.
+`useRootTemplate` hook holds the selected root template name. Changing the root calls `loadRoot()` on `useTemplateGraphStore`, which re-fetches the full graph and resets all local state. Root selection is session-only. The root dropdown wrapper has `cursor-not-allowed` while `isDirty` is true.
 
 ### 4.11 Tree Rendering
 
 The System Tree is rendered from `templateMap` using `resolveTree(templateMap, rootName)` in `utils/resolveTree.js`. No server call on render.
 
 **Collapse state:** lifted to `AssetTree` as `expandedNodes: Map<ownPath, bool>`. `TreeNode` derives `isExpanded = expandedNodes[ownPath] !== false` (undefined = expanded by default). `AssetTree` resets to `{}` on `rootTemplateName` change.
+
+**Collapse toggle:** uses `prev[ownPath] !== false ? false : true` (not `!prev[ownPath]`). This ensures the first click on an initially-expanded node (where `prev[ownPath]` is `undefined`) correctly collapses it. Using `!prev[ownPath]` would treat `undefined` as falsy and require two clicks.
 
 **Node identity:** each `TreeNode` receives `ownPath` (dot-separated `asset_name` segments from root template name), `parentPath`, `parentTemplateName`, and `childIndex`. These are used for selection identity, dirty detection, and child removal.
 
@@ -372,22 +407,63 @@ server: { proxy: { '/api': 'http://localhost:3001' } }
 
 ### 4.13 Environment Variables
 
-`index.js` must validate that `TEMPLATES_DIR` is set at startup and exit with a clear error message if missing. `PORT` defaults to 3001. `MAX_TAG_PATH_LENGTH` defaults to 100. `DATABASE_URL` must not be referenced in Phase 1 code.
+`index.js` must validate that `TEMPLATES_DIR` is set at startup and exit with a clear error message if missing. `PORT` defaults to 3001. `MAX_TAG_PATH_LENGTH` defaults to 100.
 
-### 4.14 Registry Calculation (Phase 1)
+Phase 2 database connection uses five PG* environment variables: `PGHOST` (default: `localhost`), `PGPORT` (default: `5432`), `PGDATABASE` (default: `caro_dev`), `PGUSER` (default: `postgres`), `PGPASSWORD` (required, no default). These are consumed by `@caro/db` pool.js. Never reference `DATABASE_URL`.
 
-Registry calculation is done entirely client-side using `resolveRegistry(templateMap, rootName)`. There is no `GET /api/v1/registry` server endpoint in Phase 1.
+### 4.14 Registry Calculation
 
-- `RegistryPage` calls `resolveRegistry` on mount and subscribes to `templateMap` changes via `useTemplateGraphStore`.
-- If validation errors are present, the registry table is replaced by a 'Resolve errors to view registry' banner.
-- On success the flat tag list is displayed immediately with no loading state.
-- `useRegistryStore` holds the resolved tags array, sort field, and sort direction.
+Phase 1: Registry calculation is done entirely client-side using `resolveRegistry(templateMap, rootName)`. There is no `GET /api/v1/registry` server endpoint in Phase 1.
+
+Phase 2: `RegistryPage` also fetches the database registry via `GET /api/v1/registry` and runs `diffRegistry()` client-side. The `formatDate` utility (`client/src/utils/formatDate.js`) provides:
+- `formatDateTime(v)` → `'dd-MMM-yyyy HH:mm:ss'`
+- `formatDate(v)` → `'dd-MMM-yyyy'`
+
+Both functions accept a `Date` object, ISO string, or PostgreSQL TIMESTAMPTZ string. Returns `'—'` for null/undefined/invalid.
 
 ### 4.15 Template Deletion
 
 Template deletions are pending client-side operations, not immediate server calls. See section 4.7 (`markForDeletion`, `removeTemplate`) and section 4.9c (`TemplatesTree` delete flow).
 
 The `DELETE /api/v1/templates/:template_name` endpoint remains on the server for tooling/CI use but is no longer called by the client in normal flow.
+
+**nodemon dev script must NOT watch the `templates/` directory.** Correct script:
+```
+nodemon --ext js,json --watch src src/index.js
+```
+Watching `../templates` causes nodemon to restart the server on every template file write or delete, breaking test runners that create/delete template files programmatically.
+
+### 4.16 @caro/db Package
+
+The `@caro/db` workspace package (`packages/db/`) provides a shared PostgreSQL connection pool for all server-side apps in the monorepo. It exports:
+- `pool` — lazy singleton `pg.Pool` constructed on first call
+- `query(text, params)` — executes a query against the pool
+- `withTransaction(fn)` — wraps `fn` in a BEGIN/COMMIT/ROLLBACK block
+- `runMigrations()` — applies pending migration files in order
+
+The pool is constructed lazily on first call after `dotenv.config()` has run, guaranteeing environment variables are populated. `PGPASSWORD` must be set in each app's `.env` file.
+
+### 4.17 Registry Apply Transaction
+
+`POST /api/v1/registry/apply` loads the template graph server-side via `loadRoot()`, resolves via `resolveRegistry()`, diffs against `getActiveRegistry()` (DISTINCT ON subquery), then writes inside a SERIALIZABLE transaction:
+
+1. Inserts a `registry_revisions` row (gets new `registry_rev`).
+2. For each added tag: inserts one `tag_registry` row with `retired=false`.
+3. For each modified tag: inserts one new `tag_registry` row with updated fields and `retired=false`.
+4. For each retired tag: inserts one `tag_registry` row with `retired=true`.
+5. Unchanged tags produce no inserts.
+
+`applied_by` is hardcoded to `'dev'` until authentication is implemented.
+
+Returns `{ ok, registry_rev, added, modified, retired }` or `{ ok, registry_rev: null, message: 'No changes to apply' }`.
+
+`getActiveRegistry()` uses a subquery to find the latest non-retired row per `tag_id`:
+```sql
+SELECT * FROM (
+  SELECT DISTINCT ON (tag_id) tag_id, registry_rev, tag_path, data_type, is_setpoint, retired, meta
+  FROM tag_registry ORDER BY tag_id, registry_rev DESC
+) latest WHERE retired = false
+```
 
 ---
 
@@ -399,9 +475,9 @@ The `DELETE /api/v1/templates/:template_name` endpoint remains on the server for
 |-------|---------|---------|
 | Style tokens | `@caro/ui/tokens` | CSS custom properties and JS token map. |
 | UI primitives | `@caro/ui/primitives` | Stateless, zero domain knowledge. Button, Input, Badge, Table, Modal, Tooltip, Dropdown. Shared across all CARO_Platform apps. |
-| App shared components | `apps/tag-registry/client/src/components/shared/` | Tag Registry-specific UI: SeverityBadge, FieldValueRow, TagPathLabel, JsonViewer, TrashIcon, cascade modals, ValidationPanel, NewTemplateModal, AddFieldModal. |
+| App shared components | `apps/tag-registry/client/src/components/shared/` | Tag Registry-specific UI: SeverityBadge, FieldValueRow, TagPathLabel, JsonViewer, TrashIcon, MetaModalBody, cascade modals, ValidationPanel, NewTemplateModal, AddFieldModal. |
 | App components | `apps/tag-registry/client/src/components/` | Tag Registry-specific. AssetTree, TemplatesTree, FieldsPanel, RegistryTable. Compose primitives and shared components. |
-| Pages | `apps/tag-registry/client/src/pages/` | Full page layouts. EditorPage, RegistryPage. |
+| Pages | `apps/tag-registry/client/src/pages/` | Full page layouts. EditorPage, RegistryPage, HistoryPage. |
 | Stores | `apps/tag-registry/client/src/stores/` | Zustand stores. `useTemplateGraphStore`, `useRegistryStore`, `useUIStore`. |
 
 ### 5.2 Token System
@@ -416,7 +492,7 @@ CSS custom properties defined in `packages/ui/src/tokens/index.css`. The Tailwin
 
 - **`useTemplateGraphStore`** — `templateMap`, `originalTemplateMap`, `dirtySet`, `hashes`, `pendingDeletions`, `rootTemplateName`, `validationState`. Actions: `loadRoot`, `updateTemplate`, `addTemplate`, `injectTemplateGraph`, `markForDeletion`, `removeTemplate`, `save`, `confirmSave`, `discard`, `setValidationState`. `isDirty` is an inline selector, not a store property.
 - **`useRegistryStore`** — `tags` array, `sortField`, `sortDirection`. Actions: `fetchRegistry`, `setSort`.
-- **`useUIStore`** — `selectedSystemTreeNode` (full dot-separated tree path, unique identity key), `selectedSystemTreeNodeParentPath`, `selectedSystemTreeNodeAssetName`, `selectedSystemTreeNodeParentTemplate`, `selectedSystemTreeNodeChildIndex`, `selectedTemplateTree`, `activeModal`, `modalProps`. Setters enforce mutual exclusion between system tree and template tree selections — setting one clears the other atomically.
+- **`useUIStore`** — `selectedSystemTreeNode` (full dot-separated tree path, unique identity key), `selectedSystemTreeNodeParentPath`, `selectedSystemTreeNodeAssetName`, `selectedSystemTreeNodeParentTemplate`, `selectedSystemTreeNodeChildIndex`, `selectedTemplateTree`, `activeModal`, `modalProps`, `activeTab`. Setters enforce mutual exclusion between system tree and template tree selections — setting one clears the other atomically.
 
 > **`selectedSystemTreeNode` is the full dot-separated tree path** (e.g. `"Plant1_System_A.RFPowerModule.RF_Fwd.setpoint"`), not just the `asset_name`. It is a UI-only identity key — never sent to the server. Guaranteed unique by the duplicate-sibling-name validation constraint. `selectedSystemTreeNodeChildIndex` is the array index of this node in its parent's `children` array, captured at click time and used for all child reads/writes to avoid stale-by-name lookups.
 
@@ -435,13 +511,13 @@ CSS custom properties defined in `packages/ui/src/tokens/index.css`. The Tailwin
 | Batch save | `POST /api/v1/templates/batch`, stateless, hash checking, deletions array | Same |
 | Template deletion | Pending client-side, committed via `deletions` in batch save | Same |
 | Registry calculation | Client-side via `resolveRegistry`, live on graph change | Same logic, persisted to PostgreSQL on apply |
-| Registry server endpoint | Not implemented | Reintroduced for persistence |
-| Registry UI | Single table, column-sortable, live client-side | Two-panel diff view, color-coded rows, Apply button |
+| Registry server endpoint | Not implemented | `GET /api/v1/registry` using DISTINCT ON subquery |
+| Registry UI | Single table, live client-side | Client-side diff via `diffRegistry()`, per-cell amber for modified rows, Update DB button with comment modal, 4-second success banner |
 | Registry persistence | Not implemented | `tag_registry` append-only table |
-| Diff / apply workflow | Not implemented | `POST /registry/preview` + `POST /registry/apply` |
-| Revision history | Not implemented | `registry_revisions` + `GET /registry/revisions` |
-| Retired tags | Not tracked | Detected during apply |
-| Database | None | node-postgres, SERIALIZABLE transaction |
+| Diff / apply workflow | Not implemented | `POST /api/v1/registry/apply` (SERIALIZABLE transaction); no preview endpoint — diff is client-side |
+| Revision history | Not implemented | `registry_revisions` table + `GET /api/v1/registry/revisions` + `GET /api/v1/registry/revisions/:rev` + HistoryPage |
+| Retired tags | Not tracked | Detected during apply; shown as red rows in diff |
+| Database | None | `@caro/db` workspace package, node-postgres, SERIALIZABLE transaction |
 | Stale conflict | Re-fetch root, discard local changes | Merge support (future work) |
 
 ---
@@ -484,7 +560,7 @@ File: `Plant1_System_A.json`
 
 ### 8.0 Global Root State
 
-`useRootTemplate` hook holds the selected root template name. Changing the root calls `loadRoot()` on `useTemplateGraphStore`, which re-fetches the full graph and resets all local state. Root selection is session-only. The root dropdown is **disabled** while `isDirty` is true to prevent wiping unsaved edits.
+`useRootTemplate` hook holds the selected root template name. Changing the root calls `loadRoot()` on `useTemplateGraphStore`, which re-fetches the full graph and resets all local state. Root selection is session-only. The root dropdown wrapper has `cursor-not-allowed` while `isDirty` is true to prevent wiping unsaved edits.
 
 ### 8.1 Shared Template State
 
@@ -494,6 +570,7 @@ File: `Plant1_System_A.json`
 
 - Rendered from `templateMap` via `resolveTree`.
 - Collapse state lifted to `AssetTree` as `expandedNodes` map keyed by `ownPath`. Default `undefined` = expanded. Resets to `{}` on root change.
+- **Collapse toggle uses `prev[ownPath] !== false ? false : true`** (not `!prev[ownPath]`). This correctly collapses an initially-expanded node on the first click. `undefined !== false` → `true`, so the first click sets the value to `false` (collapsed). Using `!prev[ownPath]` would treat `undefined` as falsy, setting it to `true` (still expanded), requiring two clicks.
 - Non-`tag` nodes are valid drag-drop targets (highlighted with blue tint + dashed border on drag-over).
 - All non-root nodes have a trash icon for child removal.
 - Dirty nodes shown in `font-semibold text-orange-700`.
@@ -504,31 +581,45 @@ See sections 4.9c and 4.9d for full behaviour specifications.
 
 Both trees use `font-normal text-sm text-gray-800` for item names. Dirty items use `font-semibold text-orange-700`. Selection uses `text-blue-800`. Collapse buttons use the same style across both trees.
 
+`NewTemplateModal` inputs use `id="new-template-name"` and `id="new-template-type"`. `AddFieldModal` uses `id="add-field-name"`, `id="add-field-type"`, `id="add-field-default"`. Required for Playwright `getByLabel()` locators and screen reader accessibility.
+
 ### 8.4 EditorPage Layout
 
-- **Top bar (AppShell header):** Global root selector dropdown (disabled when dirty). Save / See what's changed / Cancel buttons — visible when `isDirty`. Save disabled when `!isValid`.
+- **Top bar (AppShell header):** Global root selector dropdown (wrapper has `cursor-not-allowed` when dirty). Save / See what's changed / Cancel buttons — visible only when `isDirty` **and** `activeTab === 'editor'`. Save disabled when `!isValid`.
 - **Left panel (System Tree):** `AssetTree` for the selected root. Content-driven width (`flex-shrink-0 min-w-[25rem]`). `whitespace-nowrap` on nodes.
 - **Right panel:** Split vertically into `TemplatesTree` (top) and `FieldsPanel` (bottom). Content-driven width (`flex-shrink-0 min-w-[20rem]`). `whitespace-nowrap` on items.
 - **Below row:** `ValidationPanel` — always visible with a "Validation" section header. Message list shown only when messages are present.
 
-### 8.5 RegistryPage (Phase 1)
+### 8.5 RegistryPage (Phase 2)
 
-- Calls `resolveRegistry(templateMap, rootName)` on mount and on `templateMap` change. No server call.
-- If no root is selected, shows a prompt to select one first.
-- If validation errors are present, shows a 'Resolve errors to view registry' banner instead of the table.
-- Columns: `tag_path`, `data_type`, `is_setpoint`, `meta`.
-- Column headers toggle ascending/descending sort. Default: `tag_path` ascending.
-- `meta` column renders compact JSON with expand-on-click.
-- Pagination not implemented in Phase 1.
-- `ValidationPanel` below table shows any `resolveRegistry` errors. Informational only.
+Phase 2: RegistryPage fetches DB registry via `GET /api/v1/registry`, compares with in-memory `resolveRegistry()` result using `diffRegistry()`. Table columns: `tag_id` (first), `tag_path`, `data_type`, `is_setpoint`, `meta` (View link opens MetaModalBody). `tag_id` shows `'new'` for added rows.
+
+Modified rows highlight changed cells with amber (`bg-amber-500/25`). Full row green/red for added/retired rows. Summary counts above table. Update DB button disabled when `isDirty` or no changes. Confirmation modal requires non-empty comment. If DB is unavailable, an amber warning banner is shown and the table displays the proposed registry undiffed.
+
+Table layout: `w-auto table-auto` wrapped in a `border border-black/30 rounded-sm w-fit` container. Column dividers: `border-r border-black/30` on all cells except last column. Row dividers: `border-b border-black/30` on all `td`/`th`. Header: `border-t border-b border-black/30`.
 
 ### 8.6 `useValidation` Hook
 
-Runs all client-side validation checks synchronously on every `templateMap` change. No server call. No debounce. Exposes `messages` and `isValid`. All checks: `INVALID_ASSET_NAME`, `DUPLICATE_SIBLING_NAME`, `CIRCULAR_REFERENCE`, `INVALID_REFERENCE`, `TAG_PATH_TOO_LONG`, `SCHEMA_VALIDATION_ERROR`, `UNKNOWN_FIELD`, `PARENT_TYPE_MISSING`, `DUPLICATE_PARENT_TYPE`, `EMPTY_BRANCH` (warning).
+Runs all client-side validation checks synchronously on every `templateMap` change. No server call. No debounce. Exposes `messages` and `isValid`. All checks: `INVALID_ASSET_NAME`, `DUPLICATE_SIBLING_NAME`, `CIRCULAR_REFERENCE`, `INVALID_REFERENCE`, `TAG_PATH_TOO_LONG`, `SCHEMA_VALIDATION_ERROR`, `UNKNOWN_FIELD`, `PARENT_TYPE_MISSING`, `DUPLICATE_PARENT_TYPE`, `EMPTY_BRANCH` (warning — not yet emitted).
 
 ### 8.7 ValidationPanel Component
 
 Always renders with a "Validation" section header. Message list renders only when messages are present. Each row: severity badge, error code, human-readable message, optional ref. Both `"error"` and `"warning"` severity set `isValid = false`.
+
+### 8.8 History Page
+
+`HistoryPage` renders the `registry_revisions` table with columns: rev (right-aligned), applied_by, applied_at (formatted via `formatDateTime`), comment. Ordered DESC by `registry_rev`. Read-only — no row click handlers. Accessible via the **History** sidebar nav item (`id: 'history'`). Handles loading, error, and empty states.
+
+### 8.9 MetaModalBody Component
+
+`client/src/components/shared/MetaModalBody.jsx` — extracted from `RegistryTable` into a shared component. Accepts `{ meta, dbMeta }`.
+
+When `dbMeta` is not present: renders the meta array as a structured level-by-level list (leaf to root), showing `type`, `name`, and `fields` per level.
+
+When `dbMeta` is present (diff mode): shows a legend (amber=changed, green=added, red=removed) and per-field highlighting:
+- Field present in proposed but not db → `bg-green-500/25` (added)
+- Field value differs → `bg-amber-500/25` (changed)
+- Field in db but not proposed → `line-through bg-red-500/15` (removed)
 
 ---
 

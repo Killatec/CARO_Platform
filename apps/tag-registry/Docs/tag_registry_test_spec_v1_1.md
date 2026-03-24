@@ -1,17 +1,20 @@
 # Tag Registry Admin Tool — E2E Test Specification
-**v1.0** | Generated: 2026-03-19
-Companion documents: Functional Spec v1.15 | API Spec v1.13 | Bootstrap v1.18
+**v1.1** | Generated: 2026-03-23
+Companion documents: Functional Spec v1.16 | API Spec v1.14 | Bootstrap v1.19
 
 ---
 
 ## 1. Overview
 
-This document defines the E2E (end-to-end) test suite for the Tag Registry Admin Tool. Tests are implemented with Playwright and cover the complete user-facing surface of the application: template management, field editing, hierarchy navigation, drag-and-drop composition, save/cancel/cascade flows, validation feedback, and the registry view.
+This document defines the E2E (end-to-end) and unit test suite for the Tag Registry Admin Tool. Tests are implemented with Playwright (E2E) and Vitest (unit) and cover the complete user-facing surface of the application: template management, field editing, hierarchy navigation, drag-and-drop composition, save/cancel/cascade flows, validation feedback, the registry view, the registry diff/apply workflow, the meta View modal, and the history page.
 
 **What is tested:**
 - All primary user workflows reachable through the browser UI
 - Correct Zustand store state transitions (verified through DOM assertions)
 - Round-trip correctness: API creates fixture → UI reflects it → UI mutates it → API persists it
+- Phase 2 registry diff display and apply workflow
+- History page revision log
+- Meta View modal with field-level diff highlighting
 - Edge cases and error paths that a user can reach without direct filesystem access
 
 **What is intentionally not tested:**
@@ -21,7 +24,7 @@ This document defines the E2E (end-to-end) test suite for the Tag Registry Admin
 - Behaviour under concurrent multi-user edits (Phase 2 scope)
 
 **Relationship to the functional spec:**
-Each test file maps to one or more sections in Functional Spec v1.15. The test suite acts as a living executable companion to the spec — if a spec behaviour is observable in the browser it should have a corresponding test. Any deliberate deviation between test behaviour and spec language is documented in section 6 (skipped tests) and in `Docs/spec_delta.md`.
+Each test file maps to one or more sections in Functional Spec v1.16. The test suite acts as a living executable companion to the spec — if a spec behaviour is observable in the browser it should have a corresponding test. Any deliberate deviation between test behaviour and spec language is documented in section 6 (skipped tests) and in `Docs/spec_delta.md`.
 
 ---
 
@@ -138,7 +141,7 @@ This guards against the window between tests where nodemon may be restarting (e.
 
 ### 3.6 Client-side navigation
 
-The Tag Registry client has **no URL router**. `App.jsx` uses `useUIStore.activeTab` to switch between `EditorPage` and `RegistryPage`. A `page.goto('/registry')` call is a full browser reload that resets all Zustand stores — `rootTemplateName`, `templateMap`, `activeTab`, and `selectedNode` all revert to defaults.
+The Tag Registry client has **no URL router**. `App.jsx` uses `useUIStore.activeTab` to switch between `EditorPage`, `RegistryPage`, and `HistoryPage`. A `page.goto('/registry')` call is a full browser reload that resets all Zustand stores — `rootTemplateName`, `templateMap`, `activeTab`, and `selectedNode` all revert to defaults.
 
 To navigate between pages without losing store state, click the sidebar buttons:
 
@@ -148,6 +151,9 @@ await page.getByRole('button', { name: /registry/i }).click();
 
 // Navigate to Editor (preserves store)
 await page.getByRole('button', { name: /editor/i }).click();
+
+// Navigate to History (preserves store)
+await page.getByRole('button', { name: /history/i }).click();
 ```
 
 `pageObjects.js` exposes `po.navigateToRegistry()` and `po.navigateToEditor()` as convenience wrappers around these clicks.
@@ -216,7 +222,7 @@ await page.getByRole('button', { name: /editor/i }).click();
 | 1 | Save bar is hidden when no changes are pending | Pass | Functional spec §17: save bar visibility |
 | 2 | Save bar appears after editing a field default | Pass | Functional spec §17: dirty detection |
 | 3 | Cancel/Discard hides Save bar and reverts field | Pass | Functional spec §17: discard flow |
-| 4 | Root dropdown is disabled while dirty | **Skip** | Functional spec §17.1 — not implemented |
+| 4 | Root dropdown is disabled while dirty | **Skip** | Functional spec §17.1 — cursor-not-allowed on wrapper but dropdown still interactive |
 | 5 | Save with no upstream parents completes and hides Save bar | Pass | Functional spec §18: simple save |
 | 6 | Save triggers CascadeConfirmModal when upstream parents are affected | Pass | Functional spec §19: cascade modal |
 | 7 | Confirming the cascade modal completes the save | Pass | Functional spec §19: cascade confirm |
@@ -243,11 +249,102 @@ await page.getByRole('button', { name: /editor/i }).click();
 |---|---|---|---|
 | 1 | Shows prompt when no root is selected | Pass | Functional spec §21: empty state |
 | 2 | Shows registry table after root selection | Pass | Functional spec §21: table display |
-| 3 | tag_path column is present and contains root. prefix | Pass | Functional spec §21: tag path format |
+| 3 | tag_path column is present and contains root template name prefix | Pass | Functional spec §21: tag path format |
 | 4 | Clicking tag_path column header sorts the table | Pass | Functional spec §21: column sort |
 | 5 | Error banner shown when graph has validation errors | **Skip** | Functional spec §21.3 — not reachable via API |
 
 **Setup:** Creates 3-level hierarchy (module → parameter → tag) via API, then calls `selectRoot(modMName)` followed by `po.navigateToRegistry()`. Navigation uses the sidebar button (client-side) to preserve store state — `page.goto('/registry')` would wipe Zustand state and cause the table to never render.
+
+### 4.8 Phase 2 E2E Test Files
+
+#### 4.8.1 tests/registry-diff.spec.js — Registry Diff Display (6 tests)
+
+| # | Test | Covers |
+|---|---|---|
+| 1 | shows all tags as added (green) when not yet applied to database | diffRegistry added classification, bg-green-500 row class |
+| 2 | shows all rows as unchanged after applying registry | diffRegistry unchanged classification, no colored background |
+| 3 | shows new child as added (green) after registry was applied | diff after template modification — added row |
+| 4 | shows removed tag as retired (red) after registry was applied | diffRegistry retired classification, bg-red-500 row class |
+| 5 | shows modified row with cell-level highlight when field value changes | per-cell amber highlight (td[class*="amber"]), not full-row |
+| 6 | tag_id column shows 'new' for added rows and numeric id for unchanged rows | tag_id column behavior |
+
+**Pattern:** Timestamp-based template names (e.g. `tag_diff_${Date.now()}`) ensure tag_paths are unique per run and never appear in the DB before the test applies them. Inline `applyRegistryApi()` and `getTemplate()` helpers defined in the spec file — `api.js` was not modified.
+
+#### 4.8.2 tests/registry-apply.spec.js — Registry Apply Flow (7 tests)
+
+| # | Test | Covers |
+|---|---|---|
+| 1 | Update DB button is disabled when all tags are unchanged | disabled state when no changes |
+| 2 | Update DB button is enabled when changes exist | enabled state when added rows present |
+| 3 | clicking Update DB opens confirmation modal with correct contents | modal open, diff summary, comment input, Confirm disabled initially |
+| 4 | Confirm button enables only when comment is non-empty | Confirm gating on comment field |
+| 5 | Cancel closes modal without applying | Cancel flow, diff summary unchanged |
+| 6 | successful apply shows success banner and all rows become unchanged | banner text, diff resets to unchanged, banner auto-dismisses after 4s |
+| 7 | apply creates a new revision visible on the History page | revision count increments, comment and 'dev' visible on History page |
+
+**Key locators:**
+```js
+const updateDbButton = (page) => page.getByRole('button', { name: 'Update DB' });
+const applyModal = (page) => page.locator('.shadow-xl').filter({ hasText: /Apply Registry Changes/i }).first();
+const commentInput = (page) => page.locator('#apply-comment');
+const confirmButton = (page) => page.getByRole('button', { name: 'Confirm' });
+```
+
+#### 4.8.3 tests/history.spec.js — History Page (5 tests)
+
+| # | Test | Covers |
+|---|---|---|
+| 1 | History nav item is visible in sidebar | History sidebar button present |
+| 2 | History page shows revisions table with correct column headers | rev, applied_by, applied_at, comment headers |
+| 3 | revisions are ordered most recent first | DESC ordering by registry_rev |
+| 4 | applied_at column uses dd-MMM-yyyy HH:mm:ss format | regex `/^\d{2}-[A-Z][a-z]{2}-\d{4} \d{2}:\d{2}:\d{2}$/` |
+| 5 | comment column shows the comment entered during apply | comment round-trip |
+
+**Navigation:** `page.getByRole('button', { name: /history/i }).click()` — inline in each test, not via `pageObjects.js`.
+
+#### 4.8.4 tests/meta-modal.spec.js — Meta View Modal (4 tests)
+
+| # | Test | Covers |
+|---|---|---|
+| 1 | clicking View on a registry row opens meta modal with tag_path as title | modal opens, contains tag_path, shows Level N cards |
+| 2 | meta modal closes when Close button is clicked | modal close |
+| 3 | modified row meta modal shows diff legend when meta field value differs | legend text (changed/added/removed), amber cell highlight |
+| 4 | clicking View on a different row replaces the open modal | modal content switches to second row's tag_path |
+
+**Modal locator pattern:**
+```js
+function metaModal(page, tagPath) {
+  return page.locator('.shadow-xl').filter({ hasText: tagPath }).first();
+}
+```
+
+---
+
+## 4.9 Phase 2 Unit Test Files
+
+#### 4.9.1 client/__tests__/diffRegistry.test.js (34 tests)
+
+Covers: `deepEqual` key-order insensitivity (via meta comparison), all `diffStatus` classifications (added/retired/unchanged/modified), sort order (added→modified→unchanged→retired), `changedFields` array on modified rows, `dbMeta` present on all modified rows, `tag_id` carry-over from db row onto unchanged/modified/retired rows. Edge cases: empty proposed array, empty db array, both empty.
+
+Uses `makeProposed()` and `makeDb()` fixture helpers. No DOM, no network — pure function tests.
+
+#### 4.9.2 client/__tests__/formatDate.test.js (22 tests)
+
+Covers: all 12 month abbreviations (Jan–Dec), zero-padding for day, hour, minute, second, null/undefined/invalid inputs → `'—'`, `Date` objects, ISO strings, PostgreSQL TIMESTAMPTZ strings.
+
+**Timezone safety:** expected strings are built using the same local-time methods (`getDate()`, `getHours()`, etc.) as the implementation, ensuring tests pass regardless of the machine's timezone.
+
+#### 4.9.3 server/__tests__/registryService.test.js (18 tests)
+
+Covers: `getActiveRegistry` (SQL contains `DISTINCT ON`, `ORDER BY registry_rev DESC`, `retired = false` in outer WHERE); `getRevisions` (SQL references `registry_revisions`, ordered `registry_rev DESC`); `getRevisionTags` (called with `[rev]` param, SQL has `registry_rev=$1`, ordered `tag_path ASC`, returns `null` for empty result set).
+
+`@caro/db` is fully mocked via `vi.mock('@caro/db', () => ({ query: vi.fn(), withTransaction: vi.fn() }))`. No real PostgreSQL connection required.
+
+#### 4.9.4 server/__tests__/registry.test.js (19 tests)
+
+HTTP route tests via `node:http.createServer(createApp())` + Node 18 global `fetch`. No supertest dependency. Server lifecycle: `beforeAll` starts server, `afterAll` closes it. All service deps mocked via `vi.mock`.
+
+Covers: `GET /api/v1/registry` (success with tag array, service error → 500); `POST /api/v1/registry/apply` (missing rootName → 400, missing comment → 400, template not found → 404, success → 200 with rev/counts, no changes → 200 with null rev); `GET /api/v1/registry/revisions` (success); `GET /api/v1/registry/revisions/:rev` (success, non-integer → 400, not found → 404).
 
 ---
 
@@ -285,7 +382,7 @@ There is no URL router. `page.goto('/')` and `page.reload()` both wipe all Zusta
 - `useUIStore`: `activeTab` → resets to `'editor'`
 - `useRootTemplate`: `selectedRoot` → resets to `null`
 
-Use sidebar button clicks (`po.navigateToRegistry()`, `po.navigateToEditor()`) for in-session navigation between Editor and Registry. Use `about:blank → /` only when you explicitly want a clean store — typically only at the start of `selectRoot()`.
+Use sidebar button clicks (`po.navigateToRegistry()`, `po.navigateToEditor()`, `page.getByRole('button', { name: /history/i }).click()`) for in-session navigation between Editor, Registry, and History. Use `about:blank → /` only when you explicitly want a clean store — typically only at the start of `selectRoot()`.
 
 ### 5.4 Tag templates do not appear in root dropdown
 
@@ -350,7 +447,7 @@ Solution: always begin a test's edit sequence with `po.selectRoot(rootName)`. Th
 
 The original `TreeNode` collapse toggle used `!prev[path]`, which treats `undefined` (the initial expanded state) as falsy. The first click set the path to `true` (still expanded), requiring a second click to actually collapse. This caused system-tree collapse tests to fail.
 
-**Fixed to:** `prev[path] === false` — `undefined` (expanded) correctly transitions to `false` (collapsed) on the first click.
+**Fixed to:** `prev[path] === false ? true : false` — `undefined` (expanded) correctly transitions to `false` (collapsed) on the first click.
 
 Fix location: `AssetTree.jsx` toggle handler.
 
@@ -381,6 +478,16 @@ await expect(page.locator('body')).toContainText(/select.*root/i);
 
 This passes even after `beforeEach` has called `selectRoot()` and navigated to the Registry page, because the text "Root Template:" and "Select root..." from the dropdown label in AppShell match the regex — they are always present in the page body regardless of whether a root is actually selected. The assertion is intentionally loose and passes in both states. It is not testing the registry prompt specifically; it verifies the page loaded and contains root-selection UI, which is sufficient for this smoke-level test.
 
+### 5.13 Phase 2 API helpers defined inline
+
+Phase 2 E2E specs (`registry-diff.spec.js`, `registry-apply.spec.js`, `history.spec.js`, `meta-modal.spec.js`) define registry API helpers (`applyRegistryApi`, `fetchRevisions`, `getTemplate`) inline per spec file rather than in `helpers/api.js`. This is intentional — `api.js` was not modified to avoid breaking existing Phase 1 tests.
+
+History page navigation uses `page.getByRole('button', { name: /history/i }).click()` inline — `pageObjects.js` was not modified.
+
+### 5.14 DB rows not cleaned up after Phase 2 tests
+
+`tag_registry` and `registry_revisions` rows written during Phase 2 E2E tests are not deleted after each test. The append-only schema means stale rows from prior runs are harmless — `getActiveRegistry()` always returns the latest revision per `tag_id`, and timestamp-based template names ensure unique `tag_path`s per run. Rows from prior runs never interfere with new test assertions.
+
 ---
 
 ## 6. Intentionally Skipped Tests
@@ -394,9 +501,7 @@ This passes even after `beforeEach` has called `selectRoot()` and navigated to t
 test.skip('root dropdown is disabled while dirty', ...)
 ```
 
-**Reason:** Functional spec section 16.1 states the root dropdown should be disabled while unsaved changes are pending. `AppShell.jsx` does not currently implement this — the `Dropdown` component has no `disabled` prop wired to `isDirty`. The dropdown remains interactive while dirty.
-
-This is a known implementation gap, not a test infrastructure failure. The test is skipped rather than deleted so it documents the unimplemented behaviour and will automatically un-skip if the feature is implemented and the test is re-enabled.
+**Reason:** The root dropdown wrapper has `cursor-not-allowed` styling while dirty, but the `<select>` element itself has no `disabled` attribute — the dropdown remains interactive. The spec originally called for a `disabled` prop, but the current implementation uses a CSS cursor hint only. The test is skipped rather than deleted so it documents the implementation state.
 
 ### 6.2 error banner shown when graph has validation errors
 
@@ -424,7 +529,7 @@ The following `data-testid` attributes have been added to the app source for sta
 | `data-testid="system-tree"` | `AssetTree.jsx` | Outermost `<div>` (all return paths) |
 | `data-testid="templates-tree"` | `TemplatesTree.jsx` | Outermost `<div>` (all return paths) |
 | `data-testid="fields-panel"` | `FieldsPanel.jsx` | Outermost `<div>` (all return paths) |
-| `data-testid="save-bar"` | `AppShell.jsx` | Save bar wrapper `<div>` (only rendered when `isDirty`) |
+| `data-testid="save-bar"` | `AppShell.jsx` | Save bar wrapper `<div>` (only rendered when `isDirty` and `activeTab === 'editor'`) |
 | `data-testid="save-button"` | `AppShell.jsx` | Save `<button>` |
 | `data-testid="cancel-button"` | `AppShell.jsx` | Cancel `<button>` |
 | `data-testid="see-changes-button"` | `AppShell.jsx` | See what's changed `<button>` |
@@ -519,9 +624,9 @@ Calls `POST /templates/batch` and returns the full response data object includin
 
 ---
 
-## 9. Results Baseline (v1.0)
+## 9. Results Baseline
 
-### 9.1 E2E Suite (Playwright)
+### 9.1 E2E Suite — Phase 1 Baseline (v1.0, 2026-03-19)
 
 | Metric | Value |
 |---|---|
@@ -531,13 +636,12 @@ Calls `POST /templates/batch` and returns the full response data object includin
 | Failed | 0 |
 | Runtime | ~3.7 minutes |
 | Browsers | Chromium, Firefox, WebKit |
-| Baseline date | 2026-03-19 |
 
 Skipped breakdown:
 - `save-cancel.spec.js` test 4 × 3 browsers — see section 6.1
 - `registry.spec.js` test 5 × 3 browsers — see section 6.2
 
-### 9.2 Unit Test Suite (Vitest)
+### 9.2 Unit Test Suite — Phase 1 Baseline (v1.0, 2026-03-19)
 
 | Package | Tests | Passed | Failed |
 |---|---|---|---|
@@ -546,7 +650,7 @@ Skipped breakdown:
 | client/ useTemplateGraphStore | 47 | 47 | 0 |
 | **Total** | **201** | **201** | **0** |
 
-### 9.3 Combined baseline
+### 9.3 Combined Phase 1 Baseline
 
 | Metric | Value |
 |---|---|
@@ -556,33 +660,62 @@ Skipped breakdown:
 | Failed | 0 |
 | Baseline date | 2026-03-19 |
 
+### 9.4 Phase 2 Baseline (2026-03-23)
+
+**Vitest unit tests:**
+
+| Package | Tests | Passed |
+|---|---|---|
+| shared/ pure functions | 112 | 112 |
+| server/ templateService | 42 | 42 |
+| client/ useTemplateGraphStore | 47 | 47 |
+| client/ diffRegistry | 34 | 34 |
+| client/ formatDate | 22 | 22 |
+| server/ registryService | 18 | 18 |
+| server/ registry routes | 19 | 19 |
+| **Total** | **294** | **294** |
+
+**Playwright E2E:**
+
+| Spec files | Runs | Passed | Skipped |
+|---|---|---|---|
+| Phase 1 (7 files, 40 tests × 3 browsers) | 120 | 114 | 6 |
+| registry-diff.spec.js (6 tests × 3 browsers) | 18 | 18 | 0 |
+| registry-apply.spec.js (7 tests × 3 browsers) | 21 | 21 | 0 |
+| history.spec.js (5 tests × 3 browsers) | 15 | 15 | 0 |
+| meta-modal.spec.js (4 tests × 3 browsers) | 12 | 12 | 0 |
+| **Phase 2 total new E2E runs** | **66** | **66** | **0** |
+| **Combined E2E** | **186** | **180** | **6** |
+
+**Combined total (Phase 2):**
+
+| Metric | Value |
+|---|---|
+| Total (unit tests + E2E runs) | 480 |
+| Passing | 474 |
+| Skipped (intentional, E2E only) | 6 |
+| Failed | 0 |
+| Baseline date | 2026-03-23 |
+
 ---
 
 ## 10. Unit Test Suite
 
 ### 10.1 Overview
 
-In addition to the Playwright E2E suite, a Vitest unit test suite
-covers the three layers of business logic that are not adequately
-validated through browser tests alone: the shared pure functions,
-the server template service, and the client Zustand store.
+In addition to the Playwright E2E suite, a Vitest unit test suite covers the layers of business logic that are not adequately validated through browser tests alone: the shared pure functions, the server template service, the client Zustand store, and the Phase 2 registry utilities and routes.
 
 ### 10.2 Packages and locations
 
 | Package | Location | Run command |
 |---|---|---|
 | shared/ functions | apps/tag-registry/shared/ | npm test |
-| server templateService | apps/tag-registry/server/ | npm test |
-| useTemplateGraphStore | apps/tag-registry/client/ | npm test |
+| server templateService + registry | apps/tag-registry/server/ | npm test |
+| useTemplateGraphStore + diffRegistry + formatDate | apps/tag-registry/client/ | npm test |
 
-All three use Vitest 1.6.x. Config file: vitest.config.js in each
-package root. Test files: __tests__/**/*.test.js.
+All three use Vitest 1.6.x. Config file: vitest.config.js in each package root. Test files: `__tests__/**/*.test.js`.
 
-Note: the client package runs Vitest from the monorepo root
-node_modules/.bin because @caro/ui is a workspace-only package
-that cannot be resolved by a standalone npm install in the client
-directory. npm test works correctly because npm adds the project
-root's node_modules/.bin to PATH when running scripts.
+Note: the client package runs Vitest from the monorepo root `node_modules/.bin` because `@caro/ui` is a workspace-only package that cannot be resolved by a standalone `npm install` in the client directory. `npm test` works correctly because npm adds the project root's `node_modules/.bin` to PATH when running scripts.
 
 ### 10.3 shared/ unit tests (112 tests, 8 files)
 
@@ -594,13 +727,14 @@ root's node_modules/.bin to PATH when running scripts.
 | validateGraph.test.js | 12 | Valid graphs, INVALID_REFERENCE, CIRCULAR_REFERENCE, multi-error |
 | simulateCascade.test.js | 10 | fields added/removed/changed, affectedParents per-instance, no-op |
 | applyFieldCascade.test.js | 7 | Purity, plain object/Map passthrough, field removal cascade, single-level only |
-| resolveRegistry.test.js | 13 | tag_path construction, root. prefix, meta leaf-to-root, field resolution, path length limit |
+| resolveRegistry.test.js | 13 | tag_path construction, rootName as first segment, meta leaf-to-root, field resolution, path length limit |
 | validateParentTypes.test.js | 7 | No-op when unconfigured, PARENT_TYPE_MISSING, DUPLICATE_PARENT_TYPE |
 
-### 10.4 server/ unit tests (42 tests, 5 files)
+### 10.4 server/ unit tests (42 + 37 = 79 tests)
 
-Uses real temporary directories (os.tmpdir()) for file I/O.
-No mocking — tests the actual fs operations.
+**Phase 1 — templateService (42 tests, 5 files):**
+
+Uses real temporary directories (os.tmpdir()) for file I/O. No mocking — tests the actual fs operations.
 
 | File | Tests | Coverage |
 |---|---|---|
@@ -610,10 +744,27 @@ No mocking — tests the actual fs operations.
 | batchSave.test.js | 15 | New template, name conflict, stale hash (changes + deletions), update, delete, empty batch, requires_confirmation, confirmed cascade, graph validation rejection |
 | validateAll.test.js | 4 | Empty dir, all valid, broken reference |
 
-### 10.5 client/ unit tests (47 tests, 5 files)
+**Phase 2 — registryService (18 tests, 1 file):**
 
-Uses vi.mock() for templatesApi and useUIStore.
-Store reset via useTemplateGraphStore.setState() in beforeEach.
+`@caro/db` fully mocked. Tests SQL patterns, parameter shapes, and return values.
+
+| File | Tests | Coverage |
+|---|---|---|
+| registryService.test.js | 18 | getActiveRegistry (DISTINCT ON + WHERE retired=false), getRevisions (DESC order), getRevisionTags (tag_path ASC, null on empty) |
+
+**Phase 2 — registry routes (19 tests, 1 file):**
+
+Uses `node:http.createServer(createApp())` + Node 18 global `fetch`. No supertest.
+
+| File | Tests | Coverage |
+|---|---|---|
+| registry.test.js | 19 | GET /registry, POST /apply (validation, not-found, success, no-changes), GET /revisions, GET /revisions/:rev (success, non-integer, not-found) |
+
+### 10.5 client/ unit tests (47 + 56 = 103 tests)
+
+**Phase 1 — useTemplateGraphStore (47 tests, 5 files):**
+
+Uses vi.mock() for templatesApi and useUIStore. Store reset via `useTemplateGraphStore.setState()` in beforeEach.
 
 | File | Tests | Coverage |
 |---|---|---|
@@ -622,3 +773,15 @@ Store reset via useTemplateGraphStore.setState() in beforeEach.
 | addAndInject.test.js | 12 | addTemplate (null/existing hash), injectTemplateGraph (no-overwrite, dirtySet untouched, structuredClone) |
 | deletionActions.test.js | 7 | markForDeletion (removes from map, preserves hash/originalMap), removeTemplate (all-five, safe on missing) |
 | saveAndDiscard.test.js | 12 | Guards, payload shape, requires_confirmation, rooted reload, isolation mode wipe+refetch, confirmSave, discard, STALE_TEMPLATE |
+
+**Phase 2 — diffRegistry (34 tests, 1 file):**
+
+| File | Tests | Coverage |
+|---|---|---|
+| diffRegistry.test.js | 34 | All diffStatus classifications, sort order, changedFields, dbMeta on modified rows, tag_id carry-over, deepEqual key-order insensitivity, edge cases |
+
+**Phase 2 — formatDate (22 tests, 1 file):**
+
+| File | Tests | Coverage |
+|---|---|---|
+| formatDate.test.js | 22 | All 12 month abbreviations, zero-padding, null/undefined/invalid → '—', Date objects, ISO strings, PostgreSQL TIMESTAMPTZ |
