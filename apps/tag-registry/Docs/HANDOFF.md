@@ -90,7 +90,7 @@ All documents live in `apps/tag-registry/Docs/`.
 | `tag_registry_api_spec_v1_15.md` | v1.15 | REST API contract — all endpoints, request/response shapes, error codes | Endpoint contracts, request/response shapes, error codes |
 | `tag_registry_bootstrap_v1_21.md` | v1.21 | Implementation bootstrap — folder structure, component architecture, store behavior, seed data | Component architecture, store behavior, folder structure, seed data |
 | `tag_registry_test_spec_v1_2.md` | v1.2 | Test suite specification — E2E and unit test coverage, known gotchas, selector strategy | Writing or debugging tests, selector strategy, E2E gotchas |
-| `docs/CARO_DB_Spec_v1_3.md` | v1.3 | Platform PostgreSQL schema — all tables, column types, constraints, indexes | Writing migrations, HMI table schema, audit_log, any PostgreSQL schema question |
+| `db/Docs/CARO_DB_Spec_v1_3.md` | v1.3 | Platform PostgreSQL schema — all tables, column types, constraints, indexes | Writing migrations, HMI table schema, audit_log, any PostgreSQL schema question |
 | `spec_delta.md` | live | Pending updates to the above docs — read this to know what has diverged from the specs | **Always** — read before any task to know where reality diverges from specs |
 | `HANDOFF.md` | live | This file | Read first for orientation |
 

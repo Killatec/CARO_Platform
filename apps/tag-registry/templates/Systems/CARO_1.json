@@ -14,9 +14,9 @@
   "children": [
     {
       "template_name": "rf_power_module",
-      "asset_name": "RF_Module",
+      "asset_name": "RF1",
       "fields": {
-        "description": "Main RF power"
+        "description": "RF_Control_1"
       }
     }
   ]

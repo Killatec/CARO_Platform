@@ -33,7 +33,9 @@
       "Bash(powershell.exe -Command \"cd ''C:\\\\KillaTec\\\\CARO_Platform\\\\apps\\\\tag-registry\\\\shared''; npm test 2>&1\")",
       "Bash(powershell.exe -Command \"\\(Get-Content ''C:\\\\KillaTec\\\\CARO_Platform\\\\apps\\\\tag-registry\\\\Docs\\\\spec_delta.md''\\).Count\")",
       "Bash(npx vitest:*)",
-      "Bash(gh repo:*)"
+      "Bash(gh repo:*)",
+      "Bash(node scripts/testConnect.js)",
+      "Bash(node scripts/testSimulator.js)"
     ]
   }
 }

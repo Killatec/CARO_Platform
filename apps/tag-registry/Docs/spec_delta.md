@@ -11,7 +11,7 @@ All deltas through delta 010 have been applied to:
 - Bootstrap v1.21 (`tag_registry_bootstrap_v1_21.md`)
 - API Spec v1.15 (`tag_registry_api_spec_v1_15.md`)
 - Test Spec v1.2 (`tag_registry_test_spec_v1_2.md`)
-- CARO DB Spec v1.3 (`docs/CARO_DB_Spec_v1_3.md`)
+- CARO DB Spec v1.3 (`db/Docs/CARO_DB_Spec_v1_3.md`)
 
 ## Delta 010 — E2E tests for validation-parent-types and trends not in Test Spec v1.1
 
@@ -60,12 +60,12 @@ this endpoint. Also update Bootstrap §8 to note the `AppShell` config fetch and
 `useUIStore.validationConfig` field.
 **Status:** Resolved 2026-04-02 — superseded by Delta 006 (see below), which is the numbered version of this entry. Documented in API Spec v1.15 §2.7 and Bootstrap v1.21 §8.10.
 
-Note: `docs/spec_delta.md` Delta 004 (runMigrations fail-fast) was also resolved
+Note: `db/Docs/spec_delta.md` Delta 004 (runMigrations fail-fast) was also resolved
 in a prior session — see that file for details. Changes affected `packages/db/` and
 `apps/tag-registry/server/src/index.js`, not the tag-registry spec documents
 themselves. No tag-registry spec doc update required.
 
-Note: `docs/spec_delta.md` Delta 005 (no applied-migrations guard) was resolved
+Note: `db/Docs/spec_delta.md` Delta 005 (no applied-migrations guard) was resolved
 2026-03-29. `packages/db/migrations.js` now tracks applied migrations in a
 `schema_migrations` table. Any app using `@caro/db` gains this guard automatically.
 `db/postgres/migrations/004_alter_tag_id_to_integer.sql` was also made idempotent.
@@ -161,5 +161,5 @@ Includes a safety check that raises EXCEPTION if any existing value exceeds
 `registryService.js` `Number()` coercion works correctly with both column types.
 All 297 unit tests pass.
 **Action:** No tag-registry spec doc update required — this divergence was tracked
-in `docs/spec_delta.md` Delta 001 (now resolved). The tag-registry Bootstrap §4.1
+in `db/Docs/spec_delta.md` Delta 001 (now resolved). The tag-registry Bootstrap §4.1
 and related sections already document tag_id as a standard JS number.

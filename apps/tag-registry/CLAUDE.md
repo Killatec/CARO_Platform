@@ -18,11 +18,15 @@ Always read these two files before starting any task, regardless of scope:
 | Endpoint contracts, request/response shapes, error codes | `Docs/tag_registry_api_spec_v1_15.md` |
 | Component architecture, store behavior, folder structure, seed data | `Docs/tag_registry_bootstrap_v1_21.md` |
 | Writing or debugging tests, selector strategy, E2E gotchas | `Docs/tag_registry_test_spec_v1_2.md` |
-| Migrations, HMI table schema, audit_log, any PostgreSQL schema question | `Docs/CARO_DB_Spec_v1_3.md` |
+| Migrations, HMI table schema, audit_log, any PostgreSQL schema question | `db/Docs/CARO_DB_Spec_v1_3.md` |
 
 Do not read specs you do not need. HANDOFF.md and spec_delta.md are always sufficient for orientation and planning tasks.
 
-## 3. Hard constraints
+## 3. DB policy
+
+ALL queries live in `packages/db/`. No raw SQL in app code. Import named functions only.
+
+## 4. Hard constraints
 
 - **Language:** JavaScript only — no TypeScript anywhere.
 - **Database URL:** Never use `DATABASE_URL`. Use the five `PG*` env vars consumed by `@caro/db`.
@@ -31,7 +35,7 @@ Do not read specs you do not need. HANDOFF.md and spec_delta.md are always suffi
 - **No URL router:** Never use `page.goto('/registry')` or similar in tests or navigation logic. Use sidebar button clicks to navigate between pages.
 - **Shared module:** `apps/tag-registry/shared/` is environment-agnostic — no `fs`, no Express, no DOM. Pure functions only.
 
-## 4. Session discipline
+## 5. Session discipline
 
 After every task that changes code or behavior:
 
@@ -43,7 +47,7 @@ After every task that changes code or behavior:
 3. **Update HANDOFF.md section 6** if test counts change. Verify the header total matches the sum of all rows.
 4. **Do not bump spec version numbers** unless explicitly asked to update a spec document.
 
-## 5. Test suite baseline
+## 6. Test suite baseline
 
 Current passing totals — update HANDOFF.md section 6 if these change:
 
