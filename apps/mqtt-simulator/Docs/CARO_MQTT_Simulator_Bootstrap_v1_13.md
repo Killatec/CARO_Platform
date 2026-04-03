@@ -38,33 +38,57 @@ The simulator reads the active tag registry from PostgreSQL at startup, groups t
 >
 > tag-registry/ ← existing
 >
-> mqtt-simulator/ ← new (this document)
+> mqtt-simulator/ ← this app
 >
-> package.json
+> Docs/ ← spec documents
+>
+> server/
+>
+> index.js ← entry point, dotenv, ping, migrations, app.listen
+>
+> app.js ← Express factory, CORS, routes mount
+>
+> routes/
+>
+> simulator.js ← POST /start, POST /stop, GET /status
+>
+> services/
+>
+> mqttClient.js ← connect(), disconnect(), getClient()
+>
+> simulatorService.js ← start(), stop(), getStatus(), tick loop, command handler
+>
+> registry.js ← loadTagRegistry() — calls \@caro/db, maps rows to SimTag
+>
+> middleware/
+>
+> asyncWrap.js
+>
+> errorHandler.js
+>
+> __tests__/
+>
+> client/ ← React+Vite frontend (port 5174)
 >
 > src/
 >
-> index.js ← entry point
+> components/SimulatorPanel.jsx
 >
-> registry.js ← reads tag_registry from PostgreSQL
+> stores/useSimulatorStore.js
 >
-> simulator.js ← simulation loop and value generation
->
-> mqtt.js ← MQTT client, topic handlers
->
-> protobuf.js ← Protobuf encode/decode helpers
->
-> control.js ← REST control API server + log buffer
+> api/simulator.js
 >
 > public/
 >
-> index.html ← simple one-page control frontend
+> e2e/
+>
+> tests/
 >
 > .env.example
 >
 > README.md
 >
-> *NOTE: The simulator is a standalone Node.js app --- not part of the npm workspaces packages. It imports \@caro/db for database access.*
+> *NOTE: The simulator follows apps/tag-registry/ conventions — separate server/ and client/ directories, Express REST API, React+Vite frontend. It is part of the npm workspaces monorepo and imports \@caro/db for database access.*
 
 **3. Technology Stack**
 
@@ -140,29 +164,45 @@ The simulator reads the active tag registry from PostgreSQL at startup, groups t
 
 **6. Tag Registry Query**
 
-On startup the simulator queries tag_registry for the latest revision of each active tag:
+On startup the simulator queries tag_registry for the latest revision of each active tag.
+The query lives in packages/db/registry.js (getActiveTags()) --- do not duplicate SQL in app code.
 
+Correct query pattern (DISTINCT ON subquery first, then outer WHERE):
+
+> SELECT \* FROM (
+>
 > SELECT DISTINCT ON (tag_id)
 >
-> tag_id, tag_path, data_type, is_setpoint, meta
+> tag_id, registry_rev, tag_path, data_type, is_setpoint, trends, retired, meta
 >
 > FROM tag_registry
 >
-> WHERE retired = false
->
 > ORDER BY tag_id, registry_rev DESC
+>
+> ) latest
+>
+> WHERE retired = false
 
-module_id is extracted from the meta array --- it is the asset_name of the first ancestor node whose type is \'module\':
+*NOTE: Applying WHERE retired = false before DISTINCT ON is incorrect --- it excludes retired rows
+from consideration and can surface stale non-retired rows from older revisions. Always use the
+subquery pattern above.*
+
+module_id is extracted from the meta array --- it is the asset_name of the first ancestor node
+whose type is \'module\'. meta is ordered root-to-tag (meta[0] = root, meta[last] = tag leaf);
+find() is order-agnostic and works correctly either way:
 
 > function getModuleId(meta) {
 >
-> // meta is ordered leaf-to-root (index 0 = tag leaf)
+> // meta is ordered root-to-tag; find() is order-agnostic
 >
 > const moduleAncestor = meta.find(m =\> m.type === \'module\');
 >
 > return moduleAncestor?.name ?? \'unknown\';
 >
 > }
+
+apps/mqtt-simulator/server/services/registry.js calls getActiveTags() and maps rows to SimTag shape.
+tag_id is coerced to Number --- PostgreSQL returns INTEGER columns as strings via node-postgres.
 
 **7. Simulated Value Generation**
 
@@ -270,13 +310,17 @@ On startup the simulator subscribes to caro/+/cmd with QoS 1. The + wildcard mat
 
 **9.2 SET_VALUES**
 
-Incoming SET_VALUES CommandEnvelope shape (JSON):
+Incoming CommandEnvelope shape per CARO_MQTT_Spec §6.1 (JSON):
 
 > {
 >
 > \"command_id\": \"cmd-abc123\",
 >
 > \"command_type\": \"SET_VALUES\",
+>
+> \"ts_utc_ms\": 1743073812000,
+>
+> \"payload\": {
 >
 > \"values\": \[
 >
@@ -287,24 +331,38 @@ Incoming SET_VALUES CommandEnvelope shape (JSON):
 > \]
 >
 > }
+>
+> }
+
+*NOTE: values are nested under payload.payload.values --- not at the top level of the envelope.
+Earlier Bootstrap versions showed values at the top level; this was incorrect. Follow CARO_MQTT_Spec §6.1.*
 
 When a SET_VALUES command is received:
 
 12. Parse JSON. Validate command_type === \'SET_VALUES\'.
 
-13. For each {tag_id, value} pair in values: validate tag_id exists in the tag map for this module_id. If valid, update simValue to the received value. No type coercion is performed --- the simulator accepts the value as-is. If the tag_id is unknown, mark it as rejected in the CMD_ACK.
+13. For each {tag_id, value} pair in payload.values: validate tag_id exists in the tag map for this module_id and is a setpoint (is_setpoint === true). If valid, update simValue to the received value. If tag_id unknown or not a setpoint, mark as rejected (UNKNOWN_TAG) in the CMD_ACK.
 
-14. After CMD_ACK_DELAY_MS, publish CMD_ACK JSON to caro/{module_id}/cmd_ack (QoS 1):
+14. Immediately publish CMD_ACK JSON to caro/{module_id}/cmd_ack (QoS 1) per CARO_MQTT_Spec §6.2.
+Then publish a telemetry message for the affected module immediately (do not wait for next tick).
+
+*NOTE: CMD_ACK_DELAY_MS is not implemented --- ACK is sent immediately.*
+
+CMD_ACK shape per CARO_MQTT_Spec §6.2:
 
 > {
 >
 > \"command_id\": \"cmd-abc123\",
 >
+> \"command_type\": \"SET_VALUES\",
+>
+> \"ts_utc_ms\": 1743073812050,
+>
 > \"results\": \[
 >
-> { \"tag_id\": 1003, \"accepted\": true, \"rejection_code\": null },
+> { \"tag_id\": 1003, \"accepted\": true },
 >
-> { \"tag_id\": 1004, \"accepted\": true, \"rejection_code\": null },
+> { \"tag_id\": 1004, \"accepted\": true },
 >
 > { \"tag_id\": 9999, \"accepted\": false, \"rejection_code\": \"UNKNOWN_TAG\" }
 >
@@ -364,147 +422,142 @@ When TELEMETRY_ENCODING=json the simulator publishes a plain JSON payload to car
 
 **11. REST Control API**
 
-A lightweight Express server runs alongside the simulator on CONTROL_PORT (default 4000). It exposes simple endpoints for manual control during development and testing, serves the frontend at GET /, and provides the log polling endpoint. All endpoints return JSON.
+The Express API server runs on PORT (default 3002). All endpoints are prefixed /api/v1/simulator/.
+All responses use the { ok, data } / { ok, error: { code, message } } envelope matching
+apps/tag-registry/ conventions. Base URL: http://localhost:3002.
 
-> **⚠ This API has no authentication. It is accessible to anyone on the network. Use only on a trusted development network.**
+> **⚠ This API has no authentication. Use only on a trusted development network.**
 
-All error responses use a consistent shape:
+**11.1 Implemented Endpoints**
 
-> { \"ok\": false, \"error\": \"descriptive error message\" }
+  -----------------------------------------------------------------------------------------------------------------------------------------
+  **Method**   **Path**                          **Description**
+  ------------ --------------------------------- ------------------------------------------------------------------------------------------
+  POST         /api/v1/simulator/start           Start simulator. Body: { intervalMs? } (default 1000ms). Returns { ok, data: status }.
+                                                 Returns 409 if already running. Returns 202 — MQTT connect is async.
 
-**11.1 Endpoints**
+  POST         /api/v1/simulator/stop            Stop simulator. Returns 409 if not running.
 
-  --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-  **Method**   **Path**                      **Description**
-  ------------ ----------------------------- -------------------------------------------------------------------------------------------------------------------------------------------------------------
-  GET          /                             Serves public/index.html --- the one-page control frontend.
+  GET          /api/v1/simulator/status          Returns { ok, data: { running, intervalMs, tagCount, modules, uptime_s, tickCount } }.
+  -----------------------------------------------------------------------------------------------------------------------------------------
 
-  GET          /status                       Returns simulator status: running state, module list, tag count, tick interval, uptime.
+**11.2 Not Yet Implemented Endpoints**
 
-  GET          /logs                         Returns the last LOG_BUFFER_SIZE log entries from the rolling in-memory buffer as a JSON array. Each entry: { ts: ISO string, level: string, msg: string }.
+The following endpoints were specified in the original Bootstrap §11 but are not yet implemented.
+Add them as needed when HMI or test tooling requires them:
 
-  POST         /telemetry/stop               Stops the telemetry loop. Tags stop publishing.
+  -----------------------------------------------------------------------------------------------------------------------------------------
+  **Method**   **Path**                          **Description**
+  ------------ --------------------------------- ------------------------------------------------------------------------------------------
+  GET          /api/v1/simulator/logs            Rolling in-memory log buffer (LOG_BUFFER_SIZE entries).
 
-  POST         /telemetry/start              Restarts the telemetry loop if stopped.
+  POST         /api/v1/simulator/telemetry/stop/:module_id    Stop telemetry for one module.
 
-  POST         /telemetry/stop/:module_id    Stops telemetry for one module only.
+  POST         /api/v1/simulator/telemetry/start/:module_id   Restart telemetry for one module.
 
-  POST         /telemetry/start/:module_id   Restarts telemetry for one module.
+  POST         /api/v1/simulator/override        Pin a tag value. Body: { tag_id, value }.
 
-  POST         /override                     Manually set a tag\'s simulated value. Body: { tag_id: number, value: any }.
+  POST         /api/v1/simulator/override/clear/:tag_id       Clear a manual override.
 
-  POST         /override/clear/:tag_id       Clears a manual override --- tag resumes normal simulation.
+  POST         /api/v1/simulator/telemetry/encoding           Set encoding mode. Body: { encoding: \'protobuf\' \| \'json\' }.
 
-  POST         /telemetry/encoding           Sets the telemetry encoding mode. Body: { encoding: \'protobuf\' \| \'json\' }. Takes effect on the next tick.
+  POST         /api/v1/simulator/reject/enable   Enable REJECT_ALL_WRITES mode.
 
-  POST         /reject/enable                Enables REJECT_ALL_WRITES mode. All subsequent SET_VALUES are rejected.
+  POST         /api/v1/simulator/reject/disable  Disable REJECT_ALL_WRITES mode.
 
-  POST         /reject/disable               Disables REJECT_ALL_WRITES mode. SET_VALUES are accepted normally.
+  GET          /api/v1/simulator/tags            Full tag list with current values and override status.
 
-  GET          /tags                         Returns full tag list with current simulated values, module_id, and override status.
+  GET          /api/v1/simulator/tags/:module_id Tag list for one module.
+  -----------------------------------------------------------------------------------------------------------------------------------------
 
-  GET          /tags/:module_id              Returns tag list filtered to one module_id.
-  --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+**11.3 Status Response (current shape)**
 
-**11.2 Log Buffer**
-
-control.js maintains a rolling in-memory array of the last LOG_BUFFER_SIZE log entries (default 200). Every call to the simulator\'s logging functions appends an entry to this buffer in addition to writing to the console. When the buffer exceeds LOG_BUFFER_SIZE, the oldest entry is dropped.
-
-Log entry structure:
-
-> {
->
-> \"ts\": \"2026-03-27T10:09:16.000Z\", // ISO 8601 timestamp
->
-> \"level\": \"INFO\", // INFO \| WARN \| ERROR
->
-> \"msg\": \"\[SIM\] Started: 2 modules, 13 tags, broker: mqtt://localhost:1883, tick: 100ms\"
->
-> }
-
-**11.3 Override Behavior**
-
-A manual override pins a tag\'s simulated value and stops its automatic simulation. The tag continues to publish the overridden value on every tick until the override is cleared. This allows precise testing of specific value states --- for example setting a setpoint tag to a value outside eng_max to test OUT_OF_SYNC detection.
-
-> // POST /override
->
-> { \"tag_id\": 1003, \"value\": 9999.0 }
->
-> // Response
->
-> { \"ok\": true, \"tag_id\": 1003, \"value\": 9999.0, \"overridden\": true }
->
-> // POST /override/clear/1003
->
-> { \"ok\": true, \"tag_id\": 1003, \"overridden\": false }
-
-**11.4 Status Response**
-
-> // GET /status
+> // GET /api/v1/simulator/status
 >
 > {
+>
+> \"ok\": true,
+>
+> \"data\": {
 >
 > \"running\": true,
 >
+> \"intervalMs\": 100,
+>
+> \"tagCount\": 16,
+>
+> \"modules\": \[\"RF1\"\],
+>
 > \"uptime_s\": 142,
 >
-> \"tick_ms\": 100,
+> \"tickCount\": 1420
 >
-> \"module_count\": 2,
->
-> \"tag_count\": 13,
->
-> \"reject_all\": false,
->
-> \"encoding\": \"protobuf\", // current telemetry encoding mode: \"protobuf\" \| \"json\"
->
-> \"modules\": \[
->
-> { \"module_id\": \"RFModule_1\", \"running\": true, \"tag_count\": 7 },
->
-> { \"module_id\": \"RFModule_2\", \"running\": false, \"tag_count\": 6 }
->
-> \]
+> }
 >
 > }
 
-**12. Simple Frontend**
+**12. Frontend**
 
-A single-page HTML file (public/index.html) is served at GET /. It is plain HTML with vanilla JavaScript and basic CSS --- no framework, no build step. All interactions are static HTTP calls to the REST API.
+React+Vite client at apps/mqtt-simulator/client/ (port 5174). Mirrors apps/tag-registry/client/
+conventions: Tailwind CSS v4, Zustand store, single-page layout, no router.
 
-The page is divided into two areas:
+Key files:
 
--   Control panel (top): status display (including current encoding mode), telemetry start/stop per module, encoding mode checkbox (Protobuf / JSON) that calls POST /telemetry/encoding on change, override form, reject mode toggle, and tag list with current values and override status. The encoding checkbox initial state is read from GET /status on page load.
+-   src/stores/useSimulatorStore.js --- Zustand store: { running, intervalMs, tagCount, uptime_s, error }
 
--   Log panel (bottom): a scrolling log view that polls GET /logs every 1 second and renders all entries with timestamp, level, and message. New entries are appended at the bottom. The panel auto-scrolls to the latest entry.
+-   src/components/SimulatorPanel.jsx --- polls GET /api/v1/simulator/status every 2s,
+    Start/Stop buttons call POST /api/v1/simulator/start and /stop
 
-> *NOTE: The log panel reflects the rolling buffer state at each poll. There is no real-time push --- entries may appear up to \~1 second after they are written to the console.*
+-   src/api/simulator.js --- typed REST calls to the simulator API
+
+-   vite.config.js --- port 5174, proxies /api → http://localhost:3002
+
+-   src/index.css --- @import "tailwindcss"; @source "../../../../packages/ui/src";
+
+Start: cd apps/mqtt-simulator/client && npm run dev
+
+> *NOTE: Original Bootstrap §12 specified plain HTML + vanilla JS. Implementation uses React+Vite
+> for consistency with apps/tag-registry/client/ conventions. The log panel, per-module controls,
+> encoding toggle, and override form described in the original §12 are not yet implemented ---
+> see spec_delta.md for the full list.*
 
 **13. File Descriptions**
 
-  -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-  **File**                   **Responsibility**
-  -------------------------- --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-  src/index.js               Entry point. Validates env vars, orchestrates startup sequence (Sections 5--8). Starts telemetry loop. Handles graceful shutdown on SIGINT/SIGTERM.
+  ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+  **File**                              **Responsibility**
+  ------------------------------------- -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+  server/index.js                       Entry point. Validates env vars, starts Express server, handles graceful shutdown.
 
-  src/registry.js            Exports loadTagRegistry(). Queries tag_registry via \@caro/db, builds tag map grouped by module_id, extracts module_id from meta. Returns Map\<module_id, SimTag\[\]\>.
+  server/app.js                         Express app factory. CORS, JSON body parser, routes mount, error handler.
 
-  src/simulator.js           Exports initSimValues(tagMap), tickSimValues(tagMap, deltaMs), and getSimValue(tag). Implements fixed sine wave (f64/i32) and random toggle (bool) logic. Pure functions --- no I/O.
+  server/routes/simulator.js            POST /start, POST /stop, GET /status — delegates to simulatorService.
 
-  src/mqtt.js                Exports connectMqtt(brokerUrl, clientId), publishTelemetry(client, moduleId, tags, encoding), publishCmdAck(client, moduleId, ack), subscribeCommands(client, onCommand). publishTelemetry checks the encoding argument and publishes either a Protobuf-encoded binary or a plain JSON payload. Handles MQTT lifecycle.
+  server/services/mqttClient.js         connect(), disconnect(), getClient(). MQTT lifecycle and event logging.
 
-  src/protobuf.js            Exports encodeTelemetry(moduleId, tags). Telemetry encoding only. Commands are plain JSON --- no Protobuf decoding needed. References packages/proto/tag.proto from the monorepo root.
+  server/services/simulatorService.js   start(), stop(), getStatus(). Tick loop, command handler (SET\_VALUES, REQUEST\_SNAPSHOT, RESET), immediate publish on command.
 
-  src/control.js             Express REST control API server. Exports startControlServer(simState, logBuffer). Mounts all endpoints including POST /telemetry/encoding. Serves public/index.html at GET /. Maintains the rolling log buffer (LOG_BUFFER_SIZE entries). Tracks current encoding mode (initialised from TELEMETRY_ENCODING env var). Shares simState reference with simulator.js.
+  server/services/registry.js           loadTagRegistry(). Calls getActiveTags() from \@caro/db, maps rows to SimTag shape, coerces tag\_id to Number.
 
-  public/index.html          One-page control frontend. Plain HTML + vanilla JS + basic CSS. Control panel for all simulator actions. Log panel polling GET /logs every 1 second with auto-scroll.
+  server/middleware/asyncWrap.js        Wraps async route handlers, forwards errors to Express error handler.
 
-  packages/proto/tag.proto   Authoritative Protobuf schema per CARO_MQTT_Spec v1.7 Appendix A. Shared across all apps in the CARO_Platform monorepo. Do not duplicate.
+  server/middleware/errorHandler.js     Global Express error handler. Returns \{ ok: false, error: \{ code, message \} \}.
 
-  .env.example               All environment variables with defaults and descriptions. Copy of Section 4 table.
+  client/src/stores/useSimulatorStore.js  Zustand store: \{ running, intervalMs, tagCount, uptime\_s, error \}.
 
-  README.md                  Quick start: install, configure .env, run. One paragraph on what the simulator does.
-  -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+  client/src/components/SimulatorPanel.jsx  Polls GET /status every 2s, Start/Stop buttons, interval input.
+
+  client/src/api/simulator.js           getStatus(), startSim(), stopSim() — typed REST calls.
+
+  client/src/api/client.js              Base HTTP fetch wrapper. Adds cache: 'no-store' to all GETs. Same pattern as apps/tag-registry/client/src/api/client.js.
+
+  client/src/App.jsx                    Root React component. Renders SimulatorPanel. No router --- single page.
+
+  client/src/main.jsx                   Vite entry point. Mounts App into #root.
+
+  .env.example                          All environment variables with defaults and descriptions.
+
+  README.md                             Quick start: install, configure .env, run.
+  ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 **14. package.json**
 

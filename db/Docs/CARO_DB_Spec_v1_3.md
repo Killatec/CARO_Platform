@@ -103,10 +103,14 @@ Current migrations:
 
 -   001_create_tag_registry.sql
 -   002_create_registry_revisions.sql
--   003_create_schema_migrations.sql
+-   003_drop_active_path_index.sql
 -   004_alter_tag_id_to_integer.sql
--   005_create_hmi_tables.sql
+-   005_create_hmi_tables.sql (not yet implemented — pending HMI phase)
 -   006_add_trends_to_tag_registry.sql
+
+> *NOTE: The schema_migrations table is created programmatically inside
+> migrations.js on every runMigrations() call — it is not created via a
+> migration file.*
 
 **2.5 Database Names**
 
@@ -155,8 +159,11 @@ false.
   retired          BOOLEAN NOT NULL true if tag no longer in active
                    DEFAULT false    hierarchy.
 
-  meta             JSONB NOT NULL   Provenance chain leaf-to-root. Each
+  meta             JSONB NOT NULL   Provenance chain root-to-tag. Each
                                     entry: { type, name, fields }.
+                                    meta[0] is the root level entry;
+                                    meta[meta.length - 1] is the tag
+                                    level entry.
   ---------------- ---------------- -------------------------------------
 
 > *NOTE: Unique constraint on (tag_id, registry_rev). GIN index on meta.

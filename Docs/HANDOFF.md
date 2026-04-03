@@ -92,7 +92,7 @@ cd apps/mqtt-simulator/client && npm run dev
 
 ## 8. Session startup order
 1. Read this file
-2. Read Docs/platform_spec_delta.md
+2. Read Docs/platform_spec_delta.md — cross-app divergences
 3. Read the relevant app CLAUDE.md
 4. Read the relevant app Docs/spec_delta.md
 

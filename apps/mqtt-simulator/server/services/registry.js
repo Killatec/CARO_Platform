@@ -27,7 +27,7 @@ export async function loadTagRegistry() {
   }
 
   return rows.map(row => ({
-    tag_id:      row.tag_id,
+    tag_id:      Number(row.tag_id),
     tag_path:    row.tag_path,
     data_type:   row.data_type,
     is_setpoint: row.is_setpoint,

@@ -35,7 +35,8 @@
       "Bash(npx vitest:*)",
       "Bash(gh repo:*)",
       "Bash(node scripts/testConnect.js)",
-      "Bash(node scripts/testSimulator.js)"
+      "Bash(node scripts/testSimulator.js)",
+      "Bash(node -e \":*)"
     ]
   }
 }
