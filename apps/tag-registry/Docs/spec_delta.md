@@ -142,6 +142,14 @@ Coverage must exist before those services are written.
 
 ---
 
+### DB access centralized (2026-04-03)
+- All inline SQL removed from app code
+- registryService.js now delegates to @caro/db named functions
+- ping(), getRevisions(), getRevisionTags(), applyRegistryRevision() imported from @caro/db
+- No behavioral changes — all 3 endpoints confirmed healthy
+
+---
+
 ### tag_id column type corrected to INTEGER (2026-03-29)
 **Date:** 2026-03-29
 **Spec:** CARO_DB_Spec v1.2, §2.1/§3.1 (authoritative — lives in `docs/`)
