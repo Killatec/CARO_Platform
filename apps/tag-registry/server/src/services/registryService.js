@@ -5,7 +5,7 @@ import { resolveRegistry } from '../../../shared/index.js';
  * Returns the latest active (non-retired) registry row for each tag_id.
  * Uses DISTINCT ON to get the highest registry_rev per tag_id.
  *
- * @returns {Promise<Array<{tag_id, registry_rev, tag_path, data_type, is_setpoint, meta}>>}
+ * @returns {Promise<Array<{tag_id, registry_rev, tag_path, data_type, is_setpoint, trends, meta}>>}
  */
 export async function getActiveRegistry() {
   const result = await query(`
@@ -16,6 +16,7 @@ export async function getActiveRegistry() {
         tag_path,
         data_type,
         is_setpoint,
+        trends,
         retired,
         meta
       FROM tag_registry
@@ -123,9 +124,9 @@ export async function applyRegistry(templateMap, rootName, comment) {
     for (const tag of added) {
       nextTagId++;
       await client.query(
-        `INSERT INTO tag_registry (tag_id, registry_rev, tag_path, data_type, is_setpoint, retired, meta)
-         VALUES ($1, $2, $3, $4, $5, false, $6)`,
-        [nextTagId, next_rev, tag.tag_path, tag.data_type, tag.is_setpoint, JSON.stringify(tag.meta)]
+        `INSERT INTO tag_registry (tag_id, registry_rev, tag_path, data_type, is_setpoint, trends, retired, meta)
+         VALUES ($1, $2, $3, $4, $5, $6, false, $7)`,
+        [nextTagId, next_rev, tag.tag_path, tag.data_type, tag.is_setpoint, tag.trends ?? false, JSON.stringify(tag.meta)]
       );
     }
 
@@ -135,18 +136,18 @@ export async function applyRegistry(templateMap, rootName, comment) {
     // so only the latest row per tag_id is returned, making old rows harmless.
     for (const tag of modified) {
       await client.query(
-        `INSERT INTO tag_registry (tag_id, registry_rev, tag_path, data_type, is_setpoint, retired, meta)
-         VALUES ($1, $2, $3, $4, $5, false, $6)`,
-        [tag.tag_id, next_rev, tag.tag_path, tag.data_type, tag.is_setpoint, JSON.stringify(tag.meta)]
+        `INSERT INTO tag_registry (tag_id, registry_rev, tag_path, data_type, is_setpoint, trends, retired, meta)
+         VALUES ($1, $2, $3, $4, $5, $6, false, $7)`,
+        [tag.tag_id, next_rev, tag.tag_path, tag.data_type, tag.is_setpoint, tag.trends ?? false, JSON.stringify(tag.meta)]
       );
     }
 
     // Retired tags — insert one new row with same fields, retired=true.
     for (const dbTag of retired) {
       await client.query(
-        `INSERT INTO tag_registry (tag_id, registry_rev, tag_path, data_type, is_setpoint, retired, meta)
-         VALUES ($1, $2, $3, $4, $5, true, $6)`,
-        [dbTag.tag_id, next_rev, dbTag.tag_path, dbTag.data_type, dbTag.is_setpoint, JSON.stringify(dbTag.meta)]
+        `INSERT INTO tag_registry (tag_id, registry_rev, tag_path, data_type, is_setpoint, trends, retired, meta)
+         VALUES ($1, $2, $3, $4, $5, $6, true, $7)`,
+        [dbTag.tag_id, next_rev, dbTag.tag_path, dbTag.data_type, dbTag.is_setpoint, dbTag.trends ?? false, JSON.stringify(dbTag.meta)]
       );
     }
 
@@ -169,6 +170,7 @@ export async function applyRegistry(templateMap, rootName, comment) {
 function isModified(proposed, dbTag) {
   if (proposed.data_type !== dbTag.data_type) return true;
   if (proposed.is_setpoint !== dbTag.is_setpoint) return true;
+  if ((proposed.trends ?? false) !== (dbTag.trends ?? false)) return true;
   if (!deepEqual(proposed.meta, dbTag.meta)) return true;
   return false;
 }

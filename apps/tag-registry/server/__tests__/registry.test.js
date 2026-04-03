@@ -80,7 +80,7 @@ describe('GET /api/v1/registry', () => {
 
   it('returns tags from getActiveRegistry', async () => {
     const tags = [
-      { tag_id: 1001, tag_path: 'Plant1.Chan1.setpoint', data_type: 'f32', is_setpoint: true, retired: false, meta: [] },
+      { tag_id: 1001, tag_path: 'Plant1.Chan1.setpoint', data_type: 'f32', is_setpoint: true, trends: false, retired: false, meta: [] },
     ];
     registryService.getActiveRegistry.mockResolvedValue(tags);
     const { body } = await get('/registry');
@@ -200,7 +200,7 @@ describe('GET /api/v1/registry/revisions', () => {
 describe('GET /api/v1/registry/revisions/:rev', () => {
   it('returns 200 with tags for a valid revision', async () => {
     const tags = [
-      { tag_id: 1001, registry_rev: 1, tag_path: 'Plant1.Chan1.setpoint', data_type: 'f32', is_setpoint: true, retired: false, meta: [] },
+      { tag_id: 1001, registry_rev: 1, tag_path: 'Plant1.Chan1.setpoint', data_type: 'f32', is_setpoint: true, trends: false, retired: false, meta: [] },
     ];
     registryService.getRevisionTags.mockResolvedValue(tags);
     const { status, body } = await get('/registry/revisions/1');
@@ -222,7 +222,7 @@ describe('GET /api/v1/registry/revisions/:rev', () => {
   });
 
   it('passes the integer rev to getRevisionTags', async () => {
-    const tags = [{ tag_id: 1001, registry_rev: 3, tag_path: 'A.B.C', data_type: 'f32', is_setpoint: false, retired: false, meta: [] }];
+    const tags = [{ tag_id: 1001, registry_rev: 3, tag_path: 'A.B.C', data_type: 'f32', is_setpoint: false, trends: false, retired: false, meta: [] }];
     registryService.getRevisionTags.mockResolvedValue(tags);
     await get('/registry/revisions/3');
     expect(registryService.getRevisionTags).toHaveBeenCalledWith(3);

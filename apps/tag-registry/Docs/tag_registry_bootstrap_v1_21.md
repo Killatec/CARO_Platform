@@ -1,6 +1,6 @@
 # Tag Registry Admin Tool — Project Bootstrap Document
-**v1.19** | Generated: 2026-03-23
-Companion documents: [Functional Spec v1.16](tag_registry_spec_v1_16.md) | [API Spec v1.14](tag_registry_api_spec_v1_14.md)
+**v1.21** | Generated: 2026-04-02
+Companion documents: [Functional Spec v1.17](tag_registry_spec_v1_17.md) | [API Spec v1.15](tag_registry_api_spec_v1_15.md)
 
 ---
 
@@ -411,6 +411,8 @@ server: { proxy: { '/api': 'http://localhost:3001' } }
 
 Phase 2 database connection uses five PG* environment variables: `PGHOST` (default: `localhost`), `PGPORT` (default: `5432`), `PGDATABASE` (default: `caro_dev`), `PGUSER` (default: `postgres`), `PGPASSWORD` (required, no default). These are consumed by `@caro/db` pool.js. Never reference `DATABASE_URL`.
 
+**Authoritative env file:** `apps/tag-registry/server/.env` is the only env file loaded by the server. `server/src/index.js` calls `dotenv.config()` with no path argument; because the server process starts from `apps/tag-registry/server/`, dotenv resolves `.env` relative to that directory — not the monorepo root. Any server-side variable (`TEMPLATES_DIR`, `PORT`, `PGPASSWORD`, `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `VALIDATE_REQUIRED_PARENT_TYPES`, `VALIDATE_UNIQUE_PARENT_TYPES`) must be set in `apps/tag-registry/server/.env`. Changes to the root `.env` are never seen by the server process.
+
 ### 4.14 Registry Calculation
 
 Phase 1: Registry calculation is done entirely client-side using `resolveRegistry(templateMap, rootName)`. There is no `GET /api/v1/registry` server endpoint in Phase 1.
@@ -592,7 +594,7 @@ Both trees use `font-normal text-sm text-gray-800` for item names. Dirty items u
 
 ### 8.5 RegistryPage (Phase 2)
 
-Phase 2: RegistryPage fetches DB registry via `GET /api/v1/registry`, compares with in-memory `resolveRegistry()` result using `diffRegistry()`. Table columns: `tag_id` (first), `tag_path`, `data_type`, `is_setpoint`, `meta` (View link opens MetaModalBody). `tag_id` shows `'new'` for added rows.
+Phase 2: RegistryPage fetches DB registry via `GET /api/v1/registry`, compares with in-memory `resolveRegistry()` result using `diffRegistry()`. Table columns: `tag_id` (first), `tag_path`, `data_type`, `is_setpoint`, `trends`, `meta` (View link opens MetaModalBody). `tag_id` shows `'new'` for added rows.
 
 Modified rows highlight changed cells with amber (`bg-amber-500/25`). Full row green/red for added/retired rows. Summary counts above table. Update DB button disabled when `isDirty` or no changes. Confirmation modal requires non-empty comment. If DB is unavailable, an amber warning banner is shown and the table displays the proposed registry undiffed.
 
@@ -614,12 +616,34 @@ Always renders with a "Validation" section header. Message list renders only whe
 
 `client/src/components/shared/MetaModalBody.jsx` — extracted from `RegistryTable` into a shared component. Accepts `{ meta, dbMeta }`.
 
-When `dbMeta` is not present: renders the meta array as a structured level-by-level list (leaf to root), showing `type`, `name`, and `fields` per level.
+When `dbMeta` is not present: renders the meta array as a structured level-by-level list (root to tag — `meta[0]` is the root level, `meta[meta.length - 1]` is the tag level), showing `type`, `name`, and `fields` per level.
 
 When `dbMeta` is present (diff mode): shows a legend (amber=changed, green=added, red=removed) and per-field highlighting:
 - Field present in proposed but not db → `bg-green-500/25` (added)
 - Field value differs → `bg-amber-500/25` (changed)
 - Field in db but not proposed → `line-through bg-red-500/15` (removed)
+
+### 8.10 Config Client Wiring
+
+`AppShell.jsx` fetches `GET /api/v1/config` on mount alongside the template list fetch. The endpoint returns `{ requiredParentTypes: string[], uniqueParentTypes: boolean }` parsed from server env vars.
+
+**`useUIStore` additions:**
+- `validationConfig` initial state: `{ requiredParentTypes: [], uniqueParentTypes: false }`
+- `setValidationConfig(config)` action: replaces the stored config object
+
+**Fetch flow:**
+```js
+useEffect(() => {
+  fetchTemplates();                    // existing template list fetch
+  api.getConfig()                      // GET /api/v1/config
+    .then(res => setValidationConfig(res.data))
+    .catch(() => {});                  // silent fallback — defaults remain
+}, []);
+```
+
+**`useValidation.js`** reads `validationConfig` from `useUIStore` and passes `requiredParentTypes` and `uniqueParentTypes` directly to `validateParentTypes()`. No hardcoded values.
+
+On config fetch failure the store retains its initial state (`requiredParentTypes: []`, `uniqueParentTypes: false`), which disables both validation checks silently.
 
 ---
 

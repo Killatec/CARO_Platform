@@ -22,6 +22,7 @@ export function RegistryPage() {
 
   // Diff state
   const [diffRows, setDiffRows] = useState(null);
+  const [dbRevision, setDbRevision] = useState(null);
   const [dbError, setDbError] = useState(null);
 
   // Apply modal state
@@ -55,10 +56,13 @@ export function RegistryPage() {
     fetchRegistry()
       .then(dbTags => {
         setDiffRows(diffRegistry(proposed, dbTags));
+        const rev = dbTags.length > 0 ? Math.max(...dbTags.map(t => t.registry_rev)) : null;
+        setDbRevision(rev);
       })
       .catch(err => {
         setDbError(err.message || 'Failed to load database registry');
         setDiffRows(null);
+        setDbRevision(null);
       });
   }, [templateMap, rootTemplateName, isValid, setTags]);
 
@@ -131,7 +135,8 @@ export function RegistryPage() {
       setSuccessRev(result.registry_rev);
       clearTimeout(successTimerRef.current);
       successTimerRef.current = setTimeout(() => setSuccessRev(null), 4000);
-      // Refresh diff
+      // Update revision immediately, then refresh diff
+      setDbRevision(result.registry_rev);
       refreshDiff();
     } catch (err) {
       setApplyError(err.message || 'Failed to apply registry');
@@ -159,6 +164,11 @@ export function RegistryPage() {
       {/* Summary line + Update DB button */}
       {diffSummary && (
         <div className="mx-4 mt-4 flex items-center gap-4">
+          {dbRevision !== null && (
+            <span className="text-sm font-semibold text-gray-500 whitespace-nowrap">
+              Rev. {dbRevision}
+            </span>
+          )}
           <div className="text-sm text-gray-600 flex gap-4">
             {diffSummary.added > 0 && (
               <span className="text-green-700 font-medium">+{diffSummary.added} added</span>

@@ -1,6 +1,6 @@
 # Tag Registry Admin Tool — REST API Specification
-**Draft v1.14** | Generated: 2026-03-23
-Companion documents: [Functional Spec v1.16](tag_registry_spec_v1_16.md) | [Bootstrap v1.19](tag_registry_bootstrap_v1_19.md)
+**Draft v1.15** | Generated: 2026-04-02
+Companion documents: [Functional Spec v1.17](tag_registry_spec_v1_17.md) | [Bootstrap v1.21](tag_registry_bootstrap_v1_21.md)
 
 ---
 
@@ -70,6 +70,29 @@ Every template returned by the server carries a `hash` field: a 6-character hex 
 | PGPASSWORD | PostgreSQL password | (required) | 2 only |
 
 > **Note:** `DATABASE_URL` must not be referenced anywhere in Phase 1 or Phase 2 code. Use the five `PG*` variables instead, consumed by `@caro/db` pool.js.
+
+### 2.7 GET /api/v1/config
+
+Returns the server-side validation configuration so the client can apply the same validation rules that are active on the server.
+
+**Response:**
+
+```json
+{
+  "ok": true,
+  "data": {
+    "requiredParentTypes": ["module", "parameter"],
+    "uniqueParentTypes": false
+  }
+}
+```
+
+**Parsing rules:**
+
+- `requiredParentTypes` — derived from `VALIDATE_REQUIRED_PARENT_TYPES`: split on `,`, each token trimmed, empty strings filtered. Empty array when unset.
+- `uniqueParentTypes` — derived from `VALIDATE_UNIQUE_PARENT_TYPES`: string `"true"` (case-insensitive) → `true`, anything else → `false`.
+
+**Client usage:** `AppShell` fetches this endpoint on mount and stores the result in `useUIStore.validationConfig`. `useValidation.js` reads the values from the store and passes them to `validateParentTypes()`, replacing hardcoded defaults.
 
 ---
 
@@ -294,7 +317,7 @@ Returns the active tag registry from the database. Uses a subquery to get the la
 
 ```sql
 SELECT * FROM (
-  SELECT DISTINCT ON (tag_id) tag_id, registry_rev, tag_path, data_type, is_setpoint, retired, meta
+  SELECT DISTINCT ON (tag_id) tag_id, registry_rev, tag_path, data_type, is_setpoint, trends, retired, meta
   FROM tag_registry ORDER BY tag_id, registry_rev DESC
 ) latest WHERE retired = false
 ```
@@ -312,6 +335,7 @@ SELECT * FROM (
         "tag_path": "Plant1_System_A.RFPowerModule.RF_Fwd.setpoint",
         "data_type": "f64",
         "is_setpoint": true,
+        "trends": false,
         "retired": false,
         "meta": [ ... ]
       }
@@ -326,7 +350,7 @@ No query parameters in the current implementation.
 
 Registry diff is computed entirely client-side by `diffRegistry(proposed, dbTags)` in `client/src/utils/diffRegistry.js`. No preview endpoint exists on the server.
 
-`diffRegistry` classifies each row as `added`, `modified`, `unchanged`, or `retired`. Modified rows include a `changedFields` array (listing which of `tag_path`, `data_type`, `is_setpoint`, `meta` changed) and a `dbMeta` property (the database row's meta array, for field-level diff highlighting). Comparison uses a key-order-insensitive `deepEqual` so PostgreSQL JSONB key reordering does not produce false positives.
+`diffRegistry` classifies each row as `added`, `modified`, `unchanged`, or `retired`. Modified rows include a `changedFields` array (listing which of `tag_path`, `data_type`, `is_setpoint`, `trends`, `meta` changed) and a `dbMeta` property (the database row's meta array, for field-level diff highlighting). Comparison uses a key-order-insensitive `deepEqual` so PostgreSQL JSONB key reordering does not produce false positives.
 
 Sort order: added → modified → unchanged → retired.
 
@@ -426,6 +450,7 @@ Returns all `tag_registry` rows for a specific revision, ordered by `tag_path AS
         "tag_path": "Plant1_System_A.RFPowerModule.RF_Fwd.setpoint",
         "data_type": "f64",
         "is_setpoint": true,
+        "trends": false,
         "retired": false,
         "meta": [ ... ]
       }

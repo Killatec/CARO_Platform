@@ -1,6 +1,6 @@
 # Tag Registry Admin Tool — Functional Specification
-**Draft v1.16** | Generated: 2026-03-23
-Companion documents: [Bootstrap v1.19](tag_registry_bootstrap_v1_19.md) | [API Spec v1.14](tag_registry_api_spec_v1_14.md)
+**Draft v1.17** | Generated: 2026-04-02
+Companion documents: [Bootstrap v1.21](tag_registry_bootstrap_v1_21.md) | [API Spec v1.15](tag_registry_api_spec_v1_15.md)
 
 ---
 
@@ -76,7 +76,7 @@ The shared module exports:
 - `simulateCascade(currentTemplateMap, proposedChanges, originalTemplateMap?)` — computes field-level diffs, dropped instance values, and the list of affected parent templates given a proposed set of changes.
 - `applyFieldCascade(templateMap, changedTemplate)` — given a template that has changed, propagates the effect to all child instances in the map. Returns an updated `templateMap`. Pure function — does not mutate its input.
 - `validateParentTypes(templateMap, rootName, options)` — evaluates `VALIDATE_REQUIRED_PARENT_TYPES` and `VALIDATE_UNIQUE_PARENT_TYPES` rules. Returns `{ errors: [], warnings: [] }`.
-- `resolveRegistry(templateMap, rootName)` — resolves the full hierarchy into a flat tag list with `tag_path`, `data_type`, `is_setpoint`, and `meta`. Pure function. Extracts `.default` from each field definition before merging with instance overrides.
+- `resolveRegistry(templateMap, rootName)` — resolves the full hierarchy into a flat tag list with `tag_path`, `data_type`, `is_setpoint`, `trends`, and `meta`. Pure function. Extracts `.default` from each field definition before merging with instance overrides. The `trends` field is `true` if any level in the resolved hierarchy has a field key matching `"trends"` (case-insensitive) with value `true` after instance override resolution, `false` otherwise. The `meta` array is ordered root-to-tag: `meta[0]` is the root level entry, `meta[meta.length - 1]` is the tag-level entry.
 - `constants` — error codes, `DATA_TYPES` enum, `MAX_TAG_PATH_LENGTH` default.
 - `deepEqual(a, b)` / `deepNotEqual(a, b)` — JSON-serialization-based deep equality utilities (`utils.js`).
 
@@ -288,7 +288,7 @@ Registry generation uses `resolveRegistry(templateMap, rootName)`. In Phase 1 th
 
 1. Validate all templates in the graph (Section 10). If any errors are present, the registry preview shows a blank state with a 'Resolve errors to view registry' banner.
 2. Call `resolveRegistry(templateMap, rootName)`. Resolve the full hierarchy by walking the template composition graph and constructing `tag_path`s.
-3. For each resolved tag, build the `meta` array (leaf-to-root provenance chain).
+3. For each resolved tag, build the `meta` array (root-to-tag provenance chain: `meta[0]` = root level, `meta[meta.length - 1]` = tag level) and compute `trends`.
 4. Display the resulting flat tag list in the RegistryPage table immediately. No server call required in Phase 1.
 5. *(Phase 2)* Compare candidate registry against the database. Present full diff for review. On user confirmation, apply atomically within a SERIALIZABLE transaction.
 
@@ -335,8 +335,9 @@ Append-only table. Rows are never updated or deleted.
 | tag_path | VARCHAR NOT NULL | Full dot-separated path. Always begins with the root template's `template_name`. |
 | data_type | VARCHAR(40) NOT NULL | Data type enum value (Section 6). |
 | is_setpoint | BOOLEAN NOT NULL | true = setpoint (writable); false = monitor (read-only). |
+| trends | BOOLEAN NOT NULL DEFAULT false | true if any asset in the tag's hierarchy has a field named "trends" (case-insensitive) set to true after instance override resolution. |
 | retired | BOOLEAN NOT NULL DEFAULT false | true if the tag is no longer present in the active template hierarchy. |
-| meta | JSONB NOT NULL | Full provenance chain for the tag, ordered leaf-to-root. Array of objects, one per level. Each object has: `type`, `name`, `fields`. |
+| meta | JSONB NOT NULL | Full provenance chain for the tag, ordered root-to-tag. `meta[0]` is the root level entry; `meta[meta.length - 1]` is the tag-level entry. Each object has: `type`, `name`, `fields`. |
 
 Constraints: composite (`tag_id`, `registry_rev`) unique. Indexes on `tag_id`, `registry_rev`, `data_type`, `retired`. GIN index on `meta`.
 

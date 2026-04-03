@@ -213,6 +213,12 @@ export function FieldsPanel() {
           <tbody>
             <FieldTableRow fieldName="Template Name" value={template.template_name} readOnly />
             <FieldTableRow fieldName="Template Type" value={template.template_type} readOnly />
+            {template.template_type === 'tag' && (
+              <>
+                <FieldTableRow fieldName="Data Type" value={template.data_type ?? ''} readOnly />
+                <FieldTableRow fieldName="Is Setpoint" value={template.is_setpoint} fieldType="Boolean" readOnly />
+              </>
+            )}
             {Object.entries(fields).map(([key, fieldDef]) => {
               const isDirtyField = !(key in originalFields) ||
                 originalFields[key]?.default !== fieldDef.default;

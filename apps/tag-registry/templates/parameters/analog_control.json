@@ -31,7 +31,15 @@
     },
     {
       "template_name": "boolean_set",
-      "asset_name": "interlock_enable"
+      "asset_name": "interlock_enable",
+      "fields": {
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "interlock_status",
+      "fields": {}
     }
   ]
 }

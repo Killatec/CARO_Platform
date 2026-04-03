@@ -1,7 +1,29 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { TreeNode } from './TreeNode.jsx';
 import { resolveTree } from '../../utils/resolveTree.js';
 import { useTemplateGraphStore } from '../../stores/useTemplateGraphStore.js';
+
+const LS_KEY = 'caro_tree_expanded';
+
+function lsGet() {
+  if (typeof localStorage === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function lsSet(nodes) {
+  if (typeof localStorage === 'undefined') return;
+  localStorage.setItem(LS_KEY, JSON.stringify(nodes));
+}
+
+function lsClear() {
+  if (typeof localStorage === 'undefined') return;
+  localStorage.removeItem(LS_KEY);
+}
 
 /**
  * AssetTree - displays template hierarchy as collapsible tree
@@ -12,9 +34,25 @@ export function AssetTree() {
   const isLoading = useTemplateGraphStore(state => state.isLoading);
 
   const [expandedNodes, setExpandedNodes] = useState({});
+  // Tracks whether we have consumed the stored state for the initial root load.
+  const hasRestoredRef = useRef(false);
 
-  // Reset to all-expanded whenever the root selection changes
+  // On the first root load, restore expand state from localStorage.
+  // On subsequent root changes (manual selection), reset and clear localStorage
+  // since paths are root-specific and stale paths are meaningless.
   useEffect(() => {
+    if (!rootTemplateName) return;
+
+    if (!hasRestoredRef.current) {
+      hasRestoredRef.current = true;
+      const stored = lsGet();
+      if (stored && typeof stored === 'object' && !Array.isArray(stored)) {
+        setExpandedNodes(stored);
+        return;
+      }
+    }
+
+    lsClear();
     setExpandedNodes({});
   }, [rootTemplateName]);
 
@@ -68,7 +106,11 @@ export function AssetTree() {
           node={tree}
           ownPath={tree.template_name}
           expandedNodes={expandedNodes}
-          onToggleExpand={(path) => setExpandedNodes(prev => ({ ...prev, [path]: prev[path] === false }))}
+          onToggleExpand={(path) => setExpandedNodes(prev => {
+            const next = { ...prev, [path]: prev[path] === false };
+            lsSet(next);
+            return next;
+          })}
         />
       </div>
     </div>

@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from 'react';
 import { validateTemplate, validateGraph, validateParentTypes } from '../../../shared/index.js';
 import { useTemplateGraphStore } from '../stores/useTemplateGraphStore.js';
+import { useUIStore } from '../stores/useUIStore.js';
 
 /**
  * Validation hook - runs all client-side validation checks
@@ -8,6 +9,7 @@ import { useTemplateGraphStore } from '../stores/useTemplateGraphStore.js';
  */
 export function useValidation(templateMap, rootName) {
   const setValidationState = useTemplateGraphStore(state => state.setValidationState);
+  const { requiredParentTypes, uniqueParentTypes } = useUIStore(s => s.validationConfig);
 
   const result = useMemo(() => {
     const messages = [];
@@ -38,10 +40,9 @@ export function useValidation(templateMap, rootName) {
 
     // Validate parent types if root is selected
     if (rootName) {
-      // For now, we don't enforce these rules, but we could read from env vars
       const parentTypesResult = validateParentTypes(templates, rootName, {
-        requiredParentTypes: [], // Could be from env
-        uniqueParentTypes: false // Could be from env
+        requiredParentTypes,
+        uniqueParentTypes,
       });
       messages.push(...parentTypesResult.errors);
       messages.push(...parentTypesResult.warnings);
@@ -50,7 +51,7 @@ export function useValidation(templateMap, rootName) {
     const isValid = messages.length === 0;
 
     return { messages, isValid };
-  }, [templateMap, rootName]);
+  }, [templateMap, rootName, requiredParentTypes, uniqueParentTypes]);
 
   // Update validation state in store
   useEffect(() => {

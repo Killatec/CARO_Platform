@@ -1,6 +1,6 @@
 # Tag Registry Admin Tool — E2E Test Specification
-**v1.1** | Generated: 2026-03-23
-Companion documents: Functional Spec v1.16 | API Spec v1.14 | Bootstrap v1.19
+**v1.2** | Generated: 2026-04-02
+Companion documents: Functional Spec v1.17 | API Spec v1.15 | Bootstrap v1.21
 
 ---
 
@@ -317,6 +317,33 @@ function metaModal(page, tagPath) {
   return page.locator('.shadow-xl').filter({ hasText: tagPath }).first();
 }
 ```
+
+---
+
+### 4.8.5 tests/validation-parent-types.spec.js — Parent Type Validation (4 tests)
+
+**Prerequisite:** `VALIDATE_REQUIRED_PARENT_TYPES=module,parameter` and `VALIDATE_UNIQUE_PARENT_TYPES=true` must be set in `apps/tag-registry/server/.env`. Without these vars the config endpoint returns empty arrays/false and all four tests will fail to observe the expected error codes.
+
+| # | Test | Covers |
+|---|---|---|
+| 1 | PARENT_TYPE_MISSING shown when tag has no module ancestor | Bootstrap §8.6, §8.10 — validateParentTypes wired via config endpoint |
+| 2 | PARENT_TYPE_MISSING shown when tag has no parameter ancestor | Same setup as test 1 — second error message for second missing type |
+| 3 | No validation errors when tag has both module and parameter ancestors | Full hierarchy: system → module → parameter → tag |
+| 4 | DUPLICATE_PARENT_TYPE shown when tag has two module ancestors | Hierarchy: system → module → module → parameter → tag |
+
+**Setup:** Each test creates its own hierarchy via API in `beforeEach`. Test 1 and 2 share the same fixture (system root → tag directly, no module or parameter between them). Test 3 builds the full four-level chain. Test 4 builds a five-level chain with two `module` type nodes. All created templates are cleaned up via `deleteTemplates(created.splice(0))` in `afterEach`.
+
+---
+
+### 4.8.6 tests/trends.spec.js — Trends Column (3 tests)
+
+| # | Test | Covers |
+|---|---|---|
+| 1 | trends column header visible in Registry table | Bootstrap §8.5 — trends column between is_setpoint and meta |
+| 2 | Tag row shows false when no trends field in any template | shared/resolveRegistry — trends defaults to false |
+| 3 | Tag row shows true when module template has trends field set to true | shared/resolveRegistry — case-insensitive trends detection, Boolean field_type |
+
+**Setup:** Each test creates a module → parameter → tag hierarchy via API. Test 3 additionally passes `{ trends: { field_type: 'Boolean', default: true } }` as the module-level `fields` argument to `createStructuralTemplate`. `po.selectRoot(modName)` loads the hierarchy, `po.navigateToRegistry()` switches to the Registry page client-side. The trends cell is the 5th `<td>` (0-indexed: 4) in each row: `tag_id(0), tag_path(1), data_type(2), is_setpoint(3), trends(4), meta(5)`.
 
 ---
 
@@ -696,6 +723,43 @@ Skipped breakdown:
 | Skipped (intentional, E2E only) | 6 |
 | Failed | 0 |
 | Baseline date | 2026-03-23 |
+
+### 9.5 Phase 3 Baseline (2026-04-02)
+
+**Vitest unit tests:**
+
+| Package | Tests | Passed |
+|---|---|---|
+| shared/ pure functions | 125 | 125 |
+| server/ templateService | 42 | 42 |
+| server/ registryService | 19 | 19 |
+| server/ registry routes | 17 | 17 |
+| server/ config route | 11 | 11 |
+| client/ useTemplateGraphStore | 47 | 47 |
+| client/ diffRegistry | 34 | 34 |
+| client/ formatDate | 22 | 22 |
+| client/ (other) | 9 | 9 |
+| db/ | 6 | 6 |
+| **Total** | **332** | **332** |
+
+**Playwright E2E:**
+
+| Spec files | Runs | Passed | Skipped |
+|---|---|---|---|
+| Phase 1 (7 files × 3 browsers) | 120 | 114 | 6 |
+| Phase 2 (4 files × 3 browsers) | 66 | 66 | 0 |
+| Phase 3 (2 files × 3 browsers) | 21 | 21 | 0 |
+| **Combined E2E** | **207** | **201** | **6** |
+
+**Combined total (Phase 3):**
+
+| Metric | Value |
+|---|---|
+| Total (unit tests + E2E runs) | 533 |
+| Passing | 527 |
+| Skipped (intentional, E2E only) | 6 |
+| Failed | 0 |
+| Baseline date | 2026-04-02 |
 
 ---
 

@@ -3,5 +3,10 @@
   "template_name": "numeric_set",
   "data_type": "f64",
   "is_setpoint": true,
-  "fields": {}
+  "fields": {
+    "Trends": {
+      "field_type": "Boolean",
+      "default": true
+    }
+  }
 }

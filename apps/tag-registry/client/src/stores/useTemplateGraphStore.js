@@ -96,6 +96,10 @@ export const useTemplateGraphStore = create((set, get) => ({
 
       const originalTemplateMap = structuredClone(templateMap);
 
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('caro_last_root', data.root_template_name);
+      }
+
       set({
         templateMap,
         originalTemplateMap,

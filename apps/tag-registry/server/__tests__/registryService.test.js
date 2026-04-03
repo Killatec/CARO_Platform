@@ -42,9 +42,16 @@ describe('getActiveRegistry', () => {
     expect(sql).toMatch(/retired = false/i);
   });
 
+  it('SQL selects trends column', async () => {
+    query.mockResolvedValue({ rows: [] });
+    await getActiveRegistry();
+    const sql = query.mock.calls[0][0];
+    expect(sql).toMatch(/trends/i);
+  });
+
   it('returns rows from query result', async () => {
     const rows = [
-      { tag_id: 1001, registry_rev: 1, tag_path: 'Plant1.Chan1.setpoint', data_type: 'f32', is_setpoint: true, retired: false, meta: [] },
+      { tag_id: 1001, registry_rev: 1, tag_path: 'Plant1.Chan1.setpoint', data_type: 'f32', is_setpoint: true, trends: false, retired: false, meta: [] },
     ];
     query.mockResolvedValue({ rows });
     const result = await getActiveRegistry();
@@ -128,7 +135,7 @@ describe('getRevisionTags', () => {
 
   it('returns rows when revision has tags', async () => {
     const rows = [
-      { tag_id: 1001, registry_rev: 1, tag_path: 'Plant1.Chan1.setpoint', data_type: 'f32', is_setpoint: true, retired: false, meta: [] },
+      { tag_id: 1001, registry_rev: 1, tag_path: 'Plant1.Chan1.setpoint', data_type: 'f32', is_setpoint: true, trends: false, retired: false, meta: [] },
     ];
     query.mockResolvedValue({ rows });
     const result = await getRevisionTags(1);

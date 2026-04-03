@@ -29,11 +29,6 @@
       "fields": {
         "eng_min": 50
       }
-    },
-    {
-      "template_name": "numeric_mon",
-      "asset_name": "numeric_mon",
-      "fields": {}
     }
   ]
 }

@@ -4,6 +4,9 @@ import { create } from 'zustand';
  * UI store - manages UI state (selected node, modals, etc.)
  */
 export const useUIStore = create((set) => ({
+  // Validation config — populated from GET /api/v1/config on app mount
+  validationConfig: { requiredParentTypes: [], uniqueParentTypes: false },
+
   // State
   selectedNodeName: null,
   selectedParentName: null,
@@ -22,6 +25,8 @@ export const useUIStore = create((set) => ({
   selectedSystemTreeNodeChildIndex: null,      // number | null — index of this node in parent's children array
 
   // Actions
+  setValidationConfig: (config) => set({ validationConfig: config }),
+
   selectNode: (nodeName, parentName = null) => set({ selectedNodeName: nodeName, selectedParentName: parentName }),
   setActiveTab: (tab) => set({ activeTab: tab }),
 

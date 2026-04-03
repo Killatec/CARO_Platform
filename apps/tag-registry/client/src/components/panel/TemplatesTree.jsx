@@ -54,6 +54,23 @@ function TemplateLeaf({ name, isSelected, injecting, originalTemplateMap, templa
   );
 }
 
+const LS_KEY = 'caro_templates_expanded';
+
+function lsGet() {
+  if (typeof localStorage === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function lsSet(state) {
+  if (typeof localStorage === 'undefined') return;
+  localStorage.setItem(LS_KEY, JSON.stringify(state));
+}
+
 /**
  * TemplatesTree - shows all templates on disk grouped by template_type.
  * Folders start collapsed. Clicking a leaf fetches the full reachable
@@ -65,7 +82,7 @@ function TemplateLeaf({ name, isSelected, injecting, originalTemplateMap, templa
  */
 export function TemplatesTree({ onTemplateSelect }) {
   const [grouped, setGrouped] = useState({});   // { [template_type]: string[] }
-  const [expanded, setExpanded] = useState({});  // { [template_type]: boolean }
+  const [expanded, setExpanded] = useState(() => lsGet() ?? {});  // { [template_type]: boolean }
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [injecting, setInjecting] = useState(false);
@@ -114,6 +131,11 @@ export function TemplatesTree({ onTemplateSelect }) {
         setLoading(false);
       });
   };
+
+  // Persist expanded state to localStorage whenever it changes.
+  useEffect(() => {
+    lsSet(expanded);
+  }, [expanded]);
 
   // Fetch when dirtySet and pendingDeletions are both empty:
   // covers initial mount, post-save, and post-discard.

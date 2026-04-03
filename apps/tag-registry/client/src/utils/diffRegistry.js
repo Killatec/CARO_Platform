@@ -48,6 +48,7 @@ export function diffRegistry(proposed, dbTags) {
 function isModified(proposed, dbTag) {
   if (proposed.data_type !== dbTag.data_type) return true;
   if (proposed.is_setpoint !== dbTag.is_setpoint) return true;
+  if ((proposed.trends ?? false) !== (dbTag.trends ?? false)) return true;
   if (!deepEqual(proposed.meta, dbTag.meta)) return true;
   return false;
 }
@@ -57,6 +58,7 @@ function getChangedFields(proposed, dbTag) {
   if (proposed.tag_path !== dbTag.tag_path) changed.push('tag_path');
   if (proposed.data_type !== dbTag.data_type) changed.push('data_type');
   if (proposed.is_setpoint !== dbTag.is_setpoint) changed.push('is_setpoint');
+  if ((proposed.trends ?? false) !== (dbTag.trends ?? false)) changed.push('trends');
   if (!deepEqual(proposed.meta, dbTag.meta)) changed.push('meta');
   return changed;
 }
