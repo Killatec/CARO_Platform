@@ -214,7 +214,7 @@ Dots are not permitted in any `asset_name` OR `template_name`. `template_name` m
 
 ### 9.2 tag_id — Stable Numeric Registry Address
 
-`tag_id` is a BIGINT assigned to a tag at its first registry generation. Stored only in the database. Assigned using `MAX(tag_id) + 1` within the generation transaction at SERIALIZABLE isolation. `tag_id` values are never reused, even if tags are retired.
+`tag_id` is an INTEGER assigned to a tag at its first registry generation. Stored only in the database. Assigned using `MAX(tag_id) + 1` within the generation transaction at SERIALIZABLE isolation. `tag_id` values are never reused, even if tags are retired.
 
 ### 9.3 Tag Matching by Full Path
 
@@ -330,7 +330,7 @@ Append-only table. Rows are never updated or deleted.
 | Column | Type | Description |
 |--------|------|-------------|
 | id | SERIAL (PK) | Surrogate primary key. |
-| tag_id | BIGINT NOT NULL | Stable numeric identifier. Never reused. |
+| tag_id | INTEGER NOT NULL | Stable numeric identifier. Never reused. |
 | registry_rev | INTEGER NOT NULL | The registry revision when this row was inserted or last modified. |
 | tag_path | VARCHAR NOT NULL | Full dot-separated path. Always begins with the root template's `template_name`. |
 | data_type | VARCHAR(40) NOT NULL | Data type enum value (Section 6). |

@@ -70,6 +70,9 @@ CARO_Platform/                        # git repository root
       pool.js                         # lazy singleton pg.Pool
       query.js                        # query() and withTransaction()
       migrations.js                   # runMigrations()
+      health.js                       # ping()
+      registry.js                     # getActiveTags(), getRevisionTags(), applyRegistryRevision()
+      revisions.js                    # getRevisions()
       index.js                        # re-exports all
 
   db/
@@ -182,6 +185,27 @@ CARO_Platform/                        # git repository root
         tags/
         parameters/
         modules/
+
+    mqtt-simulator/                   # MQTT Simulator dev tool
+      Docs/
+      server/
+        index.js
+        app.js
+        routes/simulator.js
+        services/
+          mqttClient.js
+          simulatorService.js
+          registry.js
+        middleware/
+          asyncWrap.js
+          errorHandler.js
+      client/                         # React+Vite frontend (port 5174)
+        src/
+          components/SimulatorPanel.jsx
+          stores/useSimulatorStore.js
+          api/simulator.js
+      e2e/
+        tests/
 ```
 
 ---
@@ -438,10 +462,21 @@ Watching `../templates` causes nodemon to restart the server on every template f
 ### 4.16 @caro/db Package
 
 The `@caro/db` workspace package (`packages/db/`) provides a shared PostgreSQL connection pool for all server-side apps in the monorepo. It exports:
+
+**Core:**
 - `pool` — lazy singleton `pg.Pool` constructed on first call
 - `query(text, params)` — executes a query against the pool
 - `withTransaction(fn)` — wraps `fn` in a BEGIN/COMMIT/ROLLBACK block
 - `runMigrations()` — applies pending migration files in order
+
+**Health:**
+- `ping()` — executes `SELECT 1`; throws on connection failure
+
+**Tag registry queries** (all SQL lives in `packages/db/`; apps import named functions only):
+- `getActiveTags()` — returns latest non-retired row per tag_id (DISTINCT ON subquery)
+- `getRevisionTags(rev)` — returns all tag_registry rows for a given revision; null if none
+- `applyRegistryRevision(added, modified, retired, comment)` — writes a registry diff inside a SERIALIZABLE transaction; returns `{ registry_rev, added, modified, retired }`
+- `getRevisions()` — returns all registry_revisions rows ordered DESC
 
 The pool is constructed lazily on first call after `dotenv.config()` has run, guaranteeing environment variables are populated. `PGPASSWORD` must be set in each app's `.env` file.
 
@@ -462,7 +497,7 @@ Returns `{ ok, registry_rev, added, modified, retired }` or `{ ok, registry_rev:
 `getActiveRegistry()` uses a subquery to find the latest non-retired row per `tag_id`:
 ```sql
 SELECT * FROM (
-  SELECT DISTINCT ON (tag_id) tag_id, registry_rev, tag_path, data_type, is_setpoint, retired, meta
+  SELECT DISTINCT ON (tag_id) tag_id, registry_rev, tag_path, data_type, is_setpoint, trends, retired, meta
   FROM tag_registry ORDER BY tag_id, registry_rev DESC
 ) latest WHERE retired = false
 ```

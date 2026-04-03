@@ -20,7 +20,7 @@
       "template_name": "analog_control",
       "asset_name": "Acc_Ref",
       "fields": {
-        "eng_min": 52
+        "eng_min": 51
       }
     },
     {
