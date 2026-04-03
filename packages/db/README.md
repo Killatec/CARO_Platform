@@ -1,12 +1,26 @@
-# @caro/db
+# @caro/db — Shared Database Access
 
-Shared node-postgres connection pool and query utilities for the CARO Platform
-monorepo. Provides a single configured `pg.Pool` instance and helper functions
-used by all server-side apps.
+## Policy
+ALL database queries for CARO_Platform live here. No app contains raw SQL or direct pool usage.
+Apps import named functions from this package only.
+
+## Modules
+- pool.js       — PG connection pool (do not import directly in apps)
+- query.js      — query wrapper (do not import directly in apps)
+- registry.js   — tag_registry table queries
+- revisions.js  — registry_revisions table queries
+- audit.js      — audit_log writes
+
+## Adding a new query
+Add it to the appropriate module here. If no module fits, create one.
+Never add DB logic to app-level code.
+
+---
 
 ## Apps that use this package
 
 - `apps/tag-registry/server` — tag template API server
+- `apps/mqtt-simulator/server` — MQTT simulator
 
 ## Environment variables
 
@@ -35,18 +49,9 @@ to source control (`.env` is in `.gitignore`).
 
 3. Set `PGPASSWORD` (and any other overrides) in the app's `.env` file.
 
-4. Import and use:
+4. Import named functions only — never import `pool` or `query` directly:
    ```js
-   import { pool, query, withTransaction } from '@caro/db';
-
-   // Simple query
-   const result = await query('SELECT * FROM tag_registry WHERE retired = false');
-
-   // Transaction
-   await withTransaction(async (client) => {
-     await client.query('INSERT INTO registry_revisions ...', [...]);
-     await client.query('INSERT INTO tag_registry ...', [...]);
-   });
+   import { getActiveTags } from '@caro/db';
    ```
 
 ## API
@@ -72,3 +77,9 @@ back and re-throws on error. Always releases the client.
 Runs all `.sql` files in `db/postgres/migrations/` (sorted by filename) and
 returns `[{ file, status }]` where status is `'ok'` or `'error'`. Does not
 throw — all files are attempted even if one fails.
+
+### `getActiveTags()`
+
+Returns the latest active (non-retired) row for each `tag_id`. Uses a
+DISTINCT ON subquery to get the highest-revision row per tag unconditionally,
+then filters `WHERE retired = false`. Returns full rows including `meta`.

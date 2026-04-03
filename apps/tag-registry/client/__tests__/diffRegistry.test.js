@@ -8,6 +8,7 @@ function makeProposed(tag_path, overrides = {}) {
     tag_path,
     data_type: 'f32',
     is_setpoint: false,
+    trends: false,
     meta: [
       { type: 'tag',       name: tag_path.split('.').pop(), fields: { eng_min: 0, eng_max: 100 } },
       { type: 'parameter', name: 'Chan1',                   fields: { description: 'Channel 1' } },
@@ -167,21 +168,56 @@ describe('classification — modified (meta)', () => {
   });
 });
 
+describe('classification — modified (trends)', () => {
+  it('trends differs → diffStatus modified', () => {
+    const proposed = makeProposed(PATH_A, { trends: true });
+    const db       = makeDb(PATH_A, 1001, { trends: false });
+    const [row] = diffRegistry([proposed], [db]);
+    expect(row.diffStatus).toBe('modified');
+  });
+
+  it('trends change → changedFields includes trends', () => {
+    const proposed = makeProposed(PATH_A, { trends: true });
+    const db       = makeDb(PATH_A, 1001, { trends: false });
+    const [row] = diffRegistry([proposed], [db]);
+    expect(row.changedFields).toContain('trends');
+  });
+
+  it('trends change only → changedFields does not include meta or is_setpoint', () => {
+    const proposed = makeProposed(PATH_A, { trends: true });
+    const db       = makeDb(PATH_A, 1001, { trends: false });
+    const [row] = diffRegistry([proposed], [db]);
+    expect(row.changedFields).not.toContain('meta');
+    expect(row.changedFields).not.toContain('is_setpoint');
+  });
+
+  it('same trends value → not in changedFields', () => {
+    const proposed = makeProposed(PATH_A, { trends: true });
+    const db       = makeDb(PATH_A, 1001, { trends: true });
+    const [row] = diffRegistry([proposed], [db]);
+    expect(row.diffStatus).toBe('unchanged');
+    expect(row.changedFields).toBeUndefined();
+  });
+});
+
 describe('classification — multiple fields changed', () => {
-  it('all three fields changed → changedFields has data_type, is_setpoint, and meta', () => {
+  it('all four fields changed → changedFields has data_type, is_setpoint, trends, and meta', () => {
     const proposed = makeProposed(PATH_A, {
       data_type: 'i32',
       is_setpoint: true,
+      trends: true,
       meta: [{ type: 'tag', name: 'x', fields: { val: 999 } }],
     });
     const db = makeDb(PATH_A, 1001, {
       data_type: 'f32',
       is_setpoint: false,
+      trends: false,
       meta: [{ type: 'tag', name: 'x', fields: { val: 0 } }],
     });
     const [row] = diffRegistry([proposed], [db]);
     expect(row.changedFields).toContain('data_type');
     expect(row.changedFields).toContain('is_setpoint');
+    expect(row.changedFields).toContain('trends');
     expect(row.changedFields).toContain('meta');
   });
 });

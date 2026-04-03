@@ -2,7 +2,7 @@ import dotenv from 'dotenv';
 import os from 'os';
 import { createApp } from './app.js';
 import { initializeIndex } from './services/templateService.js';
-import { pool } from '@caro/db';
+import { ping, runMigrations } from '@caro/db';
 
 // Load environment variables
 dotenv.config();
@@ -24,10 +24,18 @@ async function start() {
   try {
     // Verify database connectivity
     try {
-      await pool.query('SELECT 1');
+      await ping();
       console.log('[db] Connected to PostgreSQL (caro_dev)');
     } catch (err) {
       console.error('[db] Failed to connect to PostgreSQL:', err.message);
+      process.exit(1);
+    }
+
+    // Run database migrations — abort startup on failure
+    try {
+      await runMigrations();
+    } catch (err) {
+      console.error('Server startup aborted — migration failure:', err.message);
       process.exit(1);
     }
 
@@ -44,6 +52,8 @@ async function start() {
       console.log(`Tag Registry Server running at http://${localIP}:${PORT}`);
       console.log(`Templates directory: ${process.env.TEMPLATES_DIR}`);
       console.log(`Max tag path length: ${process.env.MAX_TAG_PATH_LENGTH || 100}`);
+      console.log(`Required parent types: ${process.env.VALIDATE_REQUIRED_PARENT_TYPES || '(none)'}`);
+      console.log(`Unique parent types: ${process.env.VALIDATE_UNIQUE_PARENT_TYPES || 'false'}`);
     });
   } catch (err) {
     console.error('Failed to start server:', err);

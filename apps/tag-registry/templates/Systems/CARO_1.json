@@ -1,0 +1,23 @@
+{
+  "template_type": "system",
+  "template_name": "CARO_1",
+  "fields": {
+    "description": {
+      "field_type": "String",
+      "default": "CARO_1 System"
+    },
+    "version": {
+      "field_type": "Numeric",
+      "default": 155
+    }
+  },
+  "children": [
+    {
+      "template_name": "rf_power_module",
+      "asset_name": "RF1",
+      "fields": {
+        "description": "RF_Control_1"
+      }
+    }
+  ]
+}

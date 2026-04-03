@@ -84,14 +84,20 @@ npm run test:chromium:headed  # Chromium headed for debugging
 
 All documents live in `apps/tag-registry/Docs/`.
 
-| Document | Version | Purpose |
-|---|---|---|
-| `tag_registry_spec_v1_16.md` | v1.16 | Functional specification — UI concepts, workflows, validation rules, data model |
-| `tag_registry_api_spec_v1_14.md` | v1.14 | REST API contract — all endpoints, request/response shapes, error codes |
-| `tag_registry_bootstrap_v1_19.md` | v1.19 | Implementation bootstrap — folder structure, component architecture, store behavior, seed data |
-| `tag_registry_test_spec_v1_1.md` | v1.1 | Test suite specification — E2E and unit test coverage, known gotchas, selector strategy |
-| `spec_delta.md` | live | Pending updates to the above docs — read this to know what has diverged from the specs |
-| `HANDOFF.md` | live | This file |
+| Document | Version | Purpose | Reach for this when... |
+|---|---|---|---|
+| `tag_registry_spec_v1_17.md` | v1.17 | Functional specification — UI concepts, workflows, validation rules, data model | UI behavior, validation rules, workflow logic, data model questions |
+| `tag_registry_api_spec_v1_15.md` | v1.15 | REST API contract — all endpoints, request/response shapes, error codes | Endpoint contracts, request/response shapes, error codes |
+| `tag_registry_bootstrap_v1_21.md` | v1.21 | Implementation bootstrap — folder structure, component architecture, store behavior, seed data | Component architecture, store behavior, folder structure, seed data |
+| `tag_registry_test_spec_v1_2.md` | v1.2 | Test suite specification — E2E and unit test coverage, known gotchas, selector strategy | Writing or debugging tests, selector strategy, E2E gotchas |
+| `db/Docs/CARO_DB_Spec_v1_3.md` | v1.3 | Platform PostgreSQL schema — all tables, column types, constraints, indexes | Writing migrations, HMI table schema, audit_log, any PostgreSQL schema question |
+| `spec_delta.md` | live | Pending updates to the above docs — read this to know what has diverged from the specs | **Always** — read before any task to know where reality diverges from specs |
+| `HANDOFF.md` | live | This file | Read first for orientation |
+
+> **Before every task — read `spec_delta.md` first.**
+> The spec documents reflect a snapshot in time. `spec_delta.md` is the
+> authoritative record of where the implementation has diverged. Skipping it
+> means working from a stale picture, regardless of task scope.
 
 **Reading order for a new session:**
 1. This file (HANDOFF.md) — orientation
@@ -102,19 +108,25 @@ All documents live in `apps/tag-registry/Docs/`.
 
 ## 6. Test suite summary
 
-480 total tests/runs, 0 failures.
+533 total tests/runs, 0 failures.
 
 | Layer | Tool | Tests | Location |
 |---|---|---|---|
-| shared/ pure functions | Vitest | 112 | apps/tag-registry/shared/__tests__/ |
+| shared/ pure functions | Vitest | 125 | apps/tag-registry/shared/__tests__/ |
 | server/ templateService | Vitest | 42 | apps/tag-registry/server/__tests__/ |
-| server/ registryService | Vitest | 18 | apps/tag-registry/server/__tests__/ |
-| server/ registry routes | Vitest | 19 | apps/tag-registry/server/__tests__/ |
-| client/ useTemplateGraphStore | Vitest | 47 | apps/tag-registry/client/__tests__/ |
+| server/ registryService | Vitest | 19 | apps/tag-registry/server/__tests__/ |
+| server/ registry routes | Vitest | 17 | apps/tag-registry/server/__tests__/ |
+| server/ config route | Vitest | 11 | apps/tag-registry/server/__tests__/ |
+| client/ formatDate | Vitest | 31 | apps/tag-registry/client/__tests__/ |
 | client/ diffRegistry | Vitest | 34 | apps/tag-registry/client/__tests__/ |
-| client/ formatDate | Vitest | 22 | apps/tag-registry/client/__tests__/ |
+| client/ updateTemplate | Vitest | 6 | apps/tag-registry/client/__tests__/ |
+| client/ addAndInject | Vitest | 12 | apps/tag-registry/client/__tests__/ |
+| client/ loadRoot | Vitest | 10 | apps/tag-registry/client/__tests__/ |
+| client/ deletionActions | Vitest | 7 | apps/tag-registry/client/__tests__/ |
+| client/ saveAndDiscard | Vitest | 12 | apps/tag-registry/client/__tests__/ |
 | Phase 1 E2E (7 files, 3 browsers) | Playwright | 120 runs | apps/tag-registry/e2e/tests/ |
 | Phase 2 E2E (4 files, 3 browsers) | Playwright | 66 runs | apps/tag-registry/e2e/tests/ |
+| Phase 3 E2E (2 files, 3 browsers) | Playwright | 21 runs | apps/tag-registry/e2e/tests/ |
 
 Run all unit tests:
 ```powershell
@@ -161,7 +173,7 @@ cd apps/tag-registry/client  && npm test
 ## 8. Known gotchas
 
 These are the non-obvious things that will burn you if you
-don't know them. Full details in tag_registry_test_spec_v1_1.md
+don't know them. Full details in tag_registry_test_spec_v1_2.md
 section 5.
 
 1. **nodemon must not watch templates/** — already fixed in
@@ -196,3 +208,5 @@ section 5.
 
 10. **PGPASSWORD must be set in .env** — @caro/db pool.js
     reads PG* vars; DATABASE_URL is not used anywhere.
+
+11. **`apps/tag-registry/server/.env` is the authoritative env file** — the server is started from `apps/tag-registry/server/` so `dotenv.config()` loads `apps/tag-registry/server/.env`, not the root `.env`. Any server-side env var (`VALIDATE_REQUIRED_PARENT_TYPES`, `VALIDATE_UNIQUE_PARENT_TYPES`, `PGPASSWORD`, `PORT`, `TEMPLATES_DIR`) must be set in `apps/tag-registry/server/.env`. Changes to the root `.env` are never seen by the server process.

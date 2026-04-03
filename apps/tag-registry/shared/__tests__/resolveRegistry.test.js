@@ -115,7 +115,7 @@ describe('multiple tags', () => {
 // ── Meta structure ────────────────────────────────────────────────────────────
 
 describe('meta structure', () => {
-  it('meta is leaf-to-root: meta[0].name is the tag asset_name, last is root', () => {
+  it('meta is root-to-tag: meta[0].name is the root, last is the tag asset_name', () => {
     const tag = makeTag('T');
     const param = makeStruct('P', 'parameter', [{ template_name: 'T', asset_name: 'setpoint', fields: {} }]);
     const mod = makeStruct('M', 'module', [{ template_name: 'P', asset_name: 'chan', fields: {} }]);
@@ -123,9 +123,9 @@ describe('meta structure', () => {
 
     const result = resolveRegistry(map, 'M');
     const { meta } = result[0];
-    expect(meta[0].name).toBe('setpoint');
+    expect(meta[0].name).toBe('M');
     expect(meta[1].name).toBe('chan');
-    expect(meta[2].name).toBe('M');
+    expect(meta[2].name).toBe('setpoint');
   });
 });
 
@@ -141,10 +141,10 @@ describe('meta field resolution', () => {
 
     const result = resolveRegistry(map, 'M');
     const { meta } = result[0];
-    // meta[0] is the tag level
-    expect(meta[0].fields.eng_min).toBe(5);
+    // meta[last] is the tag level (root-to-tag order)
+    expect(meta[meta.length - 1].fields.eng_min).toBe(5);
     // Must be a scalar, not a {field_type, default} object
-    expect(typeof meta[0].fields.eng_min).toBe('number');
+    expect(typeof meta[meta.length - 1].fields.eng_min).toBe('number');
   });
 
   it('template default used when no instance override', () => {
@@ -155,7 +155,159 @@ describe('meta field resolution', () => {
     const map = { M: wrap(mod), T: wrap(tag) };
 
     const result = resolveRegistry(map, 'M');
-    expect(result[0].meta[0].fields.eng_min).toBe(42);
+    // meta[last] is the tag level (root-to-tag order)
+    const meta = result[0].meta;
+    expect(meta[meta.length - 1].fields.eng_min).toBe(42);
+  });
+});
+
+// ── trends ────────────────────────────────────────────────────────────────────
+
+describe('trends', () => {
+  it('defaults to false when no level has a trends field', () => {
+    const tag = makeTag('T', 'f64', false, {});
+    const mod = makeStruct('M', 'module', [{ template_name: 'T', asset_name: 'ch', fields: {} }]);
+    const map = { M: wrap(mod), T: wrap(tag) };
+
+    expect(resolveRegistry(map, 'M')[0].trends).toBe(false);
+  });
+
+  it('true when tag template has a trends field set to true', () => {
+    const tag = makeTag('T', 'f64', false, { trends: { field_type: 'Boolean', default: true } });
+    const mod = makeStruct('M', 'module', [{ template_name: 'T', asset_name: 'ch', fields: {} }]);
+    const map = { M: wrap(mod), T: wrap(tag) };
+
+    expect(resolveRegistry(map, 'M')[0].trends).toBe(true);
+  });
+
+  it('true when parent (non-tag) level has a trends field set to true', () => {
+    const tag = makeTag('T');
+    const mod = makeStruct('M', 'module', [
+      { template_name: 'T', asset_name: 'ch', fields: {} },
+    ], { trends: { field_type: 'Boolean', default: true } });
+    const map = { M: wrap(mod), T: wrap(tag) };
+
+    expect(resolveRegistry(map, 'M')[0].trends).toBe(true);
+  });
+
+  it('case-insensitive field key match ("Trends" and "TRENDS")', () => {
+    const tag1 = makeTag('T1', 'f64', false, { Trends: { field_type: 'Boolean', default: true } });
+    const tag2 = makeTag('T2', 'f64', false, { TRENDS: { field_type: 'Boolean', default: true } });
+    const mod = makeStruct('M', 'module', [
+      { template_name: 'T1', asset_name: 'a', fields: {} },
+      { template_name: 'T2', asset_name: 'b', fields: {} },
+    ]);
+    const map = { M: wrap(mod), T1: wrap(tag1), T2: wrap(tag2) };
+
+    const result = resolveRegistry(map, 'M');
+    expect(result[0].trends).toBe(true);
+    expect(result[1].trends).toBe(true);
+  });
+
+  it('instance override to true wins over template default of false', () => {
+    const tag = makeTag('T', 'f64', false, { trends: { field_type: 'Boolean', default: false } });
+    const mod = makeStruct('M', 'module', [
+      { template_name: 'T', asset_name: 'ch', fields: { trends: true } },
+    ]);
+    const map = { M: wrap(mod), T: wrap(tag) };
+
+    expect(resolveRegistry(map, 'M')[0].trends).toBe(true);
+  });
+
+  it('instance override to false does not trigger trends when template default is true', () => {
+    const tag = makeTag('T', 'f64', false, { trends: { field_type: 'Boolean', default: true } });
+    const mod = makeStruct('M', 'module', [
+      { template_name: 'T', asset_name: 'ch', fields: { trends: false } },
+    ]);
+    const map = { M: wrap(mod), T: wrap(tag) };
+
+    expect(resolveRegistry(map, 'M')[0].trends).toBe(false);
+  });
+});
+
+// ── trends — additional edge cases ───────────────────────────────────────────
+
+describe('trends — additional edge cases', () => {
+  it('true when two separate levels both have trends: true (no error, no double-count)', () => {
+    // Both module and parameter levels carry trends: true
+    const tag = makeTag('T');
+    const param = makeStruct('P', 'parameter',
+      [{ template_name: 'T', asset_name: 'setpoint', fields: {} }],
+      { trends: { field_type: 'Boolean', default: true } }
+    );
+    const mod = makeStruct('M', 'module',
+      [{ template_name: 'P', asset_name: 'chan', fields: {} }],
+      { trends: { field_type: 'Boolean', default: true } }
+    );
+    const map = { M: wrap(mod), P: wrap(param), T: wrap(tag) };
+
+    expect(resolveRegistry(map, 'M')[0].trends).toBe(true);
+  });
+
+  it('false when a level has trends field explicitly set to false and no other level has true', () => {
+    const tag = makeTag('T', 'f64', false, { trends: { field_type: 'Boolean', default: false } });
+    const mod = makeStruct('M', 'module', [{ template_name: 'T', asset_name: 'ch', fields: {} }]);
+    const map = { M: wrap(mod), T: wrap(tag) };
+
+    expect(resolveRegistry(map, 'M')[0].trends).toBe(false);
+  });
+
+  it('false when trends field value is string "true" (not boolean true)', () => {
+    const tag = makeTag('T', 'f64', false, { trends: { field_type: 'Boolean', default: 'true' } });
+    const mod = makeStruct('M', 'module', [{ template_name: 'T', asset_name: 'ch', fields: {} }]);
+    const map = { M: wrap(mod), T: wrap(tag) };
+
+    expect(resolveRegistry(map, 'M')[0].trends).toBe(false);
+  });
+
+  it('false when trends field value is number 1 (not boolean true)', () => {
+    const tag = makeTag('T', 'f64', false, { trends: { field_type: 'Boolean', default: 1 } });
+    const mod = makeStruct('M', 'module', [{ template_name: 'T', asset_name: 'ch', fields: {} }]);
+    const map = { M: wrap(mod), T: wrap(tag) };
+
+    expect(resolveRegistry(map, 'M')[0].trends).toBe(false);
+  });
+
+  it('false when all levels have empty fields', () => {
+    // 3-level hierarchy: module → parameter → tag, all fields: {}
+    const tag = makeTag('T');
+    const param = makeStruct('P', 'parameter', [{ template_name: 'T', asset_name: 'setpoint', fields: {} }]);
+    const mod = makeStruct('M', 'module', [{ template_name: 'P', asset_name: 'chan', fields: {} }]);
+    const map = { M: wrap(mod), P: wrap(param), T: wrap(tag) };
+
+    expect(resolveRegistry(map, 'M')[0].trends).toBe(false);
+  });
+
+  it('instance override to true at parameter level wins over parameter template default of false', () => {
+    // Module child entry for P carries fields: { trends: true } — that becomes the
+    // instance override merged into P's resolvedFields at walk time
+    const tag = makeTag('T');
+    const param = makeStruct('P', 'parameter',
+      [{ template_name: 'T', asset_name: 'setpoint', fields: {} }],
+      { trends: { field_type: 'Boolean', default: false } }
+    );
+    const mod = makeStruct('M', 'module', [
+      { template_name: 'P', asset_name: 'chan', fields: { trends: true } },
+    ]);
+    const map = { M: wrap(mod), P: wrap(param), T: wrap(tag) };
+
+    expect(resolveRegistry(map, 'M')[0].trends).toBe(true);
+  });
+
+  it('instance override to false at parameter level suppresses parameter template default of true', () => {
+    // Module child entry for P carries fields: { trends: false } — overrides the
+    // parameter template's default of true
+    const tag = makeTag('T');
+    const param = makeStruct('P', 'parameter',
+      [{ template_name: 'T', asset_name: 'setpoint', fields: {} }],
+      { trends: { field_type: 'Boolean', default: true } }
+    );
+    const mod = makeStruct('M', 'module', [
+      { template_name: 'P', asset_name: 'chan', fields: { trends: false } },
+    ]);
+    const map = { M: wrap(mod), P: wrap(param), T: wrap(tag) };
+
+    expect(resolveRegistry(map, 'M')[0].trends).toBe(false);
   });
 });
 

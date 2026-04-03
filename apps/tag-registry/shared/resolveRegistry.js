@@ -67,20 +67,28 @@ export function resolveRegistry(templateMap, rootName) {
         return;
       }
 
-      // Build meta array (leaf-to-root)
+      // Build meta array (root-to-tag)
       const meta = [
+        ...metaChain,
         {
           type: template.template_type,
           name: assetPath[assetPath.length - 1] || rootName,
           fields: resolvedFields
-        },
-        ...metaChain
+        }
       ];
+
+      // Derive trends: true if any meta level has a field keyed "trends" (case-insensitive) with value true
+      const trends = meta.some(level =>
+        Object.entries(level.fields || {}).some(
+          ([k, v]) => k.toLowerCase() === 'trends' && v === true
+        )
+      );
 
       tags.push({
         tag_path,
         data_type: template.data_type,
         is_setpoint: template.is_setpoint,
+        trends,
         meta
       });
 
@@ -105,7 +113,7 @@ export function resolveRegistry(templateMap, rootName) {
         walkHierarchy(
           child.template_name,
           [...assetPath, child.asset_name],
-          [metaEntry, ...metaChain],
+          [...metaChain, metaEntry],
           child.fields || {}
         );
       }

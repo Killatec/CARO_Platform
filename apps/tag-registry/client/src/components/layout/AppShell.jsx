@@ -6,6 +6,7 @@ import { useTemplateGraphStore } from '../../stores/useTemplateGraphStore.js';
 import { useUIStore } from '../../stores/useUIStore.js';
 import { simulateCascade } from '../../../../shared/index.js';
 import * as templatesApi from '../../api/templates.js';
+import { fetchConfig } from '../../api/config.js';
 
 /**
  * AppShell - main layout container
@@ -26,9 +27,10 @@ export function AppShell({ children }) {
   const save                = useTemplateGraphStore(state => state.save);
   const discard             = useTemplateGraphStore(state => state.discard);
 
-  const openModal       = useUIStore(state => state.openModal);
-  const setPendingBatch = useUIStore(state => state.setPendingBatch);
-  const activeTab       = useUIStore(state => state.activeTab);
+  const openModal             = useUIStore(state => state.openModal);
+  const setPendingBatch       = useUIStore(state => state.setPendingBatch);
+  const activeTab             = useUIStore(state => state.activeTab);
+  const setValidationConfig   = useUIStore(state => state.setValidationConfig);
 
   const [templates, setTemplates] = useState([]);
 
@@ -37,11 +39,28 @@ export function AppShell({ children }) {
       try {
         const allTemplates = await templatesApi.listTemplates();
         setTemplates(allTemplates);
+
+        const lastRoot = localStorage.getItem('caro_last_root');
+        if (lastRoot && allTemplates.some(t => t.template_name === lastRoot)) {
+          setSelectedRoot(lastRoot);
+        }
       } catch (error) {
         console.error('Failed to load templates:', error);
       }
     }
     loadTemplates();
+  }, []);
+
+  useEffect(() => {
+    async function loadConfig() {
+      try {
+        const config = await fetchConfig();
+        setValidationConfig(config);
+      } catch (error) {
+        console.error('Failed to load validation config:', error);
+      }
+    }
+    loadConfig();
   }, []);
 
   const rootOptions = templates

@@ -2,5 +2,11 @@
   "template_type": "tag",
   "template_name": "boolean_set",
   "data_type": "bool",
-  "is_setpoint": true
+  "is_setpoint": true,
+  "fields": {
+    "Trends": {
+      "field_type": "Boolean",
+      "default": true
+    }
+  }
 }

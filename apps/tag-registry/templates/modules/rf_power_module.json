@@ -10,7 +10,7 @@
   "children": [
     {
       "template_name": "analog_control",
-      "asset_name": "RF_Fwd",
+      "asset_name": "Acc_Fwd",
       "fields": {
         "description": "Forward RF power channel",
         "eng_min": 56
@@ -18,21 +18,21 @@
     },
     {
       "template_name": "analog_control",
-      "asset_name": "RF_Ref",
+      "asset_name": "Acc_Ref",
       "fields": {
         "eng_min": 51
       }
     },
     {
       "template_name": "analog_control",
-      "asset_name": "KLY_Fwd",
+      "asset_name": "Kly_Fwd",
       "fields": {
         "eng_min": 50
       }
     },
     {
-      "template_name": "numeric_mon",
-      "asset_name": "numeric_mon",
+      "template_name": "analog_control",
+      "asset_name": "Kly_Ref",
       "fields": {}
     }
   ]

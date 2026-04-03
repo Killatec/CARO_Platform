@@ -71,6 +71,13 @@ export function RegistryTable({ rows }) {
             >
               is_setpoint {sortField === 'is_setpoint' && (sortDirection === 'asc' ? '↑' : '↓')}
             </TableHeaderCell>
+            <TableHeaderCell
+              sortable
+              onClick={() => setSort('trends')}
+              className={`px-4 w-px whitespace-nowrap text-center cursor-pointer hover:bg-gray-100 ${HDR_BORDER} ${COL_BORDER}`}
+            >
+              trends {sortField === 'trends' && (sortDirection === 'asc' ? '↑' : '↓')}
+            </TableHeaderCell>
             <TableHeaderCell className={`px-4 w-px whitespace-nowrap text-center ${HDR_BORDER}`}>
               meta
             </TableHeaderCell>
@@ -98,6 +105,9 @@ export function RegistryTable({ rows }) {
                 </TableCell>
                 <TableCell className={`px-4 w-px whitespace-nowrap text-center ${ROW_BORDER} ${COL_BORDER} ${cellClass('is_setpoint')}`}>
                   {tag.is_setpoint ? 'true' : 'false'}
+                </TableCell>
+                <TableCell className={`px-4 w-px whitespace-nowrap text-center ${ROW_BORDER} ${COL_BORDER} ${cellClass('trends')}`}>
+                  {tag.trends ? 'true' : 'false'}
                 </TableCell>
                 <TableCell className={`px-4 w-px whitespace-nowrap text-center ${ROW_BORDER} ${cellClass('meta')}`}>
                   <button
