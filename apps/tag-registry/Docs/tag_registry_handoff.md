@@ -86,22 +86,17 @@ All documents live in `apps/tag-registry/Docs/`.
 
 | Document | Version | Purpose | Reach for this when... |
 |---|---|---|---|
-| `tag_registry_spec_v1_17.md` | v1.17 | Functional specification — UI concepts, workflows, validation rules, data model | UI behavior, validation rules, workflow logic, data model questions |
-| `tag_registry_api_spec_v1_15.md` | v1.15 | REST API contract — all endpoints, request/response shapes, error codes | Endpoint contracts, request/response shapes, error codes |
-| `tag_registry_bootstrap_v1_21.md` | v1.21 | Implementation bootstrap — folder structure, component architecture, store behavior, seed data | Component architecture, store behavior, folder structure, seed data |
-| `tag_registry_test_spec_v1_2.md` | v1.2 | Test suite specification — E2E and unit test coverage, known gotchas, selector strategy | Writing or debugging tests, selector strategy, E2E gotchas |
-| `db/Docs/CARO_DB_Spec_v1_3.md` | v1.3 | Platform PostgreSQL schema — all tables, column types, constraints, indexes | Writing migrations, HMI table schema, audit_log, any PostgreSQL schema question |
-| `spec_delta.md` | live | Pending updates to the above docs — read this to know what has diverged from the specs | **Always** — read before any task to know where reality diverges from specs |
-| `HANDOFF.md` | live | This file | Read first for orientation |
-
-> **Before every task — read `spec_delta.md` first.**
-> The spec documents reflect a snapshot in time. `spec_delta.md` is the
-> authoritative record of where the implementation has diverged. Skipping it
-> means working from a stale picture, regardless of task scope.
+| `tag_registry_spec.md` | v1.17 | Functional specification — UI concepts, workflows, validation rules, data model | UI behavior, validation rules, workflow logic, data model questions |
+| `tag_registry_api_spec.md` | v1.15 | REST API contract — all endpoints, request/response shapes, error codes | Endpoint contracts, request/response shapes, error codes |
+| `tag_registry_bootstrap.md` | v1.21 | Implementation bootstrap — folder structure, component architecture, store behavior, seed data | Component architecture, store behavior, folder structure, seed data |
+| `tag_registry_test_spec.md` | v1.2 | Test suite specification — E2E and unit test coverage, known gotchas, selector strategy | Writing or debugging tests, selector strategy, E2E gotchas |
+| `../../Docs/CARO_DB_Spec.md` _(platform root — not in app Docs/)_ | v1.3 | Platform PostgreSQL schema — all tables, column types, constraints, indexes | Writing migrations, HMI table schema, audit_log, any PostgreSQL schema question |
+| `tag_registry_deltas.md` | live | Pending updates to the above docs — read this at the start of every session | Read at session start — not before every task |
+| `tag_registry_handoff.md` | live | This file | Read first for orientation |
 
 **Reading order for a new session:**
-1. This file (HANDOFF.md) — orientation
-2. spec_delta.md — what has changed since the last spec revision
+1. This file (tag_registry_handoff.md) — orientation
+2. tag_registry_deltas.md — session start only, not before every task
 3. The specific spec document relevant to your task
 
 ---
@@ -173,7 +168,7 @@ cd apps/tag-registry/client  && npm test
 ## 8. Known gotchas
 
 These are the non-obvious things that will burn you if you
-don't know them. Full details in tag_registry_test_spec_v1_2.md
+don't know them. Full details in tag_registry_test_spec.md
 section 5.
 
 1. **nodemon must not watch templates/** — already fixed in

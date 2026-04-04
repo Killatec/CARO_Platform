@@ -18,6 +18,13 @@
       "fields": {
         "description": "RF_Control_1"
       }
+    },
+    {
+      "template_name": "rf_power_module",
+      "asset_name": "RF2",
+      "fields": {
+        "description": "Rf2"
+      }
     }
   ]
 }

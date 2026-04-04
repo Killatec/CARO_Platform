@@ -519,7 +519,7 @@ Start: cd apps/mqtt-simulator/client && npm run dev
 > *NOTE: Original Bootstrap §12 specified plain HTML + vanilla JS. Implementation uses React+Vite
 > for consistency with apps/tag-registry/client/ conventions. The log panel, per-module controls,
 > encoding toggle, and override form described in the original §12 are not yet implemented ---
-> see spec_delta.md for the full list.*
+> see mqtt_simulator_deltas.md for the full list.*
 
 **13. File Descriptions**
 

@@ -24,7 +24,7 @@ This document defines the E2E (end-to-end) and unit test suite for the Tag Regis
 - Behaviour under concurrent multi-user edits (Phase 2 scope)
 
 **Relationship to the functional spec:**
-Each test file maps to one or more sections in Functional Spec v1.16. The test suite acts as a living executable companion to the spec — if a spec behaviour is observable in the browser it should have a corresponding test. Any deliberate deviation between test behaviour and spec language is documented in section 6 (skipped tests) and in `Docs/spec_delta.md`.
+Each test file maps to one or more sections in Functional Spec v1.16. The test suite acts as a living executable companion to the spec — if a spec behaviour is observable in the browser it should have a corresponding test. Any deliberate deviation between test behaviour and spec language is documented in section 6 (skipped tests) and in `Docs/tag_registry_deltas.md`.
 
 ---
 

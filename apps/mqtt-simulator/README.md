@@ -14,4 +14,4 @@ npm install
 npm run dev
 ```
 
-See `Docs/CARO_MQTT_Simulator_Bootstrap_v1_13.md` for full implementation details.
+See `Docs/mqtt_simulator_bootstrap.md` for full implementation details.

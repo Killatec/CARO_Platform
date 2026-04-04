@@ -45,14 +45,7 @@ CARO_Platform is an industrial control system monorepo providing SCADA/HMI tag r
 
 ## 5. Platform-wide rules
 
-### DB access
-ALL database queries live in packages/db/. No app contains raw SQL or direct pool usage. Apps import named functions from @caro/db only. See packages/db/README.md.
-
-### Shared UI
-Check packages/ui/ before writing new components. Reuse primitives — do not duplicate across apps.
-
-### Spec delta discipline
-Every app has its own Docs/spec_delta.md. Update it when implementation diverges from spec. Read it at the start of every session. This platform HANDOFF and platform_spec_delta.md cover cross-app divergences only.
+Coding practices, DB access policy, and spec delta discipline: see `CLAUDE.md`
 
 ### Branching strategy
 - main — stable releases only
@@ -66,7 +59,7 @@ All apps follow apps/tag-registry/ conventions for folder structure, component s
 
 ## 6. Database
 
-Schema spec: db/Docs/CARO_DB_Spec_v1_3.md
+Schema spec: Docs/CARO_DB_Spec.md
 Migrations: db/postgres/migrations/
 Seeds: db/postgres/seeds/
 Broker config: Mosquitto — C:\Program Files\mosquitto\mosquitto.conf
@@ -90,20 +83,17 @@ cd apps/mqtt-simulator/client && npm run dev
 
 ---
 
-## 8. Session startup order
-1. Read this file
-2. Read Docs/platform_spec_delta.md — cross-app divergences
-3. Read the relevant app CLAUDE.md
-4. Read the relevant app Docs/spec_delta.md
-
----
-
-## 9. Key documents
+## 8. Key documents
 
 | Document | Path | Purpose |
 |---|---|---|
-| Platform Handoff | Docs/HANDOFF.md | This file — platform constitution |
-| Platform Spec Delta | Docs/platform_spec_delta.md | Cross-app divergences |
-| DB Spec | db/Docs/CARO_DB_Spec_v1_3.md | PostgreSQL schema |
-| Tag Registry Handoff | apps/tag-registry/Docs/HANDOFF.md | App-specific handoff |
+| Platform Handoff | Docs/platform_handoff.md | This file — platform constitution |
+| Platform Spec Delta | Docs/platform_deltas.md | Cross-app divergences |
+| DB Spec | Docs/CARO_DB_Spec.md | PostgreSQL schema — all tables, column types, constraints, indexes, migrations |
+| Tag Registry Handoff | apps/tag-registry/Docs/tag_registry_handoff.md | App-specific handoff |
+| Tag Registry Spec Delta | apps/tag-registry/Docs/tag_registry_deltas.md | Tag Registry implementation divergences |
 | MQTT Simulator CLAUDE.md | apps/mqtt-simulator/CLAUDE.md | Simulator session anchor |
+| MQTT Simulator Handoff | apps/mqtt-simulator/Docs/mqtt_simulator_handoff.md | App-specific handoff |
+| MQTT Simulator Spec Delta | apps/mqtt-simulator/Docs/mqtt_simulator_deltas.md | Simulator divergences and deferred items |
+| MQTT Spec | Docs/CARO_MQTT_Spec.md | MQTT protocol contract — topic structure, TelemetryMessage, CommandEnvelope, CMD_ACK, topic naming |
+

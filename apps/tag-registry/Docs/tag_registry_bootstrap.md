@@ -1,6 +1,6 @@
 # Tag Registry Admin Tool — Project Bootstrap Document
 **v1.21** | Generated: 2026-04-02
-Companion documents: [Functional Spec v1.17](tag_registry_spec_v1_17.md) | [API Spec v1.15](tag_registry_api_spec_v1_15.md)
+Companion documents: [Functional Spec v1.17](tag_registry_spec.md) | [API Spec v1.15](tag_registry_api_spec.md)
 
 ---
 
