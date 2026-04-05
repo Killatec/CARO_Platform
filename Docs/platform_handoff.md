@@ -32,7 +32,7 @@
 | Backend | Node.js + Express |
 | Database | PostgreSQL via `@caro/db` |
 | Messaging | Mosquitto v5 — TCP 1883, WS 8080 |
-| Language | JavaScript, ESM, no TypeScript |
+| Language | TypeScript (new code and shared packages). JavaScript retained in apps/tag-registry and apps/mqtt-simulator pending migration. |
 | Packages | npm workspaces |
 
 ---
@@ -64,6 +64,19 @@ Migrations: `db/postgres/migrations/` — never edit existing files, add new one
 Applied: `001` `002` `003` `004` `006`
 
 HMI tables (`users`, `sessions`, `commissioned_modules`, `operation_modes`, `mode_revisions`, `setpoint_values`, `pending_setpoint_values`, `system_settings`, `audit_log`) specified in DB Spec, not yet migrated. Create when HMI development starts.
+
+---
+
+## Pre-HMI Tasks
+
+### Shared Package TypeScript Migration (required before HMI scaffolding)
+Migrate in this order:
+1. `@caro/db` — typed query functions
+2. `@caro/server` — asyncWrap, errorHandler
+3. `@caro/ui` — primitives and tokens
+Then scaffold new TypeScript packages:
+4. `@caro/hmi-context` — HmiContextProvider, useLiveValue, useTagWriter, useTagMap, useTagSubtree
+5. `@caro/widgets` — NumericMon, NumericSet, BooleanMon, BooleanSet
 
 ---
 

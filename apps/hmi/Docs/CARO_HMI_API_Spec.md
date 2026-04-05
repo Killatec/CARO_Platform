@@ -5,7 +5,7 @@
 
 **Companion Documents**
 
-CARO_HMI Functional Spec v2.4 | CARO_MQTT_Spec v1.8 | Tag Registry Functional Spec v1.17 | CARO_DB_Spec v1.2
+CARO_HMI Functional Spec v2.4 | CARO_MQTT_Spec v1.8 | Tag Registry Functional Spec v1.17 | CARO_DB_Spec v1.3
 
 ---
 
@@ -163,7 +163,7 @@ List all active tags
 
 *Required role: ALL*
 
-Query parameters: `device_id` (string, optional), `is_setpoint` (boolean, optional), `page`, `page_size`.
+Query parameters: `module_id` (string, optional), `is_setpoint` (boolean, optional), `page`, `page_size`.
 
 Response:
 ```json
@@ -176,7 +176,7 @@ Response:
         "tag_path": "Plant1_System_A.RFPowerModule.RF_Fwd.setpoint",
         "data_type": "f64",
         "is_setpoint": true,
-        "device_id": "RFPowerModule",
+        "module_id": "RFPowerModule",
         "meta": [ { "type": "tag", "name": "setpoint", "fields": {} }, ... ]
       }
     ],
@@ -191,7 +191,7 @@ Get a single tag definition
 *Required role: ALL*
 
 ```json
-{ "ok": true, "data": { "tag": { "tag_id": 1001, "tag_path": "...", "data_type": "f64", "is_setpoint": true, "device_id": "RFPowerModule", "meta": [...] } } }
+{ "ok": true, "data": { "tag": { "tag_id": 1001, "tag_path": "...", "data_type": "f64", "is_setpoint": true, "module_id": "RFPowerModule", "meta": [...] } } }
 ```
 
 ### GET /api/v1/tags/hierarchy
@@ -207,7 +207,7 @@ Reconstructs the tag tree from the meta column. Used by the frontend to build na
   "data": {
     "devices": [
       {
-        "device_id": "RFPowerModule",
+        "module_id": "RFPowerModule",
         "groups": [
           { "name": "RF_Fwd", "tags": [ { "tag_id": 1001, "tag_path": "...", "is_setpoint": true, "data_type": "f64" } ] }
         ]
@@ -239,7 +239,7 @@ Request body:
 }
 ```
 
-The backend validates each tag_id (must exist and is_setpoint = true), groups tags by device_id, and publishes one SET_VALUES MQTT command per device. Each command carries only that device's tags.
+The backend validates each tag_id (must exist and is_setpoint = true), groups tags by module_id, and publishes one SET_VALUES MQTT command per device. Each command carries only that device's tags.
 
 Success response (all devices accepted):
 ```json
@@ -247,8 +247,8 @@ Success response (all devices accepted):
   "ok": true,
   "data": {
     "devices": [
-      { "device_id": "RFPowerModule", "command_id": "<UUID4>", "status": "pending_ack", "tags": [ { "tag_id": 1001, "value": 90.0 }, { "tag_id": 1002, "value": 85.0 } ] },
-      { "device_id": "CoolingModule", "command_id": "<UUID4>", "status": "pending_ack", "tags": [ { "tag_id": 2001, "value": 25.0 } ] }
+      { "module_id": "RFPowerModule", "command_id": "<UUID4>", "status": "pending_ack", "tags": [ { "tag_id": 1001, "value": 90.0 }, { "tag_id": 1002, "value": 85.0 } ] },
+      { "module_id": "CoolingModule", "command_id": "<UUID4>", "status": "pending_ack", "tags": [ { "tag_id": 2001, "value": 25.0 } ] }
     ],
     "total_tags": 3,
     "total_devices": 2
@@ -317,6 +317,9 @@ Query parameters:
 | auth.login_failed | Failed login attempt |
 | auth.locked | Account locked after failed attempts |
 | tag.write.request | Setpoint write initiated (before MQTT). Pair with tag.write.outcome via command_id. |
+| tag.write.outcome | CMD_ACK received or 1-second timeout. Pairs with tag.write.request via command_id. outcome: accepted / rejected / timeout. |
+| tag.sync.lost | First good→bad telemetry transition for a setpoint tag. System event — no actor. Latches until manually reset. |
+| tag.sync.reset | Manual reset of out-of-sync latch by any logged-in user. |
 | mode.created | Operation mode created |
 | mode.saved | Mode revision saved |
 | mode.activated | Mode revision activated |
@@ -511,7 +514,7 @@ List commissioned devices and current status
   "ok": true,
   "data": {
     "devices": [
-      { "device_id": "RFPowerModule", "validated": true, "online": true, "last_seen_at": "2026-03-26T14:00:00Z", "fw_hash": "abc123...", "tag_count": 18 }
+      { "module_id": "RFPowerModule", "validated": true, "online": true, "last_seen_at": "2026-03-26T14:00:00Z", "fw_hash": "abc123...", "tag_count": 18 }
     ]
   }
 }
@@ -534,7 +537,7 @@ Query parameter: `validated=true|false` (optional, default returns all).
   "data": {
     "modules": [
       {
-        "device_id": "RFPowerModule",
+        "module_id": "RFPowerModule",
         "validated": false,
         "online": true,
         "pending_fw_hash": "abc123...",
@@ -549,7 +552,7 @@ Query parameter: `validated=true|false` (optional, default returns all).
 }
 ```
 
-### POST /api/v1/modules/{device_id}/validate
+### POST /api/v1/modules/{module_id}/validate
 Validate a commissioned module instance
 
 *Required role: AD*
@@ -563,7 +566,7 @@ Request body:
 
 Responses:
 ```json
-{ "ok": true, "data": { "device_id": "RFPowerModule", "validated": true, "validated_at": "2026-03-26T14:10:00Z", "expected_fw_hash": "abc123...", "expected_tag_config_hash": "def456..." } }
+{ "ok": true, "data": { "module_id": "RFPowerModule", "validated": true, "validated_at": "2026-03-26T14:10:00Z", "expected_fw_hash": "abc123...", "expected_tag_config_hash": "def456..." } }
 
 // Device not ready
 { "ok": false, "error": { "code": "DEVICE_NOT_READY", "message": "Device has not completed the handshake" } }

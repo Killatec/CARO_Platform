@@ -5,7 +5,7 @@
 
 **Companion Documents**
 
-CARO_HMI Functional Spec v2.4 | CARO_HMI API Spec v1.4 | CARO_DB_Spec v1.2
+CARO_HMI Functional Spec v2.4 | CARO_HMI API Spec v1.4 | CARO_DB_Spec v1.3
 
 ---
 
@@ -146,7 +146,7 @@ All widgets accept a `tag` prop — a plain object from the backend in-memory ta
   tag_path: string,     // full dot-separated path
   data_type: string,    // "f64" | "i32" | "bool" | "str"
   is_setpoint: boolean,
-  device_id: string,
+  module_id: string,
   eng_min: number | null,  // from Tag Registry fields — used for input validation
   eng_max: number | null,
   unit: string | null,     // from Tag Registry fields — displayed after value
@@ -460,7 +460,7 @@ const mockTag = {
   tag_path: "Plant1.Module.power",
   data_type: "f64",
   is_setpoint: false,
-  device_id: "Module",
+  module_id: "Module",
   eng_min: 0,
   eng_max: 5000,
   unit: "W",

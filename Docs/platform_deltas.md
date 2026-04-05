@@ -33,3 +33,19 @@ None of the HMI tables (users through audit_log) have been created.
 **Discovered:** 2026-03-29
 
 ---
+
+## TODO — Migrate apps/tag-registry to TypeScript
+
+All source files in `apps/tag-registry/server/src/` and `apps/tag-registry/client/src/` to be converted to TypeScript. Shared packages (`@caro/db`, `@caro/server`, `@caro/ui`) will already be TypeScript by the time this migration runs. Deferred until after HMI is stable.
+
+**Status:** Open (deferred)
+
+---
+
+## TODO — Migrate apps/mqtt-simulator to TypeScript
+
+All source files in `apps/mqtt-simulator/server/src/` and `apps/mqtt-simulator/client/src/` to be converted to TypeScript. Deferred until after HMI is stable.
+
+**Status:** Open (deferred)
+
+---

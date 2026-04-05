@@ -5,7 +5,7 @@
 
 **Companion Documents**
 
-Tag Registry Functional Spec v1.17 | CARO_MQTT_Spec v1.8 | CARO_DB_Spec v1.0 | CARO_Widget_Spec v1.4
+Tag Registry Functional Spec v1.17 | CARO_MQTT_Spec v1.8 | CARO_DB_Spec v1.3 | CARO_Widget_Spec v1.4
 
 ---
 
@@ -45,6 +45,7 @@ The following technology decisions are locked based on proof-of-concept validati
 | State management | Zustand 4.5+ | Lightweight selective global state — prevents unnecessary re-renders |
 | Build tool | Vite 5+ | Dev server with HMR and production bundler |
 | Package manager | npm | Dependency management |
+| Language | TypeScript | All HMI app and shared package code. |
 | Dev tooling | Concurrently + Nodemon | Run backend and frontend simultaneously; auto-reload on change |
 
 ---
@@ -170,7 +171,7 @@ Authentication is mandatory in all production environments. Role-based access co
 ### 5.2 Supervisor Parameter Change Workflow
 
 - Supervisor may freely adjust setpoint or threshold values in the HMI without immediate authentication challenge.
-- Adjusted values are held as pending in the UI. A SET_VALUES command is sent to the device via MQTT `caro/{device_id}/cmd` (QoS1), carrying the changed tag_id/value pairs as an array.
+- Adjusted values are held as pending in the UI. A SET_VALUES command is sent to the device via MQTT `caro/{module_id}/cmd` (QoS1), carrying the changed tag_id/value pairs as an array.
 - Before publishing to MQTT, the backend writes a `tag.write.request` entry to the audit log, capturing the actor, tag_id, before value (from LKV), and requested value.
 - The backend waits up to 1 second for CMD_ACK from the device (configurable in system_settings). On ACK or timeout the Promise is resolved or rejected to the frontend widget, and a `tag.write.outcome` entry is written to the audit log with the outcome (accepted, rejected, or timeout). The two audit rows share a command_id for correlation.
 - The `pending_setpoint_values` table is updated only on CMD_ACK with `accepted=true`. The backend compares the ACK-confirmed value against the active mode revision value (epsilon for f64/i32, strict equality for bool). If within epsilon the tag is removed from pending; if outside epsilon the tag is added or kept in pending with the confirmed value.
@@ -245,6 +246,7 @@ CARO_HMI operates exclusively against tags identified by tag_id. The Tag Registr
 | data_type | VARCHAR | Determines input validation and display formatting (f64, i32, bool, str). |
 | is_setpoint | BOOLEAN | If true, tag accepts write commands from Supervisor role. If false, tag is monitor-only. |
 | meta | JSONB | Provenance chain (leaf-to-root). Used to group tags in the UI by hierarchy and to display context (asset name, template type). |
+| trends | BOOLEAN | If true, the tag's values are written to TimescaleDB by the telemetry loop. Used to filter time-series persistence — only tagged trends are stored. |
 
 > *NOTE: The HMI always queries only the latest active (non-retired) version of each tag. The HMI never reads template JSON files directly — only the resolved tag_registry table.*
 
@@ -268,13 +270,14 @@ At startup the backend builds a rich in-memory map keyed by tag_id from the Tag 
 |---|---|---|
 | tag_id | uint32 | Map key. Primary identifier for all operations. |
 | tag_path | VARCHAR | Display label for frontend. Never used as identifier on the wire. |
-| device_id | string | MQTT device_id derived from the module asset_name in the meta column. Used to route commands to the correct `caro/{device_id}/cmd` topic. |
+| module_id | string | MQTT module_id derived from the module asset_name in the meta column. Used to route commands to the correct `caro/{module_id}/cmd` topic. |
 | data_type | string | Value type (f64, i32, bool, str). Used for write validation and Protobuf encoding. |
 | is_setpoint | boolean | If true, tag accepts SET_VALUES commands (via useTagWriter). If false, write attempts are rejected with NOT_AUTHORIZED. |
 | eng_min / eng_max | number | Engineering limits. Reserved for future server-side OUT_OF_RANGE pre-validation before commands are sent to devices. |
 | meta | array | Full provenance chain. Available for hierarchy grouping and display context. |
+| trends | boolean | Whether this tag's values are written to TimescaleDB on each telemetry tick. Sourced from tag_registry.trends column. |
 
-> *NOTE: The device_id for each tag is resolved by walking the tag's meta array and finding the entry where `type === 'module'`. The `name` field of that entry is the device_id. This requires every tag to have exactly one module ancestor — enforced by the VALIDATE_REQUIRED_PARENT_TYPES rule in the Tag Registry (see Section 8.1).*
+> *NOTE: The module_id for each tag is resolved by walking the tag's meta array and finding the entry where `type === 'module'`. The `name` field of that entry is the module_id. This requires every tag to have exactly one module ancestor — enforced by the VALIDATE_REQUIRED_PARENT_TYPES rule in the Tag Registry (see Section 8.1).*
 
 The in-memory map is rebuilt whenever the backend detects a new Tag Registry revision has been applied by the Tag Registry Admin Tool (see OI-14).
 
@@ -288,7 +291,7 @@ The current active mode name and revision number are maintained as a system-wide
 
 #### 6.6.1 Data Model
 
-Operation modes are stored in three PostgreSQL tables: `operation_modes`, `mode_revisions`, and `setpoint_values`. Full schema definitions are in CARO_DB_Spec v1.0 Sections 6.1, 6.2, and 6.3.
+Operation modes are stored in three PostgreSQL tables: `operation_modes`, `mode_revisions`, and `setpoint_values`. Full schema definitions are in CARO_DB_Spec v1.3 Sections 6.1, 6.2, and 6.3.
 
 Key constraints enforced by the backend:
 
@@ -387,14 +390,14 @@ Summary of MQTT channels used by the backend:
 
 | Channel | Direction | Purpose |
 |---|---|---|
-| `caro/{device_id}/telemetry` | Device → Backend | Tag value updates (Protobuf). Change-only in normal operation; full snapshot in response to REQUEST_SNAPSHOT. |
-| `caro/{device_id}/status` | Device → Backend | Heartbeat. Backend watchdog sets tags to quality=bad on timeout. |
-| `caro/{device_id}/cmd` | Backend → Device | Typed commands: REQUEST_SNAPSHOT, SET_VALUES, RESET. Generic JSON envelope with payload object. |
-| `caro/{device_id}/cmd_ack` | Device → Backend | Command acknowledgement or rejection with reason code. |
-| `caro/{device_id}/handshake` | Backend → Device | Module handshake messages: schema delivery and tag list. |
-| `caro/{device_id}/handshake_ack` | Device → Backend | Handshake acknowledgements and firmware/tag-config hash confirmation. |
+| `caro/{module_id}/telemetry` | Device → Backend | Tag value updates (Protobuf). Change-only in normal operation; full snapshot in response to REQUEST_SNAPSHOT. |
+| `caro/{module_id}/cmd` | Backend → Module | Typed commands: REQUEST_SNAPSHOT, SET_VALUES, RESET. Generic JSON envelope with payload object. |
+| `caro/{module_id}/cmd_ack` | Device → Backend | Command acknowledgement or rejection with reason code. |
+| `caro/{module_id}/handshake` | Backend → Module | Module handshake messages: schema delivery and tag list. |
+| `caro/{module_id}/handshake_ack` | Device → Backend | Handshake acknowledgements and firmware/tag-config hash confirmation. |
+| `caro/{module_id}/beat` | Backend → Module | Backend heartbeat published to each module at regular interval. |
 
-> *NOTE: Telemetry runs unencrypted on the trusted local LAN (QoS0). All command and handshake channels use TLS and QoS1. See CARO_MQTT_Spec v1.8 for full protocol details.*
+> *NOTE: Telemetry runs unencrypted on the trusted local LAN (QoS0). All command and handshake channels use TLS and QoS1. Backend watchdog monitors telemetry continuity — loss of telemetry from a module triggers quality=bad for all of that module's tags in the LKV cache. See CARO_MQTT_Spec v1.8 for full protocol details.*
 
 ---
 
@@ -409,7 +412,7 @@ The backend maintains an in-memory last-known-value (LKV) cache keyed by tag_id 
 Startup sequence:
 
 - Backend loads tag registry from PostgreSQL — builds the full tag_id map with quality=bad for all tags.
-- Backend sends a REQUEST_SNAPSHOT command to every known device via `caro/{device_id}/cmd` (see CARO_MQTT_Spec v1.8 Section 6).
+- Backend sends a REQUEST_SNAPSHOT command to every known device via `caro/{module_id}/cmd` (see CARO_MQTT_Spec v1.8 Section 6).
 - Devices respond by publishing their current values via the telemetry channel.
 - LKV transitions to quality=good for each tag as values arrive.
 - Frontend clients that connect during this window receive quality=bad on tags not yet heard from — the correct and honest state.
@@ -420,7 +423,7 @@ Startup sequence:
 | value | typed | Latest confirmed value from device (f64, i32, bool, or str). |
 | quality | enum | good = live device value received; bad = not yet heard from device, or device disconnected. |
 | timestamp | uint64 ms | Unix timestamp of the most recent update. |
-| device_id | string | MQTT device_id that last published this tag. |
+| module_id | string | MQTT module_id that last published this tag. |
 
 ### 8.2 Telemetry Loop
 
@@ -491,16 +494,24 @@ On startup the backend loads the full active tag registry from PostgreSQL (`SELE
 
 ### 8.7 Audit Log
 
-The `audit_log` table (CARO_DB_Spec Section 10) is the authoritative record of all user-initiated and system-initiated events. It is append-only and immutable — rows are never updated or deleted. Full schema is defined in CARO_DB_Spec v1.2.
+The `audit_log` table (CARO_DB_Spec Section 10) is the authoritative record of all user-initiated and system-initiated events. It is append-only and immutable — rows are never updated or deleted. Full schema is defined in CARO_DB_Spec v1.3.
 
 #### 8.7.1 Setpoint Write — Two-Row Pattern
 
 Every setpoint write attempt produces exactly two audit_log rows that share a command_id UUID for correlation:
 
-- `tag.write.request` — written before MQTT publish. Captures actor, tag_id, before_value (LKV snapshot), after_value (requested), command_id, device_id, ip. outcome is NULL.
+- `tag.write.request` — written before MQTT publish. Captures actor, tag_id, before_value (LKV snapshot), after_value (requested), command_id, module_id, ip. outcome is NULL.
 - `tag.write.outcome` — written on CMD_ACK receipt or 1-second timeout. Captures the same command_id, outcome (accepted / rejected / timeout), after_value (ACK-confirmed value if accepted, NULL otherwise).
 
-#### 8.7.2 Event Type Reference
+#### 8.7.2 Signable Events — meaning and record_hash
+
+For signable events (mode.saved, mode.activated, module.validated), the backend must also populate two additional audit_log columns:
+- `meaning` — a human-readable statement of the action's intent, entered or confirmed by the actor at save/activation/validation time.
+- `record_hash` — SHA-256 hex digest of the canonical signed payload as defined in CARO_DB_Spec v1.3 Section 11.2.
+
+These columns are nullable for all other event types. They establish 21 CFR Part 11 readiness from initial deployment. See CARO_DB_Spec v1.3 Section 11 for the full electronic signature architecture and migration path.
+
+#### 8.7.3 Event Type Reference
 
 All event types written to audit_log:
 
@@ -528,11 +539,11 @@ Before a physical device can participate in the system it must be commissioned. 
 
 ### 9.1 Tag Registry Rule — Module Ancestor Required
 
-Every tag must have exactly one ancestor with `template_type = 'module'`. This is enforced via VALIDATE_REQUIRED_PARENT_TYPES in the Tag Registry Admin Tool. It ensures the backend can always resolve a device_id for any tag by walking its meta array. The module asset_name must match the physical device MQTT device_id exactly.
+Every tag must have exactly one ancestor with `template_type = 'module'`. This is enforced via VALIDATE_REQUIRED_PARENT_TYPES in the Tag Registry Admin Tool. It ensures the backend can always resolve a module_id for any tag by walking its meta array. The module asset_name must match the physical device MQTT module_id exactly.
 
 ### 9.2 Commissioned Modules Table
 
-The backend maintains a `commissioned_modules` table in PostgreSQL — one row per module instance. Full schema is defined in CARO_DB_Spec v1.0 Section 5.1.
+The backend maintains a `commissioned_modules` table in PostgreSQL — one row per module instance. Full schema is defined in CARO_DB_Spec v1.3 Section 5.1.
 
 ### 9.3 Commissioning Lifecycle
 
@@ -585,7 +596,7 @@ The global Zustand store shape:
 
 ```js
 {
-  tags: { [tag_id: uint32]: { value, quality, timestamp, device_id } },
+  tags: { [tag_id: uint32]: { value, quality, timestamp, module_id } },
   connected: boolean,
   updateCount: number,
   latency: number | null,
@@ -602,7 +613,7 @@ Setpoint writes go through the REST API, not WebSocket. The endpoint accepts one
 - User edits a value in a Set_Numeric or Set_Boolean widget and confirms.
 - Widget calls `POST /api/v1/tags/write` with a values array of `{ tag_id, value }` pairs and a required comment.
 - Backend validates all tags pre-flight: authorization, existence, is_setpoint, and data type. If any tag fails, WRITE_VALIDATION_FAILED is returned and no MQTT commands are issued.
-- Backend groups valid tags by device_id and publishes one SET_VALUES command per device via MQTT `caro/{device_id}/cmd` (QoS1).
+- Backend groups valid tags by module_id and publishes one SET_VALUES command per device via MQTT `caro/{module_id}/cmd` (QoS1).
 - Backend writes `tag.write.request` to audit_log (before value from LKV, requested value, actor, command_id).
 - Device processes the command and responds with CMD_ACK (or 1-second timeout fires). Backend writes `tag.write.outcome` to audit_log. If accepted=true, pending_setpoint_values is updated via epsilon comparison against active mode revision.
 - Device reflects the new value in its next telemetry. The LKV cache is updated and the broadcast loop delivers the change to all subscribed WebSocket clients in the normal way.
@@ -672,7 +683,7 @@ See Section 8.7 for full audit log specification.
 - Local backend services: target 99.5% availability during scheduled machine operation hours.
 - Loss of cloud connectivity shall not affect local operation.
 - WebSocket client auto-reconnects after 3-second backoff on connection drop.
-- Database backup policy and telemetry write-ahead buffer requirements are defined in CARO_DB_Spec v1.0 Section 10.
+- Database backup policy and telemetry write-ahead buffer requirements are defined in CARO_DB_Spec v1.3 Section 10.
 
 ### 14.3 Security
 

@@ -15,7 +15,7 @@ Platform-level specs — read once if your session involves:
 - If you implement or modify any functionality, update all affected delta files immediately — include docs/platform_deltas.md for any cross-app or shared package changes
 - Do not update handoff, bootstrap, or spec docs during a task — delta files are the only docs that change mid-session
 - ALL queries live in `packages/db/` — no raw SQL in app code, import named functions only
-- JavaScript only — no TypeScript anywhere
+- All new code is TypeScript. Existing apps (tag-registry, mqtt-simulator) remain JavaScript until explicitly migrated — see docs/platform_deltas.md for migration TODOs.
 - Check `packages/ui/` before writing new components — do not duplicate primitives
 - All apps follow `apps/tag-registry/` conventions for folder structure, component style, error shapes, and API patterns
 

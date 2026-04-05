@@ -9,3 +9,7 @@ App-level specs — read once if your session involves:
 
 Broker: mqtt://localhost:1883 (TCP) | ws://localhost:8080 (WS) | anonymous | Mosquitto v5
 Server: port 3002 | Client: port 5174
+
+## Hard constraints
+
+- **Language:** This app is JavaScript. TypeScript migration is tracked in docs/platform_deltas.md.

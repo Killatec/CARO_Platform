@@ -29,6 +29,7 @@ Do not read specs you do not need. tag_registry_handoff.md and tag_registry_delt
 - **No mkdir -p in batchSave:** Subdirectories under `templates/` must exist before saving a new template of that type.
 - **No URL router:** Never use `page.goto('/registry')` or similar in tests or navigation logic. Use sidebar button clicks to navigate between pages.
 - **Shared module:** `apps/tag-registry/shared/` is environment-agnostic — no `fs`, no Express, no DOM. Pure functions only.
+- **Language:** This app is JavaScript. TypeScript migration is tracked in docs/platform_deltas.md.
 
 ## 4. Session discipline
 
