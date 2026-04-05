@@ -1,5 +1,5 @@
 import express from 'express';
-import { asyncWrap } from '../middleware/asyncWrap.js';
+import { asyncWrap } from '@caro/server/asyncWrap';
 import { getActiveRegistry, applyRegistry, getRevisions, getRevisionTags } from '../services/registryService.js';
 import { loadRoot } from '../services/templateService.js';
 import { ERROR_CODES } from '../../../shared/index.js';
@@ -25,35 +25,28 @@ router.post('/apply', asyncWrap(async (req, res) => {
   const { rootName, comment } = req.body;
 
   if (!rootName || typeof rootName !== 'string' || rootName.trim() === '') {
-    return res.status(400).json({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'rootName is required' } });
+    const err = new Error('rootName is required');
+    err.status = 400;
+    err.code = ERROR_CODES.VALIDATION_ERROR;
+    throw err;
   }
   if (!comment || typeof comment !== 'string' || comment.trim() === '') {
-    return res.status(400).json({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'comment is required' } });
+    const err = new Error('comment is required');
+    err.status = 400;
+    err.code = ERROR_CODES.VALIDATION_ERROR;
+    throw err;
   }
 
   // Load full template graph for rootName
-  let rootData;
-  try {
-    rootData = await loadRoot(rootName);
-  } catch (err) {
-    if (err.code === ERROR_CODES.TEMPLATE_NOT_FOUND) {
-      return res.status(404).json({ ok: false, error: { code: err.code, message: err.message } });
-    }
-    throw err;
-  }
+  const rootData = await loadRoot(rootName);
 
   // Build templateMap (Map<template_name, template>) from loadRoot result
   const templateMap = new Map(
     Object.entries(rootData.templates).map(([name, entry]) => [name, entry.template])
   );
 
-  try {
-    const result = await applyRegistry(templateMap, rootName, comment.trim());
-    res.json({ ok: true, data: result });
-  } catch (err) {
-    console.error('[registry/apply] Failed to apply registry:', err);
-    res.status(500).json({ ok: false, error: { code: 'INTERNAL_ERROR', message: 'Failed to apply registry' } });
-  }
+  const result = await applyRegistry(templateMap, rootName, comment.trim());
+  res.json({ ok: true, data: result });
 }));
 
 /**
@@ -72,11 +65,17 @@ router.get('/revisions', asyncWrap(async (req, res) => {
 router.get('/revisions/:rev', asyncWrap(async (req, res) => {
   const rev = parseInt(req.params.rev, 10);
   if (isNaN(rev)) {
-    return res.status(400).json({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'rev must be an integer' } });
+    const err = new Error('rev must be an integer');
+    err.status = 400;
+    err.code = ERROR_CODES.VALIDATION_ERROR;
+    throw err;
   }
   const tags = await getRevisionTags(rev);
   if (tags === null) {
-    return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: `No tags found for revision ${rev}` } });
+    const err = new Error(`No tags found for revision ${rev}`);
+    err.status = 404;
+    err.code = 'NOT_FOUND';
+    throw err;
   }
   res.json({ ok: true, data: { tags } });
 }));

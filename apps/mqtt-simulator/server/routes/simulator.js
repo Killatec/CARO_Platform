@@ -1,5 +1,5 @@
 import express from 'express';
-import { asyncWrap } from '../middleware/asyncWrap.js';
+import { asyncWrap } from '@caro/server/asyncWrap';
 import { start, stop, getStatus, getLogs, isKnownModule, activateModule, deactivateModule, activateDeltaMode, deactivateDeltaMode, activateProtobuf, deactivateProtobuf, publishSnapshot, injectSetValues } from '../services/simulatorService.js';
 
 const router = express.Router();

@@ -1,4 +1,4 @@
-import { apiClient } from './client.js';
+import { apiClient } from '@caro/ui/api/client';
 
 /**
  * Fetches runtime validation configuration from the server.

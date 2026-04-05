@@ -118,6 +118,7 @@ describe('POST /api/v1/registry/apply — not found', () => {
   it('returns 404 when root template does not exist', async () => {
     const err = new Error('Template not found');
     err.code = ERROR_CODES.TEMPLATE_NOT_FOUND;
+    err.status = 404;
     templateService.loadRoot.mockRejectedValue(err);
 
     const { status, body } = await post('/registry/apply', {

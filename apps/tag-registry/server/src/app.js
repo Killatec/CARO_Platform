@@ -3,7 +3,7 @@ import cors from 'cors';
 import templatesRouter from './routes/templates.js';
 import registryRouter from './routes/registry.js';
 import configRouter from './routes/config.js';
-import { errorHandler } from './middleware/errorHandler.js';
+import { errorHandler } from '@caro/server/errorHandler';
 
 /**
  * Express app factory

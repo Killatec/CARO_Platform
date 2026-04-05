@@ -1,5 +1,5 @@
 import express from 'express';
-import { asyncWrap } from '../middleware/asyncWrap.js';
+import { asyncWrap } from '@caro/server/asyncWrap';
 
 const router = express.Router();
 

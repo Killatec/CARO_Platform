@@ -1,4 +1,4 @@
-import { apiClient } from './client.js';
+import { apiClient } from '@caro/ui/api/client';
 
 export const getStatus = ()            => apiClient.get('/simulator/status');
 export const startSim  = (intervalMs)  => apiClient.post('/simulator/start', intervalMs != null ? { intervalMs } : {});

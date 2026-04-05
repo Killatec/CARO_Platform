@@ -33,21 +33,3 @@ None of the HMI tables (users through audit_log) have been created.
 **Discovered:** 2026-03-29
 
 ---
-
-## TODO P-001 — packages/db/__tests__/query.test.js
-
-**Priority:** Complete before HMI service development starts
-**Scope:** `packages/db/query.js` — the `withTransaction()` helper and `pool.query()` wrapper
-
-Write unit tests covering:
-1. `withTransaction()` — ROLLBACK is called if `fn(client)` throws
-2. `withTransaction()` — client is released even if ROLLBACK itself fails
-3. `withTransaction()` — original error is re-thrown after ROLLBACK
-4. `withTransaction()` — COMMIT is called on success and client is released
-5. `pool.js` proxy — lazy singleton initializes only once (lower priority)
-
-**Note:** Also tracked in `apps/tag-registry/Docs/tag_registry_deltas.md` TODO-001. The canonical entry is here — packages/db is platform-level code.
-
-**Mock strategy:** Assert on actual arguments passed to the pg client mock via `mockClient.mock.calls`. Current migrations.test.js mocks at `fs.readdirSync` level — avoid the same blind spot.
-
-**Context:** `withTransaction()` will be load-bearing for HMI tables requiring transactional integrity — audit_log, setpoint_values, pending_setpoint_values. Coverage must exist before those services are written.

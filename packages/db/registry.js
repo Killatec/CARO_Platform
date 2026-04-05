@@ -30,7 +30,7 @@ export async function getActiveTags() {
     ) latest
     WHERE retired = false
   `);
-  return result.rows;
+  return result.rows.map(row => ({ ...row, tag_id: Number(row.tag_id) }));
 }
 
 /**

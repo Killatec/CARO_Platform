@@ -47,6 +47,10 @@ const lastPublishedCount = new Map();
 // module_id -> byte size of last published telemetry payload
 const lastPublishedBytes = new Map();
 
+// command_id deduplication — 60s rolling TTL
+const DEDUP_TTL_MS   = 60_000;
+const seenCommandIds = new Set();
+
 let timer           = null;
 let tickCount       = 0;
 let startedAt       = null;
@@ -156,7 +160,6 @@ function publishNow(moduleId) {
 // ---------------------------------------------------------------------------
 // Command handler — SET_VALUES, REQUEST_SNAPSHOT, RESET (§6)
 // Spec: caro/{module_id}/cmd QoS1; ACK to caro/{module_id}/cmd_ack QoS1
-// NOTE: duplicate command_id rejection (§6.2) not implemented — dev tool only
 // ---------------------------------------------------------------------------
 function handleCommand(topic, rawMessage) {
   const parts = topic.split('/');
@@ -172,7 +175,17 @@ function handleCommand(topic, rawMessage) {
   }
 
   const { command_id, command_type, payload } = cmd;
-  if (!command_id || !command_type) {
+
+  if (command_id != null) {
+    if (seenCommandIds.has(command_id)) {
+      log('WARN', `[SIM] Duplicate command_id ${command_id} — dropping`);
+      return;
+    }
+    seenCommandIds.add(command_id);
+    setTimeout(() => seenCommandIds.delete(command_id), DEDUP_TTL_MS);
+  }
+
+  if (!command_type) {
     log('WARN', `[SIM] Invalid command envelope on ${topic}`);
     return;
   }

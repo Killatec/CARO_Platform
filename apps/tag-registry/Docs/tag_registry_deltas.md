@@ -6,7 +6,7 @@ the corresponding Word document has been updated.
 
 ---
 
-All deltas through Delta 010 have been applied to:
+All deltas through Delta 012 have been applied to:
 - Functional Spec v1.17 (`tag_registry_spec.md`)
 - Bootstrap v1.21 (`tag_registry_bootstrap.md`)
 - API Spec v1.15 (`tag_registry_api_spec.md`)
@@ -17,7 +17,3 @@ No open divergences. Add new entries here as implementation diverges from spec.
 
 ---
 
-## TODO — not a spec divergence
-
-**Delta TODO-001 — query.test.js coverage for withTransaction/pool**
-`packages/db/__tests__/query.test.js` — 5 unit tests covering `withTransaction()` and pool behavior are missing. Must be written before HMI service development starts.

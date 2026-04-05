@@ -1,4 +1,4 @@
-import { apiClient } from './client.js';
+import { apiClient } from '@caro/ui/api/client';
 
 /**
  * List all templates, optionally filtered by type

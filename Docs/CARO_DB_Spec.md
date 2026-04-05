@@ -168,6 +168,12 @@ false.
 
 > *NOTE: Unique constraint on (tag_id, registry_rev). GIN index on meta.
 > B-tree indexes on tag_id, registry_rev, data_type, retired.*
+>
+> *NOTE: `getActiveTags()` in `packages/db/registry.js` is the canonical
+> query for this table. It returns the latest non-retired row per tag_id.
+> node-postgres returns INTEGER columns as strings; `getActiveTags()` coerces
+> tag_id to Number at the mapping step before returning rows. All consumers
+> receive a numeric tag_id — no caller-side coercion is needed.*
 
 **3.2 registry_revisions**
 

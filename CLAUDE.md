@@ -12,7 +12,8 @@ Platform-level specs — read once if your session involves:
 - MQTT message handling → `Docs/CARO_MQTT_Spec.md`
 
 ## During Every Task
-- If you implement or modify any functionality, update the relevant app deltas file immediately
+- If you implement or modify any functionality, update all affected delta files immediately — include docs/platform_deltas.md for any cross-app or shared package changes
+- Do not update handoff, bootstrap, or spec docs during a task — delta files are the only docs that change mid-session
 - ALL queries live in `packages/db/` — no raw SQL in app code, import named functions only
 - JavaScript only — no TypeScript anywhere
 - Check `packages/ui/` before writing new components — do not duplicate primitives
@@ -20,8 +21,9 @@ Platform-level specs — read once if your session involves:
 
 ## Session End Checklist
 For every session that changed code or behavior:
+0. Verify all delta files were updated during the session — add any missing entries now
 1. Review `{app}_deltas.md`
-2. For each entry:
+2. For each entry, when explicitly prompted by the user:
    - Propagate to spec doc → update spec, delete entry
-   - Permanent behavioral decision → move to `{app}_handoff.md` §Behavioral Decisions, delete entry
+   - Permanent behavioral decision → move to `{app}_handoff.md` §Key Decisions, delete entry
 3. `{app}_deltas.md` should be empty or near-empty before closing the session

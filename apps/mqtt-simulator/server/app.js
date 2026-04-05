@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import simulatorRouter from './routes/simulator.js';
-import { errorHandler } from './middleware/errorHandler.js';
+import { errorHandler } from '@caro/server/errorHandler';
 
 export function createApp() {
   const app = express();

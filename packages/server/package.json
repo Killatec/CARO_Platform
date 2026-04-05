@@ -1,0 +1,12 @@
+{
+  "name": "@caro/server",
+  "version": "1.0.0",
+  "type": "module",
+  "exports": {
+    "./asyncWrap": "./src/asyncWrap.js",
+    "./errorHandler": "./src/errorHandler.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "UNLICENSED"
+}

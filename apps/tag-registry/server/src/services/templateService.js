@@ -103,6 +103,7 @@ export async function getTemplate(template_name) {
   if (!entry) {
     const error = new Error(`Template "${template_name}" not found`);
     error.code = ERROR_CODES.TEMPLATE_NOT_FOUND;
+    error.status = 404;
     throw error;
   }
 
@@ -121,6 +122,7 @@ export async function loadRoot(template_name) {
   if (!entry) {
     const error = new Error(`Root template "${template_name}" not found`);
     error.code = ERROR_CODES.TEMPLATE_NOT_FOUND;
+    error.status = 404;
     throw error;
   }
 
@@ -186,6 +188,7 @@ export async function batchSave(changes, deletions = [], confirmed = false) {
         if (templateIndex.has(template_name)) {
           const error = new Error(`Template "${template_name}" already exists`);
           error.code = ERROR_CODES.TEMPLATE_NAME_CONFLICT;
+          error.status = 409;
           throw error;
         }
       } else {
@@ -193,11 +196,13 @@ export async function batchSave(changes, deletions = [], confirmed = false) {
         if (!entry) {
           const error = new Error(`Template "${template_name}" not found`);
           error.code = ERROR_CODES.TEMPLATE_NOT_FOUND;
+          error.status = 404;
           throw error;
         }
         if (entry.hash !== original_hash) {
           const error = new Error(`Template "${template_name}" has been modified by another user. Please refresh and try again.`);
           error.code = ERROR_CODES.STALE_TEMPLATE;
+          error.status = 409;
           throw error;
         }
       }
@@ -211,11 +216,13 @@ export async function batchSave(changes, deletions = [], confirmed = false) {
       if (!entry) {
         const error = new Error(`Template "${template_name}" not found`);
         error.code = ERROR_CODES.TEMPLATE_NOT_FOUND;
+        error.status = 404;
         throw error;
       }
       if (entry.hash !== original_hash) {
         const error = new Error(`Template "${template_name}" has been modified by another user. Please refresh and try again.`);
         error.code = ERROR_CODES.STALE_TEMPLATE;
+        error.status = 409;
         throw error;
       }
     }
@@ -246,6 +253,7 @@ export async function batchSave(changes, deletions = [], confirmed = false) {
   if (!graphValidation.valid) {
     const error = new Error('Template graph validation failed');
     error.code = ERROR_CODES.VALIDATION_ERROR;
+    error.status = 422;
     error.details = graphValidation.errors;
     throw error;
   }
@@ -343,6 +351,7 @@ export async function deleteTemplate(template_name, original_hash, confirmed = f
   if (!entry) {
     const error = new Error(`Template "${template_name}" not found`);
     error.code = ERROR_CODES.TEMPLATE_NOT_FOUND;
+    error.status = 404;
     throw error;
   }
 
@@ -350,6 +359,7 @@ export async function deleteTemplate(template_name, original_hash, confirmed = f
   if (entry.hash !== original_hash) {
     const error = new Error(`Template "${template_name}" has been modified. Please refresh and try again.`);
     error.code = ERROR_CODES.STALE_TEMPLATE;
+    error.status = 409;
     throw error;
   }
 
