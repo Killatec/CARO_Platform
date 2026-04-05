@@ -94,20 +94,25 @@ No automated tests yet. Manual testing via `curl` against the REST API and MQTT 
 ## 7. Current state
 
 ### Implemented
-- Server startup: env validation, DB connectivity check, tag registry load, MQTT connect, tick loop
-- Telemetry publishing: all tags for all modules on every tick at configurable interval (default 100ms)
-- SET_VALUES command handling: validates tag_id and is_setpoint, updates simValue, publishes CMD_ACK immediately, then publishes telemetry for affected module
-- REST API: POST /start, POST /stop, GET /status
-- Frontend: SimulatorPanel with Start/Stop buttons, status polling every 2s, interval input
+- Server auto-start: index.js calls start() on server boot; errors logged to buffer, process does not exit
+- Telemetry publishing: per-module, configurable interval (default 100ms), JSON or Protobuf per module
+- Protobuf encoding: packages/proto/tag.proto defines TagValue/TagSample/TelemetryMessage; protobuf.js service loads schema at start(); per-module protobufMode Set; all 4 combinations handled (full/delta × JSON/proto)
+- Per-module transmission control: activeModules Set; POST /telemetry/stop/:module_id and /telemetry/start/:module_id
+- Per-module delta mode: deltaMode Set; publishes only changed tags per tick; empty tags array published if nothing changed; previousValue tracked per SimTag
+- Per-module Protobuf toggle: protobufMode Set; POST /protobuf/enable/:module_id and /protobuf/disable/:module_id
+- Payload size tracking: lastPublishedBytes map updated every publish (tick and snapshot); surfaced as bytes per module in GET /status
+- Published tag count tracking: lastPublishedCount map (live count, not static registry count); surfaced as tag_count per module in GET /status
+- SET_VALUES command handling: validates tag_id and is_setpoint, updates simValue, publishes CMD_ACK immediately; updated values surface on the next scheduled tick (no out-of-tick telemetry publish)
+- Snapshot injection: POST /snapshot/:module_id — publishNow() unconditionally for that module, bypasses delta mode
+- Random setpoint injection: POST /inject/:module_id — mutates simValues directly for all setpoint tags; next tick publishes naturally
+- Rolling log buffer: LOG_BUFFER_SIZE entries (default 200); all log calls append to buffer; GET /logs returns buffer oldest-first
+- REST API: POST /start, POST /stop, GET /status, GET /logs, POST /telemetry/stop/:module_id, POST /telemetry/start/:module_id, POST /delta/enable/:module_id, POST /delta/disable/:module_id, POST /protobuf/enable/:module_id, POST /protobuf/disable/:module_id, POST /snapshot/:module_id, POST /inject/:module_id
+- Frontend: SimulatorPanel — Start/Stop buttons; modules table (Module | Tags | Bytes | Transmitting | Delta | Protobuf | Actions); Logs terminal panel; status poll 200ms; log poll 2s
 
 ### Not yet implemented
-- Protobuf encoding (JSON only currently) — required before production HMI integration
 - command_id deduplication — required before production use
-- Per-module telemetry start/stop endpoints
-- Most REST endpoints from Bootstrap §11.2 (/logs, /override, /tags, /encoding, /reject/*)
-- Env vars CMD_ACK_DELAY_MS, TELEMETRY_ENCODING, REJECT_ALL_WRITES, LOG_BUFFER_SIZE, CONTROL_PORT are defined but not read
-
-### Not started
+- /override, /override/clear/:tag_id, /reject/enable, /reject/disable, /tags, /tags/:module_id endpoints
+- Env vars CMD_ACK_DELAY_MS, TELEMETRY_ENCODING, REJECT_ALL_WRITES, CONTROL_PORT — defined in bootstrap but not read
 - E2E test suite
 - Unit tests
 
@@ -123,7 +128,7 @@ No automated tests yet. Manual testing via `curl` against the REST API and MQTT 
 
 4. **Zero active tags = process exit** — if the tag registry query returns zero active tags, the server logs a warning and exits. Simulator cannot operate without a populated registry.
 
-5. **JSON telemetry mode is simulator-only** — not defined in CARO_MQTT_Spec. Production HMI backend always expects Protobuf. JSON mode is a dev convenience only.
+5. **Telemetry encoding is per-module and runtime-toggleable** — both JSON and Protobuf modes are implemented. JSON is the default on startup; Protobuf can be enabled per module via the frontend checkbox or POST /protobuf/enable/:module_id. JSON mode is a simulator-only convenience and not defined in CARO_MQTT_Spec — production HMI backend always expects Protobuf.
 
 6. **Frontend is React+Vite, not vanilla JS** — original Bootstrap §12 specified plain HTML + vanilla JS. Implementation uses React+Vite for consistency with apps/tag-registry/client/ conventions.
 
@@ -131,16 +136,18 @@ No automated tests yet. Manual testing via `curl` against the REST API and MQTT 
 
 8. **tag_id coerced to Number** — PostgreSQL returns INTEGER columns as strings via node-postgres. `registry.js` coerces `tag_id` to `Number()` on load.
 
+9. **protobufjs installed at monorepo root** — server-local install was blocked by @caro/db workspace resolution. protobufjs resolves from the monorepo root node_modules. If it appears missing, run npm install from the monorepo root.
+
 ---
 
 ## 9. Behavioral Decisions
 
 Permanent decisions that deviate from the spec. These are intentional and will not be reversed.
 
-### All tags published on every tick — publish-on-change removed
+### Full publish is the default; delta mode is opt-in per module
 - **Spec assumption (Bootstrap v1.13 §8):** setpoint tags publish only when their value changes; monitor tags always publish
-- **Reality:** `buildMessage()` publishes all tags unconditionally on every tick
-- **Rationale:** Simplifies dev use and ensures consumers always receive the current setpoint value. On-change logic is commented out in source for reference.
+- **Reality:** Full publish mode (all tags every tick) is the default. Delta mode (only changed tags per tick) is available per module via POST /delta/enable/:module_id or the frontend checkbox. In delta mode, an empty tags array is published if nothing changed.
+- **Rationale:** Full publish simplifies dev use and ensures consumers always receive the current setpoint value. On-change-only logic for setpoints has been removed. Delta mode is available for bandwidth-constrained testing scenarios.
 
 ### POST /api/v1/simulator/start returns 202 (async connect)
 - **Spec assumption:** response reflects post-connect state

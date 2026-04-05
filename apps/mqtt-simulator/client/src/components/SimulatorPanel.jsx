@@ -1,14 +1,18 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Button, Badge } from '@caro/ui/primitives';
 import { useSimulatorStore } from '../stores/useSimulatorStore.js';
-import { getStatus, startSim, stopSim } from '../api/simulator.js';
+import { getStatus, startSim, stopSim, stopModuleTelemetry, startModuleTelemetry, enableModuleDelta, disableModuleDelta, enableModuleProtobuf, disableModuleProtobuf, getLogs, requestSnapshot, injectSetValues } from '../api/simulator.js';
 
-const POLL_INTERVAL_MS = 2000;
+const STATUS_POLL_MS = 200;
+const LOG_POLL_MS    = 2000;
 const SIM_INTERVAL_MS  = 100;
 
 export function SimulatorPanel() {
-  const { running, intervalMs, tagCount, uptime_s, error, setStatus, setError } = useSimulatorStore();
-  const [busy, setBusy] = useState(false);
+  const { running, modules, error, setStatus, setError } = useSimulatorStore();
+  const [busy, setBusy]   = useState(false);
+  const [logs, setLogs]   = useState([]);
+  const logsEndRef        = useRef(null);
+  const userScrolledRef   = useRef(false);
 
   // Poll status every 2 s
   useEffect(() => {
@@ -24,9 +28,34 @@ export function SimulatorPanel() {
     }
 
     poll();
-    const id = setInterval(poll, POLL_INTERVAL_MS);
+    const id = setInterval(poll, STATUS_POLL_MS);
     return () => { cancelled = true; clearInterval(id); };
   }, []);
+
+  // Poll logs every 2 s independently
+  useEffect(() => {
+    let cancelled = false;
+
+    async function pollLogs() {
+      try {
+        const entries = await getLogs();
+        if (!cancelled) setLogs(entries);
+      } catch {
+        // silently ignore log fetch errors
+      }
+    }
+
+    pollLogs();
+    const id = setInterval(pollLogs, LOG_POLL_MS);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
+  // Auto-scroll to bottom when logs update, unless user scrolled up
+  useEffect(() => {
+    if (!userScrolledRef.current && logsEndRef.current) {
+      logsEndRef.current.scrollIntoView({ behavior: 'instant' });
+    }
+  }, [logs]);
 
   async function handleStart() {
     setBusy(true);
@@ -38,6 +67,64 @@ export function SimulatorPanel() {
       setError(err.message);
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function handleRequestSnapshot(module) {
+    try {
+      await requestSnapshot(module.module_id);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function handleInjectSetValues(module) {
+    try {
+      await injectSetValues(module.module_id);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function handleProtobufToggle(module) {
+    try {
+      if (module.protobuf) {
+        await disableModuleProtobuf(module.module_id);
+      } else {
+        await enableModuleProtobuf(module.module_id);
+      }
+      const data = await getStatus();
+      setStatus(data);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function handleDeltaToggle(module) {
+    try {
+      if (module.delta) {
+        await disableModuleDelta(module.module_id);
+      } else {
+        await enableModuleDelta(module.module_id);
+      }
+      const data = await getStatus();
+      setStatus(data);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function handleModuleToggle(module) {
+    try {
+      if (module.active) {
+        await stopModuleTelemetry(module.module_id);
+      } else {
+        await startModuleTelemetry(module.module_id);
+      }
+      const data = await getStatus();
+      setStatus(data);
+    } catch (err) {
+      setError(err.message);
     }
   }
 
@@ -78,7 +165,6 @@ export function SimulatorPanel() {
         </div>
       </header>
 
-      {/* Status panel */}
       <main className="flex-1 overflow-auto p-8">
         {error && (
           <div className="mb-4 px-4 py-3 bg-red-50 border border-red-200 rounded text-red-700 text-sm">
@@ -86,33 +172,113 @@ export function SimulatorPanel() {
           </div>
         )}
 
-        <div className="bg-white border border-gray-200 rounded-lg shadow-sm max-w-lg">
-          <div className="px-6 py-4 border-b border-gray-100">
-            <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">Simulator Status</h2>
+        {modules.length > 0 && (
+          <div className={`bg-white border border-gray-200 rounded-lg shadow-sm max-w-5xl transition-opacity ${!running ? 'opacity-40' : ''}`}>
+            <div className="px-6 py-4 border-b border-gray-100">
+              <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">Modules</h2>
+            </div>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100">
+                  <th className="px-6 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Module</th>
+                  <th className="px-6 py-2 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide">Tags</th>
+                  <th className="px-6 py-2 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide">Bytes</th>
+                  <th className="px-6 py-2 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide">Transmitting</th>
+                  <th className="px-6 py-2 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide">Delta</th>
+                  <th className="px-6 py-2 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide">Protobuf</th>
+                  <th className="px-6 py-2 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {modules.map(module => (
+                  <tr key={module.module_id}>
+                    <td className="px-6 py-3 font-medium text-gray-900">{module.module_id}</td>
+                    <td className="px-6 py-3 text-right text-gray-700">{module.tag_count}</td>
+                    <td className="px-6 py-3 text-right text-gray-700">{module.bytes}</td>
+                    <td className="px-6 py-3 text-right">
+                      <input
+                        type="checkbox"
+                        checked={module.active}
+                        disabled={!running}
+                        onChange={() => handleModuleToggle(module)}
+                        className="h-4 w-4 rounded border-gray-300 text-blue-600 cursor-pointer disabled:cursor-not-allowed"
+                      />
+                    </td>
+                    <td className="px-6 py-3 text-right">
+                      <input
+                        type="checkbox"
+                        checked={module.delta}
+                        disabled={!running}
+                        onChange={() => handleDeltaToggle(module)}
+                        className="h-4 w-4 rounded border-gray-300 text-blue-600 cursor-pointer disabled:cursor-not-allowed"
+                      />
+                    </td>
+                    <td className="px-6 py-3 text-right">
+                      <input
+                        type="checkbox"
+                        checked={module.protobuf}
+                        disabled={!running}
+                        onChange={() => handleProtobufToggle(module)}
+                        className="h-4 w-4 rounded border-gray-300 text-blue-600 cursor-pointer disabled:cursor-not-allowed"
+                      />
+                    </td>
+                    <td className="px-6 py-3 text-right">
+                      <div className="flex justify-end gap-2">
+                        <button
+                          disabled={!running}
+                          onClick={() => handleRequestSnapshot(module)}
+                          className="px-2 py-1 text-xs font-medium rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          Rqst Snapshot
+                        </button>
+                        <button
+                          disabled={!running}
+                          onClick={() => handleInjectSetValues(module)}
+                          className="px-2 py-1 text-xs font-medium rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          Change Sets
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-          <dl className="divide-y divide-gray-100">
-            <StatusRow label="State"       value={running ? 'Running' : 'Stopped'} highlight={running} />
-            <StatusRow label="Interval"    value={intervalMs != null ? `${intervalMs} ms` : '—'} />
-            <StatusRow label="Tags"        value={tagCount ?? '—'} />
-            <StatusRow label="Uptime"      value={running ? formatUptime(uptime_s) : '—'} />
-          </dl>
+        )}
+
+        {/* Logs */}
+        <div className="mt-6 max-w-5xl">
+          <div className="mb-1 px-1">
+            <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">Logs</h2>
+          </div>
+          <div
+            className="h-64 overflow-y-auto rounded-lg bg-gray-900 px-4 py-3 font-mono text-xs"
+            onScroll={(e) => {
+              const el = e.currentTarget;
+              userScrolledRef.current = el.scrollHeight - el.scrollTop - el.clientHeight > 10;
+            }}
+          >
+            {logs.length === 0 ? (
+              <span className="text-gray-500">No log entries yet.</span>
+            ) : (
+              logs.map((entry, i) => (
+                <div key={i} className="leading-5 whitespace-pre-wrap break-all">
+                  <span className="text-gray-400">{entry.ts} </span>
+                  <span className={
+                    entry.level === 'ERROR' ? 'text-red-400' :
+                    entry.level === 'WARN'  ? 'text-yellow-400' :
+                    'text-gray-300'
+                  }>[{entry.level}]</span>
+                  <span className="text-gray-200"> {entry.msg}</span>
+                </div>
+              ))
+            )}
+            <div ref={logsEndRef} />
+          </div>
         </div>
       </main>
     </div>
   );
 }
 
-function StatusRow({ label, value, highlight = false }) {
-  return (
-    <div className="px-6 py-3 flex items-center justify-between">
-      <dt className="text-sm text-gray-500">{label}</dt>
-      <dd className={`text-sm font-medium ${highlight ? 'text-green-600' : 'text-gray-900'}`}>{value}</dd>
-    </div>
-  );
-}
-
-function formatUptime(s) {
-  if (s < 60)   return `${s}s`;
-  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
-  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
-}

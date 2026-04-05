@@ -2,7 +2,7 @@
 
 **MQTT Simulator Bootstrap**
 
-Version 1.13 \| 2026-03-27
+Version 1.14 \| 2026-04-04
 
 **DEV TOOL ONLY --- NOT FOR PRODUCTION DEPLOYMENT**
 
@@ -56,9 +56,11 @@ The simulator reads the active tag registry from PostgreSQL at startup, groups t
 >
 > mqttClient.js ← connect(), disconnect(), getClient()
 >
-> simulatorService.js ← start(), stop(), getStatus(), tick loop, command handler
+> simulatorService.js ← start(), stop(), getStatus(), tick loop, command handler, log buffer
 >
 > registry.js ← loadTagRegistry() — calls \@caro/db, maps rows to SimTag
+>
+> protobuf.js ← loadProto(), encodeProto() — Protobuf schema loader and encoder
 >
 > middleware/
 >
@@ -142,6 +144,8 @@ The simulator reads the active tag registry from PostgreSQL at startup, groups t
   REJECT_ALL_WRITES    false                   If true, all SET_VALUES commands are rejected with rejection_code: SIMULATED_REJECTION. Useful for testing OUT_OF_SYNC behavior.
   ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
+*NOTE: CMD_ACK_DELAY_MS, TELEMETRY_ENCODING, REJECT_ALL_WRITES, and CONTROL_PORT are defined here but are not read by the current implementation. ACK is sent immediately (no delay), encoding is per-module (see §8), reject mode is not implemented. Implement as needed.*
+
 **5. Startup Sequence**
 
 1.  Validate required environment variables (PGPASSWORD). Exit with clear error if missing.
@@ -160,7 +164,9 @@ The simulator reads the active tag registry from PostgreSQL at startup, groups t
 
 8.  Log startup summary: N modules, M tags total, broker URL, tick interval.
 
-> *NOTE: If the PostgreSQL query returns zero active tags, log a warning and exit. The simulator cannot operate without a populated tag registry. Continuous 10 Hz publishing makes REQUEST_SNAPSHOT unnecessary for development.*
+9.  Auto-start: index.js calls start() as a floating promise inside the app.listen callback immediately after the server begins accepting requests. If start() throws (DB failure, MQTT failure, zero tags), the error is caught and logged to the log buffer at ERROR level. The process does not exit — the server remains up so the user can see the error in the frontend log panel and retry with the Start button.
+
+> *NOTE: If the PostgreSQL query returns zero active tags, log a warning and exit. The simulator cannot operate without a populated tag registry.*
 
 **6. Tag Registry Query**
 
@@ -256,49 +262,48 @@ Auto-simulation does not run for setpoint tags. All tags start with simT: 0 --- 
 
 **8. Telemetry Loop**
 
-A single setInterval runs at TICK_INTERVAL_MS. On each tick:
+A single setInterval runs at TICK_INTERVAL_MS (default 100ms). On each tick:
 
-9.  For each module_id in the active set (simState.activeModules), advance simulated values by one tick (update simValue and simT) for monitor tags (is_setpoint=false) only. Setpoint tags are not auto-simulated. Modules not in the active set are skipped entirely.
+1. Advance simulated values for all monitor tags (is_setpoint=false) across all modules.
 
-10. Build one Protobuf TelemetryMessage per module_id containing all tags for that module.
+2. For each module_id, if the module is not in activeModules, skip it entirely.
 
-11. Publish to caro/{module_id}/telemetry with QoS 0, retain: false.
+3. Determine the publish payload based on the module's mode flags (see below).
 
-TelemetryMessage structure per CARO_MQTT_Spec v1.7:
+4. Set lastPublishedCount and lastPublishedBytes for the module.
+
+5. Publish to caro/{module_id}/telemetry with QoS 0, retain: false.
+
+**Per-module mode Sets (all module-level constants in simulatorService.js):**
+
+> const activeModules = new Set(allModuleIds); // all modules transmitting on startup
+>
+> const deltaMode     = new Set(); // empty on startup — full publish mode
+>
+> const protobufMode  = new Set(); // empty on startup — JSON mode
+
+**Four publish branches per tick (full/delta × JSON/proto):**
+
+- **Full + JSON** (default): buildMessage() returns all tags; publish JSON.stringify(msg).
+- **Full + Protobuf**: build richTags array; encodeProto() returns a Buffer; publish Buffer.
+- **Delta + JSON**: compare simValue !== previousValue; build only changed tagValues; update previousValue for all tags after comparison; publish JSON with changed tags only (may be empty array).
+- **Delta + Protobuf**: same delta comparison; build richTags for changed tags only; encodeProto(); publish Buffer.
+
+In all branches, lastPublishedCount.set(moduleId, tagCount) and lastPublishedBytes.set(moduleId, byteSize) are set before publishing.
+
+**publishNow(moduleId)** — immediate out-of-tick publish used by REQUEST_SNAPSHOT and POST /snapshot/:module_id. Respects protobufMode (full publish only; delta mode is not applied). Also updates lastPublishedCount and lastPublishedBytes.
+
+TelemetryMessage structure per CARO_MQTT_Spec v1.8:
 
 > TelemetryMessage {
 >
-> timestamp: uint64, // Date.now() in ms --- one timestamp per message, not per tag
+> timestamp: uint64, // Date.now() in ms
 >
-> status: string, // \"ONLINE\" \| \"FAULT\"
+> status: string, // \"ONLINE\"
 >
-> tags: \[
->
-> {
->
-> tag_id: uint32,
->
-> value: \<encoded per data_type --- see Section 10\>
+> tags: \[ { tag_id: uint32, value: \<encoded per data_type --- see §10\> } \]
 >
 > }
->
-> \]
->
-> }
->
-> *NOTE: The simulator always publishes all tags for a module on every tick --- not just deltas. The backend\'s LKV logic handles delta detection. This simplifies the simulator significantly.*
-
-Per-module running state is managed via a Set in simState:
-
-> simState.activeModules = new Set(allModuleIds); // all modules active on startup
->
-> // POST /telemetry/stop/:module_id
->
-> simState.activeModules.delete(module_id);
->
-> // POST /telemetry/start/:module_id
->
-> simState.activeModules.add(module_id);
 
 **9. Command Handling**
 
@@ -343,10 +348,9 @@ When a SET_VALUES command is received:
 
 13. For each {tag_id, value} pair in payload.values: validate tag_id exists in the tag map for this module_id and is a setpoint (is_setpoint === true). If valid, update simValue to the received value. If tag_id unknown or not a setpoint, mark as rejected (UNKNOWN_TAG) in the CMD_ACK.
 
-14. Immediately publish CMD_ACK JSON to caro/{module_id}/cmd_ack (QoS 1) per CARO_MQTT_Spec §6.2.
-Then publish a telemetry message for the affected module immediately (do not wait for next tick).
+14. Immediately publish CMD_ACK JSON to caro/{module_id}/cmd_ack (QoS 1) per CARO_MQTT_Spec §6.2. Updated simValues will surface on the next scheduled tick — no out-of-tick telemetry publish occurs after SET_VALUES.
 
-*NOTE: CMD_ACK_DELAY_MS is not implemented --- ACK is sent immediately.*
+*NOTE: CMD_ACK_DELAY_MS is defined as an env var but not implemented — ACK is sent immediately.*
 
 CMD_ACK shape per CARO_MQTT_Spec §6.2:
 
@@ -370,9 +374,9 @@ CMD_ACK shape per CARO_MQTT_Spec §6.2:
 >
 > }
 
-**10. Protobuf Value Encoding**
+**10. Protobuf Value Encoding — IMPLEMENTED**
 
-Protobuf encoding is used for outbound telemetry only. Commands are plain JSON. Tag values in the TelemetryMessage use the appropriate oneof field per data_type:
+Protobuf encoding is implemented and selectable per module. Commands are always plain JSON. Tag values in the TelemetryMessage use the appropriate oneof field per data_type:
 
   -------------------------------------------------------------------------------
   **data_type**   **Protobuf field**   **JS type**   **Notes**
@@ -386,13 +390,17 @@ Protobuf encoding is used for outbound telemetry only. Commands are plain JSON. 
   str             string_value         string        UTF-8 string.
   -------------------------------------------------------------------------------
 
-> *NOTE: The authoritative tag.proto schema is located at packages/proto/tag.proto in the CARO_Platform monorepo. The simulator references this shared file directly --- do not duplicate it under apps/mqtt-simulator/.*
+> *NOTE: The authoritative tag.proto schema is located at packages/proto/tag.proto. Defines TagValue (oneof), TagSample, TelemetryMessage. Do not duplicate it under apps/mqtt-simulator/.*
 
-Protobuf loading path in src/protobuf.js (ESM):
+Protobuf service: server/services/protobuf.js (ESM):
 
-> // Resolve path from apps/mqtt-simulator/src/ to packages/proto/tag.proto
+> // loadProto() called once at start() time
 >
-> const protoPath = new URL(\'../../../packages/proto/tag.proto\', import.meta.url).pathname;
+> const protoPath = path.resolve(\_\_dirname, \'../../../../packages/proto/tag.proto\');
+>
+> // encodeProto(moduleId, richTags, status) returns a Buffer
+
+> *NOTE: protobufjs is installed at the monorepo root node_modules (server-local install is blocked by @caro/db workspace resolution). If protobufjs appears missing, run npm install from the monorepo root.*
 
 **10.1 JSON Telemetry Format**
 
@@ -431,44 +439,55 @@ apps/tag-registry/ conventions. Base URL: http://localhost:3002.
 **11.1 Implemented Endpoints**
 
   -----------------------------------------------------------------------------------------------------------------------------------------
-  **Method**   **Path**                          **Description**
-  ------------ --------------------------------- ------------------------------------------------------------------------------------------
-  POST         /api/v1/simulator/start           Start simulator. Body: { intervalMs? } (default 1000ms). Returns { ok, data: status }.
-                                                 Returns 409 if already running. Returns 202 — MQTT connect is async.
+  **Method**   **Path**                                        **Description**
+  ------------ ----------------------------------------------- ------------------------------------------------------------------------------------------
+  POST         /api/v1/simulator/start                         Start simulator. Body: { intervalMs? } (default 100ms). Returns { ok, data: status }.
+                                                               Returns 409 if already running. Returns 202 — MQTT connect is async.
 
-  POST         /api/v1/simulator/stop            Stop simulator. Returns 409 if not running.
+  POST         /api/v1/simulator/stop                          Stop simulator. Returns 409 if not running.
 
-  GET          /api/v1/simulator/status          Returns { ok, data: { running, intervalMs, tagCount, modules, uptime_s, tickCount } }.
+  GET          /api/v1/simulator/status                        Returns { ok, data: { running, intervalMs, modules, uptime_s, tickCount } }. See §11.3 for modules shape.
+
+  GET          /api/v1/simulator/logs                          Returns { ok, data: \[ { ts, level, msg } \] } — rolling buffer, oldest-first.
+
+  POST         /api/v1/simulator/telemetry/stop/:module_id     Stop telemetry for one module. 404 if unknown, 409 if not running.
+
+  POST         /api/v1/simulator/telemetry/start/:module_id    Restart telemetry for one module. 404 if unknown, 409 if not running.
+
+  POST         /api/v1/simulator/delta/enable/:module_id       Enable delta mode for one module. 404 if unknown, 409 if not running.
+
+  POST         /api/v1/simulator/delta/disable/:module_id      Disable delta mode for one module. 404 if unknown, 409 if not running.
+
+  POST         /api/v1/simulator/protobuf/enable/:module_id    Enable Protobuf encoding for one module. 404 if unknown, 409 if not running.
+
+  POST         /api/v1/simulator/protobuf/disable/:module_id   Disable Protobuf encoding for one module. 404 if unknown, 409 if not running.
+
+  POST         /api/v1/simulator/snapshot/:module_id           Publish an immediate full snapshot for one module (bypasses delta mode). 404/409.
+
+  POST         /api/v1/simulator/inject/:module_id             Randomize all setpoint tag values for one module. 404/409/400 (no setpoints).
   -----------------------------------------------------------------------------------------------------------------------------------------
 
 **11.2 Not Yet Implemented Endpoints**
 
-The following endpoints were specified in the original Bootstrap §11 but are not yet implemented.
-Add them as needed when HMI or test tooling requires them:
+The following endpoints are deferred. Add them as needed when HMI or test tooling requires them:
 
   -----------------------------------------------------------------------------------------------------------------------------------------
-  **Method**   **Path**                          **Description**
-  ------------ --------------------------------- ------------------------------------------------------------------------------------------
-  GET          /api/v1/simulator/logs            Rolling in-memory log buffer (LOG_BUFFER_SIZE entries).
+  **Method**   **Path**                                        **Description**
+  ------------ ----------------------------------------------- ------------------------------------------------------------------------------------------
+  POST         /api/v1/simulator/override                      Pin a tag value. Body: { tag_id, value }.
 
-  POST         /api/v1/simulator/telemetry/stop/:module_id    Stop telemetry for one module.
+  POST         /api/v1/simulator/override/clear/:tag_id        Clear a manual override.
 
-  POST         /api/v1/simulator/telemetry/start/:module_id   Restart telemetry for one module.
+  POST         /api/v1/simulator/reject/enable                 Enable REJECT_ALL_WRITES mode.
 
-  POST         /api/v1/simulator/override        Pin a tag value. Body: { tag_id, value }.
+  POST         /api/v1/simulator/reject/disable                Disable REJECT_ALL_WRITES mode.
 
-  POST         /api/v1/simulator/override/clear/:tag_id       Clear a manual override.
+  GET          /api/v1/simulator/tags                          Full tag list with current values and override status.
 
-  POST         /api/v1/simulator/telemetry/encoding           Set encoding mode. Body: { encoding: \'protobuf\' \| \'json\' }.
-
-  POST         /api/v1/simulator/reject/enable   Enable REJECT_ALL_WRITES mode.
-
-  POST         /api/v1/simulator/reject/disable  Disable REJECT_ALL_WRITES mode.
-
-  GET          /api/v1/simulator/tags            Full tag list with current values and override status.
-
-  GET          /api/v1/simulator/tags/:module_id Tag list for one module.
+  GET          /api/v1/simulator/tags/:module_id               Tag list for one module.
   -----------------------------------------------------------------------------------------------------------------------------------------
+
+*NOTE: The rolling log buffer (LOG_BUFFER_SIZE entries, default 200 from env var) is maintained by the log() helper in simulatorService.js. All log calls append to the buffer. GET /logs returns the buffer oldest-first.*
 
 **11.3 Status Response (current shape)**
 
@@ -484,9 +503,25 @@ Add them as needed when HMI or test tooling requires them:
 >
 > \"intervalMs\": 100,
 >
-> \"tagCount\": 16,
+> \"modules\": \[
 >
-> \"modules\": \[\"RF1\"\],
+> {
+>
+> \"module_id\": \"RF1\",
+>
+> \"active\": true,
+>
+> \"tag_count\": 12,
+>
+> \"bytes\": 284,
+>
+> \"delta\": false,
+>
+> \"protobuf\": false
+>
+> }
+>
+> \],
 >
 > \"uptime_s\": 142,
 >
@@ -496,6 +531,8 @@ Add them as needed when HMI or test tooling requires them:
 >
 > }
 
+*NOTE: tag_count is the live count of tags included in the last telemetry publish (from lastPublishedCount map), not the static registry count. In delta mode this may be less than the total tag count for the module. bytes is the byte size of the last published payload.*
+
 **12. Frontend**
 
 React+Vite client at apps/mqtt-simulator/client/ (port 5174). Mirrors apps/tag-registry/client/
@@ -503,50 +540,65 @@ conventions: Tailwind CSS v4, Zustand store, single-page layout, no router.
 
 Key files:
 
--   src/stores/useSimulatorStore.js --- Zustand store: { running, intervalMs, tagCount, uptime_s, error }
+-   src/stores/useSimulatorStore.js — Zustand store: { running, modules, error, setStatus, setError }
 
--   src/components/SimulatorPanel.jsx --- polls GET /api/v1/simulator/status every 2s,
-    Start/Stop buttons call POST /api/v1/simulator/start and /stop
+-   src/components/SimulatorPanel.jsx — full simulator control panel (see layout below)
 
--   src/api/simulator.js --- typed REST calls to the simulator API
+-   src/api/simulator.js — typed REST calls to all simulator API endpoints
 
--   vite.config.js --- port 5174, proxies /api → http://localhost:3002
+-   vite.config.js — port 5174, proxies /api → http://localhost:3002
 
--   src/index.css --- @import "tailwindcss"; @source "../../../../packages/ui/src";
+-   src/index.css — @import "tailwindcss"; @source "../../../../packages/ui/src";
 
 Start: cd apps/mqtt-simulator/client && npm run dev
 
-> *NOTE: Original Bootstrap §12 specified plain HTML + vanilla JS. Implementation uses React+Vite
-> for consistency with apps/tag-registry/client/ conventions. The log panel, per-module controls,
-> encoding toggle, and override form described in the original §12 are not yet implemented ---
-> see mqtt_simulator_deltas.md for the full list.*
+**SimulatorPanel layout:**
+
+Header bar: MQTT Simulator title, RUNNING/STOPPED badge, Start/Stop button.
+
+Modules table (max-w-5xl): Module | Tags | Bytes | Transmitting | Delta | Protobuf | Actions.
+- Tags: live count from last publish (tag_count from status).
+- Bytes: byte size of last published payload.
+- Transmitting, Delta, Protobuf: checkbox toggles — each calls the corresponding REST endpoint, then re-fetches status.
+- Actions: "Rqst Snapshot" (POST /snapshot/:module_id) and "Change Sets" (POST /inject/:module_id) buttons per row.
+
+Logs terminal (max-w-5xl, h-64, dark bg): polls GET /logs every 2s. Auto-scrolls to bottom unless user has scrolled up. Entries rendered as { ts, level, msg } with level-colored brackets.
+
+Poll intervals: status poll 200ms; log poll 2000ms.
+
+> *NOTE: Implementation uses React+Vite for consistency with apps/tag-registry/client/ conventions,
+> not the plain HTML + vanilla JS described in the original spec.*
 
 **13. File Descriptions**
 
   ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
   **File**                              **Responsibility**
   ------------------------------------- -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-  server/index.js                       Entry point. Validates env vars, starts Express server, handles graceful shutdown.
+  server/index.js                       Entry point. Validates env vars, starts Express server, calls start(100) as floating promise on listen (auto-start), handles graceful shutdown.
 
   server/app.js                         Express app factory. CORS, JSON body parser, routes mount, error handler.
 
-  server/routes/simulator.js            POST /start, POST /stop, GET /status — delegates to simulatorService.
+  server/routes/simulator.js            All 12 REST endpoints — delegates to simulatorService exports.
 
   server/services/mqttClient.js         connect(), disconnect(), getClient(). MQTT lifecycle and event logging.
 
-  server/services/simulatorService.js   start(), stop(), getStatus(). Tick loop, command handler (SET\_VALUES, REQUEST\_SNAPSHOT, RESET), immediate publish on command.
+  server/services/simulatorService.js   Core simulation engine. start(), stop(), getStatus(), getLogs(), log() helper and rolling logBuffer, tick loop (4-branch publish), command handler (SET\_VALUES, REQUEST\_SNAPSHOT, RESET), publishNow(), publishSnapshot(), injectSetValues(). Per-module Sets: activeModules, deltaMode, protobufMode. Per-module Maps: lastPublishedCount, lastPublishedBytes.
 
   server/services/registry.js           loadTagRegistry(). Calls getActiveTags() from \@caro/db, maps rows to SimTag shape, coerces tag\_id to Number.
+
+  server/services/protobuf.js           loadProto(), encodeProto(moduleId, richTags, status). Loads packages/proto/tag.proto via protobufjs at start() time. Returns a Buffer for Protobuf-encoded TelemetryMessage.
+
+  packages/proto/tag.proto              Authoritative Protobuf schema. Defines TagValue (oneof float/int/bool/string), TagSample, TelemetryMessage. Shared across all apps.
 
   server/middleware/asyncWrap.js        Wraps async route handlers, forwards errors to Express error handler.
 
   server/middleware/errorHandler.js     Global Express error handler. Returns \{ ok: false, error: \{ code, message \} \}.
 
-  client/src/stores/useSimulatorStore.js  Zustand store: \{ running, intervalMs, tagCount, uptime\_s, error \}.
+  client/src/stores/useSimulatorStore.js  Zustand store: \{ running, modules, error, setStatus, setError \}.
 
-  client/src/components/SimulatorPanel.jsx  Polls GET /status every 2s, Start/Stop buttons, interval input.
+  client/src/components/SimulatorPanel.jsx  Full simulator control panel. Status poll 200ms; log poll 2000ms. Modules table with per-module toggles and action buttons. Logs terminal with auto-scroll.
 
-  client/src/api/simulator.js           getStatus(), startSim(), stopSim() — typed REST calls.
+  client/src/api/simulator.js           All typed REST calls: getStatus, startSim, stopSim, getLogs, stopModuleTelemetry, startModuleTelemetry, enableModuleDelta, disableModuleDelta, enableModuleProtobuf, disableModuleProtobuf, requestSnapshot, injectSetValues.
 
   client/src/api/client.js              Base HTTP fetch wrapper. Adds cache: 'no-store' to all GETs. Same pattern as apps/tag-registry/client/src/api/client.js.
 
@@ -599,7 +651,7 @@ Start: cd apps/mqtt-simulator/client && npm run dev
 
 **15. Logging**
 
-Console logging only --- no log library needed for a dev tool. Every log call also appends to the in-memory log buffer in control.js (see Section 11.2), making all entries available to the frontend via GET /logs.
+Console logging only --- no log library needed for a dev tool. Every log call also appends to the in-memory log buffer in simulatorService.js (see Section 11.2), making all entries available to the frontend via GET /logs.
 
   ---------------------------------------------------------------------------------------------------------
   **Event**               **Level**   **Format**
