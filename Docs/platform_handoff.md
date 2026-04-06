@@ -32,7 +32,7 @@
 | Backend | Node.js + Express |
 | Database | PostgreSQL via `@caro/db` |
 | Messaging | Mosquitto v5 — TCP 1883, WS 8080 |
-| Language | TypeScript (new code and shared packages). JavaScript retained in apps/tag-registry and apps/mqtt-simulator pending migration. |
+| Language | TypeScript — all packages. JavaScript — apps/tag-registry and apps/mqtt-simulator (pending migration). |
 | Packages | npm workspaces |
 
 ---
@@ -42,7 +42,7 @@
 - **No raw SQL in apps.** All PostgreSQL access via named functions from `@caro/db` only. No direct `pg` imports in any app.
 - **API envelope:** `{ ok: true, data }` / `{ ok: false, error: { code, message } }`. Services throw `Error` with `.code`; never set HTTP status directly.
 - **Env files:** each app reads its own `server/.env`. Root `.env` is never seen by app processes.
-- **No TypeScript** anywhere in the monorepo.
+- **Language:** TypeScript is required for all shared packages (`packages/*`). Apps (`apps/tag-registry`, `apps/mqtt-simulator`) remain JavaScript pending a future migration. All new packages must be TypeScript.
 - **Style reference:** `apps/tag-registry/` is the convention baseline for all apps.
 
 ---
@@ -71,9 +71,9 @@ HMI tables (`users`, `sessions`, `commissioned_modules`, `operation_modes`, `mod
 
 ### Shared Package TypeScript Migration (required before HMI scaffolding)
 Migrate in this order:
-1. `@caro/db` — typed query functions
-2. `@caro/server` — asyncWrap, errorHandler
-3. `@caro/ui` — primitives and tokens
+1. ✓ `@caro/db` — typed query functions
+2. ✓ `@caro/server` — asyncWrap, errorHandler
+3. ✓ `@caro/ui` — primitives and tokens
 Then scaffold new TypeScript packages:
 4. `@caro/hmi-context` — HmiContextProvider, useLiveValue, useTagWriter, useTagMap, useTagSubtree
 5. `@caro/widgets` — NumericMon, NumericSet, BooleanMon, BooleanSet

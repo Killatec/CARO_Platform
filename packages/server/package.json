@@ -2,9 +2,28 @@
   "name": "@caro/server",
   "version": "1.0.0",
   "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "exports": {
-    "./asyncWrap": "./src/asyncWrap.js",
-    "./errorHandler": "./src/errorHandler.js"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./asyncWrap": {
+      "types": "./dist/asyncWrap.d.ts",
+      "default": "./dist/asyncWrap.js"
+    },
+    "./errorHandler": {
+      "types": "./dist/errorHandler.d.ts",
+      "default": "./dist/errorHandler.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "typescript": "^6.0.2"
   },
   "keywords": [],
   "author": "",

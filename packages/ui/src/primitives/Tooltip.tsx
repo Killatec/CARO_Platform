@@ -1,9 +1,18 @@
 import React, { useState } from 'react';
 
+export interface TooltipProps extends Omit<React.HTMLAttributes<HTMLDivElement>, 'content'> {
+  content?: React.ReactNode;
+}
+
 /**
  * Tooltip primitive - stateless, zero domain knowledge
  */
-export function Tooltip({ children, content, className = '', ...props }) {
+export const Tooltip: React.FC<TooltipProps> = ({
+  children,
+  content,
+  className = '',
+  ...props
+}) => {
   const [isVisible, setIsVisible] = useState(false);
 
   if (!content) {
@@ -26,4 +35,4 @@ export function Tooltip({ children, content, className = '', ...props }) {
       )}
     </div>
   );
-}
+};

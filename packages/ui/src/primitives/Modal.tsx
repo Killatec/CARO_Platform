@@ -1,10 +1,16 @@
 import React, { useEffect } from 'react';
 import { createPortal } from 'react-dom';
 
+export interface ModalProps extends React.HTMLAttributes<HTMLDivElement> {
+  isOpen: boolean;
+  onClose: () => void;
+  title?: string;
+}
+
 /**
  * Modal primitive - stateless, zero domain knowledge
  */
-export function Modal({ isOpen, onClose, title, children, ...props }) {
+export const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, ...props }) => {
   useEffect(() => {
     if (isOpen) {
       // Prevent body scroll when modal is open
@@ -47,4 +53,4 @@ export function Modal({ isOpen, onClose, title, children, ...props }) {
     </div>,
     document.body
   );
-}
+};

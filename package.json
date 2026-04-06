@@ -8,6 +8,7 @@
     "apps/*"
   ],
   "scripts": {
+    "build": "npm run build --workspace=@caro/db && npm run build --workspace=@caro/server && npm run build --workspace=@caro/ui",
     "dev:tag-registry": "npm run dev --workspace=@caro/tag-registry",
     "dev:server": "npm run dev --workspace=@caro/tag-registry-server",
     "dev:client": "npm run dev --workspace=@caro/tag-registry-client"

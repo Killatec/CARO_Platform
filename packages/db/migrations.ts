@@ -1,9 +1,17 @@
 import fs from 'fs';
-import path from 'path';
+import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { query, withTransaction } from './query.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+export type MigrationStatus = 'ok' | 'skipped' | 'error';
+
+export interface MigrationResult {
+  file: string;
+  status: MigrationStatus;
+}
 
 /**
  * Runs all .sql migration files from db/postgres/migrations/ in filename
@@ -18,10 +26,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  * schema_migrations, so a failed migration is never recorded as applied.
  *
  * Re-throws on migration failure so callers can halt startup (Delta 004).
- *
- * @returns {Promise<Array<{file: string, status: 'ok'|'skipped'|'error'}>>}
  */
-export async function runMigrations() {
+export async function runMigrations(): Promise<MigrationResult[]> {
   // Ensure the applied-migrations tracking table exists
   await query(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -30,19 +36,19 @@ export async function runMigrations() {
     )
   `);
 
-  const migrationsDir = path.join(__dirname, '..', '..', 'db', 'postgres', 'migrations');
+  const migrationsDir = resolve(__dirname, '../../../db/postgres/migrations');
 
-  let files;
+  let files: string[];
   try {
     files = fs.readdirSync(migrationsDir)
       .filter(f => f.endsWith('.sql'))
       .sort();
   } catch (err) {
-    console.error('[db] runMigrations: could not read migrations directory:', err.message);
+    console.error('[db] runMigrations: could not read migrations directory:', (err as Error).message);
     return [];
   }
 
-  const results = [];
+  const results: MigrationResult[] = [];
 
   for (const file of files) {
     // Skip migrations that have already been applied
@@ -56,7 +62,7 @@ export async function runMigrations() {
       continue;
     }
 
-    const filePath = path.join(migrationsDir, file);
+    const filePath = resolve(migrationsDir, file);
     console.log(`[db] Running migration: ${file}`);
     try {
       const sql = fs.readFileSync(filePath, 'utf8');
@@ -70,7 +76,7 @@ export async function runMigrations() {
       console.log(`[db] Migration OK: ${file}`);
       results.push({ file, status: 'ok' });
     } catch (err) {
-      console.error(`[db] Migration FAILED: ${file}:`, err.message);
+      console.error(`[db] Migration FAILED: ${file}:`, (err as Error).message);
       results.push({ file, status: 'error' });
       throw err;
     }

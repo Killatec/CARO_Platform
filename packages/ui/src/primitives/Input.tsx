@@ -1,9 +1,19 @@
 import React from 'react';
 
+export type InputProps = React.InputHTMLAttributes<HTMLInputElement>;
+
 /**
  * Input primitive - stateless, zero domain knowledge
  */
-export function Input({ type = 'text', value, onChange, placeholder, disabled = false, className = '', ...props }) {
+export const Input: React.FC<InputProps> = ({
+  type = 'text',
+  value,
+  onChange,
+  placeholder,
+  disabled = false,
+  className = '',
+  ...props
+}) => {
   return (
     <input
       type={type}
@@ -15,4 +25,4 @@ export function Input({ type = 'text', value, onChange, placeholder, disabled = 
       {...props}
     />
   );
-}
+};

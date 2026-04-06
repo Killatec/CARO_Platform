@@ -1,4 +1,4 @@
-import pg from 'pg';
+import { Pool, PoolClient, QueryResult } from 'pg';
 
 /**
  * Lazy singleton pg.Pool.
@@ -10,9 +10,9 @@ import pg from 'pg';
  * Only one Pool instance is ever created per process.
  */
 
-let _pool = null;
+let _pool: Pool | null = null;
 
-function getPool() {
+function getPool(): Pool {
   if (_pool) {
     return _pool;
   }
@@ -23,7 +23,7 @@ function getPool() {
     );
   }
 
-  _pool = new pg.Pool({
+  _pool = new Pool({
     host:                    process.env.PGHOST     || 'localhost',
     port:                    parseInt(process.env.PGPORT || '5432', 10),
     database:                process.env.PGDATABASE || 'caro_dev',
@@ -38,16 +38,25 @@ function getPool() {
 }
 
 /**
+ * Minimal pool interface — covers the three methods used by this package.
+ */
+interface DbPool {
+  query(queryText: string, values?: unknown[]): Promise<QueryResult>;
+  connect(): Promise<PoolClient>;
+  end(): Promise<void>;
+}
+
+/**
  * Thin proxy so callers can write `pool.query(...)` and `pool.connect()`
  * without knowing about the lazy initialisation.
  *
  * Delegates every call to the real pg.Pool instance returned by getPool(),
  * which is created only on first invocation (after dotenv has loaded).
  */
-const pool = {
-  query:   (...args) => getPool().query(...args),
-  connect: (...args) => getPool().connect(...args),
-  end:     (...args) => getPool().end(...args),
+const pool: DbPool = {
+  query:   (queryText, values) => getPool().query(queryText, values as unknown[]),
+  connect: () => getPool().connect(),
+  end:     () => getPool().end(),
 };
 
 export default pool;

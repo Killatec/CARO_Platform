@@ -1,9 +1,18 @@
 import React from 'react';
 
+export interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement> {
+  variant?: 'default' | 'error' | 'warning' | 'success' | 'info';
+}
+
 /**
  * Badge primitive - stateless, zero domain knowledge
  */
-export function Badge({ children, variant = 'default', className = '', ...props }) {
+export const Badge: React.FC<BadgeProps> = ({
+  children,
+  variant = 'default',
+  className = '',
+  ...props
+}) => {
   const baseClasses = 'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium';
 
   const variantClasses = {
@@ -19,4 +28,4 @@ export function Badge({ children, variant = 'default', className = '', ...props 
       {children}
     </span>
   );
-}
+};

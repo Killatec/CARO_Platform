@@ -40,4 +40,4 @@ export const tokens = {
     md: '0.25rem',
     lg: '0.5rem'
   }
-};
+} as const;

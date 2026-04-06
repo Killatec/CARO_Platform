@@ -1,5 +1,49 @@
 import { query, withTransaction } from './query.js';
 
+/** Shape of a row returned by getActiveTags(). tag_id is coerced to number. */
+export interface ActiveTag {
+  tag_id: number;
+  registry_rev: number;
+  tag_path: string;
+  data_type: string;
+  is_setpoint: boolean;
+  trends: boolean;
+  retired: boolean;
+  meta: unknown;
+}
+
+/** Shape of a row returned by getRevisionTags(). */
+export interface RevisionTag {
+  tag_id: number;
+  registry_rev: number;
+  tag_path: string;
+  data_type: string;
+  is_setpoint: boolean;
+  retired: boolean;
+  meta: unknown;
+}
+
+/** Input shape for a new tag (no tag_id — assigned by applyRegistryRevision). */
+export interface NewTagInput {
+  tag_path: string;
+  data_type: string;
+  is_setpoint: boolean;
+  trends?: boolean;
+  meta: unknown;
+}
+
+/** Input shape for a tag that already has a tag_id (modified or retired). */
+export interface ExistingTagInput extends NewTagInput {
+  tag_id: number;
+}
+
+export interface ApplyResult {
+  registry_rev: number;
+  added: number;
+  modified: number;
+  retired: number;
+}
+
 /**
  * Returns the latest active (non-retired) row for each tag_id.
  *
@@ -11,9 +55,10 @@ import { query, withTransaction } from './query.js';
  * rows from consideration and could surface stale non-retired rows from older
  * revisions as if they were current.
  *
- * @returns {Promise<Array<{tag_id, registry_rev, tag_path, data_type, is_setpoint, trends, retired, meta}>>}
+ * node-postgres returns INTEGER columns as strings; tag_id is coerced to
+ * Number before returning so all consumers receive a numeric tag_id.
  */
-export async function getActiveTags() {
+export async function getActiveTags(): Promise<ActiveTag[]> {
   const result = await query(`
     SELECT * FROM (
       SELECT DISTINCT ON (tag_id)
@@ -30,23 +75,20 @@ export async function getActiveTags() {
     ) latest
     WHERE retired = false
   `);
-  return result.rows.map(row => ({ ...row, tag_id: Number(row.tag_id) }));
+  return result.rows.map(row => ({ ...row, tag_id: Number(row.tag_id) })) as ActiveTag[];
 }
 
 /**
  * Returns all tag_registry rows for a given revision, ordered by tag_path ASC.
  * Returns null if no rows exist for that revision.
- *
- * @param {number} rev
- * @returns {Promise<Array<{tag_id, registry_rev, tag_path, data_type, is_setpoint, retired, meta}>|null>}
  */
-export async function getRevisionTags(rev) {
+export async function getRevisionTags(rev: number): Promise<RevisionTag[] | null> {
   const result = await query(
     'SELECT tag_id, registry_rev, tag_path, data_type, is_setpoint, retired, meta FROM tag_registry WHERE registry_rev = $1 ORDER BY tag_path ASC',
     [rev]
   );
   if (result.rows.length === 0) return null;
-  return result.rows;
+  return result.rows as RevisionTag[];
 }
 
 /**
@@ -55,24 +97,21 @@ export async function getRevisionTags(rev) {
  * The caller is responsible for computing added/modified/retired from business logic.
  * This function handles only the DB writes — it assigns tag_ids, records the revision,
  * and inserts all rows atomically.
- *
- * @param {Array} added    - New tags (no tag_id yet); each has tag_path, data_type, is_setpoint, trends, meta
- * @param {Array} modified - Changed tags (have tag_id); same shape as added
- * @param {Array} retired  - Tags to retire (from getActiveTags); have tag_id and all current fields
- * @param {string} comment - Revision description
- * @returns {Promise<{registry_rev, added: number, modified: number, retired: number}>}
  */
-export async function applyRegistryRevision(added, modified, retired, comment) {
-  let result;
-
-  await withTransaction(async (client) => {
+export async function applyRegistryRevision(
+  added: NewTagInput[],
+  modified: ExistingTagInput[],
+  retired: ExistingTagInput[],
+  comment: string
+): Promise<ApplyResult> {
+  return withTransaction(async (client) => {
     await client.query('SET TRANSACTION ISOLATION LEVEL SERIALIZABLE');
 
     // Next registry_rev
     const revRow = await client.query(
       'SELECT COALESCE(MAX(registry_rev), 0) + 1 AS next_rev FROM registry_revisions'
     );
-    const next_rev = revRow.rows[0].next_rev;
+    const next_rev: number = revRow.rows[0].next_rev;
 
     // Record this revision
     await client.query(
@@ -115,13 +154,11 @@ export async function applyRegistryRevision(added, modified, retired, comment) {
       );
     }
 
-    result = {
+    return {
       registry_rev: next_rev,
       added:        added.length,
       modified:     modified.length,
       retired:      retired.length,
     };
   });
-
-  return result;
 }
