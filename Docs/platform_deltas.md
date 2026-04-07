@@ -193,6 +193,36 @@ None of the HMI tables (users through audit_log) have been created.
 
 ---
 
+## Delta: tag-registry E2E test database isolation
+
+**Date:** 2026-04-07
+**Status:** Complete
+
+- `globalSetup.js` created: clones `caro_dev` → `caro_test` via `pg_dump`/`pg_restore` before every run, spawns Express test server on `:3099` and Vite test client on `:5199`, polls both until ready
+- `globalTeardown.js` created: kills both processes via `taskkill /F /T` (Windows process tree kill)
+- `server/.env.test` created: `PORT=3099`, `PGDATABASE=caro_test`, `PGPASSWORD=KillaDB`
+- `client/vite.test.config.ts` created: `port: 5199`, `proxy: { '/api': 'http://localhost:3099' }`
+- `playwright.config.js` updated: `globalSetup`, `globalTeardown`, `baseURL: http://10.0.0.184:5199`
+- `TARGET_DB` env var added: defaults to `caro_test`; set to `caro_dev` to skip clone and run against live DB
+- `test:dev` and `test:chromium:dev` scripts added to `e2e/package.json`
+- `assertPortFree` helper in globalSetup: throws with clear error if `:3099` or `:5199` are already bound
+- `cross-env` and `dotenv-cli` added to `e2e/devDependencies`
+- `server/src/index.ts` log message fixed: hardcoded `"caro_dev"` replaced with `process.env.PGDATABASE`
+
+---
+
+## Delta: tag-registry E2E API consolidation
+
+**Date:** 2026-04-07
+**Status:** Complete
+
+- `helpers/api.js` updated: `API_BASE` changed to `:3099`; `getTemplate`, `applyRegistryApi`, `fetchRevisions` added as named exports
+- `history.spec.js`, `registry-apply.spec.js`, `registry-diff.spec.js`, `meta-modal.spec.js`: local `const API_BASE` declarations and inline function definitions removed; all three functions now imported from `helpers/api.js`
+- `history.spec.js` test 3: direct `fetch(\`${API_BASE}/templates/${tagName}\`)` call replaced with `getTemplate(tagName)`
+- No spec file hardcodes a port or base URL
+
+---
+
 ## TODO — Migrate apps/mqtt-simulator to TypeScript
 
 All source files in `apps/mqtt-simulator/server/src/` and `apps/mqtt-simulator/client/src/` to be converted to TypeScript. Deferred until after HMI is stable.
