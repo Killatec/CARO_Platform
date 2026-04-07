@@ -8,8 +8,8 @@ Date: 2026-04-02
 
 **Companion Documents**
 
-*Tag Registry Functional Spec v1.17 \| CARO_HMI Functional Spec v2.4 \|
-CARO_HMI API Spec v1.4*
+*Tag Registry Functional Spec v1.17 \| hmi_functional_spec v2.4 \|
+hmi_API_spec v1.4*
 
 **Revision History**
 
@@ -306,7 +306,7 @@ Validated manually by an Administrator.
 **6. Operation Modes**
 
 Three-table schema for named, revision-controlled snapshots of setpoint
-values. See CARO_HMI Functional Spec v2.4 Section 6.6 for workflow
+values. See hmi_functional_spec v2.4 Section 6.6 for workflow
 details.
 
 **6.1 operation_modes**
@@ -436,7 +436,7 @@ audit_log (Section 10).
 >
 > *NOTE: Telemetry never writes to this table. Out-of-sync telemetry
 > raises a tag.sync.lost audit event and sets the in-memory latch (see
-> CARO_HMI Functional Spec v2.4 Section 8.3).*
+> hmi_functional_spec v2.4 Section 8.3).*
 >
 > *NOTE: set_by and set_at are displayed in the frontend save dialog so
 > the Supervisor can see who set each pending value and when before
@@ -645,7 +645,7 @@ audit architecture are designed so that full compliance can be added
 without disruptive migration when the requirement becomes real. This
 section documents that readiness design.
 
-The existing MFA save-time challenge (CARO_HMI Functional Spec v2.4
+The existing MFA save-time challenge (hmi_functional_spec v2.4
 Section 5.4) already provides the authentication control for "who
 approved this." What is currently missing for full Part 11 compliance is
 a formal signature record cryptographically bound to the signed data.

@@ -8,14 +8,14 @@ Date: 2026-03-27
 
 **Companion Documents**
 
-CARO_HMI Functional Spec v2.3 \| CARO_HMI API Spec v1.3 \| CARO_DB_Spec v1.0
+hmi_functional_spec v2.3 \| hmi_API_spec v1.3 \| CARO_DB_Spec v1.0
 
 **Revision History**
 
   ------------- ------------ ------------- ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
   **Version**   **Date**     **Author**    **Summary**
 
-  1.0           2026-03-24   PM / Claude   Initial release. Extracted from CARO_HMI Functional Spec v1.5.
+  1.0           2026-03-24   PM / Claude   Initial release. Extracted from hmi_functional_spec v1.5.
 
   1.1           2026-03-24   PM / Claude   OI-05 resolved --- SCHEMA payload format defined as base64-encoded .proto text.
 
@@ -40,7 +40,7 @@ This document defines the MQTT interface between the CARO_HMI backend and embedd
 
 The CARO_HMI backend is the sole MQTT client on the broker side --- it subscribes to module telemetry and publishes commands. Embedded modules subscribe to command and handshake topics and publish telemetry and acknowledgements.
 
-For HMI system architecture, user roles, tag data model, WebSocket API, and REST API --- see CARO_HMI Functional Specification v2.3.
+For HMI system architecture, user roles, tag data model, WebSocket API, and REST API --- see hmi_functional_spec v2.3.
 
 **2. Broker Deployment**
 
