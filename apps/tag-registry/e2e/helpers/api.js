@@ -1,4 +1,4 @@
-const API_BASE = 'http://10.0.0.184:3001/api/v1';
+const API_BASE = 'http://10.0.0.184:3099/api/v1';
 
 /**
  * Internal fetch wrapper. Unwraps the { ok, data/error } envelope.
@@ -132,4 +132,29 @@ export async function listTemplates(type) {
  */
 export async function batchSave(changes, deletions, confirmed = false) {
   return request('POST', '/templates/batch', { changes, deletions, confirmed });
+}
+
+/**
+ * Fetches a single template by name.
+ * Returns { template, hash }.
+ */
+export async function getTemplate(name) {
+  return request('GET', `/templates/${name}`);
+}
+
+/**
+ * Applies the resolved registry for rootName to the database.
+ * Returns { registry_rev, ... }.
+ */
+export async function applyRegistryApi(rootName, comment) {
+  return request('POST', '/registry/apply', { rootName, comment });
+}
+
+/**
+ * Fetches all registry revisions ordered by registry_rev DESC.
+ * Returns the revisions array.
+ */
+export async function fetchRevisions() {
+  const data = await request('GET', '/registry/revisions');
+  return data.revisions;
 }

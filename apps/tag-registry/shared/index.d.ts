@@ -1,6 +1,6 @@
 /**
  * Type declarations for the apps/tag-registry/shared JavaScript package.
- * Consumed by the server TypeScript migration; shared source remains JS.
+ * Consumed by the server and client TypeScript migrations; shared source remains JS.
  */
 
 import type { NewTagInput } from '@caro/db';
@@ -23,24 +23,57 @@ export interface Template {
   template_type: string;
   data_type?: string;
   is_setpoint?: boolean;
+  trends?: boolean;
   fields: Record<string, FieldDef>;
   children: ChildRef[];
 }
 
+export interface TemplateEntry {
+  template: Template;
+  hash: string | null;
+}
+
 // ── Validation ────────────────────────────────────────────────────────────────
+
+export interface ValidationMessageRef {
+  template_name?: string;
+  field?: string;
+  tag_path?: string;
+  [key: string]: unknown;
+}
+
+export interface ValidationMessage {
+  severity: 'error' | 'warning';
+  code: string;
+  message: string;
+  ref?: ValidationMessageRef;
+}
 
 export interface ValidationResult {
   valid?: boolean;
-  errors: string[];
-  warnings: string[];
+  errors: ValidationMessage[];
+  warnings: ValidationMessage[];
 }
 
 // ── Cascade ───────────────────────────────────────────────────────────────────
 
+export interface CascadeDiff {
+  fields_added: Array<{ template_name: string; field: string }>;
+  fields_removed: Array<{ template_name: string; field: string }>;
+  fields_changed: Array<{ template_name: string; field: string; old_value: unknown; new_value: unknown }>;
+  instance_fields_changed: Array<{ template_name: string; asset_name: string; field: string; old_value: unknown; new_value: unknown }>;
+}
+
+export interface AffectedParent {
+  parent_template_name: string;
+  asset_name: string;
+  dropped_instance_values?: Array<{ field: string; value: unknown }>;
+}
+
 export interface CascadeResult {
   requiresConfirmation: boolean;
-  diff: unknown;
-  affectedParents: string[];
+  diff: CascadeDiff;
+  affectedParents: AffectedParent[];
 }
 
 // ── Exports ───────────────────────────────────────────────────────────────────
@@ -49,20 +82,21 @@ export declare function hashTemplate(template: Template): string;
 export declare function validateTemplate(template: Template): ValidationResult;
 export declare function validateGraph(templates: Map<string, Template>): ValidationResult;
 export declare function simulateCascade(
-  templates: Map<string, Template>,
-  changes: Array<{ template_name: string; template: Template }>
+  currentTemplateMap: Map<string, TemplateEntry>,
+  proposedChanges: Array<{ template_name: string; template: Template; original_hash?: string | null }>
 ): CascadeResult;
 export declare function applyFieldCascade(
-  templateMap: Map<string, Template>,
-  updatedTemplate: Template
-): Map<string, Template>;
+  templateMap: Map<string, TemplateEntry>,
+  changedTemplate: Template
+): Map<string, TemplateEntry>;
 export declare function resolveRegistry(
-  templateMap: Map<string, Template>,
+  templateMap: Map<string, TemplateEntry>,
   rootName: string
 ): NewTagInput[];
 export declare function validateParentTypes(
-  templates: Map<string, Template>,
-  config: { requiredParentTypes?: string[]; uniqueParentTypes?: boolean }
+  templateMap: Map<string, Template>,
+  rootName: string,
+  options?: { requiredParentTypes?: string[]; uniqueParentTypes?: boolean }
 ): ValidationResult;
 
 export declare const ERROR_CODES: {

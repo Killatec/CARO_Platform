@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest"
@@ -17,7 +17,10 @@
     "zustand": "^4.5.0"
   },
   "devDependencies": {
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^4.3.0",
+    "typescript": "^6.0.2",
     "vite": "^5.4.0",
     "tailwindcss": "^3.4.0",
     "autoprefixer": "^10.4.0",

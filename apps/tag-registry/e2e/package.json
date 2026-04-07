@@ -9,9 +9,13 @@
     "test:headed": "playwright test --headed",
     "test:chromium:headed": "playwright test --project=chromium --headed",
     "test:report": "playwright show-report",
-    "test:ui": "playwright test --ui"
+    "test:ui": "playwright test --ui",
+    "test:chromium:dev": "cross-env TARGET_DB=caro_dev playwright test --project=chromium",
+    "test:dev": "cross-env TARGET_DB=caro_dev playwright test"
   },
   "devDependencies": {
-    "@playwright/test": "^1.51.0"
+    "@playwright/test": "^1.51.0",
+    "cross-env": "^10.1.0",
+    "dotenv-cli": "^11.0.0"
   }
 }

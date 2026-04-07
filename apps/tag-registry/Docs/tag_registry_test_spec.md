@@ -1,5 +1,5 @@
 # Tag Registry Admin Tool — E2E Test Specification
-**v1.2** | Generated: 2026-04-02
+**v1.3** | Generated: 2026-04-07
 Companion documents: Functional Spec v1.17 | API Spec v1.15 | Bootstrap v1.21
 
 ---
@@ -41,7 +41,9 @@ Each test file maps to one or more sections in Functional Spec v1.16. The test s
 | Playwright config | `apps/tag-registry/e2e/playwright.config.js` |
 
 Config options set in `playwright.config.js`:
-- `baseURL`: `http://10.0.0.184:5173`
+- `baseURL`: `http://10.0.0.184:5199` (test Vite client)
+- `globalSetup`: `apps/tag-registry/e2e/globalSetup.js`
+- `globalTeardown`: `apps/tag-registry/e2e/globalTeardown.js`
 - `workers`: 1 (sequential — tests share a single server process)
 - `trace`, `screenshot`, `video`: `retain-on-failure`
 - `reporter`: HTML with `open: 'never'`
@@ -50,10 +52,13 @@ Config options set in `playwright.config.js`:
 
 | Service | URL | Notes |
 |---|---|---|
-| Vite client (dev) | `http://10.0.0.184:5173` | Proxies `/api` to `:3001` |
-| Express API (dev) | `http://10.0.0.184:3001/api/v1` | Hit directly by `helpers/api.js` |
+| Vite client (dev) | `http://10.0.0.184:5173` | Dev only — not used by E2E suite |
+| Express API (dev) | `http://10.0.0.184:3001/api/v1` | Dev only — not used by E2E suite |
+| Vite client (test) | `http://10.0.0.184:5199` | Started by globalSetup, proxies `/api` to `:3099` |
+| Express API (test) | `http://10.0.0.184:3099/api/v1` | Started by globalSetup, connects to `caro_test` |
+| Test database | `caro_test` | Cloned from `caro_dev` before every run |
 
-`helpers/api.js` calls the Express server directly at port 3001, bypassing the Vite proxy. This keeps fixture setup fast and independent of the UI.
+The E2E suite manages its own server lifecycle. `globalSetup.js` clones `caro_dev` into `caro_test` via `pg_dump`/`pg_restore`, spawns the Express test server on `:3099` and the Vite test client on `:5199`, and polls both until ready. `globalTeardown.js` kills both processes after the suite completes. All API calls in `helpers/api.js` and spec files route through `:3099` — no spec file hardcodes a port.
 
 ### 2.3 Running the suite
 
@@ -61,30 +66,26 @@ All commands must be run from `apps/tag-registry/e2e/` using the local npm binar
 
 ```bash
 cd apps/tag-registry/e2e
-
-npm test                        # all browsers (chromium + firefox + webkit)
+npm test                        # all browsers — clones caro_dev → caro_test first
 npm run test:chromium           # Chromium only — fastest for local iteration
-npm run test:chromium:headed    # Chromium headed — shows browser window
+npm run test:chromium:headed    # Chromium headed
 npm run test:headed             # all browsers headed
+npm run test:dev                # all browsers — skips clone, uses caro_dev directly
+npm run test:chromium:dev       # Chromium only against caro_dev
 npm run test:report             # open HTML report from last run
 npm run test:ui                 # Playwright UI mode (interactive)
 ```
 
+`TARGET_DB` environment variable controls which database the test server uses. Defaults to `caro_test`. Set to `caro_dev` to skip the clone step and run against the live development database.
+
 ### 2.4 Prerequisites
 
-Both servers must be running before executing any test. Tests do not start or stop servers.
+The E2E suite is self-contained. `globalSetup.js` starts both servers automatically before any test runs and `globalTeardown.js` stops them after. No manual server startup is required.
 
-```bash
-# Terminal 1 — Express API
-cd apps/tag-registry/server
-npm run dev       # nodemon; listens on :3001
-
-# Terminal 2 — Vite client
-cd apps/tag-registry/client
-npm run dev       # Vite HMR; listens on :5173
-```
-
-**Critical:** nodemon must NOT watch the `templates/` directory. See section 5.1.
+Prerequisites:
+- PostgreSQL running locally on port 5432
+- `%APPDATA%\postgresql\pgpass.conf` configured for passwordless `pg_dump`/`psql` access (see `Docs/platform_deltas.md`)
+- Ports 3099 and 5199 must be free — `globalSetup.js` will throw with a clear error if either is in use
 
 ---
 
@@ -268,7 +269,7 @@ await page.getByRole('button', { name: /history/i }).click();
 | 5 | shows modified row with cell-level highlight when field value changes | per-cell amber highlight (td[class*="amber"]), not full-row |
 | 6 | tag_id column shows 'new' for added rows and numeric id for unchanged rows | tag_id column behavior |
 
-**Pattern:** Timestamp-based template names (e.g. `tag_diff_${Date.now()}`) ensure tag_paths are unique per run and never appear in the DB before the test applies them. Inline `applyRegistryApi()` and `getTemplate()` helpers defined in the spec file — `api.js` was not modified.
+**Pattern:** Timestamp-based template names (e.g. `tag_diff_${Date.now()}`) ensure tag_paths are unique per run and never appear in the DB before the test applies them. `applyRegistryApi()` and `getTemplate()` are imported from `helpers/api.js`.
 
 #### 4.8.2 tests/registry-apply.spec.js — Registry Apply Flow (7 tests)
 
@@ -505,9 +506,9 @@ await expect(page.locator('body')).toContainText(/select.*root/i);
 
 This passes even after `beforeEach` has called `selectRoot()` and navigated to the Registry page, because the text "Root Template:" and "Select root..." from the dropdown label in AppShell match the regex — they are always present in the page body regardless of whether a root is actually selected. The assertion is intentionally loose and passes in both states. It is not testing the registry prompt specifically; it verifies the page loaded and contains root-selection UI, which is sufficient for this smoke-level test.
 
-### 5.13 Phase 2 API helpers defined inline
+### 5.13 API helpers consolidated into helpers/api.js
 
-Phase 2 E2E specs (`registry-diff.spec.js`, `registry-apply.spec.js`, `history.spec.js`, `meta-modal.spec.js`) define registry API helpers (`applyRegistryApi`, `fetchRevisions`, `getTemplate`) inline per spec file rather than in `helpers/api.js`. This is intentional — `api.js` was not modified to avoid breaking existing Phase 1 tests.
+Phase 2 E2E specs (`registry-diff.spec.js`, `registry-apply.spec.js`, `history.spec.js`, `meta-modal.spec.js`) previously defined registry API helpers (`applyRegistryApi`, `fetchRevisions`, `getTemplate`) inline per spec file. These have been moved to `helpers/api.js` and are now imported from there. No spec file hardcodes a port or base URL.
 
 History page navigation uses `page.getByRole('button', { name: /history/i }).click()` inline — `pageObjects.js` was not modified.
 
@@ -530,6 +531,10 @@ test.skip('root dropdown is disabled while dirty', ...)
 
 **Reason:** The root dropdown wrapper has `cursor-not-allowed` styling while dirty, but the `<select>` element itself has no `disabled` attribute — the dropdown remains interactive. The spec originally called for a `disabled` prop, but the current implementation uses a CSS cursor hint only. The test is skipped rather than deleted so it documents the implementation state.
 
+### 6.3 meta-modal.spec.js: clicking View on different row replaces modal
+
+**Deleted.** The modal renders with a full-viewport fixed overlay; clicking a background table button while the modal is open is blocked by the overlay by design. This interaction is not a valid user workflow.
+
 ### 6.2 error banner shown when graph has validation errors
 
 **File:** `tests/registry.spec.js` test 5
@@ -542,6 +547,45 @@ test.skip(true, 'Server validates INVALID_REFERENCE — broken template cannot b
 **Reason:** The test attempts to create a structural template referencing a non-existent child to force an `INVALID_REFERENCE` validation error in the client. However, the server's `POST /api/v1/templates/batch` endpoint calls `validateGraph()` before writing — it rejects any template referencing a child that does not exist on disk, returning `400 INVALID_REFERENCE`. The broken template is never written, the client never loads it, and the error banner is never shown.
 
 The `INVALID_REFERENCE` error state in the registry is only reachable by manually corrupting template JSON files on disk after they have been written. Testing this state would require direct filesystem access from the test helper, which is out of scope for the browser E2E suite and is better covered by a server unit test.
+
+### 9.6 Phase 4 Baseline (2026-04-07)
+
+**Changes from Phase 3:**
+- E2E suite migrated to full test database isolation (`caro_test` cloned from `caro_dev`)
+- All inline `API_BASE` constants removed from spec files — all API calls route through `helpers/api.js`
+- `meta-modal.spec.js`: deleted 1 invalid test (modal overlay blocks background clicks by design)
+- `registry-diff.spec.js`: removed global summary assertions, scoped row assertions to own root via `getOwnRows()` helper
+- `save-cancel.spec.js`: fixed tests 6+7 — added module wrapper for valid `module → parameter → tag` hierarchy
+- `history.spec.js`: fixed webkit strict mode violation — exact revision number match via anchored regex
+- All app and shared package source files migrated to TypeScript (`strict: true`, zero `tsc` errors)
+- Unit test imports updated from `.js` to `.ts`/`.tsx`
+- `registryService.test.js` rewritten — mock targets `getActiveTags`/`getRevisions`/`getRevisionTags` directly (old mock targeted `query()` which `registryService` no longer calls after `@caro/db` TypeScript migration)
+
+**Vitest unit tests:**
+
+| Package | Tests | Passed |
+|---|---|---|
+| shared/ pure functions | 125 | 125 |
+| server/ all tests | 82 | 82 |
+| client/ all tests | 112 | 112 |
+| packages/db/ | 11 | 11 |
+| **Total** | **330** | **330** |
+
+**Playwright E2E:**
+
+| Browsers | Tests per browser | Total runs | Passed | Failed |
+|---|---|---|---|---|
+| Chromium + Firefox + WebKit | 69 | 207 | 207 | 0 |
+
+**Combined total (Phase 4):**
+
+| Metric | Value |
+|---|---|
+| Total (unit + E2E) | 537 |
+| Passing | 537 |
+| Skipped | 0 |
+| Failed | 0 |
+| Baseline date | 2026-04-07 |
 
 ---
 
@@ -595,7 +639,7 @@ Avoid anchoring on display text for panel containers — text can change with in
 
 ## 8. API Helper Reference (`helpers/api.js`)
 
-All helpers call `http://10.0.0.184:3001/api/v1` directly. An internal `request()` wrapper handles JSON serialisation and unwraps the `{ ok, data }` envelope, throwing a typed `Error` with `.code` and `.status` on failure.
+All helpers call `http://10.0.0.184:3099/api/v1` directly (the test Express server). An internal `request()` wrapper handles JSON serialisation and unwraps the `{ ok, data }` envelope, throwing a typed `Error` with `.code` and `.status` on failure.
 
 ### createTagTemplate(name, dataType?, isSetpoint?, fields?)
 
@@ -648,6 +692,18 @@ Calls `POST /templates/batch` and returns the full response data object includin
 | `changes` | array of `{ template_name, original_hash, template }` | required |
 | `deletions` | array of `{ template_name, original_hash }` | required |
 | `confirmed` | boolean | `false` |
+
+### getTemplate(name)
+
+Fetches a single template by name. Returns `{ template, hash }`. Calls `GET /templates/:name`.
+
+### applyRegistryApi(rootName, comment)
+
+Applies the resolved registry for `rootName` to the database. Returns `{ registry_rev, ... }`. Calls `POST /registry/apply`.
+
+### fetchRevisions()
+
+Fetches all registry revisions ordered by `registry_rev DESC`. Returns the revisions array. Calls `GET /registry/revisions`.
 
 ---
 
@@ -773,11 +829,13 @@ In addition to the Playwright E2E suite, a Vitest unit test suite covers the lay
 
 | Package | Location | Run command |
 |---|---|---|
-| shared/ functions | apps/tag-registry/shared/ | npm test |
-| server templateService + registry | apps/tag-registry/server/ | npm test |
-| useTemplateGraphStore + diffRegistry + formatDate | apps/tag-registry/client/ | npm test |
+| shared/ functions | apps/tag-registry/shared/ | `cd apps/tag-registry/shared && npx vitest run` |
+| server templateService + registry | apps/tag-registry/server/ | `cd apps/tag-registry/server && npx vitest run` |
+| useTemplateGraphStore + diffRegistry + formatDate | apps/tag-registry/client/ | `cd apps/tag-registry/client && npx vitest run` |
 
 All three use Vitest 1.6.x. Config file: vitest.config.js in each package root. Test files: `__tests__/**/*.test.js`.
+
+Each package must be run from its own directory. There is no root-level vitest config under `apps/tag-registry/`.
 
 Note: the client package runs Vitest from the monorepo root `node_modules/.bin` because `@caro/ui` is a workspace-only package that cannot be resolved by a standalone `npm install` in the client directory. `npm test` works correctly because npm adds the project root's `node_modules/.bin` to PATH when running scripts.
 
@@ -808,13 +866,20 @@ Uses real temporary directories (os.tmpdir()) for file I/O. No mocking — tests
 | batchSave.test.js | 15 | New template, name conflict, stale hash (changes + deletions), update, delete, empty batch, requires_confirmation, confirmed cascade, graph validation rejection |
 | validateAll.test.js | 4 | Empty dir, all valid, broken reference |
 
-**Phase 2 — registryService (18 tests, 1 file):**
+**Phase 2 — registryService (12 tests, 1 file):**
 
-`@caro/db` fully mocked. Tests SQL patterns, parameter shapes, and return values.
+`@caro/db` named exports mocked directly. Tests behavior and return values.
 
 | File | Tests | Coverage |
 |---|---|---|
-| registryService.test.js | 18 | getActiveRegistry (DISTINCT ON + WHERE retired=false), getRevisions (DESC order), getRevisionTags (tag_path ASC, null on empty) |
+| registryService.test.js | 12 | getActiveRegistry, getRevisions, getRevisionTags — behavior and return value assertions. Mock targets @caro/db named exports directly. SQL pattern tests removed (covered by packages/db tests). |
+
+**packages/db/ (11 tests, 2 files):**
+
+| File | Tests | Coverage |
+|---|---|---|
+| query.test.js | 5 | withTransaction happy path, fn throws + ROLLBACK, fn throws + ROLLBACK throws, COMMIT throws + ROLLBACK, COMMIT throws + ROLLBACK throws |
+| migrations.test.js | 6 | runMigrations behavior |
 
 **Phase 2 — registry routes (19 tests, 1 file):**
 

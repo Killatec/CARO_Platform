@@ -101,13 +101,24 @@ None of the HMI tables (users through audit_log) have been created.
 - `tsx` installed at repo root (workspace resolution blocks install from subdirectory)
 - All 8 `__tests__/*.test.js` imports updated: `../src/*.js` → `../src/*.ts`, `vi.mock` paths updated to match
 - `tsc --noEmit` → zero errors; `npm run build` → clean; dev server starts; 82/82 tests passing
-- **Remaining:** `apps/tag-registry/client` TypeScript migration — deferred until after HMI stable
 
-## TODO — Migrate apps/tag-registry/client to TypeScript
+## Delta: tag-registry client TypeScript migration
 
-All source files in `apps/tag-registry/client/src/` to be converted to TypeScript. Server and shared packages already complete. Deferred until after HMI is stable.
+**Date:** 2026-04-06
+**Status:** Complete
 
-**Status:** Open (deferred)
+- All 35 source files in `apps/tag-registry/client/src/` migrated: `.js` → `.ts`, `.jsx` → `.tsx`; old files deleted
+- `client/tsconfig.json` created (`extends ../../../tsconfig.base.json`, `module: ESNext`, `moduleResolution: Bundler`, `jsx: react-jsx`, `outDir: dist`, `rootDir: src`)
+- `shared/index.d.ts` updated: added `TemplateEntry`, `ValidationMessage`, `ValidationMessageRef`, `CascadeDiff`, `AffectedParent`, fixed `validateParentTypes` signature, fixed `simulateCascade` to use `Map<string, TemplateEntry>`
+- `shared/utils.d.ts` created: declares `deepEqual`/`deepNotEqual`
+- `src/vite-env.d.ts` added for Vite CSS module type declarations
+- `@types/react`, `@types/react-dom`, `typescript` added to client `devDependencies`
+- `vite.config.js` renamed to `vite.config.ts`; `package.json` build script changed to `tsc && vite build`
+- All 7 `__tests__/*.test.js` mock paths updated from `.js` to `.ts`/`.tsx`
+- Path fix: all `.ts`/`.tsx` files had one extra `../` in shared imports vs original `.js`; corrected during migration
+- `useRegistryStore.ts` sort comparison fixed: `as unknown as Record<string, unknown>` + `String()` coercion to satisfy strict type checking
+- Root cause of mock mismatch: old `.js` source files shadowed new `.ts` files — Vite resolved `'../api/templates.js'` to the actual `.js` file; fix was deleting all old `.js`/`.jsx` source files so Vite falls through to `.ts`
+- `tsc --noEmit` → zero errors; 112/112 tests passing
 
 ---
 

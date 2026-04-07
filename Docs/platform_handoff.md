@@ -95,4 +95,4 @@ Then scaffold new TypeScript packages:
 
 ## Open TODOs
 
-- `packages/db/__tests__/query.test.js` — `withTransaction()` failure path tests missing. Required before HMI service development. Detail in `docs/platform_deltas.md`.
+None.

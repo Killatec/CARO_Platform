@@ -1,6 +1,8 @@
 import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
+  globalSetup:  './globalSetup.js',
+  globalTeardown: './globalTeardown.js',
   testDir: './tests',
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
@@ -11,7 +13,7 @@ export default defineConfig({
     ['list'],
   ],
   use: {
-    baseURL: 'http://10.0.0.184:5173',
+    baseURL: 'http://10.0.0.184:5199',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',

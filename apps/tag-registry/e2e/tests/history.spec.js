@@ -5,23 +5,10 @@ import {
   deleteTemplates,
   batchSave,
   getTemplateHash,
+  applyRegistryApi,
+  getTemplate,
 } from '../helpers/api.js';
 import { createPageObjects } from '../helpers/pageObjects.js';
-
-// ── Inline API helpers (Phase 2, not yet in api.js) ──────────────────────────
-
-const API_BASE = 'http://10.0.0.184:3001/api/v1';
-
-async function applyRegistryApi(rootName, comment) {
-  const res = await fetch(`${API_BASE}/registry/apply`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ rootName, comment }),
-  });
-  const json = await res.json();
-  if (!json.ok) throw new Error(json.error?.message ?? 'apply failed');
-  return json.data;
-}
 
 // ── Suite ────────────────────────────────────────────────────────────────────
 
@@ -86,8 +73,7 @@ test.describe('History Page', () => {
 
     // Modify a template to create a second meaningful apply
     const tagHash = await getTemplateHash(tagName);
-    const tagRes = await fetch(`${API_BASE}/templates/${tagName}`);
-    const { template: tagTemplate } = (await tagRes.json()).data;
+    const { template: tagTemplate } = await getTemplate(tagName);
     await batchSave([{
       template_name: tagName,
       original_hash: tagHash,

@@ -3,29 +3,10 @@ import {
   createTagTemplate,
   createStructuralTemplate,
   deleteTemplates,
+  applyRegistryApi,
+  fetchRevisions,
 } from '../helpers/api.js';
 import { createPageObjects } from '../helpers/pageObjects.js';
-
-// ── Inline API helpers (Phase 2, not yet in api.js) ──────────────────────────
-
-const API_BASE = 'http://10.0.0.184:3001/api/v1';
-
-async function applyRegistryApi(rootName, comment) {
-  const res = await fetch(`${API_BASE}/registry/apply`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ rootName, comment }),
-  });
-  const json = await res.json();
-  if (!json.ok) throw new Error(json.error?.message ?? 'apply failed');
-  return json.data;
-}
-
-async function fetchRevisions() {
-  const res = await fetch(`${API_BASE}/registry/revisions`);
-  const json = await res.json();
-  return json.data.revisions;
-}
 
 // ── Suite ────────────────────────────────────────────────────────────────────
 

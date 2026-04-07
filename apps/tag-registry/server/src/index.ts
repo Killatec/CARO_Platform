@@ -25,7 +25,7 @@ async function start(): Promise<void> {
     // Verify database connectivity
     try {
       await ping();
-      console.log('[db] Connected to PostgreSQL (caro_dev)');
+      console.log(`[db] Connected to PostgreSQL (${process.env.PGDATABASE ?? 'caro_dev'})`);
     } catch (err) {
       console.error('[db] Failed to connect to PostgreSQL:', (err as Error).message);
       process.exit(1);

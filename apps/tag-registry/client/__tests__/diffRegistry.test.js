@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { diffRegistry } from '../src/utils/diffRegistry.js';
+import { diffRegistry } from '../src/utils/diffRegistry.ts';
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 

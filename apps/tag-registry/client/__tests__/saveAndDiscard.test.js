@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { useTemplateGraphStore } from '../src/stores/useTemplateGraphStore.js';
-import { useUIStore } from '../src/stores/useUIStore.js';
+import { useTemplateGraphStore } from '../src/stores/useTemplateGraphStore.ts';
+import { useUIStore } from '../src/stores/useUIStore.ts';
 import { makeTag, makeStruct, makeEntry, makeLoadRootResponse } from './fixtures.js';
 
-vi.mock('../src/api/templates.js', () => ({
+vi.mock('../src/api/templates.ts', () => ({
   loadRoot: vi.fn(),
   batchSave: vi.fn(),
   listTemplates: vi.fn(),
@@ -12,7 +12,7 @@ vi.mock('../src/api/templates.js', () => ({
   validateAll: vi.fn(),
 }));
 
-vi.mock('../src/stores/useUIStore.js', () => ({
+vi.mock('../src/stores/useUIStore.ts', () => ({
   useUIStore: {
     getState: vi.fn(() => ({
       selectedTemplateTree: null,
@@ -21,7 +21,7 @@ vi.mock('../src/stores/useUIStore.js', () => ({
   },
 }));
 
-import * as templatesApi from '../src/api/templates.js';
+import * as templatesApi from '../src/api/templates.ts';
 
 const saveSuccess = { requires_confirmation: false, modified_files: [], deleted_files: [] };
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatDateTime, formatDate } from '../src/utils/formatDate.js';
+import { formatDateTime, formatDate } from '../src/utils/formatDate.ts';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
