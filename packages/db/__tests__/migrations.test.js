@@ -2,13 +2,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 
 // Mock query and withTransaction before importing migrations
-vi.mock('../query.js', () => ({
+vi.mock('../query.ts', () => ({
   query: vi.fn(),
   withTransaction: vi.fn(),
 }));
 
-import { query, withTransaction } from '../query.js';
-import { runMigrations } from '../migrations.js';
+import { query, withTransaction } from '../query.ts';
+import { runMigrations } from '../migrations.ts';
 
 // Helper: build a withTransaction mock that executes the callback with a
 // mock client whose query() always resolves successfully.

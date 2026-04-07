@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('../pool.js', () => ({
+vi.mock('../pool.ts', () => ({
   default: {
     connect: vi.fn(),
     query:   vi.fn(),
@@ -8,8 +8,8 @@ vi.mock('../pool.js', () => ({
   },
 }));
 
-import pool from '../pool.js';
-import { withTransaction } from '../query.js';
+import pool from '../pool.ts';
+import { withTransaction } from '../query.ts';
 
 beforeEach(() => {
   vi.clearAllMocks();
