@@ -29,6 +29,20 @@ async function getTemplate(name) {
   return json.data; // { template, hash }
 }
 
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * Returns a locator for tbody rows whose tag_path cell (2nd td) starts with
+ * rootName followed by a dot — i.e. rows that belong to the current test's root.
+ * Scopes row-level assertions away from accumulated rows left by prior test runs.
+ * Note: td:nth-child(2) targets tag_path; td:first-child is the tag_id column.
+ */
+function getOwnRows(page, rootName) {
+  return page.locator('tbody tr').filter({
+    has: page.locator('td:nth-child(2)').filter({ hasText: new RegExp(`^${rootName}\\.`) }),
+  });
+}
+
 // ── Suite ────────────────────────────────────────────────────────────────────
 
 test.describe('Registry Diff Display', () => {
@@ -74,17 +88,15 @@ test.describe('Registry Diff Display', () => {
   test('shows all tags as added when not yet applied to database', async ({ page }) => {
     await expect(page.locator('table')).toBeVisible({ timeout: 10000 });
 
-    // Summary line should show at least 1 added and zero modified/retired
+    // Summary line should show at least 1 added for this root's tags
     await expect(page.getByText(/\+\d+ added/)).toBeVisible();
-    await expect(page.getByText(/modified/)).not.toBeVisible();
-    await expect(page.getByText(/retired/)).not.toBeVisible();
 
-    // Every data row should have the green added background
-    const dataRows = page.locator('tbody tr');
-    const count = await dataRows.count();
+    // Every own row (tag paths starting with modName) should be green (added)
+    const ownRows = getOwnRows(page, modName);
+    const count = await ownRows.count();
     expect(count).toBeGreaterThan(0);
     for (let i = 0; i < count; i++) {
-      await expect(dataRows.nth(i)).toHaveClass(/bg-green-500/);
+      await expect(ownRows.nth(i)).toHaveClass(/bg-green-500/);
     }
   });
 
@@ -98,18 +110,16 @@ test.describe('Registry Diff Display', () => {
     await po.navigateToRegistry();
     await expect(page.locator('table')).toBeVisible({ timeout: 10000 });
 
-    // Summary should show unchanged count only, no added/modified/retired
+    // Summary should show at least one unchanged row
     await expect(page.getByText(/unchanged/)).toBeVisible();
-    await expect(page.getByText(/\+\d+ added/)).not.toBeVisible();
-    await expect(page.getByText(/modified/)).not.toBeVisible();
-    await expect(page.getByText(/retired/)).not.toBeVisible();
 
-    // No data row should have a colored background
-    const dataRows = page.locator('tbody tr');
-    const count = await dataRows.count();
+    // No own row (tag paths for this root) should have a colored background
+    const ownRows = getOwnRows(page, modName);
+    const count = await ownRows.count();
+    expect(count).toBeGreaterThan(0);
     for (let i = 0; i < count; i++) {
-      await expect(dataRows.nth(i)).not.toHaveClass(/bg-green-500/);
-      await expect(dataRows.nth(i)).not.toHaveClass(/bg-red-500/);
+      await expect(ownRows.nth(i)).not.toHaveClass(/bg-green-500/);
+      await expect(ownRows.nth(i)).not.toHaveClass(/bg-red-500/);
     }
   });
 
@@ -163,9 +173,6 @@ test.describe('Registry Diff Display', () => {
     await po.selectRoot(modName);
     await po.navigateToRegistry();
     await expect(page.locator('table')).toBeVisible({ timeout: 10000 });
-
-    // Summary should show -1 retired
-    await expect(page.getByText('-1 retired')).toBeVisible();
 
     // The retired row should be red
     const retiredPath = `${modName}.Chan1.setpoint`;

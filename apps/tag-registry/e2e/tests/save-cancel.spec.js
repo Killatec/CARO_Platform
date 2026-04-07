@@ -115,14 +115,18 @@ test.describe('Save and Cancel', () => {
   // ── Test 6 ─────────────────────────────────────────────────────────────────
   test('Save triggers CascadeConfirmModal when upstream parents are affected', async ({ page }) => {
     const pName = `param_sc_${Date.now()}`;
-    created.push(pName);
+    const mName = `mod_sc_${Date.now()}`;
+    created.push(pName, mName);
     await createStructuralTemplate(pName, 'parameter', [
       { template_name: tName, asset_name: 'mon', fields: {} },
     ]);
+    await createStructuralTemplate(mName, 'module', [
+      { template_name: pName, asset_name: 'Chan1', fields: {} },
+    ]);
 
-    // selectRoot(pName) loads the full hierarchy (pName + tName) into the store
+    // selectRoot(mName) loads the full hierarchy (mName + pName + tName) into the store
     // so simulateCascade can detect that editing tName affects pName.
-    await po.selectRoot(pName);
+    await po.selectRoot(mName);
     await po.expandTemplateFolder('tag');
     await po.clickTemplateLeaf(tName);
 
@@ -144,14 +148,18 @@ test.describe('Save and Cancel', () => {
   // ── Test 7 ─────────────────────────────────────────────────────────────────
   test('Confirming the cascade modal completes the save', async ({ page }) => {
     const pName = `param_sc2_${Date.now()}`;
-    created.push(pName);
+    const mName2 = `mod_sc2_${Date.now()}`;
+    created.push(pName, mName2);
     await createStructuralTemplate(pName, 'parameter', [
       { template_name: tName, asset_name: 'mon', fields: {} },
     ]);
+    await createStructuralTemplate(mName2, 'module', [
+      { template_name: pName, asset_name: 'Chan1', fields: {} },
+    ]);
 
-    // selectRoot(pName) loads the full hierarchy (pName + tName) into the store
+    // selectRoot(mName2) loads the full hierarchy (mName2 + pName + tName) into the store
     // so simulateCascade can detect that editing tName affects pName.
-    await po.selectRoot(pName);
+    await po.selectRoot(mName2);
     await po.expandTemplateFolder('tag');
     await po.clickTemplateLeaf(tName);
 

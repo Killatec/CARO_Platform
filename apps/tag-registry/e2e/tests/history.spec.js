@@ -135,7 +135,9 @@ test.describe('History Page', () => {
     await expect(page.locator('table')).toBeVisible({ timeout: 10000 });
 
     // Find the row with our revision number and confirm the comment
-    const revRow = page.locator('tbody tr').filter({ hasText: String(result.registry_rev) });
+    const revRow = page.locator('tbody tr').filter({
+      has: page.locator('td:first-child').filter({ hasText: new RegExp(`^${result.registry_rev}$`) }),
+    });
     await expect(revRow).toContainText(uniqueComment);
   });
 });

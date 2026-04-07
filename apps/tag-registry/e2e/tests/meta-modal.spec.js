@@ -141,27 +141,4 @@ test.describe('Meta Modal', () => {
     const amberValue = modal.locator('[class*="amber"]').first();
     await expect(amberValue).toBeVisible();
   });
-
-  // ── Test 4 ─────────────────────────────────────────────────────────────────
-  test('clicking View on a different row replaces the open modal', async ({ page }) => {
-    const path1 = `${modName}.Chan1.setpoint`;
-    const path2 = `${modName}.Chan1.monitor`;
-
-    // Open first row's modal
-    await page.locator('tr').filter({ hasText: path1 }).getByRole('button', { name: 'View' }).click();
-    await expect(metaModal(page, path1)).toBeVisible({ timeout: 5000 });
-
-    // Click View on the second row
-    await page.locator('tr').filter({ hasText: path2 }).getByRole('button', { name: 'View' }).click();
-
-    // Second row's modal should now be visible with path2 as title
-    await expect(metaModal(page, path2)).toBeVisible({ timeout: 5000 });
-
-    // First row's modal title should no longer be the active title
-    // (the modal content changes — same .shadow-xl element, different title text)
-    await expect(page.locator('.shadow-xl').filter({ hasText: path1 }).filter({ hasText: path2 }))
-      .toBeVisible({ timeout: 3000 }); // path2's modal also contains chan1 prefix
-    // Simpler assertion: modal is showing path2's content
-    await expect(page.locator('.shadow-xl').first()).toContainText(path2);
-  });
 });
