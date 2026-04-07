@@ -1,7 +1,9 @@
-import express from 'express';
+import express, { Router } from 'express';
 import { asyncWrap } from '@caro/server/asyncWrap';
 
-const router = express.Router();
+type ApiResponse<T> = { ok: true; data: T } | { ok: false; error: { code: string; message: string; details?: unknown } };
+
+const router: Router = express.Router();
 
 /**
  * GET /api/v1/config
@@ -11,7 +13,7 @@ const router = express.Router();
  *   VALIDATE_REQUIRED_PARENT_TYPES — comma-separated, trimmed, empty strings filtered.
  *   VALIDATE_UNIQUE_PARENT_TYPES   — "true" (case-insensitive) → true, else false.
  */
-router.get('/', asyncWrap(async (req, res) => {
+router.get('/', asyncWrap(async (_req, res) => {
   const requiredParentTypes = (process.env.VALIDATE_REQUIRED_PARENT_TYPES || '')
     .split(',')
     .map(s => s.trim())
@@ -20,10 +22,11 @@ router.get('/', asyncWrap(async (req, res) => {
   const uniqueParentTypes =
     (process.env.VALIDATE_UNIQUE_PARENT_TYPES || '').toLowerCase() === 'true';
 
-  res.json({
+  const response: ApiResponse<{ requiredParentTypes: string[]; uniqueParentTypes: boolean }> = {
     ok: true,
     data: { requiredParentTypes, uniqueParentTypes },
-  });
+  };
+  res.json(response);
 }));
 
 export default router;

@@ -20,14 +20,14 @@ for (const varName of REQUIRED_ENV_VARS) {
 const PORT = process.env.PORT || 3001;
 
 // Initialize template index and start server
-async function start() {
+async function start(): Promise<void> {
   try {
     // Verify database connectivity
     try {
       await ping();
       console.log('[db] Connected to PostgreSQL (caro_dev)');
     } catch (err) {
-      console.error('[db] Failed to connect to PostgreSQL:', err.message);
+      console.error('[db] Failed to connect to PostgreSQL:', (err as Error).message);
       process.exit(1);
     }
 
@@ -35,7 +35,7 @@ async function start() {
     try {
       await runMigrations();
     } catch (err) {
-      console.error('Server startup aborted — migration failure:', err.message);
+      console.error('Server startup aborted — migration failure:', (err as Error).message);
       process.exit(1);
     }
 
@@ -48,7 +48,7 @@ async function start() {
       const interfaces = os.networkInterfaces();
       const localIP = Object.values(interfaces)
         .flat()
-        .find(i => i.family === 'IPv4' && !i.internal)?.address || 'localhost';
+        .find(i => i?.family === 'IPv4' && !i?.internal)?.address || 'localhost';
       console.log(`Tag Registry Server running at http://${localIP}:${PORT}`);
       console.log(`Templates directory: ${process.env.TEMPLATES_DIR}`);
       console.log(`Max tag path length: ${process.env.MAX_TAG_PATH_LENGTH || 100}`);

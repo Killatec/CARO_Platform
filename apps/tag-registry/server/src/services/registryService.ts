@@ -1,28 +1,41 @@
-import { getActiveTags, getRevisions, getRevisionTags, applyRegistryRevision } from '@caro/db';
+import {
+  getActiveTags,
+  getRevisions,
+  getRevisionTags,
+  applyRegistryRevision,
+} from '@caro/db';
+import type { ActiveTag, RevisionRow, RevisionTag, NewTagInput, ExistingTagInput, ApplyResult } from '@caro/db';
 import { resolveRegistry } from '../../../shared/index.js';
+import type { Template } from '../../../shared/index.js';
+
+// ── Return types ──────────────────────────────────────────────────────────────
+
+type ApplyRegistryResult =
+  | { ok: true; registry_rev: null; message: string }
+  | ({ ok: true } & ApplyResult);
+
+// ── Public API ────────────────────────────────────────────────────────────────
 
 /**
  * Returns the latest active (non-retired) registry row for each tag_id.
- *
- * @returns {Promise<Array<{tag_id, registry_rev, tag_path, data_type, is_setpoint, trends, meta}>>}
  */
-export async function getActiveRegistry() {
+export async function getActiveRegistry(): Promise<ActiveTag[]> {
   return getActiveTags();
 }
 
 export { getRevisions, getRevisionTags };
+export type { RevisionRow, RevisionTag };
 
 /**
  * Applies the resolved registry to the database inside a SERIALIZABLE transaction.
- *
- * @param {Map} templateMap - Map of template_name -> template object
- * @param {string} rootName - Name of the root template
- * @param {string} comment  - Description of this registry update
- * @returns {Promise<{ok, registry_rev, added, modified, retired, message?}>}
  */
-export async function applyRegistry(templateMap, rootName, comment) {
+export async function applyRegistry(
+  templateMap: Map<string, Template>,
+  rootName: string,
+  comment: string
+): Promise<ApplyRegistryResult> {
   // 1. Resolve proposed registry server-side — do not trust client-supplied data
-  const proposed = resolveRegistry(templateMap, rootName);
+  const proposed: NewTagInput[] = resolveRegistry(templateMap, rootName);
 
   // 2. Get current DB tags
   const dbTags = await getActiveTags();
@@ -31,9 +44,9 @@ export async function applyRegistry(templateMap, rootName, comment) {
   const dbByPath       = new Map(dbTags.map(t => [t.tag_path, t]));
   const proposedByPath = new Map(proposed.map(t => [t.tag_path, t]));
 
-  const added    = [];
-  const modified = [];
-  const retired  = [];
+  const added:    NewTagInput[]      = [];
+  const modified: ExistingTagInput[] = [];
+  const retired:  ExistingTagInput[] = [];
 
   for (const tag of proposed) {
     const dbTag = dbByPath.get(tag.tag_path);
@@ -61,11 +74,9 @@ export async function applyRegistry(templateMap, rootName, comment) {
   return { ok: true, ...result };
 }
 
-// ---------------------------------------------------------------------------
-// Server-side diff helpers (mirrors client diffRegistry.js logic)
-// ---------------------------------------------------------------------------
+// ── Private helpers ───────────────────────────────────────────────────────────
 
-function isModified(proposed, dbTag) {
+function isModified(proposed: NewTagInput, dbTag: ActiveTag): boolean {
   if (proposed.data_type   !== dbTag.data_type)              return true;
   if (proposed.is_setpoint !== dbTag.is_setpoint)            return true;
   if ((proposed.trends ?? false) !== (dbTag.trends ?? false)) return true;
@@ -73,7 +84,7 @@ function isModified(proposed, dbTag) {
   return false;
 }
 
-function deepEqual(a, b) {
+function deepEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if (Array.isArray(a) && Array.isArray(b)) {
     if (a.length !== b.length) return false;
@@ -83,18 +94,20 @@ function deepEqual(a, b) {
     return true;
   }
   if (isPlainObject(a) && isPlainObject(b)) {
-    const keysA = Object.keys(a);
-    const keysB = Object.keys(b);
+    const ao = a as Record<string, unknown>;
+    const bo = b as Record<string, unknown>;
+    const keysA = Object.keys(ao);
+    const keysB = Object.keys(bo);
     if (keysA.length !== keysB.length) return false;
     for (const key of keysA) {
-      if (!Object.prototype.hasOwnProperty.call(b, key)) return false;
-      if (!deepEqual(a[key], b[key])) return false;
+      if (!Object.prototype.hasOwnProperty.call(bo, key)) return false;
+      if (!deepEqual(ao[key], bo[key])) return false;
     }
     return true;
   }
   return false;
 }
 
-function isPlainObject(v) {
+function isPlainObject(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
 }

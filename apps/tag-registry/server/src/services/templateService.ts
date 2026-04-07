@@ -11,21 +11,81 @@ import {
   validateGraph,
   simulateCascade,
   applyFieldCascade,
-  ERROR_CODES
+  ERROR_CODES,
 } from '../../../shared/index.js';
+import type { Template } from '../../../shared/index.js';
+import { CaroError } from '@caro/server/errorHandler';
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+interface TemplateIndexEntry {
+  file_path: string;
+  hash: string;
+  template: Template;
+}
+
+export interface TemplateListItem {
+  template_name: string;
+  template_type: string;
+  file_path: string;
+}
+
+export interface TemplateWithHash {
+  template: Template;
+  hash: string;
+}
+
+export interface LoadRootResult {
+  root_template_name: string;
+  templates: Record<string, TemplateWithHash>;
+}
+
+export interface BatchChange {
+  template_name: string;
+  original_hash: string | null;
+  template: Template;
+}
+
+export interface BatchDeletion {
+  template_name: string;
+  original_hash: string;
+}
+
+type BatchSaveResult =
+  | { requires_confirmation: false; modified_files: string[]; deleted_files: string[] }
+  | { requires_confirmation: true; diff: unknown; affectedParents: string[] };
+
+interface AffectedParent {
+  template_name: string;
+  references_removed: number;
+}
+
+type DeleteTemplateResult =
+  | { requires_confirmation: true; affected_parents: AffectedParent[] }
+  | { requires_confirmation: false; deleted: true; affected_parents: AffectedParent[] };
+
+export interface ValidateAllResult {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
+// ── In-memory index ───────────────────────────────────────────────────────────
 
 // In-memory index: template_name -> { file_path, hash, template }
-let templateIndex = new Map();
+let templateIndex = new Map<string, TemplateIndexEntry>();
 
 // Get TEMPLATES_DIR from environment (function to defer until env is loaded)
-function getTemplatesDir() {
-  return process.env.TEMPLATES_DIR;
+function getTemplatesDir(): string {
+  return process.env.TEMPLATES_DIR as string;
 }
+
+// ── Index management ──────────────────────────────────────────────────────────
 
 /**
  * Initialize the template index by scanning TEMPLATES_DIR recursively
  */
-export async function initializeIndex() {
+export async function initializeIndex(): Promise<void> {
   const templatesDir = getTemplatesDir();
   if (!templatesDir) {
     throw new Error('TEMPLATES_DIR environment variable is not set');
@@ -39,7 +99,7 @@ export async function initializeIndex() {
 /**
  * Recursively scan a directory for .json template files
  */
-async function scanDirectory(dirPath) {
+async function scanDirectory(dirPath: string): Promise<void> {
   try {
     const entries = await readdir(dirPath, { withFileTypes: true });
 
@@ -51,7 +111,7 @@ async function scanDirectory(dirPath) {
       } else if (entry.isFile() && entry.name.endsWith('.json')) {
         try {
           const content = await readFile(fullPath, 'utf-8');
-          const template = JSON.parse(content);
+          const template = JSON.parse(content) as Template;
 
           if (template.template_name) {
             const hash = hashTemplate(template);
@@ -60,33 +120,35 @@ async function scanDirectory(dirPath) {
             templateIndex.set(template.template_name, {
               file_path: relativePath,
               hash,
-              template
+              template,
             });
           }
         } catch (err) {
-          console.warn(`Failed to load template from ${fullPath}:`, err.message);
+          console.warn(`Failed to load template from ${fullPath}:`, (err as Error).message);
         }
       }
     }
   } catch (err) {
-    if (err.code !== 'ENOENT') {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
       throw err;
     }
   }
 }
 
+// ── Service functions ─────────────────────────────────────────────────────────
+
 /**
  * List all templates, optionally filtered by type
  */
-export async function listTemplates(type) {
-  const results = [];
+export async function listTemplates(type?: string): Promise<TemplateListItem[]> {
+  const results: TemplateListItem[] = [];
 
   for (const [template_name, entry] of templateIndex.entries()) {
     if (!type || entry.template.template_type === type) {
       results.push({
         template_name,
         template_type: entry.template.template_type,
-        file_path: entry.file_path
+        file_path: entry.file_path,
       });
     }
   }
@@ -97,11 +159,11 @@ export async function listTemplates(type) {
 /**
  * Get a single template with hash
  */
-export async function getTemplate(template_name) {
+export async function getTemplate(template_name: string): Promise<TemplateWithHash> {
   const entry = templateIndex.get(template_name);
 
   if (!entry) {
-    const error = new Error(`Template "${template_name}" not found`);
+    const error = new Error(`Template "${template_name}" not found`) as CaroError;
     error.code = ERROR_CODES.TEMPLATE_NOT_FOUND;
     error.status = 404;
     throw error;
@@ -109,27 +171,27 @@ export async function getTemplate(template_name) {
 
   return {
     template: entry.template,
-    hash: entry.hash
+    hash: entry.hash,
   };
 }
 
 /**
  * Load full reachable template graph from a root
  */
-export async function loadRoot(template_name) {
+export async function loadRoot(template_name: string): Promise<LoadRootResult> {
   const entry = templateIndex.get(template_name);
 
   if (!entry) {
-    const error = new Error(`Root template "${template_name}" not found`);
+    const error = new Error(`Root template "${template_name}" not found`) as CaroError;
     error.code = ERROR_CODES.TEMPLATE_NOT_FOUND;
     error.status = 404;
     throw error;
   }
 
-  const reachable = new Map();
-  const visited = new Set();
+  const reachable = new Map<string, TemplateWithHash>();
+  const visited = new Set<string>();
 
-  function walk(name) {
+  function walk(name: string): void {
     if (visited.has(name)) {
       return;
     }
@@ -143,7 +205,7 @@ export async function loadRoot(template_name) {
 
     reachable.set(name, {
       template: templateEntry.template,
-      hash: templateEntry.hash
+      hash: templateEntry.hash,
     });
 
     // Recurse into children
@@ -160,18 +222,19 @@ export async function loadRoot(template_name) {
 
   return {
     root_template_name: template_name,
-    templates: Object.fromEntries(reachable)
+    templates: Object.fromEntries(reachable),
   };
 }
 
 /**
  * Batch save templates with hash checking, cascade confirmation, and pending deletions.
- * @param {Array} changes - Array of { template_name, original_hash, template }
- * @param {Array} deletions - Array of { template_name, original_hash } to delete atomically
- * @param {boolean} confirmed - Whether the user has confirmed cascade changes
  */
-export async function batchSave(changes, deletions = [], confirmed = false) {
-  const hasChanges = changes && changes.length > 0;
+export async function batchSave(
+  changes: BatchChange[],
+  deletions: BatchDeletion[] = [],
+  confirmed = false
+): Promise<BatchSaveResult> {
+  const hasChanges  = changes  && changes.length  > 0;
   const hasDeletions = deletions && deletions.length > 0;
 
   if (!hasChanges && !hasDeletions) {
@@ -186,7 +249,7 @@ export async function batchSave(changes, deletions = [], confirmed = false) {
       if (original_hash === null) {
         // Assert that this is a new template
         if (templateIndex.has(template_name)) {
-          const error = new Error(`Template "${template_name}" already exists`);
+          const error = new Error(`Template "${template_name}" already exists`) as CaroError;
           error.code = ERROR_CODES.TEMPLATE_NAME_CONFLICT;
           error.status = 409;
           throw error;
@@ -194,13 +257,13 @@ export async function batchSave(changes, deletions = [], confirmed = false) {
       } else {
         const entry = templateIndex.get(template_name);
         if (!entry) {
-          const error = new Error(`Template "${template_name}" not found`);
+          const error = new Error(`Template "${template_name}" not found`) as CaroError;
           error.code = ERROR_CODES.TEMPLATE_NOT_FOUND;
           error.status = 404;
           throw error;
         }
         if (entry.hash !== original_hash) {
-          const error = new Error(`Template "${template_name}" has been modified by another user. Please refresh and try again.`);
+          const error = new Error(`Template "${template_name}" has been modified by another user. Please refresh and try again.`) as CaroError;
           error.code = ERROR_CODES.STALE_TEMPLATE;
           error.status = 409;
           throw error;
@@ -214,13 +277,13 @@ export async function batchSave(changes, deletions = [], confirmed = false) {
     for (const { template_name, original_hash } of deletions) {
       const entry = templateIndex.get(template_name);
       if (!entry) {
-        const error = new Error(`Template "${template_name}" not found`);
+        const error = new Error(`Template "${template_name}" not found`) as CaroError;
         error.code = ERROR_CODES.TEMPLATE_NOT_FOUND;
         error.status = 404;
         throw error;
       }
       if (entry.hash !== original_hash) {
-        const error = new Error(`Template "${template_name}" has been modified by another user. Please refresh and try again.`);
+        const error = new Error(`Template "${template_name}" has been modified by another user. Please refresh and try again.`) as CaroError;
         error.code = ERROR_CODES.STALE_TEMPLATE;
         error.status = 409;
         throw error;
@@ -229,12 +292,12 @@ export async function batchSave(changes, deletions = [], confirmed = false) {
   }
 
   // Step 2: Build proposed template map (index + changes - deletions)
-  const deletionSet = new Set(hasDeletions ? deletions.map(d => d.template_name) : []);
+  const deletionSet = new Set<string>(hasDeletions ? deletions.map(d => d.template_name) : []);
 
-  const proposedMap = new Map(templateIndex);
+  const proposedMap = new Map<string, TemplateIndexEntry>(templateIndex);
   if (hasChanges) {
     for (const change of changes) {
-      proposedMap.set(change.template_name, { template: change.template, hash: null });
+      proposedMap.set(change.template_name, { template: change.template, hash: '', file_path: '' });
     }
   }
   for (const name of deletionSet) {
@@ -242,7 +305,7 @@ export async function batchSave(changes, deletions = [], confirmed = false) {
   }
 
   // Extract templates for validation
-  const proposedTemplates = new Map();
+  const proposedTemplates = new Map<string, Template>();
   for (const [name, entry] of proposedMap.entries()) {
     proposedTemplates.set(name, entry.template);
   }
@@ -251,7 +314,7 @@ export async function batchSave(changes, deletions = [], confirmed = false) {
   // reference a deleted template.
   const graphValidation = validateGraph(proposedTemplates);
   if (!graphValidation.valid) {
-    const error = new Error('Template graph validation failed');
+    const error = new Error('Template graph validation failed') as CaroError;
     error.code = ERROR_CODES.VALIDATION_ERROR;
     error.status = 422;
     error.details = graphValidation.errors;
@@ -259,7 +322,7 @@ export async function batchSave(changes, deletions = [], confirmed = false) {
   }
 
   // Step 4: Run simulateCascade on field changes to identify upstream parents
-  const currentTemplates = new Map();
+  const currentTemplates = new Map<string, Template>();
   for (const [name, entry] of templateIndex.entries()) {
     currentTemplates.set(name, entry.template);
   }
@@ -272,12 +335,12 @@ export async function batchSave(changes, deletions = [], confirmed = false) {
     return {
       requires_confirmation: true,
       diff: cascadeResult.diff,
-      affectedParents: cascadeResult.affectedParents
+      affectedParents: cascadeResult.affectedParents,
     };
   }
 
   // Step 6: Apply cascade updates to build final template set
-  let cascadedMap = new Map(currentTemplates);
+  let cascadedMap = new Map<string, Template>(currentTemplates);
   if (hasChanges) {
     for (const change of changes) {
       cascadedMap = applyFieldCascade(cascadedMap, change.template);
@@ -286,7 +349,7 @@ export async function batchSave(changes, deletions = [], confirmed = false) {
 
   // Collect all templates that changed (direct saves + cascade-updated parents),
   // excluding any that are being deleted.
-  const templatesToWrite = new Map();
+  const templatesToWrite = new Map<string, Template>();
   for (const [name, template] of cascadedMap.entries()) {
     if (!deletionSet.has(name) && template !== currentTemplates.get(name)) {
       templatesToWrite.set(name, template);
@@ -294,23 +357,23 @@ export async function batchSave(changes, deletions = [], confirmed = false) {
   }
 
   // Step 7: Write changed files atomically
-  const modifiedFiles = [];
+  const modifiedFiles: string[] = [];
 
   for (const [template_name, template] of templatesToWrite.entries()) {
     const existingEntry = templateIndex.get(template_name);
-    let filePath;
+    let filePath: string;
 
     if (existingEntry) {
       filePath = existingEntry.file_path;
     } else {
       // New template — determine file path based on template_type
-      const subdir = template.template_type === 'tag' ? 'tags' :
+      const subdir = template.template_type === 'tag'       ? 'tags'       :
                      template.template_type === 'parameter' ? 'parameters' : 'modules';
       filePath = join(subdir, `${template_name}.json`);
     }
 
     const fullPath = join(getTemplatesDir(), filePath);
-    const tmpPath = fullPath + '.tmp';
+    const tmpPath  = fullPath + '.tmp';
 
     const content = JSON.stringify(template, null, 2) + '\n';
     await writeFile(tmpPath, content, 'utf-8');
@@ -323,7 +386,7 @@ export async function batchSave(changes, deletions = [], confirmed = false) {
   }
 
   // Step 8: Delete files for pending deletions
-  const deletedFiles = [];
+  const deletedFiles: string[] = [];
 
   for (const { template_name } of (deletions || [])) {
     const entry = templateIndex.get(template_name);
@@ -345,11 +408,15 @@ export async function batchSave(changes, deletions = [], confirmed = false) {
 /**
  * Delete template and remove all references
  */
-export async function deleteTemplate(template_name, original_hash, confirmed = false) {
+export async function deleteTemplate(
+  template_name: string,
+  original_hash: string,
+  confirmed = false
+): Promise<DeleteTemplateResult> {
   const entry = templateIndex.get(template_name);
 
   if (!entry) {
-    const error = new Error(`Template "${template_name}" not found`);
+    const error = new Error(`Template "${template_name}" not found`) as CaroError;
     error.code = ERROR_CODES.TEMPLATE_NOT_FOUND;
     error.status = 404;
     throw error;
@@ -357,16 +424,14 @@ export async function deleteTemplate(template_name, original_hash, confirmed = f
 
   // Check hash
   if (entry.hash !== original_hash) {
-    const error = new Error(`Template "${template_name}" has been modified. Please refresh and try again.`);
+    const error = new Error(`Template "${template_name}" has been modified. Please refresh and try again.`) as CaroError;
     error.code = ERROR_CODES.STALE_TEMPLATE;
     error.status = 409;
     throw error;
   }
 
   // Find all templates that reference this one.
-  // This is intentionally separate from simulateCascade: deletion uses simple reference
-  // counting (how many children entries point to this template_name), not field cascade logic.
-  const affectedParents = [];
+  const affectedParents: AffectedParent[] = [];
 
   for (const [parentName, parentEntry] of templateIndex.entries()) {
     if (parentName === template_name) continue;
@@ -380,7 +445,7 @@ export async function deleteTemplate(template_name, original_hash, confirmed = f
       if (referencesCount > 0) {
         affectedParents.push({
           template_name: parentName,
-          references_removed: referencesCount
+          references_removed: referencesCount,
         });
       }
     }
@@ -390,28 +455,28 @@ export async function deleteTemplate(template_name, original_hash, confirmed = f
   if (!confirmed && affectedParents.length > 0) {
     return {
       requires_confirmation: true,
-      affected_parents: affectedParents
+      affected_parents: affectedParents,
     };
   }
 
   // Remove all references from affected parents
   for (const affected of affectedParents) {
-    const parentEntry = templateIndex.get(affected.template_name);
+    const parentEntry = templateIndex.get(affected.template_name)!;
     const parentTemplate = parentEntry.template;
 
     const updatedChildren = parentTemplate.children.filter(
       child => child.template_name !== template_name
     );
 
-    const updatedTemplate = {
+    const updatedTemplate: Template = {
       ...parentTemplate,
-      children: updatedChildren
+      children: updatedChildren,
     };
 
     // Write updated parent template
     const fullPath = join(getTemplatesDir(), parentEntry.file_path);
-    const tmpPath = fullPath + '.tmp';
-    const content = JSON.stringify(updatedTemplate, null, 2) + '\n';
+    const tmpPath  = fullPath + '.tmp';
+    const content  = JSON.stringify(updatedTemplate, null, 2) + '\n';
     await writeFile(tmpPath, content, 'utf-8');
     await rename(tmpPath, fullPath);
 
@@ -420,7 +485,7 @@ export async function deleteTemplate(template_name, original_hash, confirmed = f
     templateIndex.set(affected.template_name, {
       file_path: parentEntry.file_path,
       hash,
-      template: updatedTemplate
+      template: updatedTemplate,
     });
   }
 
@@ -434,26 +499,26 @@ export async function deleteTemplate(template_name, original_hash, confirmed = f
   return {
     requires_confirmation: false,
     deleted: true,
-    affected_parents: affectedParents
+    affected_parents: affectedParents,
   };
 }
 
 /**
  * Run full validation across all template files
  */
-export async function validateAll() {
-  const errors = [];
-  const warnings = [];
+export async function validateAll(): Promise<ValidateAllResult> {
+  const errors:   string[] = [];
+  const warnings: string[] = [];
 
   // Validate each template individually
-  for (const [template_name, entry] of templateIndex.entries()) {
+  for (const [, entry] of templateIndex.entries()) {
     const result = validateTemplate(entry.template);
     errors.push(...result.errors);
     warnings.push(...result.warnings);
   }
 
   // Validate the full graph
-  const templates = new Map();
+  const templates = new Map<string, Template>();
   for (const [name, entry] of templateIndex.entries()) {
     templates.set(name, entry.template);
   }
@@ -467,6 +532,6 @@ export async function validateAll() {
   return {
     valid,
     errors,
-    warnings
+    warnings,
   };
 }

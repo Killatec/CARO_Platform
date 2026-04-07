@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, writeFile, mkdir, rm, readFile, access } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { initializeIndex, getTemplate, batchSave } from '../src/services/templateService.js';
+import { initializeIndex, getTemplate, batchSave } from '../src/services/templateService.ts';
 import { ERROR_CODES } from '../../shared/index.js';
 
 async function makeTmpDir() {

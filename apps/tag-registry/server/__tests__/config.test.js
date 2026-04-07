@@ -3,14 +3,14 @@ import http from 'node:http';
 
 // Required because createApp() registers all routers, including those that
 // import these services. The config route itself touches no services.
-vi.mock('../src/services/registryService.js', () => ({
+vi.mock('../src/services/registryService.ts', () => ({
   getActiveRegistry: vi.fn(),
   applyRegistry:     vi.fn(),
   getRevisions:      vi.fn(),
   getRevisionTags:   vi.fn(),
 }));
 
-vi.mock('../src/services/templateService.js', () => ({
+vi.mock('../src/services/templateService.ts', () => ({
   initializeIndex: vi.fn(),
   listTemplates:   vi.fn(),
   getTemplate:     vi.fn(),
@@ -20,7 +20,7 @@ vi.mock('../src/services/templateService.js', () => ({
   deleteTemplate:  vi.fn(),
 }));
 
-import { createApp } from '../src/app.js';
+import { createApp } from '../src/app.ts';
 
 // ── HTTP server lifecycle ─────────────────────────────────────────────────────
 

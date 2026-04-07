@@ -2,14 +2,14 @@ import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vites
 import http from 'node:http';
 
 // Hoist mocks before any module resolution
-vi.mock('../src/services/registryService.js', () => ({
+vi.mock('../src/services/registryService.ts', () => ({
   getActiveRegistry: vi.fn(),
   applyRegistry:     vi.fn(),
   getRevisions:      vi.fn(),
   getRevisionTags:   vi.fn(),
 }));
 
-vi.mock('../src/services/templateService.js', () => ({
+vi.mock('../src/services/templateService.ts', () => ({
   initializeIndex: vi.fn(),
   listTemplates:   vi.fn(),
   getTemplate:     vi.fn(),
@@ -19,9 +19,9 @@ vi.mock('../src/services/templateService.js', () => ({
   deleteTemplate:  vi.fn(),
 }));
 
-import { createApp } from '../src/app.js';
-import * as registryService from '../src/services/registryService.js';
-import * as templateService from '../src/services/templateService.js';
+import { createApp } from '../src/app.ts';
+import * as registryService from '../src/services/registryService.ts';
+import * as templateService from '../src/services/templateService.ts';
 import { ERROR_CODES } from '../../shared/index.js';
 
 // ── HTTP server lifecycle ─────────────────────────────────────────────────────

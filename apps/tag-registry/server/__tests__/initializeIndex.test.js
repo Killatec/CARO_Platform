@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, writeFile, mkdir, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { initializeIndex, listTemplates, getTemplate } from '../src/services/templateService.js';
+import { initializeIndex, listTemplates, getTemplate } from '../src/services/templateService.ts';
 
 async function makeTmpDir() {
   return mkdtemp(join(tmpdir(), 'caro-test-'));

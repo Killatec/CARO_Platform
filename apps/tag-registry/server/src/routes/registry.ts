@@ -1,18 +1,22 @@
-import express from 'express';
+import express, { Router } from 'express';
 import { asyncWrap } from '@caro/server/asyncWrap';
+import { CaroError } from '@caro/server/errorHandler';
 import { getActiveRegistry, applyRegistry, getRevisions, getRevisionTags } from '../services/registryService.js';
 import { loadRoot } from '../services/templateService.js';
 import { ERROR_CODES } from '../../../shared/index.js';
 
-const router = express.Router();
+type ApiResponse<T> = { ok: true; data: T } | { ok: false; error: { code: string; message: string; details?: unknown } };
+
+const router: Router = express.Router();
 
 /**
  * GET /api/v1/registry
  * Returns the current active (non-retired) registry rows from the database.
  */
-router.get('/', asyncWrap(async (req, res) => {
+router.get('/', asyncWrap(async (_req, res) => {
   const tags = await getActiveRegistry();
-  res.json({ ok: true, data: { tags } });
+  const response: ApiResponse<{ tags: typeof tags }> = { ok: true, data: { tags } };
+  res.json(response);
 }));
 
 /**
@@ -22,16 +26,16 @@ router.get('/', asyncWrap(async (req, res) => {
  * Body: { rootName: string, comment: string }
  */
 router.post('/apply', asyncWrap(async (req, res) => {
-  const { rootName, comment } = req.body;
+  const { rootName, comment } = req.body as { rootName: unknown; comment: unknown };
 
   if (!rootName || typeof rootName !== 'string' || rootName.trim() === '') {
-    const err = new Error('rootName is required');
+    const err = new Error('rootName is required') as CaroError;
     err.status = 400;
     err.code = ERROR_CODES.VALIDATION_ERROR;
     throw err;
   }
   if (!comment || typeof comment !== 'string' || comment.trim() === '') {
-    const err = new Error('comment is required');
+    const err = new Error('comment is required') as CaroError;
     err.status = 400;
     err.code = ERROR_CODES.VALIDATION_ERROR;
     throw err;
@@ -46,16 +50,18 @@ router.post('/apply', asyncWrap(async (req, res) => {
   );
 
   const result = await applyRegistry(templateMap, rootName, comment.trim());
-  res.json({ ok: true, data: result });
+  const response: ApiResponse<typeof result> = { ok: true, data: result };
+  res.json(response);
 }));
 
 /**
  * GET /api/v1/registry/revisions
  * Returns all registry revisions ordered by registry_rev DESC.
  */
-router.get('/revisions', asyncWrap(async (req, res) => {
+router.get('/revisions', asyncWrap(async (_req, res) => {
   const revisions = await getRevisions();
-  res.json({ ok: true, data: { revisions } });
+  const response: ApiResponse<{ revisions: typeof revisions }> = { ok: true, data: { revisions } };
+  res.json(response);
 }));
 
 /**
@@ -63,21 +69,22 @@ router.get('/revisions', asyncWrap(async (req, res) => {
  * Returns all tag_registry rows for a given revision.
  */
 router.get('/revisions/:rev', asyncWrap(async (req, res) => {
-  const rev = parseInt(req.params.rev, 10);
+  const rev = parseInt(req.params.rev as string, 10);
   if (isNaN(rev)) {
-    const err = new Error('rev must be an integer');
+    const err = new Error('rev must be an integer') as CaroError;
     err.status = 400;
     err.code = ERROR_CODES.VALIDATION_ERROR;
     throw err;
   }
   const tags = await getRevisionTags(rev);
   if (tags === null) {
-    const err = new Error(`No tags found for revision ${rev}`);
+    const err = new Error(`No tags found for revision ${rev}`) as CaroError;
     err.status = 404;
     err.code = 'NOT_FOUND';
     throw err;
   }
-  res.json({ ok: true, data: { tags } });
+  const response: ApiResponse<{ tags: typeof tags }> = { ok: true, data: { tags } };
+  res.json(response);
 }));
 
 export default router;

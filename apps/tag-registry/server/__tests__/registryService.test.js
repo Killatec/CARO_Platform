@@ -8,7 +8,7 @@ vi.mock('@caro/db', () => ({
 }));
 
 import { getActiveTags } from '@caro/db';
-import { getActiveRegistry, getRevisions, getRevisionTags } from '../src/services/registryService.js';
+import { getActiveRegistry, getRevisions, getRevisionTags } from '../src/services/registryService.ts';
 
 beforeEach(() => {
   vi.clearAllMocks();
