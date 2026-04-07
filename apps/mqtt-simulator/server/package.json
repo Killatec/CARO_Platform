@@ -4,8 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node index.js",
-    "dev": "nodemon --ext js --watch . index.js"
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "nodemon --ext ts,json --watch . --exec \"npx tsx index.ts\""
   },
   "dependencies": {
     "@caro/db": "*",

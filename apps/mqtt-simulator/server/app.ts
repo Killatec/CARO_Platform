@@ -1,9 +1,9 @@
-import express from 'express';
+import express, { Express } from 'express';
 import cors from 'cors';
 import simulatorRouter from './routes/simulator.js';
 import { errorHandler } from '@caro/server/errorHandler';
 
-export function createApp() {
+export function createApp(): Express {
   const app = express();
 
   app.use(cors());

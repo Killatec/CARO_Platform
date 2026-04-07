@@ -223,10 +223,37 @@ None of the HMI tables (users through audit_log) have been created.
 
 ---
 
-## TODO — Migrate apps/mqtt-simulator to TypeScript
+## Delta: tag-registry shared package TypeScript migration
 
-All source files in `apps/mqtt-simulator/server/src/` and `apps/mqtt-simulator/client/src/` to be converted to TypeScript. Deferred until after HMI is stable.
+**Date:** 2026-04-07
+**Status:** Complete
 
-**Status:** Open (deferred)
+- All 10 source files migrated from `.js` → `.ts`: `index`, `constants`, `utils`, `hashTemplate`, `validateTemplate`, `validateGraph`, `simulateCascade`, `applyFieldCascade`, `validateParentTypes`, `resolveRegistry`; `types.ts` added as new centralised interface file
+- `types.ts` — all shared types exported from one place: `FieldDef`, `ChildRef`, `Template`, `TemplateEntry`, `ValidationMessage`, `ValidationResult`, `ProposedChange`, `CascadeDiff`, `CascadeResult`, `AffectedParent`, `MetaLevel`, `ResolvedTag`, plus `extractTemplate` helper; `tsc` `strict: true`, zero errors
+- `tsconfig.json` created (`extends ../../../tsconfig.base.json`, `outDir: dist`, `rootDir: .`, `types: ["node"]`); `types: ["node"]` required because `hashTemplate.ts` imports Node's `crypto` and `@types/node` lives at workspace root
+- `package.json` renamed from `@caro/tag-registry-shared-tests` → `@caro/tag-registry-shared`; `main`/`types`/`exports` fields added pointing to `dist/`; `build: tsc` script added
+- `shared/index.d.ts` and `shared/utils.d.ts` declaration shims deleted — replaced by compiled `dist/` declarations
+- `apps/tag-registry/server/shared/index.d.ts` server-side shim was never created (confirmed absent) — no removal needed; server imports from shared now resolve via `dist/`
+- All 8 test files in `__tests__/` updated: imports changed from `'../xxx.js'` → `'../xxx.ts'`
+- **Vitest regression fix:** added `resolve-js-to-ts` plugin to `apps/tag-registry/server/vitest.config.js` — Vite's resolver does not follow NodeNext's `.js`→`.ts` fallback convention; without the plugin, server tests that import `../../shared/index.js` (NodeNext-required extension) fail to resolve after shared's `.js` files were deleted; plugin intercepts relative `.js` imports and redirects to the `.ts` source when it exists
+- 125 shared unit tests passing; full platform baseline: 330 unit + 207 E2E = 537 tests, 0 failures
+
+---
+
+## Delta: MQTT Simulator TypeScript migration
+
+**Date:** 2026-04-07
+**Status:** Complete
+
+- **Server** (`apps/mqtt-simulator/server/`): all 7 source files migrated to `.ts`, `tsc --noEmit` zero errors, `strict: true`
+  - Typed: `MqttClient`, `ProtoTag`, `SimTag`, `LogEntry`, `ModuleStatus`, `SimulatorStatus`
+  - `types/cors.d.ts` shim added (same pattern as tag-registry server — no `@types/cors` available)
+  - `package.json`: `build: tsc`, `start: node dist/index.js`, `dev` uses `tsx`
+- **Client** (`apps/mqtt-simulator/client/`): all 5 source files migrated to `.ts`/`.tsx`, `tsc --noEmit` zero errors, `strict: true`
+  - Typed: `SimulatorStore`, `SimulatorStatus`, `ModuleStatus`, `LogEntry`, all API calls
+  - `vite.config.js` → `vite.config.ts`
+  - `package.json` build script changed to `tsc && vite build`
+- Both servers start cleanly after migration
+- No tests exist for MQTT Simulator by intentional design
 
 ---

@@ -1,18 +1,18 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Button, Badge } from '@caro/ui/primitives';
 import { useSimulatorStore } from '../stores/useSimulatorStore.js';
-import { getStatus, startSim, stopSim, stopModuleTelemetry, startModuleTelemetry, enableModuleDelta, disableModuleDelta, enableModuleProtobuf, disableModuleProtobuf, getLogs, requestSnapshot, injectSetValues } from '../api/simulator.js';
+import { getStatus, startSim, stopSim, stopModuleTelemetry, startModuleTelemetry, enableModuleDelta, disableModuleDelta, enableModuleProtobuf, disableModuleProtobuf, getLogs, requestSnapshot, injectSetValues, ModuleStatus, LogEntry } from '../api/simulator.js';
 
-const STATUS_POLL_MS = 200;
-const LOG_POLL_MS    = 2000;
-const SIM_INTERVAL_MS  = 100;
+const STATUS_POLL_MS  = 200;
+const LOG_POLL_MS     = 2000;
+const SIM_INTERVAL_MS = 100;
 
-export function SimulatorPanel() {
+export const SimulatorPanel: React.FC = () => {
   const { running, modules, error, setStatus, setError } = useSimulatorStore();
-  const [busy, setBusy]   = useState(false);
-  const [logs, setLogs]   = useState([]);
-  const logsEndRef        = useRef(null);
-  const userScrolledRef   = useRef(false);
+  const [busy, setBusy] = useState<boolean>(false);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const logsEndRef      = useRef<HTMLDivElement | null>(null);
+  const userScrolledRef = useRef<boolean>(false);
 
   // Poll status every 2 s
   useEffect(() => {
@@ -23,7 +23,7 @@ export function SimulatorPanel() {
         const data = await getStatus();
         if (!cancelled) setStatus(data);
       } catch (err) {
-        if (!cancelled) setError(err.message);
+        if (!cancelled) setError((err as Error).message);
       }
     }
 
@@ -64,29 +64,29 @@ export function SimulatorPanel() {
       const data = await getStatus();
       setStatus(data);
     } catch (err) {
-      setError(err.message);
+      setError((err as Error).message);
     } finally {
       setBusy(false);
     }
   }
 
-  async function handleRequestSnapshot(module) {
+  async function handleRequestSnapshot(module: ModuleStatus) {
     try {
       await requestSnapshot(module.module_id);
     } catch (err) {
-      setError(err.message);
+      setError((err as Error).message);
     }
   }
 
-  async function handleInjectSetValues(module) {
+  async function handleInjectSetValues(module: ModuleStatus) {
     try {
       await injectSetValues(module.module_id);
     } catch (err) {
-      setError(err.message);
+      setError((err as Error).message);
     }
   }
 
-  async function handleProtobufToggle(module) {
+  async function handleProtobufToggle(module: ModuleStatus) {
     try {
       if (module.protobuf) {
         await disableModuleProtobuf(module.module_id);
@@ -96,11 +96,11 @@ export function SimulatorPanel() {
       const data = await getStatus();
       setStatus(data);
     } catch (err) {
-      setError(err.message);
+      setError((err as Error).message);
     }
   }
 
-  async function handleDeltaToggle(module) {
+  async function handleDeltaToggle(module: ModuleStatus) {
     try {
       if (module.delta) {
         await disableModuleDelta(module.module_id);
@@ -110,11 +110,11 @@ export function SimulatorPanel() {
       const data = await getStatus();
       setStatus(data);
     } catch (err) {
-      setError(err.message);
+      setError((err as Error).message);
     }
   }
 
-  async function handleModuleToggle(module) {
+  async function handleModuleToggle(module: ModuleStatus) {
     try {
       if (module.active) {
         await stopModuleTelemetry(module.module_id);
@@ -124,7 +124,7 @@ export function SimulatorPanel() {
       const data = await getStatus();
       setStatus(data);
     } catch (err) {
-      setError(err.message);
+      setError((err as Error).message);
     }
   }
 
@@ -135,7 +135,7 @@ export function SimulatorPanel() {
       const data = await getStatus();
       setStatus(data);
     } catch (err) {
-      setError(err.message);
+      setError((err as Error).message);
     } finally {
       setBusy(false);
     }
@@ -280,5 +280,4 @@ export function SimulatorPanel() {
       </main>
     </div>
   );
-}
-
+};

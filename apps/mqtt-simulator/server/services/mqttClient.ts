@@ -1,13 +1,13 @@
-import mqtt from 'mqtt';
+import mqtt, { MqttClient } from 'mqtt';
 
 // Spec: CARO_MQTT_Spec v1.8 §2.1
 // cleanSession=true, no retained messages, anonymous (dev)
 const BROKER_URL = process.env.MQTT_BROKER_URL ?? 'mqtt://localhost:1883';
 const CLIENT_ID  = process.env.MQTT_CLIENT_ID  ?? 'caro-simulator';
 
-let client = null;
+let client: MqttClient | null = null;
 
-export function connect() {
+export function connect(): MqttClient {
   if (client) return client;
 
   client = mqtt.connect(BROKER_URL, {
@@ -28,7 +28,7 @@ export function connect() {
     console.log('[MQTT] Reconnecting…');
   });
 
-  client.on('error', (err) => {
+  client.on('error', (err: Error) => {
     console.error('[MQTT] Error:', err.message);
   });
 
@@ -39,7 +39,7 @@ export function connect() {
   return client;
 }
 
-export function disconnect() {
+export function disconnect(): void {
   if (!client) return;
   client.end(false, {}, () => {
     console.log('[MQTT] Disconnected (graceful).');
@@ -47,6 +47,6 @@ export function disconnect() {
   });
 }
 
-export function getClient() {
+export function getClient(): MqttClient | null {
   return client;
 }

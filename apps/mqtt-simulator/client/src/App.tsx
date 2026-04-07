@@ -1,8 +1,6 @@
 import React from 'react';
 import { SimulatorPanel } from './components/SimulatorPanel.jsx';
 
-function App() {
-  return <SimulatorPanel />;
-}
+const App: React.FC = () => <SimulatorPanel />;
 
 export default App;

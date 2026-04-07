@@ -1,10 +1,10 @@
-// simulatorService.js
+// simulatorService.ts
 // Simulates field modules publishing telemetry per CARO_MQTT_Spec v1.8 §5.1 (JSON mode).
-// Tags are loaded from PostgreSQL at start() time via registry.js.
+// Tags are loaded from PostgreSQL at start() time via registry.ts.
 
 import { connect, getClient } from './mqttClient.js';
-import { loadTagRegistry } from './registry.js';
-import { loadProto, encodeProto } from './protobuf.js';
+import { loadTagRegistry, SimTag } from './registry.js';
+import { loadProto, encodeProto, ProtoTag } from './protobuf.js';
 
 const SINE_PERIOD_MS = 30_000; // §7: periodMs = SINE_PERIOD_S * 1000
 
@@ -12,10 +12,17 @@ const SINE_PERIOD_MS = 30_000; // §7: periodMs = SINE_PERIOD_S * 1000
 // Log buffer
 // ---------------------------------------------------------------------------
 const LOG_BUFFER_SIZE = Number(process.env.LOG_BUFFER_SIZE) || 200;
-const logBuffer = [];
 
-export function log(level, msg) {
-  const entry = { ts: new Date().toISOString(), level, msg };
+export interface LogEntry {
+  ts: string;
+  level: string;
+  msg: string;
+}
+
+const logBuffer: LogEntry[] = [];
+
+export function log(level: string, msg: string): void {
+  const entry: LogEntry = { ts: new Date().toISOString(), level, msg };
   logBuffer.push(entry);
   if (logBuffer.length > LOG_BUFFER_SIZE) logBuffer.shift();
   if (level === 'ERROR') console.error(msg);
@@ -26,43 +33,67 @@ export function log(level, msg) {
 // ---------------------------------------------------------------------------
 // Runtime state — populated by start()
 // ---------------------------------------------------------------------------
-let tags            = [];   // flat SimTag[] loaded from DB
-let moduleIds       = [];   // derived unique module_ids
+interface SimTagState {
+  simValue: number | boolean | string;
+  simT: number;
+  lastPublishedValue: number | boolean | string | undefined;
+  previousValue: number | boolean | string | undefined;
+}
+
+export interface ModuleStatus {
+  module_id: string;
+  active: boolean;
+  tag_count: number;
+  bytes: number;
+  delta: boolean;
+  protobuf: boolean;
+}
+
+export interface SimulatorStatus {
+  running: boolean;
+  intervalMs: number | null;
+  modules: ModuleStatus[];
+  uptime_s: number;
+  tickCount: number;
+}
+
+let tags: SimTag[]      = [];   // flat SimTag[] loaded from DB
+let moduleIds: string[] = [];   // derived unique module_ids
 
 // { tag_id -> { simValue, simT, lastPublishedValue } }
-const simState      = new Map();
+const simState: Map<number, SimTagState> = new Map();
 
 // module_ids currently transmitting telemetry — populated at start(), cleared at stop()
-const activeModules      = new Set();
+const activeModules: Set<string>      = new Set();
 
 // module_ids publishing only changed tags — empty on startup (full publish mode)
-const deltaMode          = new Set();
+const deltaMode: Set<string>          = new Set();
 
 // module_ids publishing in Protobuf encoding — empty on startup (JSON mode)
-const protobufMode       = new Set();
+const protobufMode: Set<string>       = new Set();
 
 // module_id -> number of tags included in the last telemetry publish
-const lastPublishedCount = new Map();
+const lastPublishedCount: Map<string, number> = new Map();
 
 // module_id -> byte size of last published telemetry payload
-const lastPublishedBytes = new Map();
+const lastPublishedBytes: Map<string, number> = new Map();
 
 // command_id deduplication — 60s rolling TTL
 const DEDUP_TTL_MS   = 60_000;
-const seenCommandIds = new Set();
+const seenCommandIds: Set<string> = new Set();
 
-let timer           = null;
+let timer: ReturnType<typeof setInterval> | null = null;
 let tickCount       = 0;
-let startedAt       = null;
-let currentInterval = null;
+let startedAt: number | null = null;
+let currentInterval: number | null = null;
 
 // ---------------------------------------------------------------------------
 // Init simulation values for each tag
 // ---------------------------------------------------------------------------
-function initSimState() {
+function initSimState(): void {
   simState.clear();
   for (const tag of tags) {
-    let simValue;
+    let simValue: number | boolean | string;
     if (tag.is_setpoint) {
       simValue = tag.data_type === 'bool' ? false
                : tag.data_type === 'str'  ? ''
@@ -80,7 +111,7 @@ function initSimState() {
 // ---------------------------------------------------------------------------
 // Per-tick value update (monitor tags only — setpoints change via SET_VALUES)
 // ---------------------------------------------------------------------------
-function advanceTag(tag, state, deltaMs) {
+function advanceTag(tag: SimTag, state: SimTagState, deltaMs: number): void {
   if (tag.is_setpoint) return;
 
   switch (tag.data_type) {
@@ -107,11 +138,11 @@ function advanceTag(tag, state, deltaMs) {
 // but publishing every tick simplifies the simulator for dev use and ensures
 // consumers always have the current setpoint value.
 // ---------------------------------------------------------------------------
-function buildMessage(moduleId) {
-  const tagValues = [];
+function buildMessage(moduleId: string): { timestamp: number; status: string; tags: { tag_id: number; value: number | boolean | string }[] } {
+  const tagValues: { tag_id: number; value: number | boolean | string }[] = [];
   for (const tag of tags) {
     if (tag.module_id !== moduleId) continue;
-    const state = simState.get(tag.tag_id);
+    const state = simState.get(tag.tag_id)!;
 
     // Publish all tags unconditionally.
     // On-change-only for setpoints commented out per 2026-04-03 decision:
@@ -132,21 +163,21 @@ function buildMessage(moduleId) {
 // ---------------------------------------------------------------------------
 // Immediate publish for one module (used by command handler)
 // ---------------------------------------------------------------------------
-function publishNow(moduleId) {
+function publishNow(moduleId: string): void {
   const client = getClient();
   if (!client?.connected) return;
 
   if (protobufMode.has(moduleId)) {
-    const richTags = tags
+    const richTags: ProtoTag[] = tags
       .filter(t => t.module_id === moduleId)
-      .map(t => ({ tag_id: t.tag_id, data_type: t.data_type, simValue: simState.get(t.tag_id).simValue }));
+      .map(t => ({ tag_id: t.tag_id, data_type: t.data_type, simValue: simState.get(t.tag_id)!.simValue }));
     lastPublishedCount.set(moduleId, richTags.length);
     try {
       const buf = encodeProto(moduleId, richTags, 'ONLINE');
       lastPublishedBytes.set(moduleId, buf.length);
       client.publish(`caro/${moduleId}/telemetry`, buf, { qos: 0, retain: false });
     } catch (err) {
-      log('ERROR', `[SIM] Proto encode failed for ${moduleId}: ${err.message}`);
+      log('ERROR', `[SIM] Proto encode failed for ${moduleId}: ${(err as Error).message}`);
     }
   } else {
     const msg = buildMessage(moduleId);
@@ -161,12 +192,12 @@ function publishNow(moduleId) {
 // Command handler — SET_VALUES, REQUEST_SNAPSHOT, RESET (§6)
 // Spec: caro/{module_id}/cmd QoS1; ACK to caro/{module_id}/cmd_ack QoS1
 // ---------------------------------------------------------------------------
-function handleCommand(topic, rawMessage) {
+function handleCommand(topic: string, rawMessage: Buffer): void {
   const parts = topic.split('/');
   if (parts.length !== 3 || parts[2] !== 'cmd') return;
   const moduleId = parts[1];
 
-  let cmd;
+  let cmd: { command_id?: string; command_type?: string; payload?: { values?: { tag_id: number; value: number | boolean | string }[] } };
   try {
     cmd = JSON.parse(rawMessage.toString());
   } catch {
@@ -192,7 +223,7 @@ function handleCommand(topic, rawMessage) {
 
   log('INFO', `[SIM] CMD ${command_type} ← ${moduleId} (id: ${command_id})`);
 
-  const results = [];
+  const results: { tag_id: number; accepted: boolean; rejection_code?: string }[] = [];
 
   if (command_type === 'SET_VALUES') {
     for (const { tag_id, value } of payload?.values ?? []) {
@@ -207,7 +238,7 @@ function handleCommand(topic, rawMessage) {
         results.push({ tag_id, accepted: false, rejection_code: 'UNKNOWN_TAG' });
         continue;
       }
-      simState.get(tag.tag_id).simValue = value;
+      simState.get(tag.tag_id)!.simValue = value;
       log('INFO', `[SIM] SET_VALUES: tag_id ${tag_id} (${tag.tag_path}) → ${value}`);
       results.push({ tag_id, accepted: true });
     }
@@ -226,17 +257,17 @@ function handleCommand(topic, rawMessage) {
     ts_utc_ms: Date.now(),
     results,
   };
-  getClient().publish(`caro/${moduleId}/cmd_ack`, JSON.stringify(ack), { qos: 1, retain: false });
+  getClient()!.publish(`caro/${moduleId}/cmd_ack`, JSON.stringify(ack), { qos: 1, retain: false });
 }
 
 // ---------------------------------------------------------------------------
 // Tick
 // ---------------------------------------------------------------------------
-function tick(intervalMs) {
+function tick(intervalMs: number): void {
   tickCount++;
 
   for (const tag of tags) {
-    advanceTag(tag, simState.get(tag.tag_id), intervalMs);
+    advanceTag(tag, simState.get(tag.tag_id)!, intervalMs);
   }
 
   const client = getClient();
@@ -249,11 +280,11 @@ function tick(intervalMs) {
     if (!activeModules.has(moduleId)) continue;
 
     if (deltaMode.has(moduleId)) {
-      const tagValues = [];
-      const richTags  = [];
+      const tagValues: { tag_id: number; value: number | boolean | string }[] = [];
+      const richTags: ProtoTag[]  = [];
       for (const tag of tags) {
         if (tag.module_id !== moduleId) continue;
-        const state = simState.get(tag.tag_id);
+        const state = simState.get(tag.tag_id)!;
         if (state.simValue !== state.previousValue) {
           tagValues.push({ tag_id: tag.tag_id, value: state.simValue });
           richTags.push({ tag_id: tag.tag_id, data_type: tag.data_type, simValue: state.simValue });
@@ -261,7 +292,7 @@ function tick(intervalMs) {
       }
       for (const tag of tags) {
         if (tag.module_id !== moduleId) continue;
-        simState.get(tag.tag_id).previousValue = simState.get(tag.tag_id).simValue;
+        simState.get(tag.tag_id)!.previousValue = simState.get(tag.tag_id)!.simValue;
       }
       lastPublishedCount.set(moduleId, tagValues.length);
       if (protobufMode.has(moduleId)) {
@@ -269,7 +300,7 @@ function tick(intervalMs) {
           const buf = encodeProto(moduleId, richTags, 'ONLINE');
           lastPublishedBytes.set(moduleId, buf.length);
           client.publish(`caro/${moduleId}/telemetry`, buf, { qos: 0, retain: false });
-        } catch (err) { log('ERROR', `[SIM] Proto encode failed for ${moduleId}: ${err.message}`); }
+        } catch (err) { log('ERROR', `[SIM] Proto encode failed for ${moduleId}: ${(err as Error).message}`); }
       } else {
         const json = JSON.stringify({ timestamp: Date.now(), status: 'ONLINE', tags: tagValues });
         lastPublishedBytes.set(moduleId, Buffer.byteLength(json));
@@ -277,15 +308,15 @@ function tick(intervalMs) {
       }
     } else {
       if (protobufMode.has(moduleId)) {
-        const richTags = tags
+        const richTags: ProtoTag[] = tags
           .filter(t => t.module_id === moduleId)
-          .map(t => ({ tag_id: t.tag_id, data_type: t.data_type, simValue: simState.get(t.tag_id).simValue }));
+          .map(t => ({ tag_id: t.tag_id, data_type: t.data_type, simValue: simState.get(t.tag_id)!.simValue }));
         lastPublishedCount.set(moduleId, richTags.length);
         try {
           const buf = encodeProto(moduleId, richTags, 'ONLINE');
           lastPublishedBytes.set(moduleId, buf.length);
           client.publish(`caro/${moduleId}/telemetry`, buf, { qos: 0, retain: false });
-        } catch (err) { log('ERROR', `[SIM] Proto encode failed for ${moduleId}: ${err.message}`); }
+        } catch (err) { log('ERROR', `[SIM] Proto encode failed for ${moduleId}: ${(err as Error).message}`); }
       } else {
         const msg = buildMessage(moduleId);
         const json = JSON.stringify(msg);
@@ -305,13 +336,13 @@ function tick(intervalMs) {
  * Load tags from DB, connect to MQTT, start telemetry loop.
  * Throws if the DB query fails or returns no tags.
  */
-export async function start(intervalMs = 1000) {
+export async function start(intervalMs = 1000): Promise<void> {
   if (timer) { log('WARN', '[SIM] Already running.'); return; }
 
   try {
     await loadProto();
   } catch (err) {
-    log('ERROR', `[SIM] Failed to load Protobuf schema: ${err.message}`);
+    log('ERROR', `[SIM] Failed to load Protobuf schema: ${(err as Error).message}`);
     throw err;
   }
 
@@ -330,7 +361,7 @@ export async function start(intervalMs = 1000) {
 
   const doStart = () => {
     client.subscribe('caro/+/cmd', { qos: 1 }, (err) => {
-      if (err) log('ERROR', `[SIM] Failed to subscribe to cmd topics: ${err.message}`);
+      if (err) log('ERROR', `[SIM] Failed to subscribe to cmd topics: ${(err as Error).message}`);
       else log('INFO', '[SIM] Subscribed to caro/+/cmd');
     });
     client.on('message', handleCommand);
@@ -347,7 +378,7 @@ export async function start(intervalMs = 1000) {
   }
 }
 
-export function stop() {
+export function stop(): void {
   if (!timer) return;
   clearInterval(timer);
   const client = getClient();
@@ -369,7 +400,7 @@ export function stop() {
   log('INFO', '[SIM] Stopped.');
 }
 
-export function getStatus() {
+export function getStatus(): SimulatorStatus {
   return {
     running:     timer !== null,
     intervalMs:  currentInterval,
@@ -386,39 +417,39 @@ export function getStatus() {
   };
 }
 
-export function getLogs() {
+export function getLogs(): LogEntry[] {
   return logBuffer.slice();
 }
 
-export function isKnownModule(moduleId) {
+export function isKnownModule(moduleId: string): boolean {
   return moduleIds.includes(moduleId);
 }
 
-export function activateModule(moduleId) {
+export function activateModule(moduleId: string): void {
   activeModules.add(moduleId);
 }
 
-export function deactivateModule(moduleId) {
+export function deactivateModule(moduleId: string): void {
   activeModules.delete(moduleId);
 }
 
-export function activateDeltaMode(moduleId) {
+export function activateDeltaMode(moduleId: string): void {
   deltaMode.add(moduleId);
 }
 
-export function deactivateDeltaMode(moduleId) {
+export function deactivateDeltaMode(moduleId: string): void {
   deltaMode.delete(moduleId);
 }
 
-export function activateProtobuf(moduleId) {
+export function activateProtobuf(moduleId: string): void {
   protobufMode.add(moduleId);
 }
 
-export function deactivateProtobuf(moduleId) {
+export function deactivateProtobuf(moduleId: string): void {
   protobufMode.delete(moduleId);
 }
 
-export function publishSnapshot(moduleId) {
+export function publishSnapshot(moduleId: string): void {
   if (!isKnownModule(moduleId)) {
     throw new Error(`Module ${moduleId} not found.`);
   }
@@ -426,7 +457,7 @@ export function publishSnapshot(moduleId) {
   log('INFO', `[SIM] Snapshot published → ${moduleId}`);
 }
 
-export function injectSetValues(moduleId) {
+export function injectSetValues(moduleId: string): void {
   if (!isKnownModule(moduleId)) {
     throw new Error(`Module ${moduleId} not found.`);
   }
@@ -438,7 +469,7 @@ export function injectSetValues(moduleId) {
 
   const STR_VALUES = ['sim', 'test', 'auto', 'manual'];
   const values = setpointTags.map(tag => {
-    let value;
+    let value: number | boolean | string;
     switch (tag.data_type) {
       case 'f64':  value = Math.round(Math.random() * 10000) / 100; break;
       case 'i32':  value = Math.floor(Math.random() * 101); break;
@@ -450,7 +481,7 @@ export function injectSetValues(moduleId) {
   });
 
   for (const { tag_id, value } of values) {
-    simState.get(tag_id).simValue = value;
+    simState.get(tag_id)!.simValue = value;
   }
 
   log('INFO', `[SIM] Change Sets → ${moduleId}: ${values.length} setpoint tags randomized`);

@@ -12,4 +12,4 @@ Server: port 3002 | Client: port 5174
 
 ## Hard constraints
 
-- **Language:** This app is JavaScript. TypeScript migration is tracked in docs/platform_deltas.md.
+- **Language:** This app is TypeScript. Both server and client are fully migrated. `tsc --noEmit` must stay clean in both `server/` and `client/`.
