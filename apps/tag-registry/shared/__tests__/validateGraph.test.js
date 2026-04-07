@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { validateGraph } from '../validateGraph.js';
-import { ERROR_CODES } from '../constants.js';
+import { validateGraph } from '../validateGraph.ts';
+import { ERROR_CODES } from '../constants.ts';
 
 // Helper: wrap a template in the { template, hash } envelope
 function wrap(template) {

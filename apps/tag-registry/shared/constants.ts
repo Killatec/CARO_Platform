@@ -9,10 +9,10 @@ export const DATA_TYPES = {
   I32: 'i32',
   I32_ARRAY: 'i32_array',
   BOOL: 'bool',
-  STRING: 'string'
-};
+  STRING: 'string',
+} as const;
 
-export const DATA_TYPE_VALUES = Object.values(DATA_TYPES);
+export const DATA_TYPE_VALUES: string[] = [...Object.values(DATA_TYPES)];
 
 export const ERROR_CODES = {
   // Template errors
@@ -37,12 +37,10 @@ export const ERROR_CODES = {
   TYPE_FOLDER_MISMATCH: 'TYPE_FOLDER_MISMATCH',
 
   // Generic
-  VALIDATION_ERROR: 'VALIDATION_ERROR'
-};
+  VALIDATION_ERROR: 'VALIDATION_ERROR',
+} as const;
 
 export const MAX_TAG_PATH_LENGTH = 100;
-
 export const MAX_IDENTIFIER_LENGTH = 40;
-
 export const I32_MIN = -2147483648;
 export const I32_MAX = 2147483647;

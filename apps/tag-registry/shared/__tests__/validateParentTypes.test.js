@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { validateParentTypes } from '../validateParentTypes.js';
-import { ERROR_CODES } from '../constants.js';
+import { validateParentTypes } from '../validateParentTypes.ts';
+import { ERROR_CODES } from '../constants.ts';
 
 function makeTag(name) {
   return { template_type: 'tag', template_name: name, data_type: 'f64', is_setpoint: false, fields: {}, children: [] };

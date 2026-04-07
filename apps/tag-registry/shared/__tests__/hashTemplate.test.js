@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { hashTemplate } from '../hashTemplate.js';
+import { hashTemplate } from '../hashTemplate.ts';
 
 describe('hashTemplate', () => {
   it('returns a 6-character string', () => {

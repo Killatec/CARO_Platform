@@ -1,8 +1,17 @@
 {
-  "name": "@caro/tag-registry-shared-tests",
+  "name": "@caro/tag-registry-shared",
   "type": "module",
   "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
   "scripts": {
+    "build": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"

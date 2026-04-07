@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { resolveRegistry } from '../resolveRegistry.js';
-import { MAX_TAG_PATH_LENGTH } from '../constants.js';
+import { resolveRegistry } from '../resolveRegistry.ts';
+import { MAX_TAG_PATH_LENGTH } from '../constants.ts';
 
 function makeTag(name, dataType = 'f64', isSetpoint = false, fields = {}) {
   return {

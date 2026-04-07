@@ -1,16 +1,25 @@
 import { ERROR_CODES } from './constants.js';
+import type { Template, TemplateEntry, ValidationResult, ValidationMessage } from './types.js';
+import { extractTemplate } from './types.js';
 
-/**
- * Validate parent type rules (VALIDATE_REQUIRED_PARENT_TYPES, VALIDATE_UNIQUE_PARENT_TYPES).
- *
- * @param {Map<string, Object>|Object} templateMap - Template map (Map or object of name -> { template, hash })
- * @param {string} rootName - Root template name
- * @param {Object} options - { requiredParentTypes: string[], uniqueParentTypes: boolean }
- * @returns {Object} { errors: [], warnings: [] }
- */
-export function validateParentTypes(templateMap, rootName, options = {}) {
-  const errors = [];
-  const warnings = [];
+type TemplateMapInput =
+  | Map<string, Template | TemplateEntry>
+  | Record<string, Template | TemplateEntry>
+  | null
+  | undefined;
+
+interface ValidateParentTypesOptions {
+  requiredParentTypes?: string[];
+  uniqueParentTypes?: boolean;
+}
+
+export function validateParentTypes(
+  templateMap: TemplateMapInput,
+  rootName: string | null | undefined,
+  options: ValidateParentTypesOptions = {},
+): ValidationResult {
+  const errors: ValidationMessage[] = [];
+  const warnings: ValidationMessage[] = [];
 
   if (!templateMap || !rootName) {
     return { errors, warnings };
@@ -18,48 +27,37 @@ export function validateParentTypes(templateMap, rootName, options = {}) {
 
   const { requiredParentTypes = [], uniqueParentTypes = false } = options;
 
-  // Skip validation if no rules are configured
   if (requiredParentTypes.length === 0 && !uniqueParentTypes) {
     return { errors, warnings };
   }
 
-  // Convert to Map for processing
-  let workingMap;
+  let workingMap: Map<string, Template | TemplateEntry>;
   if (templateMap instanceof Map) {
     workingMap = templateMap;
   } else {
     workingMap = new Map(Object.entries(templateMap));
   }
 
-  // Extract template objects
-  const templates = new Map();
+  const templates = new Map<string, Template>();
   for (const [name, value] of workingMap.entries()) {
     if (value && typeof value === 'object') {
-      templates.set(name, value.template || value);
+      templates.set(name, extractTemplate(value));
     }
   }
 
-  // Walk hierarchy and collect all tags with their ancestor chains
-  const tagAncestorChains = [];
+  const tagAncestorChains: Array<{ template_name: string; ancestorTypes: string[] }> = [];
 
-  function walkHierarchy(templateName, ancestorChain = []) {
+  function walkHierarchy(templateName: string, ancestorChain: string[] = []): void {
     const template = templates.get(templateName);
-    if (!template) {
-      return;
-    }
+    if (!template) return;
 
     const currentChain = [...ancestorChain, template.template_type];
 
-    // If this is a tag, record its ancestor chain
     if (template.template_type === 'tag') {
-      tagAncestorChains.push({
-        template_name: templateName,
-        ancestorTypes: currentChain
-      });
+      tagAncestorChains.push({ template_name: templateName, ancestorTypes: currentChain });
       return;
     }
 
-    // Recurse into children
     if (template.children && Array.isArray(template.children)) {
       for (const child of template.children) {
         if (child.template_name) {
@@ -71,25 +69,22 @@ export function validateParentTypes(templateMap, rootName, options = {}) {
 
   walkHierarchy(rootName);
 
-  // Validate each tag's ancestor chain
   for (const { template_name, ancestorTypes } of tagAncestorChains) {
-    // Check required parent types
     for (const requiredType of requiredParentTypes) {
       if (!ancestorTypes.includes(requiredType)) {
         errors.push({
           severity: 'error',
           code: ERROR_CODES.PARENT_TYPE_MISSING,
           message: `Tag "${template_name}" is missing required ancestor type "${requiredType}"`,
-          ref: { template_name, required_type: requiredType }
+          ref: { template_name, required_type: requiredType },
         });
       }
     }
 
-    // Check unique parent types
     if (uniqueParentTypes) {
-      const typeCounts = new Map();
+      const typeCounts = new Map<string, number>();
       for (const type of ancestorTypes) {
-        typeCounts.set(type, (typeCounts.get(type) || 0) + 1);
+        typeCounts.set(type, (typeCounts.get(type) ?? 0) + 1);
       }
 
       for (const [type, count] of typeCounts.entries()) {
@@ -98,7 +93,7 @@ export function validateParentTypes(templateMap, rootName, options = {}) {
             severity: 'error',
             code: ERROR_CODES.DUPLICATE_PARENT_TYPE,
             message: `Tag "${template_name}" has duplicate ancestor type "${type}" (${count} occurrences)`,
-            ref: { template_name, duplicate_type: type }
+            ref: { template_name, duplicate_type: type },
           });
         }
       }

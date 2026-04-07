@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { simulateCascade } from '../simulateCascade.js';
+import { simulateCascade } from '../simulateCascade.ts';
 
 function makeTemplate(name, type, fields = {}, children = []) {
   return { template_type: type, template_name: name, fields, children };

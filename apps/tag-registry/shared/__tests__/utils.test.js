@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { deepEqual, deepNotEqual } from '../utils.js';
+import { deepEqual, deepNotEqual } from '../utils.ts';
 
 describe('deepEqual', () => {
   it('equal numbers', () => expect(deepEqual(1, 1)).toBe(true));

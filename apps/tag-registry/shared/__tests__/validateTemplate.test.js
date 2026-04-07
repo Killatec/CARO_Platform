@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { validateTemplate } from '../validateTemplate.js';
-import { DATA_TYPES, MAX_IDENTIFIER_LENGTH, ERROR_CODES } from '../constants.js';
+import { validateTemplate } from '../validateTemplate.ts';
+import { DATA_TYPES, MAX_IDENTIFIER_LENGTH, ERROR_CODES } from '../constants.ts';
 
 function makeTag(overrides = {}) {
   return {
