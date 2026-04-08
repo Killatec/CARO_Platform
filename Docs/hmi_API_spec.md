@@ -1,11 +1,8 @@
 # CARO_HMI REST API Specification
-**Version:** 1.4
 **Date:** 2026-03-28
-**Status:** Pending reconciliation — companion doc references and platform changes not yet updated
-
 **Companion Documents**
 
-hmi_functional_spec v2.4 | CARO_MQTT_Spec v1.8 | Tag Registry Functional Spec v1.17 | CARO_DB_Spec v1.3
+hmi_functional_spec | CARO_MQTT_Spec | Tag Registry Functional Spec | CARO_DB_Spec
 
 ---
 
@@ -14,8 +11,8 @@ hmi_functional_spec v2.4 | CARO_MQTT_Spec v1.8 | Tag Registry Functional Spec v1
 | Version | Date | Author | Summary |
 |---|---|---|---|
 | 1.0 | 2026-03-26 | PM / Claude | Initial release. Auth, tag registry, setpoint write, audit log, trends stub, operation modes, device status, commissioned modules, WebSocket, error codes. |
-| 1.1 | 2026-03-26 | PM / Claude | Setpoint write endpoint redesigned to accept one or more tag_id/value pairs (batch-first). Response grouped by device_id. Partial failure reporting per device. Single write is a batch of one. Aligns with SET_VALUES command type in CARO_MQTT_Spec v1.2. |
-| 1.2 | 2026-03-26 | PM / Claude | Companion documents updated to include CARO_DB_Spec v1.0 and updated versions of all companion specs. |
+| 1.1 | 2026-03-26 | PM / Claude | Setpoint write endpoint redesigned to accept one or more tag_id/value pairs (batch-first). Response grouped by device_id. Partial failure reporting per device. Single write is a batch of one. Aligns with SET_VALUES command type in CARO_MQTT_Spec. |
+| 1.2 | 2026-03-26 | PM / Claude | Companion documents updated to include CARO_DB_Spec and updated versions of all companion specs. |
 | 1.3 | 2026-03-26 | PM / Claude | Rate limiting defaults added: 100 req/min read, 20 req/min write, both configurable (OI-02 closed). Idempotency note added: write retries are safe — telemetry loop resolves ambiguity. command_id correlation via WebSocket not required — out-of-sync detection handles outcome visibility. |
 | 1.4 | 2026-03-28 | PM / Claude | Audit log endpoint updated: tag.write split into tag.write.request and tag.write.outcome (two-row pattern with shared command_id); tag.sync.lost and tag.sync.reset added; comment no longer required on tag writes (mode save only). Sync reset endpoint added: POST /api/v1/tags/{tag_id}/sync-reset. PENDING_TABLE_EMPTY error code updated: no longer references cmd_status. |
 
@@ -80,7 +77,7 @@ Paginated endpoints accept `page` (default: 1) and `page_size` (default: 50, max
 
 ## 3. Authentication Endpoints
 
-See hmi_functional_spec v2.4 Section 5.4 for full session and MFA implementation details.
+See hmi_functional_spec Section 5.4 for full session and MFA implementation details.
 
 ### POST /api/v1/auth/login
 Step 1 — validate credentials
@@ -354,16 +351,16 @@ Response:
 
 ---
 
-## 7. Trends (Deferred — TimescaleDB)
+## 7. Trends (TimescaleDB)
 
-Trend endpoints are reserved for future implementation. Request/response shapes are TBD pending TimescaleDB integration.
+Trend endpoints provide historical tag data via TimescaleDB integration.
 
 ### GET /api/v1/trends/{tag_id}
-Query historical tag values — TBD
+Query historical tag values
 
 *Required role: ALL*
 
-Query parameters, aggregation strategy, resolution, and response shape: TBD. See OI-01.
+Query parameters, aggregation strategy, resolution, and response shape: pending TimescaleDB integration.
 
 ---
 
@@ -591,7 +588,7 @@ The WebSocket connection is the primary real-time data channel. Connection: `wss
 | PONG | Server → Client | Echoes PING timestamp. |
 | MODE_CHANGED | Server → Client | Broadcast when active mode revision changes. JSON only. |
 
-> *NOTE: SUBSCRIBE, UNSUBSCRIBE, SNAPSHOT, DELTA, PING, and PONG use Protobuf encoding defined in CARO_MQTT_Spec v1.8 Appendix A. MODE_CHANGED is JSON.*
+> *NOTE: SUBSCRIBE, UNSUBSCRIBE, SNAPSHOT, DELTA, PING, and PONG use Protobuf encoding defined in CARO_MQTT_Spec Appendix A. MODE_CHANGED is JSON.*
 
 MODE_CHANGED payload:
 ```json
@@ -623,14 +620,9 @@ MODE_CHANGED payload:
 | PENDING_TABLE_EMPTY | 422 | No rows in pending_setpoint_values to promote. |
 | INTERNAL_ERROR | 500 | Unexpected server error. |
 
----
+## Open Questions
 
-## 13. Open Issues
+- What are the trends endpoint query parameters and aggregation strategy? Depends on TimescaleDB schema.
+- Should `challenge_token` be stored in-memory or derived via HMAC?
+- Can activated revisions be cloned (REVISION_IMMUTABLE policy)?
 
-| # | Issue | Owner | Priority | Target |
-|---|---|---|---|---|
-| OI-01 | Define trends endpoint — query parameters, aggregation types, response shape, and TimescaleDB schema. Deferred until TimescaleDB integration begins. | Backend | Low | v1.3 |
-| OI-02 | RESOLVED in v1.3 — rate limiting defaults added: 100 req/min read, 20 req/min write. | --- | --- | Resolved v1.3 |
-| OI-03 | Define challenge_token storage — short-lived in-memory token vs signed stateless token (e.g. HMAC). Lifetime is 60 seconds. | Backend | Medium | v1.3 |
-| OI-04 | Define REVISION_IMMUTABLE policy — can an activated revision be cloned to a new editable one? | PM | Medium | v1.3 |
-| OI-05 | Define user management endpoints — create, modify, role change, MFA reset, unlock (Administrator only). | Backend | Low | v1.3 |

@@ -51,7 +51,15 @@
       "Read(//c/KillaTec/CARO_Platform/$d/node_modules/**)",
       "Bash(done)",
       "Bash(python3 -c \"import json,sys; data=json.load\\(sys.stdin\\); [print\\(item[''''text'''']\\) for item in data if item.get\\(''''type''''\\)==''''text'''']\")",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "Bash(grep -rn \"db_handoff\\\\|db\\\\\\\\Docs\\\\\\\\db_handoff\\\\|db/Docs/db_handoff\" c:/KillaTec/CARO_Platform --include=\"*.md\" --include=\"*.json\" --include=\"*.ts\" --include=\"*.js\")",
+      "Bash(grep -rn \"db/Docs/db_handoff\\\\|db\\\\\\\\Docs\\\\\\\\db_handoff\" c:/KillaTec/CARO_Platform --include=\"*.md\")",
+      "Bash(grep -rn \"mqtt_simulator_bootstrap\\\\|mqtt_simulator_deltas\\\\|mqtt_simulator_handoff\\\\|mqtt-simulator/Docs\\\\|mqtt_simulator\" c:/KillaTec/CARO_Platform --include=*.md --include=*.json)",
+      "Bash(grep -rn \"mqtt-simulator/Docs\\\\|mqtt_simulator_bootstrap\\\\|mqtt_simulator_deltas\\\\|mqtt_simulator_handoff\" c:/KillaTec/CARO_Platform --include=*.md)",
+      "Bash(grep -rn \"tag-registry/Docs\\\\|tag_registry_api_spec\\\\|tag_registry_bootstrap\\\\|tag_registry_deltas\\\\|tag_registry_handoff\\\\|tag_registry_spec\\\\|tag_registry_test_spec\" c:/KillaTec/CARO_Platform --include=*.md --include=*.json --include=*.ts --include=*.js)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)"
     ]
   }
 }

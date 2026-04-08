@@ -1,11 +1,8 @@
 # CARO_HMI Functional Specification
-**Version:** 2.4
 **Date:** 2026-03-28
-**Status:** Pending reconciliation — companion doc references and platform changes not yet updated
-
 **Companion Documents**
 
-Tag Registry Functional Spec v1.17 | CARO_MQTT_Spec v1.8 | CARO_DB_Spec v1.3 | hmi_widget_spec v1.4
+Tag Registry Functional Spec | CARO_MQTT_Spec | CARO_DB_Spec | hmi_widget_spec
 
 ---
 
@@ -25,7 +22,7 @@ The Tag Registry Admin Tool (see companion documents) is the single source of tr
 
 Intended audience: System architects, embedded firmware engineers, backend/frontend developers, QA, and HSE reviewers.
 
-Document owner: Product Manager. Technical authority: TBD (assign before production deployment).
+Document owner: Product Manager.
 
 ---
 
@@ -63,7 +60,7 @@ CARO_HMI provides real-time tag monitoring, supervised setpoint delivery to embe
 | Embedded Devices | Publish telemetry by tag_id via MQTT. Accept setpoint commands by tag_id. Evaluate all safety interlocks and alarms locally. Receive alarm threshold values as setpoint commands. |
 | MQTT Broker | Local broker on trusted LAN. Routes telemetry from devices to backend. Routes commands from backend to devices. TLS required for command channels; telemetry unencrypted on trusted LAN. |
 | Backend Server | Node.js / Express. Subscribes to device telemetry via MQTT. Maintains last-known-value cache keyed by tag_id. Bridges MQTT telemetry to WebSocket clients. Reads tag definitions from PostgreSQL Tag Registry at startup. Writes telemetry to TimescaleDB. Authenticates users and enforces RBAC. |
-| PostgreSQL (Tag Registry) | Authoritative source of all tag definitions. Read by backend at startup and on registry change notification. Schema defined in Tag Registry Functional Spec v1.16. |
+| PostgreSQL (Tag Registry) | Authoritative source of all tag definitions. Read by backend at startup and on registry change notification. Schema defined in Tag Registry Functional Spec. |
 | TimescaleDB | Stores time-series telemetry keyed by tag_id. Supports high-resolution, aggregated, and archived tiers. |
 | Web Frontend | React 18 web application. Connects via HTTPS REST + WSS. Displays real-time tag values, trends, and audit logs. Uses Zustand for global state and auto-subscription context for tag management. |
 | Cloud Monitoring (optional) | Read-only forwarding of telemetry to cloud. No write-back or remote control permitted. |
@@ -252,7 +249,7 @@ CARO_HMI operates exclusively against tags identified by tag_id. The Tag Registr
 
 ### 6.2 tag_id Wire Format
 
-tag_id is transmitted as uint32 in all Protobuf messages and WebSocket traffic. This matches the uint32 field type in the Protobuf schema defined in CARO_MQTT_Spec v1.8 Appendix A, and the INTEGER column type in the tag_registry table. tag_path is fetched from the Tag Registry at startup and cached in memory for display purposes only — it is never transmitted on the wire.
+tag_id is transmitted as uint32 in all Protobuf messages and WebSocket traffic. This matches the uint32 field type in the Protobuf schema defined in CARO_MQTT_Spec Appendix A, and the INTEGER column type in the tag_registry table. tag_path is fetched from the Tag Registry at startup and cached in memory for display purposes only — it is never transmitted on the wire.
 
 ### 6.3 Tag Groups and Hierarchy
 
@@ -279,7 +276,7 @@ At startup the backend builds a rich in-memory map keyed by tag_id from the Tag 
 
 > *NOTE: The module_id for each tag is resolved by walking the tag's meta array and finding the entry where `type === 'module'`. The `name` field of that entry is the module_id. This requires every tag to have exactly one module ancestor — enforced by the VALIDATE_REQUIRED_PARENT_TYPES rule in the Tag Registry (see Section 8.1).*
 
-The in-memory map is rebuilt whenever the backend detects a new Tag Registry revision has been applied by the Tag Registry Admin Tool (see OI-14).
+The in-memory map is rebuilt whenever the backend detects a new Tag Registry revision has been applied by the Tag Registry Admin Tool.
 
 ### 6.6 Operation Modes
 
@@ -291,7 +288,7 @@ The current active mode name and revision number are maintained as a system-wide
 
 #### 6.6.1 Data Model
 
-Operation modes are stored in three PostgreSQL tables: `operation_modes`, `mode_revisions`, and `setpoint_values`. Full schema definitions are in CARO_DB_Spec v1.3 Sections 6.1, 6.2, and 6.3.
+Operation modes are stored in three PostgreSQL tables: `operation_modes`, `mode_revisions`, and `setpoint_values`. Full schema definitions are in CARO_DB_Spec Sections 6.1, 6.2, and 6.3.
 
 Key constraints enforced by the backend:
 
@@ -378,13 +375,13 @@ Plant_A.RF_Module.RF_Fwd.interlock_enable (tag_id: 1004, type: bool, is_setpoint
 }
 ```
 
-> *NOTE: Widget validation is the dashboard component's responsibility. If expected tags are missing from the subtree — due to a wrong path or registry change — the component should render a clear error. See hmi_widget_spec v1.4 Section 6.4 for dashboard panel composition examples.*
+> *NOTE: Widget validation is the dashboard component's responsibility. If expected tags are missing from the subtree — due to a wrong path or registry change — the component should render a clear error. See hmi_widget_spec Section 6.4 for dashboard panel composition examples.*
 
 ---
 
 ## 7. MQTT Interface
 
-Full MQTT protocol specification is in CARO_MQTT_Spec v1.8.
+Full MQTT protocol specification is in CARO_MQTT_Spec.
 
 Summary of MQTT channels used by the backend:
 
@@ -397,7 +394,7 @@ Summary of MQTT channels used by the backend:
 | `caro/{module_id}/handshake_ack` | Device → Backend | Handshake acknowledgements and firmware/tag-config hash confirmation. |
 | `caro/{module_id}/beat` | Backend → Module | Backend heartbeat published to each module at regular interval. |
 
-> *NOTE: Telemetry runs unencrypted on the trusted local LAN (QoS0). All command and handshake channels use TLS and QoS1. Backend watchdog monitors telemetry continuity — loss of telemetry from a module triggers quality=bad for all of that module's tags in the LKV cache. See CARO_MQTT_Spec v1.8 for full protocol details.*
+> *NOTE: Telemetry runs unencrypted on the trusted local LAN (QoS0). All command and handshake channels use TLS and QoS1. Backend watchdog monitors telemetry continuity — loss of telemetry from a module triggers quality=bad for all of that module's tags in the LKV cache. See CARO_MQTT_Spec for full protocol details.*
 
 ---
 
@@ -412,7 +409,7 @@ The backend maintains an in-memory last-known-value (LKV) cache keyed by tag_id 
 Startup sequence:
 
 - Backend loads tag registry from PostgreSQL — builds the full tag_id map with quality=bad for all tags.
-- Backend sends a REQUEST_SNAPSHOT command to every known device via `caro/{module_id}/cmd` (see CARO_MQTT_Spec v1.8 Section 6).
+- Backend sends a REQUEST_SNAPSHOT command to every known device via `caro/{module_id}/cmd` (see CARO_MQTT_Spec Section 6).
 - Devices respond by publishing their current values via the telemetry channel.
 - LKV transitions to quality=good for each tag as values arrive.
 - Frontend clients that connect during this window receive quality=bad on tags not yet heard from — the correct and honest state.
@@ -490,11 +487,11 @@ On backend restart: in-flight commands have no DB state to clean up (pending_set
 
 On startup the backend loads the full active tag registry from PostgreSQL (`SELECT tag_id, tag_path, data_type, is_setpoint, meta FROM tag_registry WHERE retired = false` using DISTINCT ON to get the latest revision per tag_id). This map is held in memory and used to: validate incoming tag_ids, populate display labels for WebSocket clients, and determine which tags are writable.
 
-> *NOTE: The backend detects Tag Registry changes via PostgreSQL LISTEN/NOTIFY — the Tag Registry Admin Tool fires NOTIFY registry_changes after each apply. However the backend does NOT auto-reload on notification. Auto-reload is unsafe during active device handshakes. Instead the backend displays a persistent HMI warning: 'Tag Registry has been updated — restart backend to apply changes.' An Administrator performs a controlled restart at an appropriate time. See OI-14.*
+> *NOTE: The backend detects Tag Registry changes via PostgreSQL LISTEN/NOTIFY — the Tag Registry Admin Tool fires NOTIFY registry_changes after each apply. However the backend does NOT auto-reload on notification. Auto-reload is unsafe during active device handshakes. Instead the backend displays a persistent HMI warning: 'Tag Registry has been updated — restart backend to apply changes.' An Administrator performs a controlled restart at an appropriate time.*
 
 ### 8.7 Audit Log
 
-The `audit_log` table (CARO_DB_Spec Section 10) is the authoritative record of all user-initiated and system-initiated events. It is append-only and immutable — rows are never updated or deleted. Full schema is defined in CARO_DB_Spec v1.3.
+The `audit_log` table (CARO_DB_Spec Section 10) is the authoritative record of all user-initiated and system-initiated events. It is append-only and immutable — rows are never updated or deleted. Full schema is defined in CARO_DB_Spec.
 
 #### 8.7.1 Setpoint Write — Two-Row Pattern
 
@@ -507,9 +504,9 @@ Every setpoint write attempt produces exactly two audit_log rows that share a co
 
 For signable events (mode.saved, mode.activated, module.validated), the backend must also populate two additional audit_log columns:
 - `meaning` — a human-readable statement of the action's intent, entered or confirmed by the actor at save/activation/validation time.
-- `record_hash` — SHA-256 hex digest of the canonical signed payload as defined in CARO_DB_Spec v1.3 Section 11.2.
+- `record_hash` — SHA-256 hex digest of the canonical signed payload as defined in CARO_DB_Spec Section 11.2.
 
-These columns are nullable for all other event types. They establish 21 CFR Part 11 readiness from initial deployment. See CARO_DB_Spec v1.3 Section 11 for the full electronic signature architecture and migration path.
+These columns are nullable for all other event types. They establish 21 CFR Part 11 readiness from initial deployment. See CARO_DB_Spec Section 11 for the full electronic signature architecture and migration path.
 
 #### 8.7.3 Event Type Reference
 
@@ -543,22 +540,22 @@ Every tag must have exactly one ancestor with `template_type = 'module'`. This i
 
 ### 9.2 Commissioned Modules Table
 
-The backend maintains a `commissioned_modules` table in PostgreSQL — one row per module instance. Full schema is defined in CARO_DB_Spec v1.3 Section 5.1.
+The backend maintains a `commissioned_modules` table in PostgreSQL — one row per module instance. Full schema is defined in CARO_DB_Spec Section 5.1.
 
 ### 9.3 Commissioning Lifecycle
 
 - A new module instance in the Tag Registry triggers a `commissioned_modules` row with `validated = false`.
-- The physical device connects and the backend executes the handshake (see CARO_MQTT_Spec v1.8 Section 7). The backend holds received firmware and tag-config hashes as pending.
+- The physical device connects and the backend executes the handshake (see CARO_MQTT_Spec Section 7). The backend holds received firmware and tag-config hashes as pending.
 - An Administrator reviews the pending module in the HMI and confirms with a required comment. Validation sets `validated = true` and stores the pending hashes as the expected baseline.
-- On every subsequent connection the backend re-runs the handshake and compares received hashes against the stored baseline. A mismatch triggers an error condition (behavior TBD — see OI-15).
+- On every subsequent connection the backend re-runs the handshake and compares received hashes against the stored baseline. A mismatch triggers an error condition.
 
-> *NOTE: Full handshake protocol — topic names, message types, payload formats, hash validation, and tag_path truncation rules — are defined in CARO_MQTT_Spec v1.8 Section 7.*
+> *NOTE: Full handshake protocol — topic names, message types, payload formats, hash validation, and tag_path truncation rules — are defined in CARO_MQTT_Spec Section 7.*
 
 ---
 
 ## 10. WebSocket Real-Time API
 
-The frontend establishes a WSS connection after authentication. The backend bridges MQTT device telemetry to WebSocket clients using the Protobuf message format defined in CARO_MQTT_Spec v1.8 Appendix A.
+The frontend establishes a WSS connection after authentication. The backend bridges MQTT device telemetry to WebSocket clients using the Protobuf message format defined in CARO_MQTT_Spec Appendix A.
 
 ### 10.1 Connection Lifecycle
 
@@ -683,7 +680,7 @@ See Section 8.7 for full audit log specification.
 - Local backend services: target 99.5% availability during scheduled machine operation hours.
 - Loss of cloud connectivity shall not affect local operation.
 - WebSocket client auto-reconnects after 3-second backoff on connection drop.
-- Database backup policy and telemetry write-ahead buffer requirements are defined in CARO_DB_Spec v1.3 Section 10.
+- Database backup policy and telemetry write-ahead buffer requirements are defined in CARO_DB_Spec Section 10.
 
 ### 14.3 Security
 
@@ -699,20 +696,18 @@ See Section 8.7 for full audit log specification.
 
 ---
 
-## 15. Open Issues and Decisions Required
+## Open Questions
 
-| # | Issue | Owner | Priority | Target |
-|---|---|---|---|---|
-| OI-01 | Define Network Security Plan (firewall rules, zone separation between device network, backend LAN, and cloud DMZ). | IT Security | High | v1.5 |
-| OI-02 | Define full Protobuf schema version management policy — how schema versions are distributed to devices and frontend clients. | Backend / FW Eng | High | v1.5 |
-| OI-03 | Define heartbeat interval and watchdog timeout final values. | FW Eng / Backend | Medium | v1.5 |
-| OI-05 | Define REST rate limits (final value). | Backend Eng | Medium | v1.5 |
-| OI-06 | Define Administrator onboarding and credential management procedures. | IT Security / PM | Medium | v1.5 |
-| OI-07 | Define Operations Manual and recovery procedures. | Ops / Backend | Medium | v1.4 |
-| OI-08 | Define alarm threshold delivery protocol — full snapshot vs delta on device reconnect; versioning and acknowledgement. | Backend / FW Eng | High | v1.5 |
-| OI-10 | Define machine state machine per machine type — stored as Tag Registry metadata or separate config. | PM / Process Eng | Medium | v1.5 |
-| OI-11 | Cloud sync protocol — telemetry forwarding format, auth, and rate limits. | Backend / Cloud | Low | v1.4 |
-| OI-12 | Define MQTT topic ACL policy and per-device credential provisioning process. | IT Security / FW Eng | High | v1.5 |
-| OI-14 | LISTEN/NOTIFY mechanism decided (v2.2): backend listens on registry_changes NOTIFY channel. Auto-reload intentionally NOT implemented — unsafe during active device handshakes. Backend raises HMI warning on notification. Remaining open: define the HMI warning UI component and the controlled restart procedure. | Backend | Medium | v2.3 |
-| OI-15 | NTP provisioning: CARO_Platform must provision a local NTP server for device clock synchronization. Device onboarding procedure and NTP server configuration TBD. | Backend / Ops | Medium | v2.4 |
-| OI-16 | Define hash mismatch behavior — whether firmware hash or tag-config hash mismatches on reconnect fully block the device (no telemetry, no commands) or put it in a flagged/degraded state. Decision requires HSE and process engineering input. | PM / HSE / Process Eng | High | v1.5 |
+- Who is the assigned technical authority for this system before production deployment?
+- What is the Network Security Plan?
+- What is the Protobuf schema version management policy?
+- What are the final REST rate limit values?
+- What is the Administrator onboarding and credential management process?
+- What does the Operations Manual cover and what are the recovery procedures?
+- What is the alarm threshold delivery protocol?
+- What is the machine state machine definition per machine type?
+- What is the cloud sync protocol — telemetry forwarding, authentication, rate limits?
+- What does the HMI warning UI look like and what is the controlled restart procedure?
+- What is the NTP provisioning strategy — local NTP server for device clock sync?
+- What is the correct behavior when a hash mismatch is detected between device and backend?
+

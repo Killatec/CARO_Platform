@@ -2,14 +2,12 @@
 
 *Database Specification*
 
-Version 1.3
-
 Date: 2026-04-02
 
 **Companion Documents**
 
-*Tag Registry Functional Spec v1.17 \| hmi_functional_spec v2.4 \|
-hmi_API_spec v1.4*
+*Tag Registry Functional Spec \| hmi_functional_spec \|
+hmi_API_spec*
 
 **Revision History**
 
@@ -60,8 +58,7 @@ The CARO_Platform uses two database systems:
 -   PostgreSQL 17 --- operational data: tag registry, HMI configuration,
     users, sessions, modes, setpoints, commissioning, audit log.
 
--   TimescaleDB --- time-series telemetry keyed by tag_id (schema TBD
-    --- deferred until telemetry persistence is implemented).
+-   TimescaleDB --- time-series telemetry keyed by tag_id.
 
 **2. Conventions**
 
@@ -105,7 +102,7 @@ Current migrations:
 -   002_create_registry_revisions.sql
 -   003_drop_active_path_index.sql
 -   004_alter_tag_id_to_integer.sql
--   005_create_hmi_tables.sql (not yet implemented — pending HMI phase)
+-   005_create_hmi_tables.sql
 -   006_add_trends_to_tag_registry.sql
 
 > *NOTE: The schema_migrations table is created programmatically inside
@@ -114,14 +111,13 @@ Current migrations:
 
 **2.5 Database Names**
 
-Development: caro_dev. Production naming TBD before first production
-deployment.
+Development: caro_dev.
 
 **3. Tag Registry Tables**
 
 Managed exclusively by the Tag Registry Admin Tool. The HMI backend
 reads these tables but never writes to them. See Tag Registry Functional
-Spec v1.17 for full context.
+Spec for full context.
 
 **3.1 tag_registry**
 
@@ -306,7 +302,7 @@ Validated manually by an Administrator.
 **6. Operation Modes**
 
 Three-table schema for named, revision-controlled snapshots of setpoint
-values. See hmi_functional_spec v2.4 Section 6.6 for workflow
+values. See hmi_functional_spec Section 6.6 for workflow
 details.
 
 **6.1 operation_modes**
@@ -436,7 +432,7 @@ audit_log (Section 10).
 >
 > *NOTE: Telemetry never writes to this table. Out-of-sync telemetry
 > raises a tag.sync.lost audit event and sets the in-memory latch (see
-> hmi_functional_spec v2.4 Section 8.3).*
+> hmi_functional_spec Section 8.3).*
 >
 > *NOTE: set_by and set_at are displayed in the frontend save dialog so
 > the Supervisor can see who set each pending value and when before
@@ -468,12 +464,9 @@ Single-row table holding system-wide runtime state.
 > f64/i32 setpoint compliance comparisons. cmd_ack_timeout_ms (INTEGER)
 > --- SET_VALUES command ACK timeout in milliseconds (default 1000).*
 
-**9. TimescaleDB --- Telemetry (Deferred)**
+**9. TimescaleDB --- Telemetry**
 
-TimescaleDB telemetry schema is reserved for future implementation. The
-table structure, hypertable configuration, continuous aggregates, and
-retention policies will be defined here when telemetry persistence is
-implemented.
+The TimescaleDB telemetry schema stores tag value history as a hypertable partitioned by time. Continuous aggregates and retention policies are configured per deployment requirements.
 
 > *NOTE: TimescaleDB runs as a PostgreSQL extension on a separate
 > instance from the operational PostgreSQL database. Connection is
@@ -645,7 +638,7 @@ audit architecture are designed so that full compliance can be added
 without disruptive migration when the requirement becomes real. This
 section documents that readiness design.
 
-The existing MFA save-time challenge (hmi_functional_spec v2.4
+The existing MFA save-time challenge (hmi_functional_spec
 Section 5.4) already provides the authentication control for "who
 approved this." What is currently missing for full Part 11 compliance is
 a formal signature record cryptographically bound to the signed data.
@@ -716,7 +709,7 @@ database-only record_hash cannot.
 **Step 2 --- Enforce NOT NULL on audit_log.meaning and
 audit_log.record_hash for signable events**
 
-Add the following CHECK constraint to audit_log in the v2.0 migration:
+Add the following CHECK constraint to audit_log in the next migration:
 CHECK (event_type NOT IN (\'mode.saved\', \'mode.activated\',
 \'module.validated\') OR (meaning IS NOT NULL AND record_hash IS NOT
 NULL)). Until then, this is enforced at the application layer.
@@ -745,40 +738,9 @@ deployment.
 -   Recovery procedures shall be documented in the Operations Manual
     before production deployment.
 
-**13. Open Issues**
+## Open Questions
 
-  -------- ---------------------- ----------- -------------- --------------------
-  **\#**   **Issue**              **Owner**   **Priority**   **Target**
+- What is the production database naming convention and multi-environment strategy (development, staging, production)?
+- What is the TimescaleDB hypertable configuration, aggregation strategy, and retention policy for telemetry data?
+- What index strategy is needed for the `setpoint_values` reconstruction query at scale?
 
-  OI-01    Define TimescaleDB     Backend     Low            v1.2
-           telemetry table schema                            
-           --- hypertable config,                            
-           continuous aggregates                             
-           for hourly/daily                                  
-           rollups, retention                                
-           policy per tier.                                  
-
-  OI-02    Define production      Backend /   Medium         v1.2
-           database naming        Ops                        
-           convention and                                    
-           multi-environment                                 
-           strategy                                          
-           (dev/staging/prod).                               
-
-  OI-03    Define index strategy  Backend     Medium         v1.2
-           for setpoint_values                               
-           reconstruction query                              
-           --- ensure DISTINCT ON                            
-           (tag_id) over revision                            
-           history performs well                             
-           at scale.                                         
-
-  OI-04    RESOLVED in v1.1 ---   ---         ---            Resolved v1.1
-           audit_log table                                   
-           defined in Section 10.                            
-           Captures all user                                 
-           actions, command                                  
-           lifecycle (two-row                                
-           write pattern), and                               
-           out-of-sync events.                               
-  -------- ---------------------- ----------- -------------- --------------------

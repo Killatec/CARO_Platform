@@ -1,11 +1,8 @@
 # CARO_Widget_Spec — HMI Widget Specification
-**Version:** 1.4
 **Date:** 2026-03-26
-**Status:** Pending reconciliation — companion doc references and platform changes not yet updated
-
 **Companion Documents**
 
-hmi_functional_spec v2.4 | hmi_API_spec v1.4 | CARO_DB_Spec v1.3
+hmi_functional_spec | hmi_API_spec | CARO_DB_Spec
 
 ---
 
@@ -199,7 +196,7 @@ Widgets are compact by default — designed to be composed in dashboard grids. T
 
 ---
 
-## 5. Widget Catalog — v1.4
+## 5. Widget Catalog
 
 Version 1.0 includes four foundational single-tag widgets. More complex multi-tag widgets (trend charts, gauges, state panels) will be added in future versions and will follow the same useLiveValue / useTagWriter hook contract.
 
@@ -324,7 +321,7 @@ Toggleable boolean setpoint. Displays the confirmed state and allows Supervisors
 
 ## 6. Dashboard Composition
 
-A dashboard is a React component that instantiates widgets and defines the layout. There is no dashboard builder, JSON renderer, or drag-and-drop system in v1.0. Dashboards are code.
+A dashboard is a React component that instantiates widgets and defines the layout. There is no dashboard builder, JSON renderer, or drag-and-drop system. Dashboards are code.
 
 ### 6.1 Wiring the Contract Functions
 
@@ -371,7 +368,7 @@ export function RFGeneratorDashboard() {
 
 ### 6.3 Evolution Path — Configurable Dashboards
 
-The v1.0 approach of dashboards-as-code is intentional and sufficient for a fixed machine configuration where tag_ids are known at build time. When runtime-configurable dashboards are needed the natural evolution is a JSON layout config and a DashboardRenderer component:
+The dashboards-as-code approach is intentional and sufficient for a fixed machine configuration where tag_ids are known at build time. When runtime-configurable dashboards are needed the natural evolution is a JSON layout config and a DashboardRenderer component:
 
 ```json
 // Future: JSON layout config
@@ -388,13 +385,13 @@ The widget API (useLiveValue + useTagWriter hooks) does not change at all in thi
 
 > *NOTE: Multi-tag writes from a page component: call `useTagWriter().write([{tagId, value}, ...])` with all values in a single batch. Individual widgets always write one tag (or their own set of tags if multi-tag). Coordinated writes across unrelated widgets are a page component responsibility.*
 
-> *NOTE: Dashboard config storage and the DashboardRenderer component are out of scope for v1.0. The current design intentionally supports this evolution without any breaking changes to the widget API.*
+> *NOTE: Dashboard config storage and the DashboardRenderer component are out of scope. The current design intentionally supports this evolution without any breaking changes to the widget API.*
 
 ### 6.4 useTagSubtree — Path-Based Dashboard Composition
 
 For dashboard components that display all tags under a known path prefix, `@caro/hmi-context` exports `useTagSubtree(pathPrefix)`. This returns a nested tree of all nodes at and below the prefix — both structural (intermediate) nodes and leaf (tag) nodes — built from the in-memory tag map at mount time. The tree is a one-time snapshot; a browser refresh picks up registry changes.
 
-Full definition is in hmi_functional_spec v2.4 Section 6.7. Node shape summary:
+Full definition is in hmi_functional_spec Section 6.7. Node shape summary:
 
 ```ts
 // NestedTagNode — every node in the tree has this shape
@@ -487,16 +484,9 @@ test('shows dash when quality is bad', () => {
 });
 ```
 
----
+## Open Questions
 
-## 8. Open Issues
+- What is the `HmiContextProvider` WebSocket deduplication strategy when multiple widgets subscribe to the same tag? Reference counting or another approach?
+- What are the `trueColor` and `falseColor` design token values?
+- What is the `MockHmiProvider` test helper shape needed for widget testing?
 
-| # | Issue | Owner | Priority | Target |
-|---|---|---|---|---|
-| OI-01 | Define the HmiContextProvider WebSocket deduplication strategy — multiple widgets calling useLiveValue for the same tag_id must result in a single WebSocket SUBSCRIBE per tag_id. Define the reference counting or set-based approach. | Frontend | High | v1.4 |
-| OI-02 | RESOLVED in v1.1 — write() Promise from useTagWriter rejects on device CMD_ACK with accepted: false. App layer translates CMD_ACK into Promise resolution/rejection. Widgets handle all failure cases via the single Promise. | --- | --- | Resolved v1.4 |
-| OI-03 | Define trueColor / falseColor token set — restrict to a fixed set of named values (green, red, amber, blue, gray) mapped to @caro/ui design tokens, rather than arbitrary Tailwind class names. | Frontend / Design | Low | v1.4 |
-| OI-04 | Define Vitest + React Testing Library setup for the widgets package — test runner config, MockHmiProvider patterns, and coverage baseline. | Frontend | Medium | v1.4 |
-| OI-05 | RESOLVED in v1.4 — useLiveValue supports being called multiple times within the same widget, each with a different tag_id. Deduplication and cleanup on unmount handled by HmiContextProvider reference counting. | --- | --- | Resolved v1.4 |
-| OI-06 | Dashboard config schema and DashboardRenderer component — JSON layout config stored in PostgreSQL, runtime-configurable dashboards. | Frontend / Backend | Low | v2.0 |
-| OI-07 | Define MockHmiProvider test helper shape — exported from @caro/hmi-context/testing. Should accept tagValues map and mockWrite function to simulate any widget state without a running backend. | Frontend | Medium | v1.4 |

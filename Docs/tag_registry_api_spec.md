@@ -1,6 +1,6 @@
 # Tag Registry Admin Tool — REST API Specification
-**Draft v1.15** | Generated: 2026-04-02
-Companion documents: [Functional Spec v1.17](tag_registry_spec.md) | [Bootstrap v1.21](tag_registry_bootstrap.md)
+**Draft** | Generated: 2026-04-02
+Companion documents: [Functional Spec](tag_registry_spec.md) | [Bootstrap](tag_registry_bootstrap.md)
 
 ---
 
@@ -69,7 +69,7 @@ Every template returned by the server carries a `hash` field: a 6-character hex 
 | PGUSER | PostgreSQL user | postgres | 2 only |
 | PGPASSWORD | PostgreSQL password | (required) | 2 only |
 
-> **Note:** `DATABASE_URL` must not be referenced anywhere in Phase 1 or Phase 2 code. Use the five `PG*` variables instead, consumed by `@caro/db` pool.js.
+> **Note:** `DATABASE_URL` must not be referenced anywhere in app code. Use the five `PG*` variables instead, consumed by `@caro/db` pool.js.
 
 ### 2.7 GET /api/v1/config
 
@@ -303,13 +303,13 @@ Responses: 200 OK, 404 `TEMPLATE_NOT_FOUND`, 409 `STALE_TEMPLATE` (hash mismatch
 
 ---
 
-## 4. Asset Tree Endpoints (Phase 2 — Not Yet Implemented)
+## 4. Asset Tree Endpoints
 
-These endpoints were originally planned to support server-side tree resolution. In the implemented Phase 2, registry resolution is performed server-side only during the apply operation (via `loadRoot` + `resolveRegistry`). No separate asset tree manipulation endpoints are implemented.
+Registry resolution is performed server-side during the apply operation (via `loadRoot` + `resolveRegistry`). No separate asset tree manipulation endpoints are implemented.
 
 ---
 
-## 5. Registry Endpoints (Phase 2)
+## 5. Registry Endpoints
 
 ### 5.1 GET /api/v1/registry
 
@@ -407,7 +407,7 @@ Server loads the template graph via `loadRoot()`, resolves server-side via `reso
 
 ---
 
-## 6. Revision History Endpoints (Phase 2)
+## 6. Revision History Endpoints
 
 ### 6.1 GET /api/v1/registry/revisions
 
@@ -485,13 +485,3 @@ Returns 404 if no rows exist for the given revision number.
 | VALIDATION_ERROR | 422 | One or more validation rules failed. See details array. Graph validation errors from batchSave (INVALID_REFERENCE, CIRCULAR_REFERENCE) are returned as VALIDATION_ERROR with specific codes in the details array — not as top-level error codes. |
 
 ---
-
-## 8. Open Items
-
-- Authentication and session management are out of scope for the prototype. `applied_by` is hardcoded to `'dev'` until a real auth system is implemented.
-- Stale conflict merging: when a batch is rejected due to `STALE_TEMPLATE`, attempt to merge the client's local changes with the refreshed server state rather than discarding them.
-- WebSocket or SSE endpoint for live notification when another session modifies a template.
-- Bulk import endpoint for loading an existing flat tag list into the template hierarchy.
-- Rate limiting and request size limits are not specified for the prototype.
-- Rename tracking endpoint: future endpoint to rename a `tag_path` in both JSON files and the database while preserving `tag_id` continuity.
-- `data_type` as FK: Phase 2+ consideration — `data_type` column in `tag_registry` intended to become a BIGINT FK referencing a data_types lookup table.

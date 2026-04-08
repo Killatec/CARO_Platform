@@ -1,6 +1,6 @@
 # MQTT Simulator — Bootstrap
-**v1.14** | **Updated:** 2026-04-05
-Companion docs: `CARO_MQTT_Spec.md` v1.8 | `CARO_DB_Spec.md`
+**Updated:** 2026-04-05
+Companion docs: `CARO_MQTT_Spec.md` | `CARO_DB_Spec.md`
 
 ---
 
@@ -143,7 +143,7 @@ const protobufMode  = new Set();               // empty — JSON default
 | Delta + JSON | Changed tags only (`simValue !== previousValue`); update `previousValue` for all after comparison; may publish empty `tags` array |
 | Delta + Protobuf | Changed tags only; `encodeProto()` → Buffer |
 
-**`TelemetryMessage` shape (per `CARO_MQTT_Spec` v1.8):**
+**`TelemetryMessage` shape (per `CARO_MQTT_Spec`):**
 ```js
 {
   timestamp: uint64,   // Date.now() ms
@@ -201,7 +201,7 @@ Processing:
 
 **REQUEST_SNAPSHOT** — calls `publishNow(moduleId)`.
 
-`command_id` deduplication not implemented — required before production use.
+`command_id` deduplication: 60-second rolling TTL Set — duplicate commands within the window are silently dropped.
 
 ---
 

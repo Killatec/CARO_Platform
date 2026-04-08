@@ -1,6 +1,6 @@
 # Tag Registry Admin Tool — E2E Test Specification
-**v1.3** | Generated: 2026-04-07
-Companion documents: Functional Spec v1.17 | API Spec v1.15 | Bootstrap v1.21
+Generated: 2026-04-07
+Companion documents: Functional Spec | API Spec | Bootstrap
 
 ---
 
@@ -12,7 +12,7 @@ This document defines the E2E (end-to-end) and unit test suite for the Tag Regis
 - All primary user workflows reachable through the browser UI
 - Correct Zustand store state transitions (verified through DOM assertions)
 - Round-trip correctness: API creates fixture → UI reflects it → UI mutates it → API persists it
-- Phase 2 registry diff display and apply workflow
+- Registry diff display and apply workflow
 - History page revision log
 - Meta View modal with field-level diff highlighting
 - Edge cases and error paths that a user can reach without direct filesystem access
@@ -21,10 +21,10 @@ This document defines the E2E (end-to-end) and unit test suite for the Tag Regis
 - Server-side logic (covered by functional integration tests, not E2E)
 - Templates with corrupted on-disk JSON (not reachable via the API — see section 6.2)
 - Performance or load characteristics
-- Behaviour under concurrent multi-user edits (Phase 2 scope)
+- Behaviour under concurrent multi-user edits
 
 **Relationship to the functional spec:**
-Each test file maps to one or more sections in Functional Spec v1.16. The test suite acts as a living executable companion to the spec — if a spec behaviour is observable in the browser it should have a corresponding test. Any deliberate deviation between test behaviour and spec language is documented in section 6 (skipped tests) and in `Docs/tag_registry_deltas.md`.
+Each test file maps to one or more sections in Functional Spec. The test suite acts as a living executable companion to the spec — if a spec behaviour is observable in the browser it should have a corresponding test. Any deliberate deviation between test behaviour and spec language is documented in section 6 (skipped tests) and in `Docs/tag_registry_deltas.md`.
 
 ---
 
@@ -256,7 +256,7 @@ await page.getByRole('button', { name: /history/i }).click();
 
 **Setup:** Creates 3-level hierarchy (module → parameter → tag) via API, then calls `selectRoot(modMName)` followed by `po.navigateToRegistry()`. Navigation uses the sidebar button (client-side) to preserve store state — `page.goto('/registry')` would wipe Zustand state and cause the table to never render.
 
-### 4.8 Phase 2 E2E Test Files
+### 4.8 Registry E2E Test Files
 
 #### 4.8.1 tests/registry-diff.spec.js — Registry Diff Display (6 tests)
 
@@ -348,7 +348,7 @@ function metaModal(page, tagPath) {
 
 ---
 
-## 4.9 Phase 2 Unit Test Files
+## 4.9 Registry Unit Test Files
 
 #### 4.9.1 client/__tests__/diffRegistry.test.js (34 tests)
 
@@ -508,13 +508,13 @@ This passes even after `beforeEach` has called `selectRoot()` and navigated to t
 
 ### 5.13 API helpers consolidated into helpers/api.js
 
-Phase 2 E2E specs (`registry-diff.spec.js`, `registry-apply.spec.js`, `history.spec.js`, `meta-modal.spec.js`) previously defined registry API helpers (`applyRegistryApi`, `fetchRevisions`, `getTemplate`) inline per spec file. These have been moved to `helpers/api.js` and are now imported from there. No spec file hardcodes a port or base URL.
+Registry E2E specs (`registry-diff.spec.js`, `registry-apply.spec.js`, `history.spec.js`, `meta-modal.spec.js`) previously defined registry API helpers (`applyRegistryApi`, `fetchRevisions`, `getTemplate`) inline per spec file. These have been moved to `helpers/api.js` and are now imported from there. No spec file hardcodes a port or base URL.
 
 History page navigation uses `page.getByRole('button', { name: /history/i }).click()` inline — `pageObjects.js` was not modified.
 
-### 5.14 DB rows not cleaned up after Phase 2 tests
+### 5.14 DB rows not cleaned up after registry tests
 
-`tag_registry` and `registry_revisions` rows written during Phase 2 E2E tests are not deleted after each test. The append-only schema means stale rows from prior runs are harmless — `getActiveRegistry()` always returns the latest revision per `tag_id`, and timestamp-based template names ensure unique `tag_path`s per run. Rows from prior runs never interfere with new test assertions.
+`tag_registry` and `registry_revisions` rows written during registry E2E tests are not deleted after each test. The append-only schema means stale rows from prior runs are harmless — `getActiveRegistry()` always returns the latest revision per `tag_id`, and timestamp-based template names ensure unique `tag_path`s per run. Rows from prior runs never interfere with new test assertions.
 
 ---
 
@@ -548,9 +548,9 @@ test.skip(true, 'Server validates INVALID_REFERENCE — broken template cannot b
 
 The `INVALID_REFERENCE` error state in the registry is only reachable by manually corrupting template JSON files on disk after they have been written. Testing this state would require direct filesystem access from the test helper, which is out of scope for the browser E2E suite and is better covered by a server unit test.
 
-### 9.6 Phase 4 Baseline (2026-04-07)
+### 9.6 Baseline (2026-04-07)
 
-**Changes from Phase 3:**
+**Changes from prior baseline:**
 - E2E suite migrated to full test database isolation (`caro_test` cloned from `caro_dev`)
 - All inline `API_BASE` constants removed from spec files — all API calls route through `helpers/api.js`
 - `meta-modal.spec.js`: deleted 1 invalid test (modal overlay blocks background clicks by design)
@@ -709,7 +709,7 @@ Fetches all registry revisions ordered by `registry_rev DESC`. Returns the revis
 
 ## 9. Results Baseline
 
-### 9.1 E2E Suite — Phase 1 Baseline (v1.0, 2026-03-19)
+### 9.1 E2E Suite — Phase 1 Baseline (2026-03-19)
 
 | Metric | Value |
 |---|---|
@@ -724,7 +724,7 @@ Skipped breakdown:
 - `save-cancel.spec.js` test 4 × 3 browsers — see section 6.1
 - `registry.spec.js` test 5 × 3 browsers — see section 6.2
 
-### 9.2 Unit Test Suite — Phase 1 Baseline (v1.0, 2026-03-19)
+### 9.2 Unit Test Suite — Phase 1 Baseline (2026-03-19)
 
 | Package | Tests | Passed | Failed |
 |---|---|---|---|
@@ -743,7 +743,7 @@ Skipped breakdown:
 | Failed | 0 |
 | Baseline date | 2026-03-19 |
 
-### 9.4 Phase 2 Baseline (2026-03-23)
+### 9.4 Baseline (2026-03-23)
 
 **Vitest unit tests:**
 
@@ -767,10 +767,10 @@ Skipped breakdown:
 | registry-apply.spec.js (7 tests × 3 browsers) | 21 | 21 | 0 |
 | history.spec.js (5 tests × 3 browsers) | 15 | 15 | 0 |
 | meta-modal.spec.js (4 tests × 3 browsers) | 12 | 12 | 0 |
-| **Phase 2 total new E2E runs** | **66** | **66** | **0** |
+| **New E2E runs** | **66** | **66** | **0** |
 | **Combined E2E** | **186** | **180** | **6** |
 
-**Combined total (Phase 2):**
+**Combined total:**
 
 | Metric | Value |
 |---|---|
@@ -780,7 +780,7 @@ Skipped breakdown:
 | Failed | 0 |
 | Baseline date | 2026-03-23 |
 
-### 9.5 Phase 3 Baseline (2026-04-02)
+### 9.5 Baseline (2026-04-02)
 
 **Vitest unit tests:**
 
@@ -807,7 +807,7 @@ Skipped breakdown:
 | Phase 3 (2 files × 3 browsers) | 21 | 21 | 0 |
 | **Combined E2E** | **207** | **201** | **6** |
 
-**Combined total (Phase 3):**
+**Combined total:**
 
 | Metric | Value |
 |---|---|
@@ -823,7 +823,7 @@ Skipped breakdown:
 
 ### 10.1 Overview
 
-In addition to the Playwright E2E suite, a Vitest unit test suite covers the layers of business logic that are not adequately validated through browser tests alone: the shared pure functions, the server template service, the client Zustand store, and the Phase 2 registry utilities and routes.
+In addition to the Playwright E2E suite, a Vitest unit test suite covers the layers of business logic that are not adequately validated through browser tests alone: the shared pure functions, the server template service, the client Zustand store, and the registry utilities and routes.
 
 ### 10.2 Packages and locations
 

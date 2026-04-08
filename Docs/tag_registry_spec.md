@@ -1,6 +1,6 @@
 # Tag Registry Admin Tool — Functional Specification
-**Draft v1.17** | Generated: 2026-04-02
-Companion documents: [Bootstrap v1.21](tag_registry_bootstrap.md) | [API Spec v1.15](tag_registry_api_spec.md)
+**Draft** | Generated: 2026-04-02
+Companion documents: [Bootstrap](tag_registry_bootstrap.md) | [API Spec](tag_registry_api_spec.md)
 
 ---
 
@@ -25,7 +25,7 @@ Companion documents: [Bootstrap v1.21](tag_registry_bootstrap.md) | [API Spec v1
 
 ## 2. Purpose
 
-This document describes the complete Tag Registry Admin Tool system across all phases. The Bootstrap Document governs what is implemented in Phase 1 and what is deferred to Phase 2.
+This document describes the complete Tag Registry Admin Tool system.
 
 The tool enables engineers to:
 
@@ -270,7 +270,7 @@ Controlled by server environment variables `VALIDATE_REQUIRED_PARENT_TYPES` and 
 ### 10.8 Tool Warnings (Non-Blocking)
 
 - `TYPE_FOLDER_MISMATCH` — template_type does not match subfolder.
-- `EMPTY_BRANCH` — structural template in the root hierarchy contains no tag descendants. **Note:** `EMPTY_BRANCH` is declared in `shared/constants.js` but is not yet implemented in Phase 1 validation. It is not emitted by `validateGraph`, `validateTemplate`, or `useValidation`. Reserved for future implementation.
+- `EMPTY_BRANCH` — structural template in the root hierarchy contains no tag descendants. **Note:** `EMPTY_BRANCH` is declared in `shared/constants.js` but is not emitted by `validateGraph`, `validateTemplate`, or `useValidation`.
 
 ### 10.9 Template Change Propagation
 
@@ -280,7 +280,7 @@ Any structural change to a template triggers `applyFieldCascade` immediately on 
 
 ## 11. Registry Generation
 
-Registry generation uses `resolveRegistry(templateMap, rootName)`. In Phase 1 this runs entirely client-side in-memory. In Phase 2 the same function is called server-side before writing to the database.
+Registry generation uses `resolveRegistry(templateMap, rootName)`. It runs client-side in-memory for the live preview, and server-side before writing to the database on apply.
 
 `resolveRegistry` extracts `.default` from each field definition before merging with instance overrides, so `meta.fields` in the registry output contains flat `{ name: value }` pairs.
 
@@ -289,8 +289,8 @@ Registry generation uses `resolveRegistry(templateMap, rootName)`. In Phase 1 th
 1. Validate all templates in the graph (Section 10). If any errors are present, the registry preview shows a blank state with a 'Resolve errors to view registry' banner.
 2. Call `resolveRegistry(templateMap, rootName)`. Resolve the full hierarchy by walking the template composition graph and constructing `tag_path`s.
 3. For each resolved tag, build the `meta` array (root-to-tag provenance chain: `meta[0]` = root level, `meta[meta.length - 1]` = tag level) and compute `trends`.
-4. Display the resulting flat tag list in the RegistryPage table immediately. No server call required in Phase 1.
-5. *(Phase 2)* Compare candidate registry against the database. Present full diff for review. On user confirmation, apply atomically within a SERIALIZABLE transaction.
+4. Display the resulting flat tag list in the RegistryPage table immediately.
+5. Compare candidate registry against the database. Present full diff for review. On user confirmation, apply atomically within a SERIALIZABLE transaction.
 
 ### 11.2 Change Classifications
 
@@ -301,7 +301,7 @@ Registry generation uses `resolveRegistry(templateMap, rootName)`. In Phase 1 th
 
 ---
 
-## 12. Diff Review UI *(Phase 2)*
+## 12. Diff Review UI
 
 The Registry page shows the resolved registry compared against the database. Comparison is performed client-side by `diffRegistry()` using key-order-insensitive deep equality. Row classification: added (green `bg-green-500/15` full row), retired (red `bg-red-500/15` full row), modified (per-cell amber `bg-amber-500/25` on changed fields only via `changedFields` array), unchanged (no highlight). A summary line shows counts per status (+N added / ~N modified / N unchanged / -N retired).
 
@@ -492,40 +492,22 @@ A History nav tab shows the `registry_revisions` table with columns: rev, applie
 5. Use the System Tree to navigate, edit instance names and field overrides. Drag template leaves from the Templates Tree onto System Tree nodes to add child instances.
 6. ValidationPanel shows live feedback from local simulation.
 7. When ValidationPanel is clear, click Save. If upstream parents are affected, review and confirm the cascade modal.
-8. *(Phase 2)* Navigate to the Registry tab. Review the diff against the database. Click Update DB, enter a comment, and confirm to apply.
-9. *(Phase 2)* View the History tab to see all past registry revisions.
+8. Navigate to the Registry tab. Review the diff against the database. Click Update DB, enter a comment, and confirm to apply.
+9. View the History tab to see all past registry revisions.
 
 ---
 
-## 18. Phase Split Reference
+## 18. Implementation Summary
 
-| Feature | Phase 1 | Phase 2 |
-|---------|---------|---------|
-| Template graph | Fetched from server on root selection, held in client memory | Same |
-| On-demand template fetch | Via `loadRoot` endpoint for individual templates/subgraphs | Same |
-| Cascade simulation | Client-side via `simulateCascade` | Same |
-| Field cascade on edit | Client-side via `applyFieldCascade`, immediate | Same + server applies on save |
-| Batch save | `POST /api/v1/templates/batch` with hash checking, cascade confirm, and deletions array | Same |
-| Template deletion | Pending client-side, committed via batch save `deletions` array | Same |
-| Registry calculation | Client-side via `resolveRegistry`, live on graph change | Same logic, persisted to PostgreSQL on apply |
-| Registry UI | Single table, live client-side, blank on errors | Client-side diff via `diffRegistry()`, per-cell highlighting for modified rows, Update DB button with comment modal, 4-second success banner, History page for revision log |
-| Registry persistence | Not implemented | `tag_registry` append-only table |
-| Diff / apply workflow | Not implemented | `POST /api/v1/registry/apply` (server resolves server-side, diffs, writes SERIALIZABLE transaction). `GET /api/v1/registry/revisions` and `GET /api/v1/registry/revisions/:rev`. |
-| Revision history | Not implemented | `registry_revisions` table + History page |
-| Retired tags | Not tracked | Detected during apply; shown in diff as red rows |
-| Database | None | node-postgres, SERIALIZABLE transaction |
-| Stale conflict on save | Re-fetch full root, discard local changes | Merge support (future work) |
+| Feature | Implementation |
+|---------|----------------|
+| Template graph | Fetched from server on root selection via `loadRoot`, held in client memory |
+| Cascade simulation | Client-side via `simulateCascade`; applied server-side authoritatively on save |
+| Batch save | `POST /api/v1/templates/batch` with hash checking, cascade confirmation modal, and deletions array |
+| Registry calculation | Client-side via `resolveRegistry` for live preview; server-side before writing to PostgreSQL on apply |
+| Registry UI | Diff view via `diffRegistry()` with per-cell highlighting, Update DB button with comment modal, 4-second success banner, History page |
+| Registry persistence | `tag_registry` append-only table via `POST /api/v1/registry/apply` (SERIALIZABLE transaction) |
+| Revision history | `registry_revisions` table + History page |
+| Retired tags | Detected during apply; shown in diff as red rows |
+| Stale conflict on save | Re-fetch full root, discard local changes (merge not supported) |
 
----
-
-## 19. Open Items
-
-- **Rename tracking:** Add a mechanism to allow tag renaming that updates both template JSON files and the database simultaneously, preserving `tag_id` continuity.
-- **Stale merge:** When a batch save is rejected due to a stale hash, attempt to merge the client's local changes with the refreshed server state rather than discarding them entirely.
-- **Detailed UI wireframes** for the Asset Tree Editor, cascade confirmation modal, and registry diff review view.
-- **Root template deletion:** Upon user confirmation, all active tags belonging to that root in the registry will be marked as retired.
-- **`data_type` as integer FK:** In Phase 2, `data_type` column in `tag_registry` is intended to become a BIGINT FK referencing a data_types lookup table.
-- **Concurrent edit protection** between simultaneous user sessions is not required at this time.
-- **Bulk import** of existing flat tag lists into the template hierarchy.
-- **Deployment and upgrade strategy** when the tool itself changes.
-- **Authentication:** `applied_by` is currently hardcoded to `'dev'`. A real auth system is a Phase 2+ item.

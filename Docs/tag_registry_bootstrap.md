@@ -1,5 +1,5 @@
 # Tag Registry Admin Tool — Bootstrap
-**v1.22** | **Updated:** 2026-04-07
+**Updated:** 2026-04-07
 Companion docs: `tag_registry_spec.md` | `tag_registry_api_spec.md` | `tag_registry_test_spec.md`
 
 ---

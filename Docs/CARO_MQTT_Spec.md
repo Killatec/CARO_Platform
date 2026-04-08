@@ -2,26 +2,24 @@
 
 MQTT Interface Specification
 
-*Version 1.8*
-
 Date: 2026-03-27
 
 **Companion Documents**
 
-hmi_functional_spec v2.3 \| hmi_API_spec v1.3 \| CARO_DB_Spec v1.0
+hmi_functional_spec \| hmi_API_spec \| CARO_DB_Spec
 
 **Revision History**
 
   ------------- ------------ ------------- ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
   **Version**   **Date**     **Author**    **Summary**
 
-  1.0           2026-03-24   PM / Claude   Initial release. Extracted from hmi_functional_spec v1.5.
+  1.0           2026-03-24   PM / Claude   Initial release. Extracted from hmi_functional_spec.
 
   1.1           2026-03-24   PM / Claude   OI-05 resolved --- SCHEMA payload format defined as base64-encoded .proto text.
 
   1.2           2026-03-26   PM / Claude   SET_TAG renamed to SET_VALUES. Command payload now carries a values array. CMD_ACK updated to per-tag results array.
 
-  1.3           2026-03-26   PM / Claude   Companion documents updated to include CARO_DB_Spec v1.0 and updated companion spec versions.
+  1.3           2026-03-26   PM / Claude   Companion documents updated to include CARO_DB_Spec and updated companion spec versions.
 
   1.4           2026-03-26   PM / Claude   QoS strategy rationale documented. Retained messages explicitly prohibited. cleanSession=true policy defined. NTP synchronization requirement added.
 
@@ -40,7 +38,7 @@ This document defines the MQTT interface between the CARO_HMI backend and embedd
 
 The CARO_HMI backend is the sole MQTT client on the broker side --- it subscribes to module telemetry and publishes commands. Embedded modules subscribe to command and handshake topics and publish telemetry and acknowledgements.
 
-For HMI system architecture, user roles, tag data model, WebSocket API, and REST API --- see hmi_functional_spec v2.3.
+For HMI system architecture, user roles, tag data model, WebSocket API, and REST API --- see hmi_functional_spec.
 
 **2. Broker Deployment**
 
@@ -126,7 +124,7 @@ The single telemetry topic caro/{module_id}/telemetry carries module-to-backend 
 
 ***NOTE:** There is no separate MQTT topic for full snapshots vs change-only updates. The message structure is identical in both modes. The backend distinguishes context by whether a REQUEST_SNAPSHOT command was recently sent to that module.*
 
-Recommended telemetry publish rate: 100--500 ms (2--10 Hz). The final value is TBD (see OI-01) but firmware teams should size buffers and DMA transfers accordingly. The default in the MQTT simulator is 100 ms (10 Hz).
+Recommended telemetry publish rate: 100--500 ms (2--10 Hz). Firmware teams should size buffers and DMA transfers accordingly. The default in the MQTT simulator is 100 ms (10 Hz).
 
 **5.1 JSON Telemetry Format**
 
@@ -162,7 +160,7 @@ When operating in change-only mode with no tag changes on a given tick, the modu
 
 **5.3 Backend Heartbeat**
 
-The backend publishes a heartbeat to each module on caro/{module_id}/beat at a regular interval (final value TBD --- see OI-07). Modules use this to detect loss of communication with the backend. Backend heartbeat payload:
+The backend publishes a heartbeat to each module on caro/{module_id}/beat at a regular interval. Modules use this to detect loss of communication with the backend. Backend heartbeat payload:
 
 {
 
@@ -170,7 +168,7 @@ The backend publishes a heartbeat to each module on caro/{module_id}/beat at a r
 
 }
 
-***NOTE:** Backend heartbeat format is currently timestamp-only. Additional fields TBD --- see OI-07.*
+***NOTE:** Backend heartbeat format is timestamp-only.*
 
 **6. Command Channel**
 
@@ -336,7 +334,7 @@ On receipt of the CONFIRM message the backend compares:
 
 -   tag_config_hash --- received from module vs tag_config_hash stored in the commissioned_modules table.
 
-During module commissioning, the received hashes are stored as the expected baseline in the commissioned_modules table. On all subsequent connections, hashes are compared against the stored baseline. A mismatch raises a System Alarm (behavior TBD --- see OI-03).
+During module commissioning, the received hashes are stored as the expected baseline in the commissioned_modules table. On all subsequent connections, hashes are compared against the stored baseline. A mismatch raises a System Alarm.
 
 ***NOTE:** Both hashes are computed entirely on the module from its compiled firmware definitions. The backend does not independently compute or verify these hashes --- it only compares the received values against the stored baseline.*
 
@@ -346,25 +344,6 @@ The tag_path delivered in the TAG_LIST message is truncated to remove the root-t
 
 Example: a tag with full path Plant1_System_A.RFPowerModule.RF_Fwd.setpoint is delivered to the RFPowerModule module as RF_Fwd.setpoint. The module uses tag_id for all wire communication; tag_path is used for local logging and diagnostics only.
 
-**8. Open Items**
-
-  -------- ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- ---------------------- -------------- ---------------
-  **\#**   **Issue**                                                                                                                                                                                             **Owner**              **Priority**   **Target**
-
-  OI-01    Define heartbeat interval and watchdog timeout final values.                                                                                                                                          FW Eng / Backend       Medium         v1.9
-
-  OI-02    Define hash algorithm and canonical serialization format for fw_hash and tag_config_hash --- must be agreed between firmware team and backend.                                                        Backend / FW Eng       High           v1.9
-
-  OI-03    Define hash mismatch behavior --- whether mismatches fully block the module or put it in a flagged/degraded state. Decision requires HSE and process engineering input.                               PM / HSE               High           v1.9
-
-  OI-04    Define MQTT topic ACL policy and per-module credential provisioning process.                                                                                                                          IT Security / FW Eng   High           v1.9
-
-  OI-05    RESOLVED --- SCHEMA payload format defined as base64-encoded .proto text. Schema delivery via handshake removed in v1.5; schema is hardcoded in firmware and sourced from packages/proto/tag.proto.   ---                    ---            Resolved v1.5
-
-  OI-06    Define module reconnect behavior --- should the backend re-deliver pending setpoint values that were sent while the module was offline?                                                               Backend / FW Eng       Medium         v1.9
-
-  OI-07    Define backend heartbeat interval and confirm whether additional fields beyond ts_utc_ms are required.                                                                                                Backend / FW Eng       Low            v1.9
-  -------- ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- ---------------------- -------------- ---------------
 
 **Appendix A: Protobuf Schema Reference**
 
@@ -375,3 +354,12 @@ packages/proto/tag.proto
 This file is version-controlled in the CARO_Platform monorepo and is the single source of truth for all apps and firmware. Do not duplicate the schema under individual app directories.
 
 The schema is hardcoded in module firmware. It is not delivered over the wire during the handshake sequence.
+
+## Open Questions
+
+- What is the final heartbeat interval and watchdog timeout value?
+- What hash algorithm and canonical serialization format should be used for `fw_hash` and `tag_config_hash`? Must be agreed between firmware and backend teams.
+- What is the correct behavior when a hash mismatch is detected — device blocked or degraded mode? Requires HSE input.
+- What is the MQTT topic ACL policy and per-module credential provisioning strategy? Requires IT Security and firmware engineering input.
+- Should pending setpoints be re-delivered to a module that reconnects after being offline?
+- What additional fields beyond timestamp should the backend heartbeat include?
