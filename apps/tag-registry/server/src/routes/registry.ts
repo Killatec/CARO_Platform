@@ -3,7 +3,7 @@ import { asyncWrap } from '@caro/server/asyncWrap';
 import { CaroError } from '@caro/server/errorHandler';
 import { getActiveRegistry, applyRegistry, getRevisions, getRevisionTags } from '../services/registryService.js';
 import { loadRoot } from '../services/templateService.js';
-import { ERROR_CODES } from '../../../shared/index.js';
+import { ERROR_CODES } from '@caro/tag-registry-shared';
 
 type ApiResponse<T> = { ok: true; data: T } | { ok: false; error: { code: string; message: string; details?: unknown } };
 

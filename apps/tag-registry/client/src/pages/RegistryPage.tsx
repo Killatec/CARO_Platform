@@ -5,7 +5,7 @@ import { Modal } from '@caro/ui/primitives';
 import { useTemplateGraphStore } from '../stores/useTemplateGraphStore.js';
 import { useRegistryStore } from '../stores/useRegistryStore.js';
 import { useValidation } from '../hooks/useValidation.js';
-import { resolveRegistry } from '../../../shared/index.js';
+import { resolveRegistry } from '@caro/tag-registry-shared';
 import { fetchRegistry, applyRegistry } from '../api/registry.js';
 import { diffRegistry } from '../utils/diffRegistry.js';
 import type { DiffRow } from '../utils/diffRegistry.js';
@@ -49,7 +49,11 @@ export function RegistryPage(): React.ReactElement {
       return;
     }
 
-    const proposed = resolveRegistry(templateMap, rootTemplateName);
+    const proposed = resolveRegistry(templateMap, rootTemplateName).map(t => ({
+      ...t,
+      data_type:   t.data_type   ?? 'float',
+      is_setpoint: t.is_setpoint ?? false,
+    }));
     setTags(proposed);
 
     setDbError(null);
@@ -68,7 +72,11 @@ export function RegistryPage(): React.ReactElement {
 
   function refreshDiff() {
     if (!rootTemplateName || !templateMap || templateMap.size === 0 || !isValid) return;
-    const proposed = resolveRegistry(templateMap, rootTemplateName);
+    const proposed = resolveRegistry(templateMap, rootTemplateName).map(t => ({
+      ...t,
+      data_type:   t.data_type   ?? 'float',
+      is_setpoint: t.is_setpoint ?? false,
+    }));
     setTags(proposed);
     fetchRegistry()
       .then((dbTags: ActiveTag[]) => setDiffRows(diffRegistry(proposed, dbTags)))

@@ -4,8 +4,8 @@ import { useUIStore } from '../../stores/useUIStore.js';
 import { useTemplateGraphStore } from '../../stores/useTemplateGraphStore.js';
 import { NewTemplateModal } from '../shared/NewTemplateModal.jsx';
 import { TrashIcon } from '../shared/TrashIcon.jsx';
-import { deepNotEqual } from '../../../../shared/utils.js';
-import type { TemplateEntry } from '../../../../shared/index.js';
+import { deepNotEqual } from '@caro/tag-registry-shared';
+import type { TemplateEntry } from '@caro/tag-registry-shared';
 
 interface TemplateLeafProps {
   name: string;

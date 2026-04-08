@@ -5,8 +5,8 @@ import {
   applyRegistryRevision,
 } from '@caro/db';
 import type { ActiveTag, RevisionRow, RevisionTag, NewTagInput, ExistingTagInput, ApplyResult } from '@caro/db';
-import { resolveRegistry } from '../../../shared/index.js';
-import type { Template } from '../../../shared/index.js';
+import { resolveRegistry } from '@caro/tag-registry-shared';
+import type { Template } from '@caro/tag-registry-shared';
 
 // ── Return types ──────────────────────────────────────────────────────────────
 
@@ -35,7 +35,11 @@ export async function applyRegistry(
   comment: string
 ): Promise<ApplyRegistryResult> {
   // 1. Resolve proposed registry server-side — do not trust client-supplied data
-  const proposed: NewTagInput[] = resolveRegistry(templateMap, rootName);
+  const proposed: NewTagInput[] = resolveRegistry(templateMap, rootName).map(t => ({
+    ...t,
+    data_type:   t.data_type   ?? 'float',
+    is_setpoint: t.is_setpoint ?? false,
+  }));
 
   // 2. Get current DB tags
   const dbTags = await getActiveTags();

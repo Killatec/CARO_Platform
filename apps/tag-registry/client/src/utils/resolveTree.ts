@@ -1,4 +1,4 @@
-import type { Template, TemplateEntry } from '../../../shared/index.js';
+import type { Template, TemplateEntry } from '@caro/tag-registry-shared';
 
 export interface TreeNodeData {
   template_name: string;

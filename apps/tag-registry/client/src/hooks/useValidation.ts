@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from 'react';
-import { validateTemplate, validateGraph, validateParentTypes } from '../../../shared/index.js';
-import type { Template, TemplateEntry, ValidationMessage } from '../../../shared/index.js';
+import { validateTemplate, validateGraph, validateParentTypes } from '@caro/tag-registry-shared';
+import type { Template, TemplateEntry, ValidationMessage } from '@caro/tag-registry-shared';
 import { useTemplateGraphStore } from '../stores/useTemplateGraphStore.js';
 import { useUIStore } from '../stores/useUIStore.js';
 

@@ -8,8 +8,10 @@
 
 ## HMI
 
-- [ ] Scaffold `@caro/hmi-context` package — `HmiContextProvider`, `useLiveValue`, `useTagWriter`, `useTagMap`, `useTagSubtree`
-- [ ] Scaffold `@caro/widgets` package — `NumericMon`, `NumericSet`, `BooleanMon`, `BooleanSet`
+- [x] Scaffold `@caro/hmi-context` package — `HmiContextProvider`, `useLiveValue`, `useTagWriter`, `useTagMap`, `useTagSubtree` *(Phase 1, 2026-04-08)*
+- [x] Scaffold `@caro/widgets` package — `NumericMon`, `NumericSet`, `BooleanMon`, `BooleanSet` *(Phase 1, 2026-04-08)*
+- [x] HMI server core — LKV cache, MQTT bridge, WebSocket server, DB pipeline placeholder, Express shell *(Phase 2, 2026-04-08)*
+- [x] Fix tag-map.ts meta field resolution — eng_min/eng_max/unit/format walks meta root-to-leaf, first match wins *(2026-04-08)*
 - [ ] Create HMI database migrations (005+) for all HMI tables: `users`, `sessions`, `commissioned_modules`, `operation_modes`, `mode_revisions`, `setpoint_values`, `pending_setpoint_values`, `system_settings`, `audit_log`
 - [ ] Trends endpoint — `GET /api/v1/trends/{tag_id}` (TimescaleDB backend, query params, aggregation)
 - [ ] User management endpoints — no user CRUD endpoints exist yet

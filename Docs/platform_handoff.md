@@ -1,5 +1,5 @@
 # CARO_Platform — Platform Handoff
-**Updated:** 2026-04-07 | **Root:** `C:\KillaTec\CARO_Platform` | **GitHub:** `Killatec/CARO_Platform` | **Branch:** `dev`
+**Updated:** 2026-04-08 | **Root:** `C:\KillaTec\CARO_Platform` | **GitHub:** `Killatec/CARO_Platform` | **Branch:** `dev`
 
 ---
 
@@ -9,7 +9,7 @@
 |---|---|---|---|
 | Tag Registry | 3001 | 5173 | Complete |
 | MQTT Simulator | 3002 | 5174 | Active development |
-| CARO HMI | TBD | TBD | Not started |
+| CARO HMI | 3003 | 5175 | Phase 3 complete — server core + client shell + demo page, E2E pipeline working |
 
 ---
 
@@ -21,6 +21,9 @@
 | `@caro/ui` | `packages/ui/` | Shared React primitives, tokens, and `apiClient` (`@caro/ui/api/client`) |
 | `@caro/server` | `packages/server/` | Shared Express middleware — asyncWrap, errorHandler |
 | `@caro/proto` | `packages/proto/` | Shared Protobuf schemas (`tag.proto`) |
+| `@caro/hmi-context` | `packages/hmi-context/` | HMI React context, hooks (useLiveValue, useTagWriter, useTagMap, useTagSubtree, useResolveAssetPath), MockHmiProvider |
+| `@caro/widgets` | `packages/widgets/` | HMI widget components (NumericMon, NumericSet, BooleanMon, BooleanSet) |
+| `@caro/tag-registry-shared` | `apps/tag-registry/shared/` | Tag Registry shared validation, types, and utilities |
 
 ---
 
@@ -78,8 +81,9 @@ Migrate in this order:
 5. ✓ apps/mqtt-simulator — server and client migrated to TypeScript
 
 Then scaffold new TypeScript packages:
-6. ○ `@caro/hmi-context` — HmiContextProvider, useLiveValue, useTagWriter, useTagMap, useTagSubtree
-7. ○ `@caro/widgets` — NumericMon, NumericSet, BooleanMon, BooleanSet
+6. ✓ `@caro/hmi-context` — HmiContextProvider, useLiveValue, useTagWriter, useTagMap, useTagSubtree, useResolveAssetPath, MockHmiProvider
+7. ✓ `@caro/widgets` — NumericMon, NumericSet, BooleanMon, BooleanSet
+8. ✓ `apps/caro-hmi/server` — LKV cache, MQTT bridge, WebSocket server, DB pipeline placeholder, Express shell
 
 ---
 
@@ -125,3 +129,4 @@ All platform and app documentation consolidated to `C:\KillaTec\CARO_Platform\Do
 | HMI Functional Spec | `hmi_functional_spec.md` |
 | HMI API Spec | `hmi_API_spec.md` |
 | HMI Widget Spec | `hmi_widget_spec.md` |
+| HMI Bootstrap | `hmi_bootstrap.md` |

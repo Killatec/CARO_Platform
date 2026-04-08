@@ -1,9 +1,8 @@
 import { create } from 'zustand';
 import * as templatesApi from '../api/templates.js';
 import type { BatchChange, BatchDeletion, BatchSaveResult } from '../api/templates.js';
-import { applyFieldCascade } from '../../../shared/index.js';
-import { deepEqual } from '../../../shared/utils.js';
-import type { Template, TemplateEntry, ValidationMessage } from '../../../shared/index.js';
+import { applyFieldCascade, deepEqual } from '@caro/tag-registry-shared';
+import type { Template, TemplateEntry, ValidationMessage } from '@caro/tag-registry-shared';
 import { useUIStore } from './useUIStore.js';
 
 export interface ValidationState {
@@ -151,7 +150,11 @@ export const useTemplateGraphStore = create<TemplateGraphState>((set, get) => ({
         newDirtySet.add(template_name);
       }
       return {
-        templateMap: cascadedMap instanceof Map ? cascadedMap : new Map(Object.entries(cascadedMap)) as Map<string, TemplateEntry>,
+        templateMap: cascadedMap instanceof Map
+          ? cascadedMap as Map<string, TemplateEntry>
+          : cascadedMap != null
+            ? new Map(Object.entries(cascadedMap)) as Map<string, TemplateEntry>
+            : newTemplateMap,
         dirtySet: newDirtySet,
       };
     });

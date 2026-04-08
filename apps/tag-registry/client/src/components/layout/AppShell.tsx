@@ -4,7 +4,7 @@ import { Sidebar } from './Sidebar.jsx';
 import { useRootTemplate } from '../../hooks/useRootTemplate.js';
 import { useTemplateGraphStore } from '../../stores/useTemplateGraphStore.js';
 import { useUIStore } from '../../stores/useUIStore.js';
-import { simulateCascade } from '../../../../shared/index.js';
+import { simulateCascade } from '@caro/tag-registry-shared';
 import * as templatesApi from '../../api/templates.js';
 import { fetchConfig } from '../../api/config.js';
 import type { TemplateListItem } from '../../api/templates.js';

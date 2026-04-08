@@ -1,5 +1,5 @@
 import { apiClient } from '@caro/ui/api/client';
-import type { Template, TemplateEntry } from '../../../shared/index.js';
+import type { Template, TemplateEntry } from '@caro/tag-registry-shared';
 
 export interface TemplateListItem {
   template_name: string;

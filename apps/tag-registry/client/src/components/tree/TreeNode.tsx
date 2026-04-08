@@ -4,7 +4,7 @@ import { loadRoot } from '../../api/templates.js';
 import { useUIStore } from '../../stores/useUIStore.js';
 import { useTemplateGraphStore } from '../../stores/useTemplateGraphStore.js';
 import { TrashIcon } from '../shared/TrashIcon.jsx';
-import { deepNotEqual } from '../../../../shared/utils.js';
+import { deepNotEqual } from '@caro/tag-registry-shared';
 import type { TreeNodeData } from '../../utils/resolveTree.js';
 
 interface TreeNodeProps {

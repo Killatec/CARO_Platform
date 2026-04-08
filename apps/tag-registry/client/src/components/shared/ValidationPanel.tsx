@@ -1,6 +1,6 @@
 import React from 'react';
 import { SeverityBadge } from './SeverityBadge.jsx';
-import type { ValidationMessage } from '../../../../shared/index.js';
+import type { ValidationMessage } from '@caro/tag-registry-shared';
 
 interface ValidationPanelProps {
   messages?: ValidationMessage[];

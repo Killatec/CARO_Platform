@@ -238,11 +238,11 @@ CARO_HMI operates exclusively against tags identified by tag_id. The Tag Registr
 
 | Field | Type | HMI Usage |
 |---|---|---|
-| tag_id | UINT32 | Primary identifier for all HMI operations: telemetry subscription, setpoint commands, trending queries, alarm binding, audit records. Transmitted as uint32 in all Protobuf messages. |
+| tag_id | UINT32 | Primary identifier for all HMI operations: telemetry subscription, setpoint commands, trending queries, alarm binding, audit records. Transmitted as uint32 in all WebSocket messages. |
 | tag_path | VARCHAR | Human-readable label displayed in dashboards and trend views. Fetched at startup; used for display only — never as an identifier on the wire. |
 | data_type | VARCHAR | Determines input validation and display formatting (f64, i32, bool, str). |
 | is_setpoint | BOOLEAN | If true, tag accepts write commands from Supervisor role. If false, tag is monitor-only. |
-| meta | JSONB | Provenance chain (leaf-to-root). Used to group tags in the UI by hierarchy and to display context (asset name, template type). |
+| meta | JSONB | Provenance chain (leaf-to-root). Used to group tags in the UI by hierarchy, display context, and resolve fields (eng_min, eng_max, unit, format) via root-to-leaf resolution (see Section 6.5). |
 | trends | BOOLEAN | If true, the tag's values are written to TimescaleDB by the telemetry loop. Used to filter time-series persistence — only tagged trends are stored. |
 
 > *NOTE: The HMI always queries only the latest active (non-retired) version of each tag. The HMI never reads template JSON files directly — only the resolved tag_registry table.*
@@ -275,6 +275,8 @@ At startup the backend builds a rich in-memory map keyed by tag_id from the Tag 
 | trends | boolean | Whether this tag's values are written to TimescaleDB on each telemetry tick. Sourced from tag_registry.trends column. |
 
 > *NOTE: The module_id for each tag is resolved by walking the tag's meta array and finding the entry where `type === 'module'`. The `name` field of that entry is the module_id. This requires every tag to have exactly one module ancestor — enforced by the VALIDATE_REQUIRED_PARENT_TYPES rule in the Tag Registry (see Section 8.1).*
+
+**Meta field resolution rule:** Fields `eng_min`, `eng_max`, `unit`, and `format` are resolved by walking the `meta` array from root (meta[0]) to leaf (meta[last]). The first level containing the field wins. If no level contains the field, a default is used (null for eng_min/eng_max/unit, `2` for format decimal places). This is implemented in `tag-map.ts getMetaField()`.
 
 The in-memory map is rebuilt whenever the backend detects a new Tag Registry revision has been applied by the Tag Registry Admin Tool.
 
@@ -394,7 +396,7 @@ Summary of MQTT channels used by the backend:
 | `caro/{module_id}/handshake_ack` | Device → Backend | Handshake acknowledgements and firmware/tag-config hash confirmation. |
 | `caro/{module_id}/beat` | Backend → Module | Backend heartbeat published to each module at regular interval. |
 
-> *NOTE: Telemetry runs unencrypted on the trusted local LAN (QoS0). All command and handshake channels use TLS and QoS1. Backend watchdog monitors telemetry continuity — loss of telemetry from a module triggers quality=bad for all of that module's tags in the LKV cache. See CARO_MQTT_Spec for full protocol details.*
+> *NOTE: Telemetry runs unencrypted on the trusted local LAN (QoS0). All command and handshake channels use TLS and QoS1. Backend watchdog monitors telemetry continuity — loss of telemetry from a module writes null (bad quality) for all of that module's tags in the LKV cache. See CARO_MQTT_Spec for full protocol details.*
 
 ---
 
@@ -404,37 +406,39 @@ The backend bridges MQTT device telemetry to WebSocket frontend clients. This is
 
 ### 8.1 Last-Known-Value Cache
 
-The backend maintains an in-memory last-known-value (LKV) cache keyed by tag_id (uint32). On startup all tags are initialized with quality=bad. The cache transitions to quality=good only when a live telemetry value is received from the device.
+The backend maintains an in-memory last-known-value (LKV) cache keyed by tag_id (uint32). On startup all tags are initialized with `value = null` (bad quality). The cache transitions to a non-null value only when a live telemetry value is received from the device. When a device disconnects or telemetry is lost, the watchdog writes null back to the LKV for all of that module's tags.
 
 Startup sequence:
 
-- Backend loads tag registry from PostgreSQL — builds the full tag_id map with quality=bad for all tags.
+- Backend loads tag registry from PostgreSQL — builds the full tag_id map with value=null for all tags.
 - Backend sends a REQUEST_SNAPSHOT command to every known device via `caro/{module_id}/cmd` (see CARO_MQTT_Spec Section 6).
 - Devices respond by publishing their current values via the telemetry channel.
-- LKV transitions to quality=good for each tag as values arrive.
-- Frontend clients that connect during this window receive quality=bad on tags not yet heard from — the correct and honest state.
+- LKV value becomes non-null for each tag as values arrive.
+- Frontend clients that connect during this window receive null values on tags not yet heard from — the correct and honest state.
 
 | Cache Entry Field | Type | Description |
 |---|---|---|
 | tag_id | uint32 | Stable tag identifier from the Tag Registry. |
-| value | typed | Latest confirmed value from device (f64, i32, bool, or str). |
-| quality | enum | good = live device value received; bad = not yet heard from device, or device disconnected. |
-| timestamp | uint64 ms | Unix timestamp of the most recent update. |
-| module_id | string | MQTT module_id that last published this tag. |
+| value | typed or null | Latest confirmed value from device (f64, i32, bool, str), or null if not yet received or device disconnected. Null = bad quality. |
+| generation | uint32 | Monotonic counter bumped only when value changes (strict equality). Used by the WebSocket pipeline for per-client change detection. |
+
+> *NOTE: There is no separate quality enum — null value means bad quality. There is no per-tag timestamp in the LKV cache. The WebSocket pipeline uses generation counters (not timestamps) to detect which tags have changed since a client's last update.*
+
+**Database writes:** Telemetry is written to TimescaleDB using a module-level timestamp from the MQTT message, not a per-tag timestamp. Each MQTT telemetry message carries one timestamp that is shared by all tags in that message. The DB pipeline receives entries as `{ moduleTs, tags[] }` and writes them in batches.
 
 ### 8.2 Telemetry Loop
 
-The backend runs a telemetry loop at up to 10 Hz (100 ms interval). On each tick it:
+The backend runs two independent pipelines at decoupled rates:
 
-- Collects all tag_ids whose LKV cache value has changed since the last tick.
-- Writes the changed values to TimescaleDB keyed by tag_id and timestamp — this is the sole write path for time-series persistence.
-- For each connected WebSocket client, computes the intersection of changed tag_ids with that client's subscription set, encodes only the intersecting tags as a Protobuf message, and sends it to that client. Each client receives a tailored message — not a shared broadcast.
+**WebSocket pipeline (pull-based, default 8 Hz / 125 ms tick):** On each tick, for each connected WebSocket client, compares per-tag generation counters against the client's last-sent generations. Tags with newer generations are included in a JSON DELTA message tailored to that client's subscription set. Each client receives only its subscribed tags — not a shared broadcast.
+
+**DB pipeline (push-based from MQTT handler):** Each incoming MQTT telemetry message is enqueued directly to the DB pipeline with its module-level timestamp. The pipeline flushes in batches to TimescaleDB. This is the sole write path for time-series persistence.
 
 > *NOTE: Ticks with zero changes produce no TimescaleDB writes and no WebSocket traffic for any client.*
 
 ### 8.3 Snapshot on Connect
 
-When a WebSocket client sends a SUBSCRIBE message, the backend immediately responds with a SnapshotMessage containing the current LKV cache values for all requested tag_ids. This ensures the client has full state without waiting for the next delta tick. After the snapshot, the client receives only delta updates for subscribed tags.
+When a WebSocket client sends a SUBSCRIBE message, the backend immediately responds with a SNAPSHOT message containing the current LKV cache values (value only, no timestamps) for all requested tag_ids. This ensures the client has full state without waiting for the next delta tick. After the snapshot, the client receives only DELTA updates for subscribed tags. Null values in the snapshot indicate bad quality (device not yet heard from).
 
 ### 8.4 Mode Compliance State
 
@@ -463,7 +467,7 @@ The expected value for each setpoint tag is maintained in the backend in-memory 
 
 OUT_OF_SYNC latches on the first good→bad transition and does not re-trigger for subsequent drift on the same tag. It clears only on manual reset by any logged-in user. The reset is written to audit_log as `tag.sync.reset`. The latch state is in-memory only — a backend restart clears it, and the next out-of-sync telemetry tick re-asserts it. Telemetry never writes to pending_setpoint_values.
 
-> *NOTE: Quality is evaluated by the backend per tag. When quality changes (good/uncertain/bad) it is pushed to clients as a delta via the normal telemetry loop. Frontend widgets do not implement stale detection — they render whatever quality the backend sends.*
+> *NOTE: Quality is represented by null value = bad quality. When a device disconnects, the watchdog writes null to the LKV for affected tags. This null propagates to clients as a normal delta. Frontend widgets check `value === null` to detect bad quality — they do not implement stale detection.*
 
 ### 8.5 Command Failure Handling
 

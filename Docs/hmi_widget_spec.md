@@ -15,6 +15,7 @@ hmi_functional_spec | hmi_API_spec | CARO_DB_Spec
 | 1.2 | 2026-03-26 | PM / Claude | Architecture redesigned around useLiveValue / useTagWriter hooks via @caro/hmi-context peer dependency. Widgets no longer accept onSubscribe / onWrite props. isPending lives in useWriteTag, cleared on Promise resolution. useTag is purely a read path. Dashboard composition simplified to single tag prop per widget. |
 | 1.3 | 2026-03-26 | PM / Claude | Fix 1: usage examples updated to hook-based API. Fix 2: Section 6.3 evolution note updated. Fix 3: companion doc version corrected. Fix 4: OI-05 reworded for hook contract. Section 6.4 added: useTagSubtree reference with nested node shape and dashboard panel example. |
 | 1.4 | 2026-03-26 | PM / Claude | useTag renamed to useLiveValue (granular single-tag subscription for efficient partial re-renders). useWriteTag renamed to useTagWriter. write() accepts single {tagId,value} or array for batch writes. isPending/error keyed by tagId. Quality is backend-evaluated and pushed as delta — no frontend stale logic. OI-05 closed. Companion docs updated. |
+| 1.5 | 2026-04-08 | PM / Claude | Quality enum removed — null value = bad quality. LiveValue.timestamp removed. Widget `tag` prop replaced with `assetPath` string + useResolveAssetPath. Meta field resolution rule: root-to-leaf, first match wins. Decimal formatting from tag.meta format field. Dashboard examples updated. |
 
 ---
 
@@ -61,17 +62,16 @@ Widgets in `@caro/widgets` use two custom hooks provided by the `@caro/hmi-conte
 
 ### 3.2 useLiveValue
 
-`useLiveValue(tagId)` — called internally by every widget on mount. Returns live value, quality, and timestamp for the given tag_id. Purely a read path — no write awareness.
+`useLiveValue(tagId)` — called internally by every widget on mount. Returns the live value for the given tag_id. Purely a read path — no write awareness.
 
 ```ts
 // Signature (in @caro/hmi-context)
 export function useLiveValue(tagId: number): {
-  value: any,        // latest confirmed value from device telemetry
-  quality: Quality,  // 'good' | 'bad' | 'uncertain'
-  timestamp: number  // Unix ms from the Protobuf Tag message
+  value: number | boolean | string | null  // null = bad quality (device not connected or value not yet received)
 }
-// type Quality = 'good' | 'bad' | 'uncertain'
 ```
+
+Quality is represented by `value === null`. There is no separate quality enum or timestamp field. When a device disconnects or telemetry is lost, the backend watchdog writes null to the LKV cache, which propagates to clients. Widgets check `value === null` to render the bad-quality state.
 
 The HmiContextProvider implementation subscribes to the WebSocket layer and maintains a last-known-value cache. On mount, the backend sends a SNAPSHOT for the tag_id so useLiveValue returns the current value immediately without waiting for the next delta.
 
@@ -132,9 +132,11 @@ export function useTagWriter() {
 6. `write()` Promise rejects (network error or device rejection). finally block clears isPending. `error(tag.tag_id)` is set. Widget shows rejection reason.
 7. Widget unmounts. useLiveValue cleanup unsubscribes. WebSocket UNSUBSCRIBE sent if no other widgets need this tag_id.
 
-### 3.5 Tag Definition Object (TagDef)
+### 3.5 Asset Path Resolution and Tag Definition
 
-All widgets accept a `tag` prop — a plain object from the backend in-memory tag map representing the full tag definition from the Tag Registry. Widgets read `tag_id`, `data_type`, `eng_min`, `eng_max`, and `unit` directly from this object. This eliminates the need for individual props per field and means new registry fields are available to widgets without API changes.
+All widgets accept an `assetPath` prop — a dot-separated path string that identifies the tag in the Tag Registry hierarchy. Widgets no longer receive a pre-resolved TagDef object. Instead, `@caro/hmi-context` provides `useResolveAssetPath(assetPath): TagDef[]` which finds all tags whose `tag_path` contains the `assetPath` as a contiguous segment match. Abbreviated paths are supported (e.g. `"RF_Fwd.setpoint"` instead of `"Plant1.Module.RF_Fwd.setpoint"`) as long as the match is unambiguous.
+
+Error evaluation (wrong number of matches, missing expected children) is the widget's responsibility, not hmi-context's. Widgets that expect exactly one tag use a `useSingleTag(assetPath, widgetName)` helper that throws descriptive errors on zero or multiple matches.
 
 ```ts
 // TagDef shape — from the backend in-memory tag map (Section 6.5 of hmi_functional_spec)
@@ -144,14 +146,18 @@ All widgets accept a `tag` prop — a plain object from the backend in-memory ta
   data_type: string,    // "f64" | "i32" | "bool" | "str"
   is_setpoint: boolean,
   module_id: string,
-  eng_min: number | null,  // from Tag Registry fields — used for input validation
+  eng_min: number | null,  // resolved from meta (see resolution rule below)
   eng_max: number | null,
-  unit: string | null,     // from Tag Registry fields — displayed after value
-  meta: array              // full provenance chain — available but not required by widgets
+  unit: string | null,     // resolved from meta (see resolution rule below)
+  meta: array              // full provenance chain
 }
 ```
 
-> *NOTE: Widgets use `tag.tag_id` internally for useLiveValue and useTagWriter calls — the dashboard author never passes tagId separately. The `label` prop is a display override; if omitted, widgets derive a short label from the last segment of `tag.tag_path`.*
+**Meta field resolution rule:** Fields `eng_min`, `eng_max`, `unit`, and `format` are resolved by walking the `meta` array from root (meta[0]) to leaf (meta[last]). The first level containing the field wins. If no level contains the field, a default is used (null for eng_min/eng_max/unit, `2` for format decimal places).
+
+**Decimal formatting:** The number of decimal places for numeric display is resolved from the `format` field in `tag.meta` using the root-to-leaf resolution rule above, with a default of 2 decimal places.
+
+> *NOTE: Widgets use `tag.tag_id` internally for useLiveValue and useTagWriter calls. The `label` prop is a display override; if omitted, widgets derive a short label from the last segment of `tag.tag_path`.*
 
 ---
 
@@ -161,19 +167,18 @@ All widgets in `@caro/widgets` follow these standards consistently. They use `@c
 
 ### 4.1 Quality Indicator
 
-Every widget reflects the quality of its tag value. Quality is communicated as a visual modifier on the value display — never hidden.
+Every widget reflects the quality of its tag value. Quality is determined by checking `value === null` from useLiveValue. There is no separate quality enum — null value means bad quality.
 
-| Quality | Visual Treatment |
+| State | Visual Treatment |
 |---|---|
-| good | Normal display. No indicator shown. |
-| bad | Value display shows a dash (---) instead of the value. Widget background or border tinted with a subtle red (`bg-red-500/10` or `border-red-400`). Tooltip: 'No signal — device not connected or value not yet received.' |
-| uncertain | Value shown but with an amber tint (`bg-amber-500/10`) and a small warning indicator. Tooltip: 'Value may be stale.' |
+| value !== null | Normal display. No indicator shown. |
+| value === null | Value display shows a dash (`---`) instead of the value. Widget background or border tinted with a subtle red (`bg-red-500/10` or `border-red-400`). Tooltip: 'No signal — device not connected or value not yet received.' |
 
-> *NOTE: quality=bad is the initial state for all tags before the first telemetry snapshot is received from the device. Widgets must handle this gracefully — never show undefined or NaN.*
+> *NOTE: `value === null` is the initial state for all tags before the first telemetry snapshot is received from the device. Widgets must handle this gracefully — never show undefined or NaN. The "uncertain" quality state has been removed; values are either present (non-null) or absent (null).*
 
 ### 4.1b Quality — Backend Evaluated
 
-Quality (good/uncertain/bad) is evaluated by the backend per tag based on device telemetry. When quality changes it is pushed to clients as a delta via the normal WebSocket telemetry loop. useLiveValue receives quality updates the same way it receives value updates. Widgets do not implement stale detection or quality inference — they render whatever quality the backend sends.
+Quality is evaluated by the backend per tag based on device telemetry. When a device disconnects or telemetry is lost, the backend watchdog writes null to the LKV cache. This null value propagates to clients via the normal WebSocket delta. Widgets check `value === null` to detect bad quality — they do not implement stale detection or quality inference.
 
 ### 4.2 Pending State (Setpoint Widgets)
 
@@ -208,22 +213,23 @@ Read-only display of a numeric tag value (f64 or i32). No user interaction. Suit
 
 | Prop | Type | Required | Default | Description |
 |---|---|---|---|---|
-| tag | TagDef | Yes | — | Tag definition object from the Tag Registry in-memory map. |
+| assetPath | string | Yes | — | Dot-separated path identifying the tag. Resolved via useResolveAssetPath. Abbreviated paths supported. |
 | label | string | No | — | Display label override. If omitted, the last segment of tag.tag_path is used. |
 
 > *NOTE: This widget calls useLiveValue and useTagWriter internally from @caro/hmi-context. No subscription or write props are required.*
 
 **Behavior**
 
+- Resolves tag via `useResolveAssetPath(assetPath)` (must match exactly one tag).
 - Calls `useLiveValue(tag.tag_id)` on mount to subscribe to live value updates.
-- Displays the latest value formatted to decimalPlaces with the unit suffix.
-- quality=bad: shows `---` and applies red tint. quality=uncertain: shows value with amber tint. Both sourced from useLiveValue.quality.
+- Displays the latest value formatted to the decimal places resolved from tag.meta `format` field (root-to-leaf, default 2) with the unit suffix.
+- value === null: shows `---` and applies red tint. Non-null: normal display.
 - Updates instantly on every useLiveValue value change — no debounce.
 
 **Usage Example**
 
 ```jsx
-<NumericMon tag={tagMap.get(1001)} label="RF Forward Power" />
+<NumericMon assetPath="RF_Fwd.monitor" label="RF Forward Power" />
 ```
 
 ---
@@ -236,24 +242,25 @@ Editable numeric setpoint widget for f64 or i32 tags. Displays the confirmed dev
 
 | Prop | Type | Required | Default | Description |
 |---|---|---|---|---|
-| tag | TagDef | Yes | — | Tag definition object. Provides tag_id, data_type, eng_min, eng_max, unit for validation and display. |
+| assetPath | string | Yes | — | Dot-separated path identifying the tag. Resolved via useResolveAssetPath. |
 | label | string | No | — | Display label override. Defaults to last segment of tag.tag_path. |
 | requireConfirm | boolean | No | false | If true, shows a confirmation dialog before submitting the write. |
 | confirmMessage | string | No | — | Custom confirmation message. |
 
 **Behavior**
 
+- Resolves tag via `useResolveAssetPath(assetPath)` (must match exactly one tag).
 - Displays confirmed value in normal state. An edit icon or click on the value opens an inline input pre-filled with the current value.
 - Input validates against `tag.eng_min` / `tag.eng_max` client-side. Shows inline validation error if out of range without calling `write()`.
 - On confirm: calls `write(tag.tag_id, parsedValue)` from useTagWriter. `isPending(tag.tag_id)` becomes true.
 - Pending state clears in the finally block of `write()` — on CMD_ACK acceptance, device rejection, or network error. `error(tag.tag_id)` is set on rejection.
 - `useTagWriter.isPending` and `useTagWriter.error` are used to drive pending spinner and inline error display.
-- quality=bad: edit button is disabled with tooltip 'Cannot write — device not connected.'
+- value === null: edit button is disabled with tooltip 'Cannot write — device not connected.'
 
 **Usage Example**
 
 ```jsx
-<NumericSet tag={tagMap.get(1003)} label="Power Setpoint" />
+<NumericSet assetPath="RF_Fwd.setpoint" label="Power Setpoint" />
 ```
 
 ---
@@ -266,7 +273,7 @@ Read-only boolean state indicator. Displays ON/OFF, ACTIVE/CLEAR, or any custom 
 
 | Prop | Type | Required | Default | Description |
 |---|---|---|---|---|
-| tag | TagDef | Yes | — | Tag definition object from the Tag Registry. |
+| assetPath | string | Yes | — | Dot-separated path identifying the tag. Resolved via useResolveAssetPath. |
 | label | string | No | — | Display label override. |
 | trueLabel | string | No | "ON" | Text displayed when value is true. |
 | falseLabel | string | No | "OFF" | Text displayed when value is false. |
@@ -275,14 +282,15 @@ Read-only boolean state indicator. Displays ON/OFF, ACTIVE/CLEAR, or any custom 
 
 **Behavior**
 
+- Resolves tag via `useResolveAssetPath(assetPath)` (must match exactly one tag).
 - Displays a colored dot indicator alongside the label and trueLabel/falseLabel text.
-- quality=bad: indicator shown as dashed circle, label shown as `---` with red tint.
+- value === null: indicator shown as dashed circle, label shown as `---` with red tint.
 - No user interaction.
 
 **Usage Example**
 
 ```jsx
-<BooleanMon tag={tagMap.get(1004)} label="RF Interlock" trueLabel="ACTIVE" falseLabel="CLEAR" trueColor="red" falseColor="green" />
+<BooleanMon assetPath="RF_Fwd.interlock" label="RF Interlock" trueLabel="ACTIVE" falseLabel="CLEAR" trueColor="red" falseColor="green" />
 ```
 
 ---
@@ -295,7 +303,7 @@ Toggleable boolean setpoint. Displays the confirmed state and allows Supervisors
 
 | Prop | Type | Required | Default | Description |
 |---|---|---|---|---|
-| tag | TagDef | Yes | — | Tag definition object from the Tag Registry. |
+| assetPath | string | Yes | — | Dot-separated path identifying the tag. Resolved via useResolveAssetPath. |
 | label | string | No | — | Display label override. |
 | trueLabel | string | No | "ON" | Text displayed when value is true. |
 | falseLabel | string | No | "OFF" | Text displayed when value is false. |
@@ -306,15 +314,16 @@ Toggleable boolean setpoint. Displays the confirmed state and allows Supervisors
 
 **Behavior**
 
+- Resolves tag via `useResolveAssetPath(assetPath)` (must match exactly one tag).
 - Displays a toggle button or indicator showing the confirmed state.
 - On click: if `requireConfirm=true`, opens a confirmation dialog. On confirm (or immediately if `requireConfirm=false`), calls `write(tag.tag_id, !currentValue)` from useTagWriter.
 - Pending state follows the same rules as Numeric_Set — managed via `useTagWriter.isPending` and `useTagWriter.error`.
-- quality=bad (from useLiveValue.quality): toggle is disabled with tooltip 'Cannot write — device not connected.'
+- value === null: toggle is disabled with tooltip 'Cannot write — device not connected.'
 
 **Usage Example**
 
 ```jsx
-<BooleanSet tag={tagMap.get(1005)} label="RF Enable" trueLabel="ENABLED" falseLabel="DISABLED" requireConfirm={true} confirmMessage="Enable RF output? Ensure area is clear." />
+<BooleanSet assetPath="RF_Fwd.enable" label="RF Enable" trueLabel="ENABLED" falseLabel="DISABLED" requireConfirm={true} confirmMessage="Enable RF output? Ensure area is clear." />
 ```
 
 ---
@@ -350,17 +359,15 @@ export function HmiContextProvider({ children }) {
 ```jsx
 // dashboards/RFGeneratorDashboard.jsx
 import { NumericMon, NumericSet, BooleanMon, BooleanSet } from '@caro/widgets';
-import { useTagMap } from '@caro/hmi-context';
 
 export function RFGeneratorDashboard() {
-  const tagMap = useTagMap(); // Map<tag_id, TagDef> — no other wiring needed
   return (
     <div className="grid grid-cols-3 gap-4 p-4">
-      <NumericMon tag={tagMap.get(1001)} label="RF Forward Power" />
-      <NumericMon tag={tagMap.get(1002)} label="RF Reflected Power" />
-      <NumericSet tag={tagMap.get(1003)} label="Power Setpoint" />
-      <BooleanMon tag={tagMap.get(1004)} label="Interlock" trueLabel="ACTIVE" falseLabel="CLEAR" trueColor="red" falseColor="green" />
-      <BooleanSet tag={tagMap.get(1005)} label="RF Enable" requireConfirm={true} />
+      <NumericMon assetPath="RF_Fwd.monitor" label="RF Forward Power" />
+      <NumericMon assetPath="RF_Ref.monitor" label="RF Reflected Power" />
+      <NumericSet assetPath="RF_Fwd.setpoint" label="Power Setpoint" />
+      <BooleanMon assetPath="RF_Fwd.interlock" label="Interlock" trueLabel="ACTIVE" falseLabel="CLEAR" trueColor="red" falseColor="green" />
+      <BooleanSet assetPath="RF_Fwd.enable" label="RF Enable" requireConfirm={true} />
     </div>
   );
 }
@@ -426,9 +433,9 @@ export function RFFwdPanel({ pathPrefix }) {
 
   return (
     <div className="flex flex-col gap-2">
-      <NumericMon tag={monitor.tag} label="Forward Power" />
-      <NumericSet tag={setpoint.tag} label="Power Setpoint" />
-      <BooleanSet tag={interlock_enable?.tag} label="Interlock Enable" requireConfirm={true} />
+      <NumericMon assetPath={`${pathPrefix}.monitor`} label="Forward Power" />
+      <NumericSet assetPath={`${pathPrefix}.setpoint`} label="Power Setpoint" />
+      <BooleanSet assetPath={`${pathPrefix}.interlock_enable`} label="Interlock Enable" requireConfirm={true} />
     </div>
   );
 }
@@ -452,32 +459,34 @@ import { render, screen } from '@testing-library/react';
 import { NumericMon } from '@caro/widgets';
 import { MockHmiProvider } from '@caro/hmi-context/testing';
 
-const mockTag = {
-  tag_id: 1001,
-  tag_path: "Plant1.Module.power",
-  data_type: "f64",
-  is_setpoint: false,
-  module_id: "Module",
-  eng_min: 0,
-  eng_max: 5000,
-  unit: "W",
-  meta: []
-};
+const mockTags = [
+  {
+    tag_id: 1001,
+    tag_path: "Plant1.Module.power",
+    data_type: "f64",
+    is_setpoint: false,
+    module_id: "Module",
+    eng_min: 0,
+    eng_max: 5000,
+    unit: "W",
+    meta: []
+  }
+];
 
-test('displays value when quality is good', () => {
+test('displays value when quality is good (non-null)', () => {
   render(
-    <MockHmiProvider tagValues={{ 1001: { value: 85.5, quality: 'good', timestamp: Date.now() } }}>
-      <NumericMon tag={mockTag} label="Power" />
+    <MockHmiProvider tags={mockTags} tagValues={{ 1001: { value: 85.5 } }}>
+      <NumericMon assetPath="power" label="Power" />
     </MockHmiProvider>
   );
   expect(screen.getByText('85.50')).toBeInTheDocument();
   expect(screen.getByText('W')).toBeInTheDocument();
 });
 
-test('shows dash when quality is bad', () => {
+test('shows dash when value is null (bad quality)', () => {
   render(
-    <MockHmiProvider tagValues={{ 1001: { value: 0, quality: 'bad', timestamp: 0 } }}>
-      <NumericMon tag={mockTag} label="Power" />
+    <MockHmiProvider tags={mockTags} tagValues={{ 1001: { value: null } }}>
+      <NumericMon assetPath="power" label="Power" />
     </MockHmiProvider>
   );
   expect(screen.getByText('---')).toBeInTheDocument();

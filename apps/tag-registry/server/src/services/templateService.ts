@@ -12,8 +12,8 @@ import {
   simulateCascade,
   applyFieldCascade,
   ERROR_CODES,
-} from '../../../shared/index.js';
-import type { Template } from '../../../shared/index.js';
+} from '@caro/tag-registry-shared';
+import type { Template, ValidationMessage, AffectedParent as CascadeAffectedParent } from '@caro/tag-registry-shared';
 import { CaroError } from '@caro/server/errorHandler';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -53,7 +53,7 @@ export interface BatchDeletion {
 
 type BatchSaveResult =
   | { requires_confirmation: false; modified_files: string[]; deleted_files: string[] }
-  | { requires_confirmation: true; diff: unknown; affectedParents: string[] };
+  | { requires_confirmation: true; diff: unknown; affectedParents: CascadeAffectedParent[] };
 
 interface AffectedParent {
   template_name: string;
@@ -66,8 +66,8 @@ type DeleteTemplateResult =
 
 export interface ValidateAllResult {
   valid: boolean;
-  errors: string[];
-  warnings: string[];
+  errors: ValidationMessage[];
+  warnings: ValidationMessage[];
 }
 
 // ── In-memory index ───────────────────────────────────────────────────────────
@@ -343,7 +343,7 @@ export async function batchSave(
   let cascadedMap = new Map<string, Template>(currentTemplates);
   if (hasChanges) {
     for (const change of changes) {
-      cascadedMap = applyFieldCascade(cascadedMap, change.template);
+      cascadedMap = applyFieldCascade(cascadedMap, change.template) as Map<string, Template>;
     }
   }
 
@@ -507,8 +507,8 @@ export async function deleteTemplate(
  * Run full validation across all template files
  */
 export async function validateAll(): Promise<ValidateAllResult> {
-  const errors:   string[] = [];
-  const warnings: string[] = [];
+  const errors:   ValidationMessage[] = [];
+  const warnings: ValidationMessage[] = [];
 
   // Validate each template individually
   for (const [, entry] of templateIndex.entries()) {

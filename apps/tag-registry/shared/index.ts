@@ -12,6 +12,7 @@ export { applyFieldCascade } from './applyFieldCascade.js';
 export { validateParentTypes } from './validateParentTypes.js';
 export { resolveRegistry } from './resolveRegistry.js';
 export { hashTemplate } from './hashTemplate.js';
+export { deepEqual, deepNotEqual } from './utils.js';
 export * from './constants.js';
 export type {
   FieldDef, ChildRef, Template, TemplateEntry,

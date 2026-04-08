@@ -582,13 +582,29 @@ The WebSocket connection is the primary real-time data channel. Connection: `wss
 |---|---|---|
 | SUBSCRIBE | Client → Server | Subscribe to tag_ids. Server responds with SNAPSHOT then streams updates. |
 | UNSUBSCRIBE | Client → Server | Unsubscribe from tag_ids. |
-| SNAPSHOT | Server → Client | Full current LKV cache values for all subscribed tag_ids. Sent on subscribe or reconnect. |
-| DELTA | Server → Client | Changed values only, up to 10 Hz. Filtered per client to subscribed tags only. |
+| SNAPSHOT | Server → Client | Full current LKV cache values for all subscribed tag_ids. Sent on subscribe or reconnect. Values only (no timestamps). |
+| DELTA | Server → Client | Changed values only, up to 8 Hz (125 ms tick). Filtered per client to subscribed tags only. Values only (no timestamps). |
 | PING | Client → Server | Latency measurement. |
 | PONG | Server → Client | Echoes PING timestamp. |
-| MODE_CHANGED | Server → Client | Broadcast when active mode revision changes. JSON only. |
+| MODE_CHANGED | Server → Client | Broadcast when active mode revision changes. |
 
-> *NOTE: SUBSCRIBE, UNSUBSCRIBE, SNAPSHOT, DELTA, PING, and PONG use Protobuf encoding defined in CARO_MQTT_Spec Appendix A. MODE_CHANGED is JSON.*
+All WebSocket messages use JSON encoding. SNAPSHOT and DELTA carry a `values` object keyed by tag_id with the value only (no timestamp, no quality enum). A null value means bad quality.
+
+```json
+// SUBSCRIBE
+{ "type": "SUBSCRIBE", "tagIds": [1001, 1002, 1003] }
+
+// UNSUBSCRIBE
+{ "type": "UNSUBSCRIBE", "tagIds": [1001] }
+
+// SNAPSHOT (sent immediately on subscribe)
+{ "type": "SNAPSHOT", "values": { "1001": 85.5, "1002": 12.3, "1003": null } }
+
+// DELTA (sent on tick when values change)
+{ "type": "DELTA", "values": { "1001": 86.1 } }
+```
+
+> *NOTE: Protobuf encoding is reserved for future optimization (Phase 6). The current implementation uses JSON for all WebSocket messages.*
 
 MODE_CHANGED payload:
 ```json

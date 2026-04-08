@@ -1,0 +1,20 @@
+{
+  "name": "@caro/hmi-context",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+    "./testing": { "types": "./dist/MockHmiProvider.d.ts", "default": "./dist/MockHmiProvider.js" }
+  },
+  "scripts": { "build": "tsc", "test": "vitest run" },
+  "peerDependencies": { "react": "^18.0.0" },
+  "devDependencies": {
+    "@testing-library/react": "^14.0.0",
+    "@types/react": "^19.2.14",
+    "typescript": "^6.0.2",
+    "vitest": "^1.6.0",
+    "jsdom": "^24.0.0"
+  }
+}

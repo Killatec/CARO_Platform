@@ -4,8 +4,8 @@ import { useUIStore } from '../../stores/useUIStore.js';
 import { useTemplateGraphStore } from '../../stores/useTemplateGraphStore.js';
 import { AddFieldModal } from '../shared/AddFieldModal.jsx';
 import { TrashIcon } from '../shared/TrashIcon.jsx';
-import { deepNotEqual } from '../../../../shared/utils.js';
-import type { FieldDef } from '../../../../shared/index.js';
+import { deepNotEqual } from '@caro/tag-registry-shared';
+import type { FieldDef } from '@caro/tag-registry-shared';
 
 type FieldType = 'Numeric' | 'String' | 'Boolean';
 
