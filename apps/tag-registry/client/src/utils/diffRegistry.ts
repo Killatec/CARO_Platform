@@ -1,3 +1,5 @@
+import { deepEqual } from '@caro/tag-registry-shared';
+
 export interface ProposedTag {
   tag_path: string;
   data_type: string;
@@ -77,31 +79,3 @@ function getChangedFields(proposed: ProposedTag, dbTag: DbTag): string[] {
   return changed;
 }
 
-/**
- * Deep equality check that is key-order insensitive for plain objects.
- */
-function deepEqual(a: unknown, b: unknown): boolean {
-  if (a === b) return true;
-  if (Array.isArray(a) && Array.isArray(b)) {
-    if (a.length !== b.length) return false;
-    for (let i = 0; i < a.length; i++) {
-      if (!deepEqual(a[i], b[i])) return false;
-    }
-    return true;
-  }
-  if (isPlainObject(a) && isPlainObject(b)) {
-    const keysA = Object.keys(a as object);
-    const keysB = Object.keys(b as object);
-    if (keysA.length !== keysB.length) return false;
-    for (const key of keysA) {
-      if (!Object.prototype.hasOwnProperty.call(b, key)) return false;
-      if (!deepEqual((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key])) return false;
-    }
-    return true;
-  }
-  return false;
-}
-
-function isPlainObject(v: unknown): boolean {
-  return v !== null && typeof v === 'object' && !Array.isArray(v);
-}

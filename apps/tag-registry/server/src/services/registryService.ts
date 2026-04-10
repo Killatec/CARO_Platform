@@ -5,7 +5,7 @@ import {
   applyRegistryRevision,
 } from '@caro/db';
 import type { ActiveTag, RevisionRow, RevisionTag, NewTagInput, ExistingTagInput, ApplyResult } from '@caro/db';
-import { resolveRegistry } from '@caro/tag-registry-shared';
+import { resolveRegistry, deepEqual } from '@caro/tag-registry-shared';
 import type { Template } from '@caro/tag-registry-shared';
 
 // ── Return types ──────────────────────────────────────────────────────────────
@@ -84,30 +84,3 @@ function isModified(proposed: NewTagInput, dbTag: ActiveTag): boolean {
   return false;
 }
 
-function deepEqual(a: unknown, b: unknown): boolean {
-  if (a === b) return true;
-  if (Array.isArray(a) && Array.isArray(b)) {
-    if (a.length !== b.length) return false;
-    for (let i = 0; i < a.length; i++) {
-      if (!deepEqual(a[i], b[i])) return false;
-    }
-    return true;
-  }
-  if (isPlainObject(a) && isPlainObject(b)) {
-    const ao = a as Record<string, unknown>;
-    const bo = b as Record<string, unknown>;
-    const keysA = Object.keys(ao);
-    const keysB = Object.keys(bo);
-    if (keysA.length !== keysB.length) return false;
-    for (const key of keysA) {
-      if (!Object.prototype.hasOwnProperty.call(bo, key)) return false;
-      if (!deepEqual(ao[key], bo[key])) return false;
-    }
-    return true;
-  }
-  return false;
-}
-
-function isPlainObject(v: unknown): v is Record<string, unknown> {
-  return v !== null && typeof v === 'object' && !Array.isArray(v);
-}

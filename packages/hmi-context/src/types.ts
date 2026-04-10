@@ -1,3 +1,6 @@
+import type { MetaLevel } from '@caro/tag-registry-shared';
+export type { MetaLevel };
+
 /** Tag definition from the backend in-memory tag map. */
 export interface TagDef {
   tag_id: number;
@@ -9,13 +12,6 @@ export interface TagDef {
   eng_max: number | null;
   unit: string | null;
   meta: MetaLevel[];
-}
-
-/** Single level in the tag provenance chain (meta[0] = root, meta[last] = tag leaf). */
-export interface MetaLevel {
-  type: string;
-  name: string;
-  fields: Record<string, unknown>;
 }
 
 /** Live value pushed via WebSocket. null value = bad quality (device offline / telemetry lost). */

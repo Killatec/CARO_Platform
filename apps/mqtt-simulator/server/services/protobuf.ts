@@ -8,7 +8,7 @@ const protoPath = resolve(__dirname, '../../../../packages/proto/tag.proto');
 export interface ProtoTag {
   tag_id: number;
   data_type: string;
-  simValue: number | boolean | string;
+  simValue: number | boolean;
 }
 
 let TelemetryMessage: protobufjs.Type | null = null;
@@ -25,10 +25,8 @@ export function encodeProto(moduleId: string, tags: ProtoTag[], status: string):
     status,
     tags: tags.map(t => {
       const value: Record<string, unknown> = {};
-      if (t.data_type === 'f32')  value.float_value  = t.simValue;
-      if (t.data_type === 'i32')  value.int_value    = t.simValue;
-      if (t.data_type === 'bool') value.bool_value   = t.simValue;
-      if (t.data_type === 'str')  value.string_value = t.simValue;
+      if (t.data_type === 'f32')  value.float_value = t.simValue;
+      if (t.data_type === 'bool') value.bool_value  = t.simValue;
       return { tag_id: t.tag_id, value };
     }),
   };

@@ -262,7 +262,7 @@ export const useTemplateGraphStore = create<TemplateGraphState>((set, get) => ({
 
     const deletions: BatchDeletion[] = Array.from(pendingDeletions).map(name => ({
       template_name: name,
-      original_hash: originalTemplateMap.get(name)?.hash ?? null,
+      original_hash: originalTemplateMap.get(name)!.hash as string,
     }));
 
     set({ isLoading: true, error: null });

@@ -34,10 +34,10 @@ export function log(level: string, msg: string): void {
 // Runtime state — populated by start()
 // ---------------------------------------------------------------------------
 interface SimTagState {
-  simValue: number | boolean | string;
+  simValue: number | boolean;
   simT: number;
-  lastPublishedValue: number | boolean | string | undefined;
-  previousValue: number | boolean | string | undefined;
+  lastPublishedValue: number | boolean | undefined;
+  previousValue: number | boolean | undefined;
 }
 
 export interface ModuleStatus {
@@ -93,16 +93,13 @@ let currentInterval: number | null = null;
 function initSimState(): void {
   simState.clear();
   for (const tag of tags) {
-    let simValue: number | boolean | string;
+    let simValue: number | boolean;
     if (tag.is_setpoint) {
-      simValue = tag.data_type === 'bool' ? false
-               : tag.data_type === 'str'  ? ''
-               : 0;
+      simValue = tag.data_type === 'bool' ? false : 0;
     } else {
       simValue = tag.data_type === 'f32'  ? 50.0
-               : tag.data_type === 'i32'  ? 50
                : tag.data_type === 'bool' ? false
-               : 'sim';
+               : 50.0;
     }
     simState.set(tag.tag_id, { simValue, simT: 0, lastPublishedValue: undefined, previousValue: undefined });
   }
@@ -119,15 +116,9 @@ function advanceTag(tag: SimTag, state: SimTagState, deltaMs: number): void {
       state.simT += deltaMs;
       state.simValue = 50 + 25 * Math.sin((2 * Math.PI * state.simT) / SINE_PERIOD_MS);
       break;
-    case 'i32':
-      state.simT += deltaMs;
-      state.simValue = Math.round(50 + 25 * Math.sin((2 * Math.PI * state.simT) / SINE_PERIOD_MS));
-      break;
     case 'bool':
       if (Math.random() < 0.005) state.simValue = !state.simValue; // ~0.5% per tick
       break;
-    case 'str':
-      break; // static
   }
 }
 
@@ -197,7 +188,7 @@ function handleCommand(topic: string, rawMessage: Buffer): void {
   if (parts.length !== 3 || parts[2] !== 'cmd') return;
   const moduleId = parts[1];
 
-  let cmd: { command_id?: string; command_type?: string; payload?: { values?: { tag_id: number; value: number | boolean | string }[] } };
+  let cmd: { command_id?: string; command_type?: string; payload?: { values?: { tag_id: number; value: number | boolean }[] } };
   try {
     cmd = JSON.parse(rawMessage.toString());
   } catch {
@@ -467,15 +458,11 @@ export function injectSetValues(moduleId: string): void {
     throw new Error(`Module ${moduleId} has no setpoint tags.`);
   }
 
-  const STR_VALUES = ['sim', 'test', 'auto', 'manual'];
   const values = setpointTags.map(tag => {
-    let value: number | boolean | string;
+    let value: number | boolean;
     switch (tag.data_type) {
-      case 'f32':  value = Math.round(Math.random() * 10000) / 100; break;
-      case 'i32':  value = Math.floor(Math.random() * 101); break;
       case 'bool': value = Math.random() > 0.5; break;
-      case 'str':  value = STR_VALUES[Math.floor(Math.random() * STR_VALUES.length)]; break;
-      default:     value = 0;
+      default:     value = Math.round(Math.random() * 10000) / 100; break; // f32
     }
     return { tag_id: tag.tag_id, value };
   });

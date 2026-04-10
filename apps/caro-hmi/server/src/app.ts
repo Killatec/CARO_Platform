@@ -1,5 +1,5 @@
 import express from 'express';
-import type { Application } from 'express';
+import type { Application, ErrorRequestHandler } from 'express';
 import cors from 'cors';
 import type { TagDef } from '@caro/hmi-context';
 import { errorHandler } from '@caro/server';
@@ -22,7 +22,7 @@ export function createApp(tagMap: Map<number, TagDef>): Application {
 
   app.use('/api/v1/tags', createTagsRouter(tagMap));
 
-  app.use(errorHandler);
+  app.use(errorHandler as ErrorRequestHandler);
 
   return app;
 }
