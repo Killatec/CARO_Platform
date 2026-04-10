@@ -105,10 +105,9 @@ describe('HmiContextProvider', () => {
     const wrapper = makeWrapper([mockTag, mockReadbackTag]);
     const { result } = renderHook(() => useTagMap(), { wrapper });
 
-    // Initially empty before fetch resolves
-    expect(result.current.size).toBe(0);
-
-    await waitFor(() => expect(result.current.size).toBe(2));
+    // Provider returns null until fetch resolves, so hooks are not yet mounted.
+    // Wait for tags to load and provider to render children.
+    await waitFor(() => expect(result.current?.size).toBe(2));
 
     expect(result.current.get(1001)).toEqual(mockTag);
     expect(result.current.get(1002)).toEqual(mockReadbackTag);

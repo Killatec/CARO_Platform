@@ -18,9 +18,10 @@ async function writeTemplate(dir, subdir, template) {
 const tagTemplate = {
   template_type: 'tag',
   template_name: 'my_tag',
-  data_type: 'f64',
-  is_setpoint: false,
-  fields: {},
+  fields: {
+    data_type: { field_type: 'TagType', default: 'f32' },
+    is_setpoint: { field_type: 'Boolean', default: false },
+  },
   children: [],
 };
 

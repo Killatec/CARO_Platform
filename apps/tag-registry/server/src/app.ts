@@ -3,6 +3,7 @@ import cors from 'cors';
 import templatesRouter from './routes/templates.js';
 import registryRouter from './routes/registry.js';
 import configRouter from './routes/config.js';
+import tagTypesRouter from './routes/tagTypes.js';
 import { errorHandler } from '@caro/server/errorHandler';
 
 /**
@@ -19,6 +20,7 @@ export function createApp(): Application {
   app.use('/api/v1/templates', templatesRouter);
   app.use('/api/v1/registry', registryRouter);
   app.use('/api/v1/config', configRouter);
+  app.use('/api/v1/tag-types', tagTypesRouter);
 
   // Error handler (must be last)
   app.use(errorHandler);

@@ -1,4 +1,5 @@
 import http from 'http';
+import { ping, runMigrations } from '@caro/db';
 import { config } from './config.js';
 import { loadTagMap } from './tag-map.js';
 import { LkvCache } from './lkv.js';
@@ -8,6 +9,22 @@ import { WsServer } from './ws-server.js';
 import { createApp } from './app.js';
 
 async function start(): Promise<void> {
+  // 0. Verify DB connectivity and run migrations
+  try {
+    await ping();
+    console.log(`[HMI] Connected to PostgreSQL`);
+  } catch (err) {
+    console.error('[HMI] Failed to connect to PostgreSQL:', (err as Error).message);
+    process.exit(1);
+  }
+
+  try {
+    await runMigrations();
+  } catch (err) {
+    console.error('[HMI] Startup aborted — migration failure:', (err as Error).message);
+    process.exit(1);
+  }
+
   // 1. Load tag map from DB
   let tagMapResult: Awaited<ReturnType<typeof loadTagMap>>;
   try {

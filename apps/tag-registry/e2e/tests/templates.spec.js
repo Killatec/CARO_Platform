@@ -41,7 +41,7 @@ test.describe('Templates Tree', () => {
   test('clicking a template leaf populates the Fields Panel', async ({ page }) => {
     const name = `tag_fields_${Date.now()}`;
     created.push(name);
-    await createTagTemplate(name, 'f64', false, {
+    await createTagTemplate(name, 'f32', false, {
       eng_min: { field_type: 'Numeric', default: 0 },
     });
 
@@ -56,7 +56,7 @@ test.describe('Templates Tree', () => {
   test('editing a template default field value marks it dirty (orange)', async ({ page }) => {
     const name = `tag_dirty_${Date.now()}`;
     created.push(name);
-    await createTagTemplate(name, 'f64', false, {
+    await createTagTemplate(name, 'f32', false, {
       eng_min: { field_type: 'Numeric', default: 0 },
     });
 

@@ -447,21 +447,22 @@ const cascadeModal = page.locator('.shadow-xl').filter({ hasText: /cascade|confi
 
 Filter on distinguishing title text to avoid matching multiple `.shadow-xl` elements if several modals are present simultaneously.
 
-### 5.7 createTagTemplate requires top-level data_type and is_setpoint
+### 5.7 createTagTemplate places data_type and is_setpoint inside fields
 
-The shared `validateTemplate()` function checks `template.data_type` (must be a valid `DATA_TYPES` key) and `typeof template.is_setpoint !== 'boolean'` at the **top level** of the template object — matching the on-disk JSON structure (`apps/tag-registry/templates/tags/numeric_mon.json`).
-
-If `data_type` or `is_setpoint` are placed inside the `fields` object as `{ field_type, default }` descriptors, `validateTemplate` cannot find them at the expected paths, reports `SCHEMA_VALIDATION_ERROR` for both fields, and sets `validationState.isValid = false`. This disables the Save button and prevents the Registry table from rendering — symptoms that are easy to misdiagnose as UI bugs.
+The shared `validateTemplate()` function checks for three required fields inside `template.fields` on tag templates: `data_type` (field_type `TagType`), `is_setpoint` (field_type `Boolean`), and `Trends` (field_type `Boolean`). Missing or wrong field_type values produce `SCHEMA_VALIDATION_ERROR`. The server also validates TagType field defaults against the `tag_types` database table.
 
 **Correct `createTagTemplate` output:**
 ```js
 {
   template_type: 'tag',
   template_name: name,
-  data_type:     dataType,    // top-level string — NOT inside fields{}
-  is_setpoint:   isSetpoint,  // top-level boolean — NOT inside fields{}
-  fields:        fields,      // user-defined fields only
-  children:      [],
+  fields: {
+    data_type:   { field_type: 'TagType', default: dataType },
+    is_setpoint: { field_type: 'Boolean', default: isSetpoint },
+    Trends:      { field_type: 'Boolean', default: true },
+    ...fields,
+  },
+  children: [],
 }
 ```
 
@@ -648,13 +649,13 @@ Creates a tag template and returns `{ template, hash }`.
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `name` | string | required | Unique template name |
-| `dataType` | string | `'f64'` | One of the `DATA_TYPES` constants |
+| `dataType` | string | `'f32'` | A valid `tag_types.type_name` value |
 | `isSetpoint` | boolean | `false` | Whether the tag is a setpoint |
 | `fields` | object | `{}` | Additional user-defined fields |
 
 Posts via `POST /templates/batch` with `confirmed: true`, then re-fetches via `GET /templates/:name` to return the server-assigned hash.
 
-**Schema requirement:** `data_type` and `is_setpoint` are placed at the top level of the template object, not inside `fields{}`. See section 5.7.
+**Schema requirement:** `data_type` and `is_setpoint` are placed inside `fields{}` as field definition objects (field_type `TagType` and `Boolean` respectively). See section 5.7.
 
 ### createStructuralTemplate(name, templateType?, children?, fields?)
 

@@ -1,5 +1,16 @@
 import { query, withTransaction } from './query.js';
 
+export interface TagType {
+  id: number;
+  type_name: string;
+  display_name: string;
+}
+
+export async function getTagTypes(): Promise<TagType[]> {
+  const result = await query('SELECT id, type_name, display_name FROM tag_types ORDER BY id');
+  return result.rows as TagType[];
+}
+
 /** Shape of a row returned by getActiveTags(). tag_id is coerced to number. */
 export interface ActiveTag {
   tag_id: number;

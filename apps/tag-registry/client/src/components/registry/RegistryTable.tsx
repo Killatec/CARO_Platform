@@ -3,6 +3,7 @@ import { Table, TableHeader, TableBody, TableRow, TableHeaderCell, TableCell, Mo
 import { TagPathLabel } from '../shared/TagPathLabel.jsx';
 import { MetaModalBody } from '../shared/MetaModalBody.jsx';
 import { useRegistryStore } from '../../stores/useRegistryStore.js';
+import { useTagTypesStore } from '../../stores/useTagTypesStore.js';
 import type { DiffRow } from '../../utils/diffRegistry.js';
 
 const DIFF_ROW_CLASS: Record<string, string> = {
@@ -35,6 +36,8 @@ export function RegistryTable({ rows }: RegistryTableProps): React.ReactElement 
   const sortField = useRegistryStore(state => state.sortField);
   const sortDirection = useRegistryStore(state => state.sortDirection);
   const setSort = useRegistryStore(state => state.setSort);
+
+  const displayNameMap = useTagTypesStore(state => state.displayNameMap);
 
   const [metaModal, setMetaModal] = useState<MetaModalState | null>(null);
 
@@ -108,7 +111,7 @@ export function RegistryTable({ rows }: RegistryTableProps): React.ReactElement 
                   <TagPathLabel tagPath={tag.tag_path} />
                 </TableCell>
                 <TableCell className={`px-4 w-px whitespace-nowrap text-center ${ROW_BORDER} ${COL_BORDER} ${cellClass('data_type')}`}>
-                  {tag.data_type}
+                  {displayNameMap.get(tag.data_type) ?? tag.data_type}
                 </TableCell>
                 <TableCell className={`px-4 w-px whitespace-nowrap text-center ${ROW_BORDER} ${COL_BORDER} ${cellClass('is_setpoint')}`}>
                   {tag.is_setpoint ? 'true' : 'false'}

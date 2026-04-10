@@ -10,12 +10,12 @@
 --   Plant1_System_A (module)
 --   └── RFPowerModule  ← rf_power_module (module)
 --       ├── RF_Fwd     ← analog_control  (parameter, overrides: description, eng_min)
---       │   ├── setpoint        ← numeric_set  (f64,  is_setpoint=true)
---       │   ├── monitor         ← numeric_mon  (f64,  is_setpoint=false)
+--       │   ├── setpoint        ← numeric_set  (f32,  is_setpoint=true)
+--       │   ├── monitor         ← numeric_mon  (f32,  is_setpoint=false)
 --       │   └── interlock_enable← boolean_set  (bool, is_setpoint=true)
 --       ├── RF_Ref     ← analog_control  (parameter, no field overrides)
---       │   ├── setpoint        ← numeric_set  (f64,  is_setpoint=true)
---       │   ├── monitor         ← numeric_mon  (f64,  is_setpoint=false)
+--       │   ├── setpoint        ← numeric_set  (f32,  is_setpoint=true)
+--       │   ├── monitor         ← numeric_mon  (f32,  is_setpoint=false)
 --       │   └── interlock_enable← boolean_set  (bool, is_setpoint=true)
 --       └── boolean_mon         ← boolean_mon  (bool, is_setpoint=false)
 -- =============================================================================
@@ -42,7 +42,7 @@ VALUES
 -- 1. Plant1_System_A.RFPowerModule.RF_Fwd.setpoint
 (1001, 1,
  'Plant1_System_A.RFPowerModule.RF_Fwd.setpoint',
- 'f64', true, false,
+ 'f32', true, false,
  '[
    {"type": "tag",       "name": "setpoint",        "fields": {}},
    {"type": "parameter", "name": "RF_Fwd",           "fields": {"description": "Forward RF power channel", "eng_min": 55, "eng_max": 100, "Units": "V"}},
@@ -53,7 +53,7 @@ VALUES
 -- 2. Plant1_System_A.RFPowerModule.RF_Fwd.monitor
 (1002, 1,
  'Plant1_System_A.RFPowerModule.RF_Fwd.monitor',
- 'f64', false, false,
+ 'f32', false, false,
  '[
    {"type": "tag",       "name": "monitor",          "fields": {}},
    {"type": "parameter", "name": "RF_Fwd",           "fields": {"description": "Forward RF power channel", "eng_min": 55, "eng_max": 100, "Units": "V"}},
@@ -75,7 +75,7 @@ VALUES
 -- 4. Plant1_System_A.RFPowerModule.RF_Ref.setpoint
 (1004, 1,
  'Plant1_System_A.RFPowerModule.RF_Ref.setpoint',
- 'f64', true, false,
+ 'f32', true, false,
  '[
    {"type": "tag",       "name": "setpoint",         "fields": {}},
    {"type": "parameter", "name": "RF_Ref",            "fields": {"description": "RF_Param", "eng_min": 51, "eng_max": 100, "Units": "V"}},
@@ -86,7 +86,7 @@ VALUES
 -- 5. Plant1_System_A.RFPowerModule.RF_Ref.monitor
 (1005, 1,
  'Plant1_System_A.RFPowerModule.RF_Ref.monitor',
- 'f64', false, false,
+ 'f32', false, false,
  '[
    {"type": "tag",       "name": "monitor",          "fields": {}},
    {"type": "parameter", "name": "RF_Ref",            "fields": {"description": "RF_Param", "eng_min": 51, "eng_max": 100, "Units": "V"}},

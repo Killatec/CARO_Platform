@@ -16,7 +16,7 @@ const ts = Date.now();
 const tName = `tag_sc_${ts}`;
 const pName = `param_sc_${ts}`;
 
-await createTagTemplate(tName, "f64", false, {
+await createTagTemplate(tName, "f32", false, {
   eng_min: { field_type: "Numeric", default: 0 },
 });
 await createStructuralTemplate(pName, "parameter", [

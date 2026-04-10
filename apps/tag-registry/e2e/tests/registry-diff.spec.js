@@ -44,7 +44,7 @@ test.describe('Registry Diff Display', () => {
     modName   = `mod_diff_${ts}`;
     created.push(tagName, paramName, modName);
 
-    await createTagTemplate(tagName, 'f64', false, {
+    await createTagTemplate(tagName, 'f32', false, {
       eng_min: { field_type: 'Numeric', default: 0 },
     });
     await createStructuralTemplate(paramName, 'parameter', [

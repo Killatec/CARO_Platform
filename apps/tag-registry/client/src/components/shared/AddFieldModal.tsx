@@ -1,13 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { Modal, Button, Input } from '@caro/ui/primitives';
+import { useTagTypesStore } from '../../stores/useTagTypesStore.js';
 
-const TYPE_OPTIONS = ['Numeric', 'String', 'Boolean'] as const;
+const TYPE_OPTIONS = ['Numeric', 'String', 'Boolean', 'TagType'] as const;
 type FieldType = typeof TYPE_OPTIONS[number];
 
 const EMPTY_DEFAULTS: Record<FieldType, number | string | boolean> = {
   Numeric: 0,
   String: '',
   Boolean: false,
+  TagType: 'f32',
 };
 
 interface AddFieldModalProps {
@@ -23,6 +25,7 @@ interface AddFieldModalProps {
 export function AddFieldModal({
   isOpen, onConfirm, onCancel, existingFieldNames = []
 }: AddFieldModalProps): React.ReactElement | null {
+  const tagTypes = useTagTypesStore(state => state.tagTypes);
   const [fieldName, setFieldName] = useState('');
   const [fieldType, setFieldType] = useState<FieldType>('String');
   const [defaultValue, setDefaultValue] = useState<number | string | boolean>(EMPTY_DEFAULTS['String']);
@@ -64,7 +67,7 @@ export function AddFieldModal({
     } else if (fieldType === 'Boolean') {
       coerced = Boolean(defaultValue);
     } else {
-      coerced = String(defaultValue);
+      coerced = String(defaultValue); // String and TagType
     }
 
     onConfirm(trimmed, fieldType, coerced);
@@ -109,6 +112,17 @@ export function AddFieldModal({
               onChange={(e) => setDefaultValue(e.target.checked)}
               className="h-4 w-4"
             />
+          ) : fieldType === 'TagType' ? (
+            <select
+              id="add-field-default"
+              value={String(defaultValue)}
+              onChange={(e) => setDefaultValue(e.target.value)}
+              className="border border-gray-300 rounded px-2 py-1.5 text-sm w-full"
+            >
+              {tagTypes.map(t => (
+                <option key={t.type_name} value={t.type_name}>{t.display_name}</option>
+              ))}
+            </select>
           ) : (
             <Input
               id="add-field-default"

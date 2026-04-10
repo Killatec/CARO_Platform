@@ -2,12 +2,13 @@ import React, { useEffect, useRef, useState, useMemo } from 'react';
 import { Input } from '@caro/ui/primitives';
 import { useUIStore } from '../../stores/useUIStore.js';
 import { useTemplateGraphStore } from '../../stores/useTemplateGraphStore.js';
+import { useTagTypesStore } from '../../stores/useTagTypesStore.js';
 import { AddFieldModal } from '../shared/AddFieldModal.jsx';
 import { TrashIcon } from '../shared/TrashIcon.jsx';
 import { deepNotEqual } from '@caro/tag-registry-shared';
 import type { FieldDef } from '@caro/tag-registry-shared';
 
-type FieldType = 'Numeric' | 'String' | 'Boolean';
+type FieldType = 'Numeric' | 'String' | 'Boolean' | 'TagType';
 
 function coerceValue(rawValue: unknown, fieldType: FieldType): number | string | boolean {
   if (fieldType === 'Boolean') return Boolean(rawValue);
@@ -15,7 +16,7 @@ function coerceValue(rawValue: unknown, fieldType: FieldType): number | string |
     const parsed = parseFloat(String(rawValue));
     return isNaN(parsed) ? 0 : parsed;
   }
-  return String(rawValue);
+  return String(rawValue); // String and TagType
 }
 
 interface FieldTableRowProps {
@@ -33,12 +34,41 @@ function FieldTableRow({
   fieldName, value, fieldType = 'String', isOverride = false,
   isDirtyField = false, readOnly = false, onChange, onDelete
 }: FieldTableRowProps): React.ReactElement {
+  const tagTypes = useTagTypesStore(state => state.tagTypes);
   const colorClass = isDirtyField
     ? 'text-orange-700 font-semibold'
     : isOverride
       ? 'text-blue-600 font-normal'
       : 'text-gray-700 font-normal';
   const nameCellClass = `py-1.5 pr-4 text-sm whitespace-nowrap pl-2 ${colorClass}`;
+
+  if (fieldType === 'TagType') {
+    return (
+      <tr>
+        <td className={nameCellClass}>{fieldName}</td>
+        <td className="py-1.5">
+          <select
+            value={value != null ? String(value) : ''}
+            onChange={onChange ? (e) => onChange(e.target.value) : undefined}
+            disabled={readOnly}
+            className={`w-[20ch] text-sm border border-gray-300 rounded px-1 py-0.5 ${colorClass}`}
+          >
+            {tagTypes.map(t => (
+              <option key={t.type_name} value={t.type_name}>{t.display_name}</option>
+            ))}
+          </select>
+        </td>
+        <td className="py-1.5 pl-1 w-6">
+          {onDelete && (
+            <button type="button" onClick={onDelete} title={`Delete field "${fieldName}"`}
+              className="p-1 text-gray-400 hover:text-red-500 transition-colors rounded">
+              <TrashIcon />
+            </button>
+          )}
+        </td>
+      </tr>
+    );
+  }
 
   if (fieldType === 'Boolean') {
     return (
@@ -212,12 +242,6 @@ export function FieldsPanel(): React.ReactElement {
           <tbody>
             <FieldTableRow fieldName="Template Name" value={template.template_name} readOnly />
             <FieldTableRow fieldName="Template Type" value={template.template_type} readOnly />
-            {template.template_type === 'tag' && (
-              <>
-                <FieldTableRow fieldName="Data Type" value={template.data_type ?? ''} readOnly />
-                <FieldTableRow fieldName="Is Setpoint" value={template.is_setpoint} fieldType="Boolean" readOnly />
-              </>
-            )}
             {Object.entries(fields).map(([key, fieldDef]) => {
               const isDirtyField = !(key in originalFields) ||
                 originalFields[key]?.default !== fieldDef.default;

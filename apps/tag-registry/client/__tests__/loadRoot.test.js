@@ -100,10 +100,10 @@ describe('loadRoot — originalTemplateMap is a deep clone', () => {
 
     const state = useTemplateGraphStore.getState();
     // Directly mutate the templateMap entry's template
-    state.templateMap.get('T').template.data_type = 'i32';
+    state.templateMap.get('T').template.fields.data_type.default = 'MUTATED';
 
     // originalTemplateMap should still have the original value
-    expect(state.originalTemplateMap.get('T').template.data_type).toBe('f64');
+    expect(state.originalTemplateMap.get('T').template.fields.data_type.default).toBe('f32');
   });
 });
 

@@ -20,12 +20,20 @@ async function writeTemplate(dir, subdir, template) {
 }
 
 const tagA = {
-  template_type: 'tag', template_name: 'tag_a', data_type: 'f64',
-  is_setpoint: false, fields: {}, children: [],
+  template_type: 'tag', template_name: 'tag_a',
+  fields: {
+    data_type: { field_type: 'TagType', default: 'f32' },
+    is_setpoint: { field_type: 'Boolean', default: false },
+  },
+  children: [],
 };
 const tagB = {
-  template_type: 'tag', template_name: 'tag_b', data_type: 'i32',
-  is_setpoint: true, fields: {}, children: [],
+  template_type: 'tag', template_name: 'tag_b',
+  fields: {
+    data_type: { field_type: 'TagType', default: 'i32' },
+    is_setpoint: { field_type: 'Boolean', default: true },
+  },
+  children: [],
 };
 const param = {
   template_type: 'parameter', template_name: 'param_x',

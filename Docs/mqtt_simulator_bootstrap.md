@@ -50,7 +50,7 @@ Server reads from `apps/mqtt-simulator/server/.env`.
 | `PGUSER` | `postgres` | |
 | `PGPASSWORD` | — | **Required** |
 | `TICK_INTERVAL_MS` | `100` | 10 Hz default |
-| `SINE_PERIOD_S` | `30` | Sine wave period for f64/i32 monitor tags |
+| `SINE_PERIOD_S` | `30` | Sine wave period for f32 monitor tags |
 | `LOG_BUFFER_SIZE` | `200` | Rolling in-memory log entries |
 
 ---
@@ -76,11 +76,11 @@ Server reads from `apps/mqtt-simulator/server/.env`.
 {
   tag_id:      number,    // coerced from PostgreSQL string
   tag_path:    string,
-  data_type:   string,    // 'f64' | 'i32' | 'bool' | 'str'
+  data_type:   string,    // 'f32' | 'bool'
   is_setpoint: boolean,
   module_id:   string,    // from meta array
   simValue:    any,       // monitor: auto-simulated; setpoint: from SET_VALUES or type default
-  simT:        number,    // time accumulator for sine (monitor f64/i32 only)
+  simT:        number,    // time accumulator for sine (monitor f32 only)
   overridden:  boolean,   // true if pinned via REST override (not yet implemented)
 }
 ```
@@ -100,18 +100,15 @@ return moduleAncestor?.name ?? 'unknown';
 
 | `data_type` | Initial | Per-tick update |
 |---|---|---|
-| `f64` | `50.0` | `50 + 25 * sin(2π * t / periodMs)`. `t` increments by `TICK_INTERVAL_MS` each tick. `periodMs = SINE_PERIOD_S * 1000`. |
-| `i32` | `50` | Same as f64, `Math.round()` applied. |
+| `f32` | `50.0` | `50 + 25 * sin(2π * t / periodMs)`. `t` increments by `TICK_INTERVAL_MS` each tick. `periodMs = SINE_PERIOD_S * 1000`. |
 | `bool` | `false` | 0.5% probability flip per tick (~1 toggle per 200 ticks). |
-| `str` | `"sim"` | Static. Never changes. |
 
 **Setpoint tags (`is_setpoint: true`):**
 
 | `data_type` | Initial |
 |---|---|
-| `f64`, `i32` | `0` |
+| `f32` | `0` |
 | `bool` | `false` |
-| `str` | `""` |
 
 All tags start with `simT: 0`.
 
@@ -220,10 +217,8 @@ Tag value `oneof` field per `data_type`:
 
 | `data_type` | Protobuf field | JS type |
 |---|---|---|
-| `f64` | `float_value` | number |
-| `i32` | `int_value` | number |
+| `f32` | `float_value` | number |
 | `bool` | `bool_value` | boolean |
-| `str` | `string_value` | string |
 
 `protobufjs` installed at monorepo root (not server-local — blocked by `@caro/db` workspace resolution). Run `npm install` from monorepo root if missing.
 

@@ -27,7 +27,7 @@ test.describe('Meta Modal', () => {
     modName   = `mod_meta_${ts}`;
     created.push(tagName, paramName, modName);
 
-    await createTagTemplate(tagName, 'f64', false, {
+    await createTagTemplate(tagName, 'f32', false, {
       eng_min: { field_type: 'Numeric', default: 0 },
     });
     // Two children so tests can switch between rows

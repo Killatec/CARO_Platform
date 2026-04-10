@@ -171,7 +171,7 @@ Authentication is mandatory in all production environments. Role-based access co
 - Adjusted values are held as pending in the UI. A SET_VALUES command is sent to the device via MQTT `caro/{module_id}/cmd` (QoS1), carrying the changed tag_id/value pairs as an array.
 - Before publishing to MQTT, the backend writes a `tag.write.request` entry to the audit log, capturing the actor, tag_id, before value (from LKV), and requested value.
 - The backend waits up to 1 second for CMD_ACK from the device (configurable in system_settings). On ACK or timeout the Promise is resolved or rejected to the frontend widget, and a `tag.write.outcome` entry is written to the audit log with the outcome (accepted, rejected, or timeout). The two audit rows share a command_id for correlation.
-- The `pending_setpoint_values` table is updated only on CMD_ACK with `accepted=true`. The backend compares the ACK-confirmed value against the active mode revision value (epsilon for f64/i32, strict equality for bool). If within epsilon the tag is removed from pending; if outside epsilon the tag is added or kept in pending with the confirmed value.
+- The `pending_setpoint_values` table is updated only on CMD_ACK with `accepted=true`. The backend compares the ACK-confirmed value against the active mode revision value (epsilon for f32, strict equality for bool). If within epsilon the tag is removed from pending; if outside epsilon the tag is added or kept in pending with the confirmed value.
 - Adjusted values are NOT written to the permanent mode revision table until explicitly saved by the Supervisor.
 - On save, the system shall require authentication confirmation (password or valid MFA session token).
 - On successful authentication, values are promoted from the temporary table to the permanent mode revision and an audit record is created.
@@ -240,7 +240,7 @@ CARO_HMI operates exclusively against tags identified by tag_id. The Tag Registr
 |---|---|---|
 | tag_id | UINT32 | Primary identifier for all HMI operations: telemetry subscription, setpoint commands, trending queries, alarm binding, audit records. Transmitted as uint32 in all WebSocket messages. |
 | tag_path | VARCHAR | Human-readable label displayed in dashboards and trend views. Fetched at startup; used for display only — never as an identifier on the wire. |
-| data_type | VARCHAR | Determines input validation and display formatting (f64, i32, bool, str). |
+| data_type | VARCHAR | Determines input validation and display formatting (f32, bool). |
 | is_setpoint | BOOLEAN | If true, tag accepts write commands from Supervisor role. If false, tag is monitor-only. |
 | meta | JSONB | Provenance chain (leaf-to-root). Used to group tags in the UI by hierarchy, display context, and resolve fields (eng_min, eng_max, unit, format) via root-to-leaf resolution (see Section 6.5). |
 | trends | BOOLEAN | If true, the tag's values are written to TimescaleDB by the telemetry loop. Used to filter time-series persistence — only tagged trends are stored. |
@@ -268,7 +268,7 @@ At startup the backend builds a rich in-memory map keyed by tag_id from the Tag 
 | tag_id | uint32 | Map key. Primary identifier for all operations. |
 | tag_path | VARCHAR | Display label for frontend. Never used as identifier on the wire. |
 | module_id | string | MQTT module_id derived from the module asset_name in the meta column. Used to route commands to the correct `caro/{module_id}/cmd` topic. |
-| data_type | string | Value type (f64, i32, bool, str). Used for write validation and Protobuf encoding. |
+| data_type | string | Value type (f32, bool). Used for write validation and Protobuf encoding. |
 | is_setpoint | boolean | If true, tag accepts SET_VALUES commands (via useTagWriter). If false, write attempts are rejected with NOT_AUTHORIZED. |
 | eng_min / eng_max | number | Engineering limits. Reserved for future server-side OUT_OF_RANGE pre-validation before commands are sent to devices. |
 | meta | array | Full provenance chain. Available for hierarchy grouping and display context. |
@@ -357,8 +357,8 @@ On call, the hook iterates the full in-memory tag map and selects all entries wh
 Given `pathPrefix = 'Plant_A.RF_Module.RF_Fwd'` and a registry containing:
 
 ```
-Plant_A.RF_Module.RF_Fwd.setpoint        (tag_id: 1003, type: f64, is_setpoint: true)
-Plant_A.RF_Module.RF_Fwd.monitor         (tag_id: 1001, type: f64, is_setpoint: false)
+Plant_A.RF_Module.RF_Fwd.setpoint        (tag_id: 1003, type: f32, is_setpoint: true)
+Plant_A.RF_Module.RF_Fwd.monitor         (tag_id: 1001, type: f32, is_setpoint: false)
 Plant_A.RF_Module.RF_Fwd.interlock_enable (tag_id: 1004, type: bool, is_setpoint: true)
 ```
 
@@ -419,7 +419,7 @@ Startup sequence:
 | Cache Entry Field | Type | Description |
 |---|---|---|
 | tag_id | uint32 | Stable tag identifier from the Tag Registry. |
-| value | typed or null | Latest confirmed value from device (f64, i32, bool, str), or null if not yet received or device disconnected. Null = bad quality. |
+| value | typed or null | Latest confirmed value from device (f32, bool), or null if not yet received or device disconnected. Null = bad quality. |
 | generation | uint32 | Monotonic counter bumped only when value changes (strict equality). Used by the WebSocket pipeline for per-client change detection. |
 
 > *NOTE: There is no separate quality enum — null value means bad quality. There is no per-tag timestamp in the LKV cache. The WebSocket pipeline uses generation counters (not timestamps) to detect which tags have changed since a client's last update.*
@@ -452,11 +452,11 @@ The backend maintains a `mode_compliance_state` for the active mode revision. Th
 The compliance check runs on every incoming telemetry update for a setpoint tag. The comparison is:
 
 ```
-if |telemetry_value - expected| > epsilon → OUT_OF_SYNC  (f64/i32)
+if |telemetry_value - expected| > epsilon → OUT_OF_SYNC  (f32)
 if telemetry_value !== expected → OUT_OF_SYNC             (bool, strict equality)
 ```
 
-epsilon is a system-wide configurable value stored in system_settings. It applies to all f64 and i32 setpoint comparisons. Boolean setpoints use strict equality.
+epsilon is a system-wide configurable value stored in system_settings. It applies to all f32 setpoint comparisons. Boolean setpoints use strict equality.
 
 The expected value for each setpoint tag is maintained in the backend in-memory tag map as a single field alongside value, quality, and timestamp. Update rules:
 

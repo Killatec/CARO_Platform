@@ -2,7 +2,7 @@
 export interface TagDef {
   tag_id: number;
   tag_path: string;
-  data_type: 'f64' | 'i32' | 'bool' | 'str';
+  data_type: string;
   is_setpoint: boolean;
   module_id: string;
   eng_min: number | null;

@@ -171,7 +171,7 @@ Response:
       {
         "tag_id": 1001,
         "tag_path": "Plant1_System_A.RFPowerModule.RF_Fwd.setpoint",
-        "data_type": "f64",
+        "data_type": "f32",
         "is_setpoint": true,
         "module_id": "RFPowerModule",
         "meta": [ { "type": "tag", "name": "setpoint", "fields": {} }, ... ]
@@ -188,7 +188,7 @@ Get a single tag definition
 *Required role: ALL*
 
 ```json
-{ "ok": true, "data": { "tag": { "tag_id": 1001, "tag_path": "...", "data_type": "f64", "is_setpoint": true, "module_id": "RFPowerModule", "meta": [...] } } }
+{ "ok": true, "data": { "tag": { "tag_id": 1001, "tag_path": "...", "data_type": "f32", "is_setpoint": true, "module_id": "RFPowerModule", "meta": [...] } } }
 ```
 
 ### GET /api/v1/tags/hierarchy
@@ -206,7 +206,7 @@ Reconstructs the tag tree from the meta column. Used by the frontend to build na
       {
         "module_id": "RFPowerModule",
         "groups": [
-          { "name": "RF_Fwd", "tags": [ { "tag_id": 1001, "tag_path": "...", "is_setpoint": true, "data_type": "f64" } ] }
+          { "name": "RF_Fwd", "tags": [ { "tag_id": 1001, "tag_path": "...", "is_setpoint": true, "data_type": "f32" } ] }
         ]
       }
     ]
@@ -263,7 +263,7 @@ Partial validation failure response (some tags invalid before any MQTT command i
     "details": [
       { "tag_id": 9999, "code": "TAG_NOT_FOUND" },
       { "tag_id": 1003, "code": "TAG_NOT_WRITABLE" },
-      { "tag_id": 1001, "code": "TYPE_MISMATCH", "expected": "f64", "got": "boolean" }
+      { "tag_id": 1001, "code": "TYPE_MISMATCH", "expected": "f32", "got": "boolean" }
     ]
   }
 }
@@ -432,7 +432,7 @@ Get setpoint values for a revision
   "ok": true,
   "data": {
     "revision_id": "r_005",
-    "values": [ { "tag_id": 1001, "tag_path": "...RF_Fwd.setpoint", "value": 90.0, "data_type": "f64" } ]
+    "values": [ { "tag_id": 1001, "tag_path": "...RF_Fwd.setpoint", "value": 90.0, "data_type": "f32" } ]
   }
 }
 ```

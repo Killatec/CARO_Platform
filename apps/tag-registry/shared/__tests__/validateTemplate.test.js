@@ -1,14 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import { validateTemplate } from '../validateTemplate.ts';
-import { DATA_TYPES, MAX_IDENTIFIER_LENGTH, ERROR_CODES } from '../constants.ts';
+import { MAX_IDENTIFIER_LENGTH, ERROR_CODES } from '../constants.ts';
 
 function makeTag(overrides = {}) {
   return {
     template_type: 'tag',
     template_name: 'my_tag',
-    data_type: 'f64',
-    is_setpoint: false,
-    fields: {},
+    fields: {
+      data_type: { field_type: 'TagType', default: 'f32' },
+      is_setpoint: { field_type: 'Boolean', default: false },
+      Trends: { field_type: 'Boolean', default: true },
+    },
     children: [],
     ...overrides,
   };
@@ -40,15 +42,13 @@ describe('valid templates', () => {
     expect(r.errors).toHaveLength(0);
   });
 
-  it.each(Object.values(DATA_TYPES).filter(t => t !== 'i32_array'))(
-    'tag with data_type "%s" is valid', (dataType) => {
-      const r = validateTemplate(makeTag({ data_type: dataType }));
-      expect(r.valid).toBe(true);
-    }
-  );
+  it('tag with TagType data_type is valid', () => {
+    const r = validateTemplate(makeTag({ fields: { data_type: { field_type: 'TagType', default: 'f32' }, is_setpoint: { field_type: 'Boolean', default: false }, Trends: { field_type: 'Boolean', default: true } } }));
+    expect(r.valid).toBe(true);
+  });
 
   it('tag with is_setpoint: true is valid', () => {
-    expect(validateTemplate(makeTag({ is_setpoint: true })).valid).toBe(true);
+    expect(validateTemplate(makeTag({ fields: { data_type: { field_type: 'TagType', default: 'f32' }, is_setpoint: { field_type: 'Boolean', default: true }, Trends: { field_type: 'Boolean', default: true } } })).valid).toBe(true);
   });
 
   it('structural template with one valid child', () => {
@@ -59,17 +59,17 @@ describe('valid templates', () => {
   });
 
   it('field with field_type Numeric, default 0 is valid', () => {
-    const r = validateTemplate(makeTag({ fields: { eng_min: { field_type: 'Numeric', default: 0 } } }));
+    const r = validateTemplate(makeTag({ fields: { data_type: { field_type: 'TagType', default: 'f32' }, is_setpoint: { field_type: 'Boolean', default: false }, Trends: { field_type: 'Boolean', default: true }, eng_min: { field_type: 'Numeric', default: 0 } } }));
     expect(r.valid).toBe(true);
   });
 
   it('field with field_type String, default "" is valid', () => {
-    const r = validateTemplate(makeTag({ fields: { label: { field_type: 'String', default: '' } } }));
+    const r = validateTemplate(makeTag({ fields: { data_type: { field_type: 'TagType', default: 'f32' }, is_setpoint: { field_type: 'Boolean', default: false }, Trends: { field_type: 'Boolean', default: true }, label: { field_type: 'String', default: '' } } }));
     expect(r.valid).toBe(true);
   });
 
   it('field with field_type Boolean, default false is valid', () => {
-    const r = validateTemplate(makeTag({ fields: { enabled: { field_type: 'Boolean', default: false } } }));
+    const r = validateTemplate(makeTag({ fields: { data_type: { field_type: 'TagType', default: 'f32' }, is_setpoint: { field_type: 'Boolean', default: false }, Trends: { field_type: 'Boolean', default: true }, enabled: { field_type: 'Boolean', default: false } } }));
     expect(r.valid).toBe(true);
   });
 
@@ -110,29 +110,39 @@ describe('null / missing', () => {
 // ── Tag-specific errors ──────────────────────────────────────────────────────
 
 describe('tag-specific errors', () => {
-  it('data_type missing → invalid', () => {
-    const r = validateTemplate(makeTag({ data_type: undefined }));
+  it('tag without data_type field → invalid', () => {
+    const r = validateTemplate(makeTag({ fields: { is_setpoint: { field_type: 'Boolean', default: false }, Trends: { field_type: 'Boolean', default: true } } }));
     expect(r.valid).toBe(false);
-    expect(r.errors.some(e => e.code === ERROR_CODES.SCHEMA_VALIDATION_ERROR)).toBe(true);
   });
 
-  it('data_type: "invalid_type" → invalid', () => {
-    expect(validateTemplate(makeTag({ data_type: 'invalid_type' })).valid).toBe(false);
+  it('tag with data_type field_type "String" instead of "TagType" → invalid', () => {
+    expect(validateTemplate(makeTag({ fields: { data_type: { field_type: 'String', default: 'f32' }, is_setpoint: { field_type: 'Boolean', default: false }, Trends: { field_type: 'Boolean', default: true } } })).valid).toBe(false);
   });
 
-  it('data_type: "i32_array" → valid (present in DATA_TYPE_VALUES)', () => {
-    const result = validateTemplate(makeTag({ data_type: 'i32_array' }));
-    expect(result.valid).toBe(true);
+  it('TagType data_type field with numeric default → invalid (type mismatch)', () => {
+    expect(validateTemplate(makeTag({ fields: { data_type: { field_type: 'TagType', default: 2 }, is_setpoint: { field_type: 'Boolean', default: false }, Trends: { field_type: 'Boolean', default: true } } })).valid).toBe(false);
   });
 
-  it('is_setpoint missing → invalid', () => {
-    const t = makeTag();
-    delete t.is_setpoint;
-    expect(validateTemplate(t).valid).toBe(false);
+  it('tag without is_setpoint field → invalid', () => {
+    const r = validateTemplate(makeTag({ fields: { data_type: { field_type: 'TagType', default: 'f32' }, Trends: { field_type: 'Boolean', default: true } } }));
+    expect(r.valid).toBe(false);
   });
 
-  it('is_setpoint: "true" (string) → invalid', () => {
-    expect(validateTemplate(makeTag({ is_setpoint: 'true' })).valid).toBe(false);
+  it('tag with is_setpoint field_type "String" instead of "Boolean" → invalid', () => {
+    expect(validateTemplate(makeTag({ fields: { data_type: { field_type: 'TagType', default: 'f32' }, is_setpoint: { field_type: 'String', default: 'false' }, Trends: { field_type: 'Boolean', default: true } } })).valid).toBe(false);
+  });
+
+  it('is_setpoint: "true" (string) → invalid (Boolean field_type type mismatch)', () => {
+    expect(validateTemplate(makeTag({ fields: { data_type: { field_type: 'TagType', default: 'f32' }, is_setpoint: { field_type: 'Boolean', default: 'true' }, Trends: { field_type: 'Boolean', default: true } } })).valid).toBe(false);
+  });
+
+  it('tag without Trends field → invalid', () => {
+    const r = validateTemplate(makeTag({ fields: { data_type: { field_type: 'TagType', default: 'f32' }, is_setpoint: { field_type: 'Boolean', default: false } } }));
+    expect(r.valid).toBe(false);
+  });
+
+  it('tag with Trends field_type "String" instead of "Boolean" → invalid', () => {
+    expect(validateTemplate(makeTag({ fields: { data_type: { field_type: 'TagType', default: 'f32' }, is_setpoint: { field_type: 'Boolean', default: false }, Trends: { field_type: 'String', default: 'true' } } })).valid).toBe(false);
   });
 
   it('tag with non-empty children array → invalid', () => {

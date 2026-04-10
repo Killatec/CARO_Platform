@@ -143,7 +143,7 @@ Error evaluation (wrong number of matches, missing expected children) is the wid
 {
   tag_id: number,       // uint32
   tag_path: string,     // full dot-separated path
-  data_type: string,    // "f64" | "i32" | "bool" | "str"
+  data_type: string,    // "f32" | "bool"
   is_setpoint: boolean,
   module_id: string,
   eng_min: number | null,  // resolved from meta (see resolution rule below)
@@ -207,7 +207,7 @@ Version 1.0 includes four foundational single-tag widgets. More complex multi-ta
 
 ### MON Numeric_Mon
 
-Read-only display of a numeric tag value (f64 or i32). No user interaction. Suitable for monitoring process values, sensor readings, calculated outputs.
+Read-only display of a numeric tag value (f32). No user interaction. Suitable for monitoring process values, sensor readings, calculated outputs.
 
 **Props**
 
@@ -236,7 +236,7 @@ Read-only display of a numeric tag value (f64 or i32). No user interaction. Suit
 
 ### SET Numeric_Set
 
-Editable numeric setpoint widget for f64 or i32 tags. Displays the confirmed device value and allows Supervisors to submit new values. Manages the full pending lifecycle.
+Editable numeric setpoint widget for f32 tags. Displays the confirmed device value and allows Supervisors to submit new values. Manages the full pending lifecycle.
 
 **Props**
 
@@ -463,7 +463,7 @@ const mockTags = [
   {
     tag_id: 1001,
     tag_path: "Plant1.Module.power",
-    data_type: "f64",
+    data_type: "f32",
     is_setpoint: false,
     module_id: "Module",
     eng_min: 0,

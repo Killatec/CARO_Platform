@@ -25,7 +25,7 @@ export function encodeProto(moduleId: string, tags: ProtoTag[], status: string):
     status,
     tags: tags.map(t => {
       const value: Record<string, unknown> = {};
-      if (t.data_type === 'f64')  value.float_value  = t.simValue;
+      if (t.data_type === 'f32')  value.float_value  = t.simValue;
       if (t.data_type === 'i32')  value.int_value    = t.simValue;
       if (t.data_type === 'bool') value.bool_value   = t.simValue;
       if (t.data_type === 'str')  value.string_value = t.simValue;

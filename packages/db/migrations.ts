@@ -28,6 +28,11 @@ export interface MigrationResult {
  * Re-throws on migration failure so callers can halt startup (Delta 004).
  */
 export async function runMigrations(): Promise<MigrationResult[]> {
+  // Acquire an advisory lock so concurrent server startups don't race.
+  // Lock ID 1 is reserved for migration coordination.
+  await query('SELECT pg_advisory_lock(1)');
+
+  try {
   // Ensure the applied-migrations tracking table exists
   await query(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -83,4 +88,7 @@ export async function runMigrations(): Promise<MigrationResult[]> {
   }
 
   return results;
+  } finally {
+    await query('SELECT pg_advisory_unlock(1)');
+  }
 }

@@ -1,7 +1,7 @@
-import { DATA_TYPE_VALUES, ERROR_CODES, MAX_IDENTIFIER_LENGTH } from './constants.js';
+import { ERROR_CODES, MAX_IDENTIFIER_LENGTH } from './constants.js';
 import type { Template, ValidationResult, ValidationMessage } from './types.js';
 
-const VALID_FIELD_TYPES = ['Numeric', 'String', 'Boolean'];
+const VALID_FIELD_TYPES = ['Numeric', 'String', 'Boolean', 'TagType'];
 
 export function validateTemplate(template: Template | null | undefined): ValidationResult {
   const errors: ValidationMessage[] = [];
@@ -46,28 +46,54 @@ export function validateTemplate(template: Template | null | undefined): Validat
   const isTag = template.template_type === 'tag';
 
   if (isTag) {
-    if (!template.data_type) {
+    const dataTypeField = template.fields?.data_type;
+    if (!dataTypeField || typeof dataTypeField !== 'object' || !('field_type' in dataTypeField)) {
       errors.push({
         severity: 'error',
         code: ERROR_CODES.SCHEMA_VALIDATION_ERROR,
-        message: 'Tag templates must have data_type',
-        ref: { template_name: template.template_name },
+        message: 'Tag templates must have a "data_type" field',
+        ref: { template_name: template.template_name, field: 'data_type' },
       });
-    } else if (!DATA_TYPE_VALUES.includes(template.data_type)) {
+    } else if (dataTypeField.field_type !== 'TagType') {
       errors.push({
         severity: 'error',
         code: ERROR_CODES.SCHEMA_VALIDATION_ERROR,
-        message: `Invalid data_type: ${template.data_type}. Must be one of: ${DATA_TYPE_VALUES.join(', ')}`,
+        message: `Field "data_type" must have field_type "TagType", got "${dataTypeField.field_type}"`,
         ref: { template_name: template.template_name, field: 'data_type' },
       });
     }
 
-    if (typeof template.is_setpoint !== 'boolean') {
+    const isSetpointField = template.fields?.is_setpoint;
+    if (!isSetpointField || typeof isSetpointField !== 'object' || !('field_type' in isSetpointField)) {
       errors.push({
         severity: 'error',
         code: ERROR_CODES.SCHEMA_VALIDATION_ERROR,
-        message: 'Tag templates must have is_setpoint (boolean)',
-        ref: { template_name: template.template_name },
+        message: 'Tag templates must have an "is_setpoint" field',
+        ref: { template_name: template.template_name, field: 'is_setpoint' },
+      });
+    } else if (isSetpointField.field_type !== 'Boolean') {
+      errors.push({
+        severity: 'error',
+        code: ERROR_CODES.SCHEMA_VALIDATION_ERROR,
+        message: `Field "is_setpoint" must have field_type "Boolean", got "${isSetpointField.field_type}"`,
+        ref: { template_name: template.template_name, field: 'is_setpoint' },
+      });
+    }
+
+    const trendsField = template.fields?.Trends;
+    if (!trendsField || typeof trendsField !== 'object' || !('field_type' in trendsField)) {
+      errors.push({
+        severity: 'error',
+        code: ERROR_CODES.SCHEMA_VALIDATION_ERROR,
+        message: 'Tag templates must have a "Trends" field',
+        ref: { template_name: template.template_name, field: 'Trends' },
+      });
+    } else if (trendsField.field_type !== 'Boolean') {
+      errors.push({
+        severity: 'error',
+        code: ERROR_CODES.SCHEMA_VALIDATION_ERROR,
+        message: `Field "Trends" must have field_type "Boolean", got "${trendsField.field_type}"`,
+        ref: { template_name: template.template_name, field: 'Trends' },
       });
     }
 
@@ -158,7 +184,7 @@ export function validateTemplate(template: Template | null | undefined): Validat
       }
 
       const expectedType =
-        fieldDef.field_type === 'Numeric' ? 'number'
+        fieldDef.field_type === 'Numeric'  ? 'number'
         : fieldDef.field_type === 'Boolean' ? 'boolean'
         : 'string';
 

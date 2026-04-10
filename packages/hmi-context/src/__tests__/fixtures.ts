@@ -3,7 +3,7 @@ import type { TagDef } from '../types.js';
 export const mockTag: TagDef = {
   tag_id: 1001,
   tag_path: 'Plant1.Module.RF_Fwd.setpoint',
-  data_type: 'f64',
+  data_type: 'f32',
   is_setpoint: true,
   module_id: 'Module',
   eng_min: 0,
@@ -20,7 +20,7 @@ export const mockTag: TagDef = {
 export const mockReadbackTag: TagDef = {
   tag_id: 1002,
   tag_path: 'Plant1.Module.RF_Fwd.readback',
-  data_type: 'f64',
+  data_type: 'f32',
   is_setpoint: false,
   module_id: 'Module',
   eng_min: 0,

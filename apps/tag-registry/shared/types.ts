@@ -1,5 +1,5 @@
 export interface FieldDef {
-  field_type: 'Numeric' | 'String' | 'Boolean';
+  field_type: 'Numeric' | 'String' | 'Boolean' | 'TagType';
   default: number | string | boolean;
 }
 
@@ -12,9 +12,6 @@ export interface ChildRef {
 export interface Template {
   template_name: string;
   template_type: string;
-  data_type?: string;
-  is_setpoint?: boolean;
-  trends?: boolean;
   fields: Record<string, FieldDef>;
   children: ChildRef[];
 }
@@ -101,8 +98,8 @@ export interface MetaLevel {
 
 export interface ResolvedTag {
   tag_path: string;
-  data_type: string | undefined;
-  is_setpoint: boolean | undefined;
+  data_type: string;
+  is_setpoint: boolean;
   trends: boolean;
   meta: MetaLevel[];
 }

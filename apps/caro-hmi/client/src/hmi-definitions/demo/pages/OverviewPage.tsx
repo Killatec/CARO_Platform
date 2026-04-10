@@ -3,7 +3,7 @@
  *
  * Asset paths are derived from the CARO_1 system template hierarchy:
  *   CARO_1 (system) → RF1 (rf_power_module) → Acc_Fwd / Acc_Ref / Kly_Fwd (analog_control)
- *     → monitor (f64, readback), setpoint (f64, setpoint),
+ *     → monitor (f32, readback), setpoint (f32, setpoint),
  *       interlock_status (bool, readback), interlock_enable (bool, setpoint)
  *
  * If the registry is empty or uses different paths, each widget degrades to

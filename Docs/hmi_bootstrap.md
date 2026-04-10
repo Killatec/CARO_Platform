@@ -62,6 +62,8 @@ MQTT Simulator (10 Hz)
         → Browser WebSocket
           → HmiContextProvider (batched SUBSCRIBE)
             → useLiveValue(tagId) → widget re-render
+
+> **Note:** `HmiContextProvider` returns `null` (renders nothing) until the REST tag map fetch completes (`tagMapLoaded = true`). Children do not mount until tags are available, preventing widgets from throwing "no tags found" before the map is populated.
 ```
 
 To verify E2E is working: open http://localhost:5175, start the MQTT Simulator from http://localhost:5174, and watch live values update on the demo dashboard.

@@ -20,7 +20,7 @@ test.describe('Save and Cancel', () => {
     tName = `tag_sc_${Date.now()}`;
     created.push(tName);
 
-    await createTagTemplate(tName, 'f64', false, {
+    await createTagTemplate(tName, 'f32', false, {
       eng_min: { field_type: 'Numeric', default: 0 },
     });
 

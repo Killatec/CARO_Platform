@@ -1,4 +1,4 @@
-import { MAX_TAG_PATH_LENGTH, ERROR_CODES } from './constants.js';
+import { MAX_TAG_PATH_LENGTH, ERROR_CODES, DEFAULT_DATA_TYPE } from './constants.js';
 import type { Template, TemplateEntry, MetaLevel, ResolvedTag } from './types.js';
 import { extractTemplate } from './types.js';
 
@@ -69,8 +69,8 @@ export function resolveRegistry(
 
       tags.push({
         tag_path,
-        data_type: template.data_type,
-        is_setpoint: template.is_setpoint,
+        data_type: typeof resolvedFields.data_type === 'string' ? resolvedFields.data_type : DEFAULT_DATA_TYPE,
+        is_setpoint: typeof resolvedFields.is_setpoint === 'boolean' ? resolvedFields.is_setpoint : false,
         trends,
         meta,
       });

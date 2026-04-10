@@ -3,7 +3,7 @@ import type { TagDef } from '@caro/hmi-context';
 export const mockNumericTag: TagDef = {
   tag_id: 1001,
   tag_path: 'Plant1.Module.RF_Fwd.monitor',
-  data_type: 'f64',
+  data_type: 'f32',
   is_setpoint: false,
   module_id: 'Module',
   eng_min: 0,
@@ -20,7 +20,7 @@ export const mockNumericTag: TagDef = {
 export const mockSetpointTag: TagDef = {
   tag_id: 1003,
   tag_path: 'Plant1.Module.RF_Fwd.setpoint',
-  data_type: 'f64',
+  data_type: 'f32',
   is_setpoint: true,
   module_id: 'Module',
   eng_min: 0,
@@ -72,7 +72,7 @@ export const mockBoolSetTag: TagDef = {
 export const mockNumericTagRev: TagDef = {
   tag_id: 1002,
   tag_path: 'Plant1.Module.RF_Rev.monitor',
-  data_type: 'f64',
+  data_type: 'f32',
   is_setpoint: false,
   module_id: 'Module',
   eng_min: 0,

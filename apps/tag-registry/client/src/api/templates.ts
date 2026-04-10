@@ -20,7 +20,7 @@ export interface BatchChange {
 
 export interface BatchDeletion {
   template_name: string;
-  original_hash: string | null;
+  original_hash: string;
 }
 
 export interface BatchSaveResult {

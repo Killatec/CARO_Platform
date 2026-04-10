@@ -96,21 +96,21 @@ describe('classification — unchanged', () => {
 
 describe('classification — modified (data_type)', () => {
   it('data_type differs → diffStatus modified', () => {
-    const proposed = makeProposed(PATH_A, { data_type: 'f64' });
+    const proposed = makeProposed(PATH_A, { data_type: 'bool' });
     const db       = makeDb(PATH_A, 1001, { data_type: 'f32' });
     const [row] = diffRegistry([proposed], [db]);
     expect(row.diffStatus).toBe('modified');
   });
 
   it('data_type change → changedFields includes data_type', () => {
-    const proposed = makeProposed(PATH_A, { data_type: 'f64' });
+    const proposed = makeProposed(PATH_A, { data_type: 'bool' });
     const db       = makeDb(PATH_A, 1001, { data_type: 'f32' });
     const [row] = diffRegistry([proposed], [db]);
     expect(row.changedFields).toContain('data_type');
   });
 
   it('data_type change only → changedFields does not include meta or is_setpoint', () => {
-    const proposed = makeProposed(PATH_A, { data_type: 'f64' });
+    const proposed = makeProposed(PATH_A, { data_type: 'bool' });
     const db       = makeDb(PATH_A, 1001, { data_type: 'f32' });
     const [row] = diffRegistry([proposed], [db]);
     expect(row.changedFields).not.toContain('meta');
@@ -118,14 +118,14 @@ describe('classification — modified (data_type)', () => {
   });
 
   it('modified row carries tag_id from db', () => {
-    const proposed = makeProposed(PATH_A, { data_type: 'f64' });
+    const proposed = makeProposed(PATH_A, { data_type: 'bool' });
     const db       = makeDb(PATH_A, 1001, { data_type: 'f32' });
     const [row] = diffRegistry([proposed], [db]);
     expect(row.tag_id).toBe(1001);
   });
 
   it('non-meta change → dbMeta is still set (diffRegistry always includes it; RegistryTable filters it)', () => {
-    const proposed = makeProposed(PATH_A, { data_type: 'f64' });
+    const proposed = makeProposed(PATH_A, { data_type: 'bool' });
     const db       = makeDb(PATH_A, 1001, { data_type: 'f32' });
     const [row] = diffRegistry([proposed], [db]);
     // dbMeta is always present on modified rows; the table only passes it to the
@@ -280,14 +280,14 @@ describe('deepEqual — key-order insensitive (via meta comparison)', () => {
 describe('sort order', () => {
   it('result order is added → modified → unchanged → retired', () => {
     const proposed = [
-      makeProposed(PATH_A),                             // unchanged
-      makeProposed(PATH_B, { data_type: 'i32' }),       // modified (db has f32)
-      makeProposed(PATH_C),                             // added (not in db)
+      makeProposed(PATH_A),                                  // unchanged
+      makeProposed(PATH_B, { data_type: 'i32' }),             // modified (db has 'f32')
+      makeProposed(PATH_C),                                  // added (not in db)
     ];
     const db = [
-      makeDb(PATH_A, 1001),                             // unchanged
-      makeDb(PATH_B, 1002, { data_type: 'f32' }),       // modified
-      makeDb('Plant1_System_A.Chan3.monitor', 1003),    // retired (not in proposed)
+      makeDb(PATH_A, 1001),                                  // unchanged
+      makeDb(PATH_B, 1002, { data_type: 'f32' }),             // modified
+      makeDb('Plant1_System_A.Chan3.monitor', 1003),         // retired (not in proposed)
     ];
 
     const result = diffRegistry(proposed, db);

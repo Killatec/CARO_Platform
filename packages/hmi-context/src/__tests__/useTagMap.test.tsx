@@ -35,7 +35,7 @@ describe('useTagMap', () => {
     expect(tag).toBeDefined();
     expect(tag!.tag_id).toBe(1001);
     expect(tag!.tag_path).toBe('Plant1.Module.RF_Fwd.setpoint');
-    expect(tag!.data_type).toBe('f64');
+    expect(tag!.data_type).toBe('f32');
     expect(tag!.is_setpoint).toBe(true);
     expect(tag!.unit).toBe('W');
   });

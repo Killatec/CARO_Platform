@@ -12,7 +12,7 @@ describe('hashTemplate', () => {
   });
 
   it('same template always produces the same hash', () => {
-    const t = { template_name: 'my_tag', template_type: 'tag', data_type: 'f64', is_setpoint: false };
+    const t = { template_name: 'my_tag', template_type: 'tag', fields: { data_type: { field_type: 'TagType', default: 'f32' }, is_setpoint: { field_type: 'Boolean', default: false } } };
     expect(hashTemplate(t)).toBe(hashTemplate(t));
   });
 

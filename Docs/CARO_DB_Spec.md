@@ -84,7 +84,7 @@ reconstructed by querying rows at or before a given revision number.
 **2.3 JSONB Value Column**
 
 All tag value columns use JSONB. This handles all current data types
-(f64, i32, bool, str) and future array types without schema changes.
+(f32, bool) and future types without schema changes.
 Type validation against the tag\'s data_type is performed at the
 application layer, not the database.
 
@@ -102,8 +102,10 @@ Current migrations:
 -   002_create_registry_revisions.sql
 -   003_drop_active_path_index.sql
 -   004_alter_tag_id_to_integer.sql
--   005_create_hmi_tables.sql
 -   006_add_trends_to_tag_registry.sql
+-   007_create_tag_types.sql
+-   008_revert_data_type_to_string.sql
+-   009_cleanup_tag_types.sql
 
 > *NOTE: The schema_migrations table is created programmatically inside
 > migrations.js on every runMigrations() call — it is not created via a
@@ -140,8 +142,8 @@ false.
   tag_path         VARCHAR NOT NULL Full dot-separated path starting with
                                     root template name.
 
-  data_type        VARCHAR(40) NOT  Value type: f64, i32, bool, str.
-                   NULL             
+  data_type        VARCHAR(40) NOT  FK → tag_types.type_name. Identifies
+                   NULL             the tag's value type.
 
   is_setpoint      BOOLEAN NOT NULL true = writable setpoint; false =
                                     monitor.
@@ -188,6 +190,29 @@ One row per registry apply action.
   comment          TEXT NOT NULL    Required comment describing the
                                     change.
   ---------------- ---------------- -------------------------------------
+
+**3.3 tag_types**
+
+Lookup table for valid tag data types. `type_name` is the stable key
+referenced by `tag_registry.data_type` via FK. `display_name` provides
+human-friendly labels for UI.
+
+  ---------------- ---------------- -------------------------------------
+  **Column**       **Type**         **Description**
+
+  id               SERIAL           Surrogate key for ordering.
+
+  type_name        VARCHAR(40) NOT  Stable internal type identifier
+                   NULL UNIQUE      (e.g. f32, bool). FK target for
+                                    tag_registry.data_type.
+
+  display_name     VARCHAR(80) NOT  Human-friendly label for UI display
+                   NULL             (e.g. "Float 64", "Boolean"). Can be
+                                    changed without affecting any
+                                    references.
+  ---------------- ---------------- -------------------------------------
+
+> *NOTE: After migration 009, only `f32` and `bool` remain. Migration 009 renamed all `f64` references in `tag_registry.data_type` to `f32`, then deleted unused types (`f64`, `i32`, `i32_array`, `string`). New types can be added via INSERT. `display_name` can be renamed freely — all FK references use `type_name`.*
 
 **4. Users and Sessions**
 

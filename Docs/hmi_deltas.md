@@ -4,4 +4,6 @@
 
 ---
 
-*(No pending deltas — all entries propagated on 2026-04-08.)*
+_(no open divergences)_
+
+---

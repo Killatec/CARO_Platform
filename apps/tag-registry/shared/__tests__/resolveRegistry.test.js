@@ -2,13 +2,15 @@ import { describe, it, expect } from 'vitest';
 import { resolveRegistry } from '../resolveRegistry.ts';
 import { MAX_TAG_PATH_LENGTH } from '../constants.ts';
 
-function makeTag(name, dataType = 'f64', isSetpoint = false, fields = {}) {
+function makeTag(name, dataType = 'f32', isSetpoint = false, fields = {}) {
   return {
     template_type: 'tag',
     template_name: name,
-    data_type: dataType,
-    is_setpoint: isSetpoint,
-    fields,
+    fields: {
+      data_type: { field_type: 'TagType', default: dataType },
+      is_setpoint: { field_type: 'Boolean', default: isSetpoint },
+      ...fields,
+    },
     children: [],
   };
 }
@@ -60,7 +62,7 @@ describe('single tag path', () => {
   });
 
   it('is_setpoint propagated from tag template', () => {
-    const tag = makeTag('T', 'f64', true);
+    const tag = makeTag('T', 'f32', true);
     const mod = makeStruct('M', 'module', [{ template_name: 'T', asset_name: 'ch', fields: {} }]);
     const map = { M: wrap(mod), T: wrap(tag) };
 
@@ -133,7 +135,7 @@ describe('meta structure', () => {
 
 describe('meta field resolution', () => {
   it('instance override wins over template default; value is scalar, not {field_type,default}', () => {
-    const tag = makeTag('T', 'f64', false, { eng_min: { field_type: 'Numeric', default: 0 } });
+    const tag = makeTag('T', 2, false, { eng_min: { field_type: 'Numeric', default: 0 } });
     const mod = makeStruct('M', 'module', [
       { template_name: 'T', asset_name: 'ch', fields: { eng_min: 5 } },
     ]);
@@ -148,7 +150,7 @@ describe('meta field resolution', () => {
   });
 
   it('template default used when no instance override', () => {
-    const tag = makeTag('T', 'f64', false, { eng_min: { field_type: 'Numeric', default: 42 } });
+    const tag = makeTag('T', 2, false, { eng_min: { field_type: 'Numeric', default: 42 } });
     const mod = makeStruct('M', 'module', [
       { template_name: 'T', asset_name: 'ch', fields: {} },
     ]);
@@ -165,7 +167,7 @@ describe('meta field resolution', () => {
 
 describe('trends', () => {
   it('defaults to false when no level has a trends field', () => {
-    const tag = makeTag('T', 'f64', false, {});
+    const tag = makeTag('T', 2, false, {});
     const mod = makeStruct('M', 'module', [{ template_name: 'T', asset_name: 'ch', fields: {} }]);
     const map = { M: wrap(mod), T: wrap(tag) };
 
@@ -173,7 +175,7 @@ describe('trends', () => {
   });
 
   it('true when tag template has a trends field set to true', () => {
-    const tag = makeTag('T', 'f64', false, { trends: { field_type: 'Boolean', default: true } });
+    const tag = makeTag('T', 2, false, { trends: { field_type: 'Boolean', default: true } });
     const mod = makeStruct('M', 'module', [{ template_name: 'T', asset_name: 'ch', fields: {} }]);
     const map = { M: wrap(mod), T: wrap(tag) };
 
@@ -191,8 +193,8 @@ describe('trends', () => {
   });
 
   it('case-insensitive field key match ("Trends" and "TRENDS")', () => {
-    const tag1 = makeTag('T1', 'f64', false, { Trends: { field_type: 'Boolean', default: true } });
-    const tag2 = makeTag('T2', 'f64', false, { TRENDS: { field_type: 'Boolean', default: true } });
+    const tag1 = makeTag('T1', 2, false, { Trends: { field_type: 'Boolean', default: true } });
+    const tag2 = makeTag('T2', 2, false, { TRENDS: { field_type: 'Boolean', default: true } });
     const mod = makeStruct('M', 'module', [
       { template_name: 'T1', asset_name: 'a', fields: {} },
       { template_name: 'T2', asset_name: 'b', fields: {} },
@@ -205,7 +207,7 @@ describe('trends', () => {
   });
 
   it('instance override to true wins over template default of false', () => {
-    const tag = makeTag('T', 'f64', false, { trends: { field_type: 'Boolean', default: false } });
+    const tag = makeTag('T', 2, false, { trends: { field_type: 'Boolean', default: false } });
     const mod = makeStruct('M', 'module', [
       { template_name: 'T', asset_name: 'ch', fields: { trends: true } },
     ]);
@@ -215,7 +217,7 @@ describe('trends', () => {
   });
 
   it('instance override to false does not trigger trends when template default is true', () => {
-    const tag = makeTag('T', 'f64', false, { trends: { field_type: 'Boolean', default: true } });
+    const tag = makeTag('T', 2, false, { trends: { field_type: 'Boolean', default: true } });
     const mod = makeStruct('M', 'module', [
       { template_name: 'T', asset_name: 'ch', fields: { trends: false } },
     ]);
@@ -245,7 +247,7 @@ describe('trends — additional edge cases', () => {
   });
 
   it('false when a level has trends field explicitly set to false and no other level has true', () => {
-    const tag = makeTag('T', 'f64', false, { trends: { field_type: 'Boolean', default: false } });
+    const tag = makeTag('T', 2, false, { trends: { field_type: 'Boolean', default: false } });
     const mod = makeStruct('M', 'module', [{ template_name: 'T', asset_name: 'ch', fields: {} }]);
     const map = { M: wrap(mod), T: wrap(tag) };
 
@@ -253,7 +255,7 @@ describe('trends — additional edge cases', () => {
   });
 
   it('false when trends field value is string "true" (not boolean true)', () => {
-    const tag = makeTag('T', 'f64', false, { trends: { field_type: 'Boolean', default: 'true' } });
+    const tag = makeTag('T', 2, false, { trends: { field_type: 'Boolean', default: 'true' } });
     const mod = makeStruct('M', 'module', [{ template_name: 'T', asset_name: 'ch', fields: {} }]);
     const map = { M: wrap(mod), T: wrap(tag) };
 
@@ -261,7 +263,7 @@ describe('trends — additional edge cases', () => {
   });
 
   it('false when trends field value is number 1 (not boolean true)', () => {
-    const tag = makeTag('T', 'f64', false, { trends: { field_type: 'Boolean', default: 1 } });
+    const tag = makeTag('T', 2, false, { trends: { field_type: 'Boolean', default: 1 } });
     const mod = makeStruct('M', 'module', [{ template_name: 'T', asset_name: 'ch', fields: {} }]);
     const map = { M: wrap(mod), T: wrap(tag) };
 

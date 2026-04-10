@@ -5,6 +5,7 @@
 import { readdir, readFile, writeFile, unlink, rename } from 'fs/promises';
 import { join, dirname, relative } from 'path';
 import { existsSync } from 'fs';
+import { getTagTypes } from '@caro/db';
 import {
   hashTemplate,
   validateTemplate,
@@ -287,6 +288,23 @@ export async function batchSave(
         error.code = ERROR_CODES.STALE_TEMPLATE;
         error.status = 409;
         throw error;
+      }
+    }
+  }
+
+  // Step 1c: Validate TagType field values against tag_types lookup table
+  if (hasChanges) {
+    const tagTypes = await getTagTypes();
+    const validTypeNames = new Set(tagTypes.map(t => t.type_name));
+
+    for (const { template } of changes) {
+      for (const [fieldName, fieldDef] of Object.entries(template.fields || {})) {
+        if (fieldDef.field_type === 'TagType' && typeof fieldDef.default === 'string' && !validTypeNames.has(fieldDef.default)) {
+          const err = new Error(`Field "${fieldName}" has invalid TagType value "${fieldDef.default}". Valid type names: ${[...validTypeNames].join(', ')}`) as CaroError;
+          err.code = ERROR_CODES.SCHEMA_VALIDATION_ERROR;
+          err.status = 400;
+          throw err;
+        }
       }
     }
   }

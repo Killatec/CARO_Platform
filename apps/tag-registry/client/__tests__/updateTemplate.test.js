@@ -72,8 +72,7 @@ describe('updateTemplate — dirtySet', () => {
   });
 
   it('removes from dirtySet when template reverted to baseline', () => {
-    const originalFields = { eng_min: { field_type: 'Numeric', default: 0 } };
-    const tag = makeTag('T', originalFields);
+    const tag = makeTag('T', { eng_min: { field_type: 'Numeric', default: 0 } });
     preload(tag);
 
     // First make it dirty
@@ -81,8 +80,8 @@ describe('updateTemplate — dirtySet', () => {
       dirtySet: new Set(['T']),
     });
 
-    // Revert to exactly the original value
-    useTemplateGraphStore.getState().updateTemplate('T', { fields: originalFields });
+    // Revert to exactly the original value (full fields including data_type/is_setpoint)
+    useTemplateGraphStore.getState().updateTemplate('T', { fields: tag.fields });
 
     expect(useTemplateGraphStore.getState().dirtySet.has('T')).toBe(false);
   });
@@ -95,7 +94,7 @@ describe('updateTemplate — dirtySet', () => {
       originalTemplateMap: new Map(), // no baseline
     });
 
-    useTemplateGraphStore.getState().updateTemplate('T', { data_type: 'i32' });
+    useTemplateGraphStore.getState().updateTemplate('T', { fields: { extra: { field_type: 'String', default: 'changed' } } });
 
     expect(useTemplateGraphStore.getState().dirtySet.has('T')).toBe(true);
   });

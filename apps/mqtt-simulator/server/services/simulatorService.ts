@@ -99,7 +99,7 @@ function initSimState(): void {
                : tag.data_type === 'str'  ? ''
                : 0;
     } else {
-      simValue = tag.data_type === 'f64'  ? 50.0
+      simValue = tag.data_type === 'f32'  ? 50.0
                : tag.data_type === 'i32'  ? 50
                : tag.data_type === 'bool' ? false
                : 'sim';
@@ -115,7 +115,7 @@ function advanceTag(tag: SimTag, state: SimTagState, deltaMs: number): void {
   if (tag.is_setpoint) return;
 
   switch (tag.data_type) {
-    case 'f64':
+    case 'f32':
       state.simT += deltaMs;
       state.simValue = 50 + 25 * Math.sin((2 * Math.PI * state.simT) / SINE_PERIOD_MS);
       break;
@@ -471,7 +471,7 @@ export function injectSetValues(moduleId: string): void {
   const values = setpointTags.map(tag => {
     let value: number | boolean | string;
     switch (tag.data_type) {
-      case 'f64':  value = Math.round(Math.random() * 10000) / 100; break;
+      case 'f32':  value = Math.round(Math.random() * 10000) / 100; break;
       case 'i32':  value = Math.floor(Math.random() * 101); break;
       case 'bool': value = Math.random() > 0.5; break;
       case 'str':  value = STR_VALUES[Math.floor(Math.random() * STR_VALUES.length)]; break;

@@ -29,7 +29,7 @@ async function request(method, path, body) {
  * server-assigned hash.
  * Returns { template, hash }.
  */
-export async function createTagTemplate(name, dataType = 'f64', isSetpoint = false, fields = {}) {
+export async function createTagTemplate(name, dataType = 'f32', isSetpoint = false, fields = {}) {
   const template = {
     template_type: 'tag',
     template_name: name,

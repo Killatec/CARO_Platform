@@ -35,11 +35,7 @@ export async function applyRegistry(
   comment: string
 ): Promise<ApplyRegistryResult> {
   // 1. Resolve proposed registry server-side — do not trust client-supplied data
-  const proposed: NewTagInput[] = resolveRegistry(templateMap, rootName).map(t => ({
-    ...t,
-    data_type:   t.data_type   ?? 'float',
-    is_setpoint: t.is_setpoint ?? false,
-  }));
+  const proposed: NewTagInput[] = resolveRegistry(templateMap, rootName) as NewTagInput[];
 
   // 2. Get current DB tags
   const dbTags = await getActiveTags();
@@ -81,7 +77,7 @@ export async function applyRegistry(
 // ── Private helpers ───────────────────────────────────────────────────────────
 
 function isModified(proposed: NewTagInput, dbTag: ActiveTag): boolean {
-  if (proposed.data_type   !== dbTag.data_type)              return true;
+  if (proposed.data_type !== dbTag.data_type)                  return true;
   if (proposed.is_setpoint !== dbTag.is_setpoint)            return true;
   if ((proposed.trends ?? false) !== (dbTag.trends ?? false)) return true;
   if (!deepEqual(proposed.meta, dbTag.meta))                 return true;

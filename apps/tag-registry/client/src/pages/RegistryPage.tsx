@@ -49,11 +49,7 @@ export function RegistryPage(): React.ReactElement {
       return;
     }
 
-    const proposed = resolveRegistry(templateMap, rootTemplateName).map(t => ({
-      ...t,
-      data_type:   t.data_type   ?? 'float',
-      is_setpoint: t.is_setpoint ?? false,
-    }));
+    const proposed = resolveRegistry(templateMap, rootTemplateName);
     setTags(proposed);
 
     setDbError(null);
@@ -72,11 +68,7 @@ export function RegistryPage(): React.ReactElement {
 
   function refreshDiff() {
     if (!rootTemplateName || !templateMap || templateMap.size === 0 || !isValid) return;
-    const proposed = resolveRegistry(templateMap, rootTemplateName).map(t => ({
-      ...t,
-      data_type:   t.data_type   ?? 'float',
-      is_setpoint: t.is_setpoint ?? false,
-    }));
+    const proposed = resolveRegistry(templateMap, rootTemplateName);
     setTags(proposed);
     fetchRegistry()
       .then((dbTags: ActiveTag[]) => setDiffRows(diffRegistry(proposed, dbTags)))

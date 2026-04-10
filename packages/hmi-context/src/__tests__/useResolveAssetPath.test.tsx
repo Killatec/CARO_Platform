@@ -8,7 +8,7 @@ import type { TagDef } from '../types.js';
 const rfFwdSetpoint: TagDef = {
   tag_id: 1001,
   tag_path: 'Plant1.Module.RF_Fwd.setpoint',
-  data_type: 'f64',
+  data_type: 'f32',
   is_setpoint: true,
   module_id: 'Module',
   eng_min: 0,
@@ -25,7 +25,7 @@ const rfFwdSetpoint: TagDef = {
 const rfFwdMonitor: TagDef = {
   tag_id: 1002,
   tag_path: 'Plant1.Module.RF_Fwd.monitor',
-  data_type: 'f64',
+  data_type: 'f32',
   is_setpoint: false,
   module_id: 'Module',
   eng_min: 0,
@@ -42,7 +42,7 @@ const rfFwdMonitor: TagDef = {
 const rfRevSetpoint: TagDef = {
   tag_id: 1003,
   tag_path: 'Plant1.Module.RF_Rev.setpoint',
-  data_type: 'f64',
+  data_type: 'f32',
   is_setpoint: true,
   module_id: 'Module',
   eng_min: 0,
@@ -59,7 +59,7 @@ const rfRevSetpoint: TagDef = {
 const rfRevMonitor: TagDef = {
   tag_id: 1004,
   tag_path: 'Plant1.Module.RF_Rev.monitor',
-  data_type: 'f64',
+  data_type: 'f32',
   is_setpoint: false,
   module_id: 'Module',
   eng_min: 0,

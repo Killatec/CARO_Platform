@@ -70,7 +70,7 @@ test.describe('Registry Table — trends column', () => {
     created.push(tagName, paramName, modName);
 
     // No trends field on any template
-    await createTagTemplate(tagName, 'f64', false, {});
+    await createTagTemplate(tagName, 'f32', false, {});
     await createStructuralTemplate(paramName, 'parameter', [
       { template_name: tagName, asset_name: 'setpoint', fields: {} },
     ]);
@@ -102,7 +102,7 @@ test.describe('Registry Table — trends column', () => {
     const modName   = `mod_tr3_${ts}`;
     created.push(tagName, paramName, modName);
 
-    await createTagTemplate(tagName, 'f64', false, {});
+    await createTagTemplate(tagName, 'f32', false, {});
     await createStructuralTemplate(paramName, 'parameter', [
       { template_name: tagName, asset_name: 'setpoint', fields: {} },
     ]);

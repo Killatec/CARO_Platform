@@ -95,39 +95,39 @@ describe('injectTemplateGraph — adds new entries', () => {
 describe('injectTemplateGraph — never overwrites existing templateMap entry', () => {
   it('existing templateMap entry preserved when same name injected', () => {
     const originalTag = makeTag('T');
-    originalTag.data_type = 'i32'; // distinctive value
+    originalTag.fields.data_type.default = 'i32'; // distinctive value
     useTemplateGraphStore.setState({
       templateMap: new Map([['T', { template: originalTag, hash: 'aabbcc' }]]),
     });
 
     const differentTag = makeTag('T');
-    differentTag.data_type = 'bool';
+    differentTag.fields.data_type.default = 'bool';
     useTemplateGraphStore.getState().injectTemplateGraph({
       T: { template: differentTag, hash: 'ddeeff' },
     });
 
     const entry = useTemplateGraphStore.getState().templateMap.get('T');
     expect(entry.hash).toBe('aabbcc');
-    expect(entry.template.data_type).toBe('i32');
+    expect(entry.template.fields.data_type.default).toBe('i32');
   });
 });
 
 describe('injectTemplateGraph — never overwrites existing originalTemplateMap entry', () => {
   it('existing originalTemplateMap entry preserved when same name injected', () => {
     const originalTag = makeTag('T');
-    originalTag.data_type = 'i32';
+    originalTag.fields.data_type.default = 'i32';
     useTemplateGraphStore.setState({
       originalTemplateMap: new Map([['T', { template: originalTag, hash: 'aabbcc' }]]),
     });
 
     const differentTag = makeTag('T');
-    differentTag.data_type = 'bool';
+    differentTag.fields.data_type.default = 'bool';
     useTemplateGraphStore.getState().injectTemplateGraph({
       T: { template: differentTag, hash: 'ddeeff' },
     });
 
     const origEntry = useTemplateGraphStore.getState().originalTemplateMap.get('T');
-    expect(origEntry.template.data_type).toBe('i32');
+    expect(origEntry.template.fields.data_type.default).toBe('i32');
   });
 });
 
@@ -154,9 +154,9 @@ describe('injectTemplateGraph — structuredClone in originalTemplateMap', () =>
     });
 
     // Mutate the original reference after injection
-    tag.data_type = 'MUTATED';
+    tag.fields.data_type.default = 'MUTATED';
 
     const stored = useTemplateGraphStore.getState().originalTemplateMap.get('T');
-    expect(stored.template.data_type).toBe('f64');
+    expect(stored.template.fields.data_type.default).toBe('f32');
   });
 });

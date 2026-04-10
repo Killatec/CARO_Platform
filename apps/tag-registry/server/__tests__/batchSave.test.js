@@ -1,4 +1,11 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+vi.mock('@caro/db', () => ({
+  getTagTypes: vi.fn().mockResolvedValue([
+    { id: 1, type_name: 'f32',  display_name: 'Float 32' },
+    { id: 5, type_name: 'bool', display_name: 'Boolean' },
+  ]),
+}));
 import { mkdtemp, writeFile, mkdir, rm, readFile, access } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -25,7 +32,11 @@ async function fileExists(p) {
 
 const baseTag = {
   template_type: 'tag', template_name: 'tag_a',
-  data_type: 'f64', is_setpoint: false, fields: {}, children: [],
+  fields: {
+    data_type: { field_type: 'TagType', default: 'f32' },
+    is_setpoint: { field_type: 'Boolean', default: false },
+  },
+  children: [],
 };
 
 let tmpDir;
@@ -95,7 +106,11 @@ describe('batchSave — new template (original_hash: null)', () => {
   it('creates file in tags/ for a new tag template', async () => {
     const newTag = {
       template_type: 'tag', template_name: 'brand_new',
-      data_type: 'i32', is_setpoint: false, fields: {}, children: [],
+      fields: {
+        data_type: { field_type: 'TagType', default: 'bool' },
+        is_setpoint: { field_type: 'Boolean', default: false },
+      },
+      children: [],
     };
     const result = await batchSave([{ template_name: 'brand_new', original_hash: null, template: newTag }]);
     expect(result.requires_confirmation).toBe(false);
@@ -132,19 +147,19 @@ describe('batchSave — new template (original_hash: null)', () => {
 describe('batchSave — update existing', () => {
   it('writes updated content to disk', async () => {
     const { hash } = await getTemplate('tag_a');
-    const updated = { ...baseTag, data_type: 'i32' };
+    const updated = { ...baseTag, fields: { ...baseTag.fields, data_type: { field_type: 'TagType', default: 'bool' } } };
 
     await batchSave([{ template_name: 'tag_a', original_hash: hash, template: updated }]);
 
     const onDisk = JSON.parse(
       await readFile(join(tmpDir, 'tags', 'tag_a.json'), 'utf-8')
     );
-    expect(onDisk.data_type).toBe('i32');
+    expect(onDisk.fields.data_type.default).toBe('bool');
   });
 
   it('returns modified_files list', async () => {
     const { hash } = await getTemplate('tag_a');
-    const updated = { ...baseTag, data_type: 'bool' };
+    const updated = { ...baseTag, fields: { ...baseTag.fields, data_type: { field_type: 'TagType', default: 'bool' } } };
 
     const result = await batchSave([{ template_name: 'tag_a', original_hash: hash, template: updated }]);
     expect(result.modified_files.length).toBeGreaterThan(0);
@@ -152,12 +167,12 @@ describe('batchSave — update existing', () => {
 
   it('updates the in-memory index so subsequent getTemplate returns new hash', async () => {
     const { hash: h1 } = await getTemplate('tag_a');
-    const updated = { ...baseTag, data_type: 'i32' };
+    const updated = { ...baseTag, fields: { ...baseTag.fields, data_type: { field_type: 'TagType', default: 'bool' } } };
     await batchSave([{ template_name: 'tag_a', original_hash: h1, template: updated }]);
 
     const { hash: h2, template } = await getTemplate('tag_a');
     expect(h2).not.toBe(h1);
-    expect(template.data_type).toBe('i32');
+    expect(template.fields.data_type.default).toBe('bool');
   });
 });
 

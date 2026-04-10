@@ -129,8 +129,9 @@ Environment-agnostic. No `fs`, no Express, no DOM. Both server and client import
 
 **`validateTemplate(template)`**
 Returns `{ valid: bool, errors: [], warnings: [] }`.
-- Each field in `template.fields` must be `{ field_type, default }`. `field_type` ∈ `{ "Numeric", "String", "Boolean" }`. `typeof default` must match.
-- `data_type` and `is_setpoint` are **top-level** template properties — never inside `fields{}`.
+- Each field in `template.fields` must be `{ field_type, default }`. `field_type` ∈ `{ "Numeric", "String", "Boolean", "TagType" }`. `typeof default` must match.
+- `data_type` and `is_setpoint` are regular entries in `fields{}` with field_type `TagType` and `Boolean` respectively. The resolver extracts them from resolved fields (defaults: `data_type` → `'f32'`, `is_setpoint` → `false`).
+- Tag templates must also include a `Trends` field (field_type `Boolean`). `validateTemplate` enforces all three required fields on tag templates.
 - `template_name` must not contain a dot (`INVALID_TEMPLATE_NAME`).
 
 **`validateGraph(templateMap)`**
@@ -299,7 +300,7 @@ Runs `validateTemplate`, `validateGraph`, `validateParentTypes` synchronously on
 
 ### `FieldsPanel`
 - Uses `selectionKey + setTimeout(0)` blank-tick pattern on every selection switch. Dependency array must be `[selectionKey]` — not the raw selection fields.
-- **Template mode:** `data_type` and `is_setpoint` are top-level — never inside `fields{}`.
+- **Template mode:** `data_type` (field_type `TagType`) and `is_setpoint` (field_type `Boolean`) are entries inside `fields{}`, rendered via the tag-types dropdown and boolean toggle respectively.
 - **Instance mode:** child lookup uses `children[selectedSystemTreeNodeChildIndex]` (index-based, not asset_name match).
 - `isDirtyField` color: dirty → `font-semibold text-orange-700`; non-dirty override → `text-blue-600`; default → `text-gray-700`.
 - `FieldTableRow` is a `<tr>`-based component local to `FieldsPanel.jsx`. Distinct from `FieldRow.jsx` (div/flex). `FieldRow` is not used inside `FieldsPanel`.

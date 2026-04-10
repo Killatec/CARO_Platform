@@ -7,6 +7,8 @@ import { useUIStore } from '../../stores/useUIStore.js';
 import { simulateCascade } from '@caro/tag-registry-shared';
 import * as templatesApi from '../../api/templates.js';
 import { fetchConfig } from '../../api/config.js';
+import { fetchTagTypes } from '../../api/tagTypes.js';
+import { useTagTypesStore } from '../../stores/useTagTypesStore.js';
 import type { TemplateListItem } from '../../api/templates.js';
 
 interface ChildChanged {
@@ -69,6 +71,12 @@ export function AppShell({ children }: AppShellProps): React.ReactElement {
       }
     }
     loadConfig();
+  }, []);
+
+  useEffect(() => {
+    fetchTagTypes()
+      .then(types => useTagTypesStore.getState().setTagTypes(types))
+      .catch(error => console.error('Failed to load tag types:', error));
   }, []);
 
   const rootOptions = templates
