@@ -2,9 +2,13 @@
   "template_type": "module",
   "template_name": "rf_power_module",
   "fields": {
-    "description": {
+    "Module_Type": {
+      "field_type": "ModuleType",
+      "default": "MQTT"
+    },
+    "Description": {
       "field_type": "String",
-      "default": "Rf1"
+      "default": "RF Module"
     }
   },
   "children": [

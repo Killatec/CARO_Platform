@@ -21,3 +21,7 @@ Read once at session start alongside `Docs/platform_handoff.md`.
 **Detail:** `runMigrations()` from `@caro/db` is now called at startup in all three servers (tag-registry, caro-hmi, mqtt-simulator). Advisory lock `pg_advisory_lock(1)` in `packages/db/migrations.ts` prevents concurrent migration races when all three servers start simultaneously. Each server calls `ping()` first to verify DB connectivity, then `runMigrations()`, failing fast with `process.exit(1)` on error before any app-level init runs.
 
 ---
+
+- module_types lookup table added (migration 010); ModuleType field type added to tag-registry shared/server/client; module templates now require Module_Type field
+- module and module_type columns added to tag_registry (migration 011); resolved from meta chain during registry apply; displayed in RegistryTable UI with sort and diff support
+- module_types lookup table added (migration 010) with HMI and MQTT seed rows; getModuleTypes() and ModuleType interface added to @caro/db and exported from index

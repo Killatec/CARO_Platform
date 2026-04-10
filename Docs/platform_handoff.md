@@ -64,7 +64,7 @@
 
 Schema spec: `docs/CARO_DB_Spec.md`
 Migrations: `db/postgres/migrations/` — never edit existing files, add new ones only.
-Applied: `001` `002` `003` `004` `006` `007` `008` `009`
+Applied: `001` `002` `003` `004` `006` `007` `008` `009` `010` `011`
 
 HMI tables (`users`, `sessions`, `commissioned_modules`, `operation_modes`, `mode_revisions`, `setpoint_values`, `pending_setpoint_values`, `system_settings`, `audit_log`) specified in DB Spec, not yet migrated. Create when HMI development starts.
 

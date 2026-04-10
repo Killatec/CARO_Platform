@@ -77,7 +77,7 @@ export function RegistryPage(): React.ReactElement {
 
   if (!rootTemplateName) {
     return (
-      <div className="w-fit flex flex-col overflow-auto p-6 text-center text-gray-500">
+      <div className="flex flex-col h-full p-6 text-center text-gray-500">
         <p>Select a root template from the dropdown above to view the registry.</p>
       </div>
     );
@@ -85,7 +85,7 @@ export function RegistryPage(): React.ReactElement {
 
   if (!isValid) {
     return (
-      <div className="w-fit flex flex-col overflow-auto p-6 text-center">
+      <div className="flex flex-col h-full p-6 text-center">
         <div className="bg-red-50 border border-red-200 rounded-lg p-4">
           <h3 className="text-lg font-semibold text-red-900 mb-2">
             Resolve errors to view registry
@@ -142,57 +142,62 @@ export function RegistryPage(): React.ReactElement {
   }
 
   return (
-    <div className="w-fit flex flex-col overflow-auto">
-      {dbError && (
-        <div className="mx-4 mt-4 bg-amber-50 border border-amber-300 rounded p-3 text-sm text-amber-800">
-          DB registry unavailable — showing proposed registry without diff. ({dbError})
-        </div>
-      )}
-
-      {successRev !== null && (
-        <div className="mx-4 mt-4 bg-green-50 border border-green-300 rounded p-3 text-sm text-green-800">
-          Registry updated to revision {successRev}
-        </div>
-      )}
-
-      {diffSummary && (
-        <div className="mx-4 mt-4 flex items-center gap-4">
-          {dbRevision !== null && (
-            <span className="text-sm font-semibold text-gray-500 whitespace-nowrap">
-              Rev. {dbRevision}
-            </span>
-          )}
-          <div className="text-sm text-gray-600 flex gap-4">
-            {diffSummary.added > 0 && (
-              <span className="text-green-700 font-medium">+{diffSummary.added} added</span>
-            )}
-            {diffSummary.modified > 0 && (
-              <span className="text-amber-700 font-medium">~{diffSummary.modified} modified</span>
-            )}
-            {diffSummary.unchanged > 0 && (
-              <span>{diffSummary.unchanged} unchanged</span>
-            )}
-            {diffSummary.retired > 0 && (
-              <span className="text-red-700 font-medium">-{diffSummary.retired} retired</span>
-            )}
+    <div className="flex flex-col h-full">
+      <div className="flex-1 min-h-0 overflow-auto">
+        {dbError && (
+          <div className="mx-4 mt-4 bg-amber-50 border border-amber-300 rounded p-3 text-sm text-amber-800">
+            DB registry unavailable — showing proposed registry without diff. ({dbError})
           </div>
-          <button
-            onClick={openModal}
-            disabled={!hasChanges}
-            title={isDirty ? 'Save or discard changes before updating the registry' : undefined}
-            className={`ml-auto px-3 py-1 text-sm rounded font-medium transition-colors ${
-              hasChanges
-                ? 'bg-blue-600 text-white hover:bg-blue-700'
-                : 'bg-gray-200 text-gray-400 cursor-not-allowed'
-            }`}
-          >
-            Update DB
-          </button>
-        </div>
-      )}
+        )}
 
-      <RegistryTable rows={diffRows} />
-      <ValidationPanel messages={messages} />
+        {successRev !== null && (
+          <div className="mx-4 mt-4 bg-green-50 border border-green-300 rounded p-3 text-sm text-green-800">
+            Registry updated to revision {successRev}
+          </div>
+        )}
+
+        {diffSummary && (
+          <div className="mx-4 mt-4 flex items-center gap-4">
+            {dbRevision !== null && (
+              <span className="text-sm font-semibold text-gray-500 whitespace-nowrap">
+                Rev. {dbRevision}
+              </span>
+            )}
+            <div className="text-sm text-gray-600 flex gap-4">
+              {diffSummary.added > 0 && (
+                <span className="text-green-700 font-medium">+{diffSummary.added} added</span>
+              )}
+              {diffSummary.modified > 0 && (
+                <span className="text-amber-700 font-medium">~{diffSummary.modified} modified</span>
+              )}
+              {diffSummary.unchanged > 0 && (
+                <span>{diffSummary.unchanged} unchanged</span>
+              )}
+              {diffSummary.retired > 0 && (
+                <span className="text-red-700 font-medium">-{diffSummary.retired} retired</span>
+              )}
+            </div>
+            <button
+              onClick={openModal}
+              disabled={!hasChanges}
+              title={isDirty ? 'Save or discard changes before updating the registry' : undefined}
+              className={`ml-auto px-3 py-1 text-sm rounded font-medium transition-colors ${
+                hasChanges
+                  ? 'bg-blue-600 text-white hover:bg-blue-700'
+                  : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+              }`}
+            >
+              Update DB
+            </button>
+          </div>
+        )}
+
+        <RegistryTable rows={diffRows} />
+      </div>
+
+      <div className="flex-shrink-0">
+        <ValidationPanel messages={messages} />
+      </div>
 
       <Modal
         isOpen={modalOpen}

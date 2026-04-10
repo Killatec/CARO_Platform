@@ -67,9 +67,14 @@ export function resolveRegistry(
         ),
       );
 
+      const moduleLevel = metaChain.find(level => level.type === 'module');
+      const moduleTypeRaw = moduleLevel?.fields?.Module_Type;
+
       tags.push({
         tag_path,
         data_type: typeof resolvedFields.data_type === 'string' ? resolvedFields.data_type : DEFAULT_DATA_TYPE,
+        module: moduleLevel?.name ?? null,
+        module_type: typeof moduleTypeRaw === 'string' ? moduleTypeRaw : null,
         is_setpoint: typeof resolvedFields.is_setpoint === 'boolean' ? resolvedFields.is_setpoint : false,
         trends,
         meta,

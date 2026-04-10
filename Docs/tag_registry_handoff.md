@@ -11,6 +11,7 @@
 - Registry persistence — diff live calculation against PostgreSQL; apply via SERIALIZABLE transaction; append-only `tag_registry` table
 - Revision history — every apply creates a `registry_revisions` row; History page shows full log
 - Client-side validation — circular references, invalid references, schema errors, tag path length, configurable parent type rules; blocks save on error
+- Module type support — `module_types` lookup table, `ModuleType` field type with dropdown UI, `Module_Type` required on module templates, `module` and `module_type` columns resolved and persisted to `tag_registry`; `GET /api/v1/module-types` endpoint
 - Test suite — 330 Vitest unit tests (server 82, shared 125, client 112, packages/db 11) + 207 Playwright E2E tests (Chromium, Firefox, WebKit); 537 total, 0 failures
 
 ## What Is Not Built

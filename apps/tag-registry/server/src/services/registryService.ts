@@ -80,6 +80,8 @@ function isModified(proposed: NewTagInput, dbTag: ActiveTag): boolean {
   if (proposed.data_type !== dbTag.data_type)                  return true;
   if (proposed.is_setpoint !== dbTag.is_setpoint)            return true;
   if ((proposed.trends ?? false) !== (dbTag.trends ?? false)) return true;
+  if ((proposed.module ?? null) !== (dbTag.module ?? null))           return true;
+  if ((proposed.module_type ?? null) !== (dbTag.module_type ?? null)) return true;
   if (!deepEqual(proposed.meta, dbTag.meta))                 return true;
   return false;
 }

@@ -129,8 +129,9 @@ Environment-agnostic. No `fs`, no Express, no DOM. Both server and client import
 
 **`validateTemplate(template)`**
 Returns `{ valid: bool, errors: [], warnings: [] }`.
-- Each field in `template.fields` must be `{ field_type, default }`. `field_type` ∈ `{ "Numeric", "String", "Boolean", "TagType" }`. `typeof default` must match.
+- Each field in `template.fields` must be `{ field_type, default }`. `field_type` ∈ `{ "Numeric", "String", "Boolean", "TagType", "ModuleType" }`. `typeof default` must match.
 - `data_type` and `is_setpoint` are regular entries in `fields{}` with field_type `TagType` and `Boolean` respectively. The resolver extracts them from resolved fields (defaults: `data_type` → `'f32'`, `is_setpoint` → `false`).
+- `Module_Type` is a required field on module templates with field_type `ModuleType`. The resolver extracts `module` (instance name) and `module_type` (Module_Type value) from the nearest module-level ancestor in the meta chain.
 - Tag templates must also include a `Trends` field (field_type `Boolean`). `validateTemplate` enforces all three required fields on tag templates.
 - `template_name` must not contain a dot (`INVALID_TEMPLATE_NAME`).
 
@@ -151,9 +152,10 @@ Returns `{ errors: [], warnings: [] }`.
 Options: `{ requiredParentTypes: string[], uniqueParentTypes: boolean }`.
 
 **`resolveRegistry(templateMap, rootName)`**
-Returns `[{ tag_path, data_type, is_setpoint, meta }]`.
+Returns `[{ tag_path, module, module_type, data_type, is_setpoint, meta }]`.
 - First segment of every `tag_path` is `rootName` (not the literal string `'root'`).
 - Extracts `.default` from field definitions before merging with instance overrides.
+- `module` is the `asset_name` of the nearest ancestor with `template_type: "module"` (null if none). `module_type` is the `Module_Type` field value from that ancestor (null if none).
 
 **`hashTemplate(template)`**
 Returns 6-character hex SHA-1 string.
@@ -276,6 +278,10 @@ Called by `save()`, `confirmSave()`, `discard()` when `rootTemplateName` is null
 - Setting one selection type clears the other atomically (system tree vs template tree).
 - `validationConfig` — `{ requiredParentTypes: [], uniqueParentTypes: false }`. Set by `AppShell` on mount via `GET /api/v1/config`.
 
+### `useTagTypesStore` / `useModuleTypesStore`
+- `useTagTypesStore` — stores `tagTypes` array and `displayNameMap` (type_name → display_name). Fetched on AppShell mount via `GET /api/v1/tag-types`.
+- `useModuleTypesStore` — mirrors `useTagTypesStore`. Stores `moduleTypes` array and `displayNameMap` (type_name → display_name). Fetched on AppShell mount via `GET /api/v1/module-types`.
+
 ---
 
 ## 8. `useValidation` Hook
@@ -300,7 +306,7 @@ Runs `validateTemplate`, `validateGraph`, `validateParentTypes` synchronously on
 
 ### `FieldsPanel`
 - Uses `selectionKey + setTimeout(0)` blank-tick pattern on every selection switch. Dependency array must be `[selectionKey]` — not the raw selection fields.
-- **Template mode:** `data_type` (field_type `TagType`) and `is_setpoint` (field_type `Boolean`) are entries inside `fields{}`, rendered via the tag-types dropdown and boolean toggle respectively.
+- **Template mode:** `data_type` (field_type `TagType`) and `is_setpoint` (field_type `Boolean`) are entries inside `fields{}`, rendered via the tag-types dropdown and boolean toggle respectively. `Module_Type` (field_type `ModuleType`) renders as a dropdown populated from `useModuleTypesStore`. Same pattern as `TagType` / `useTagTypesStore`.
 - **Instance mode:** child lookup uses `children[selectedSystemTreeNodeChildIndex]` (index-based, not asset_name match).
 - `isDirtyField` color: dirty → `font-semibold text-orange-700`; non-dirty override → `text-blue-600`; default → `text-gray-700`.
 - `FieldTableRow` is a `<tr>`-based component local to `FieldsPanel.jsx`. Distinct from `FieldRow.jsx` (div/flex). `FieldRow` is not used inside `FieldsPanel`.
@@ -310,11 +316,14 @@ Shared by `CascadeModal` and `CascadePreviewModal`. Props: `newTemplates`, `chil
 
 ### `RegistryPage`
 - Fetches DB registry via `GET /api/v1/registry`, compares with `resolveRegistry()` using `diffRegistry()`.
+- Layout: `h-full flex flex-col` outer container. Scrollable content area (`flex-1 min-h-0 overflow-auto`) wraps banners, diff bar, and table. `ValidationPanel` pinned to bottom via `flex-shrink-0` wrapper.
 - `tag_id` shows `'new'` for added rows.
 - Modified rows: changed cells `bg-amber-500/25`. Added rows: green. Retired rows: red.
 - Update DB disabled when `isDirty` or no changes. Confirmation modal requires non-empty comment.
 - If DB unavailable: amber warning banner, table displays proposed registry undiffed.
 - Table layout: `w-auto table-auto` in `border border-black/30 rounded-sm w-fit` container.
+- Columns: tag_id, tag_path, module, module_type, data_type, is_setpoint, trends, meta. All columns except meta are sortable. `module_type` displays `display_name` from `useModuleTypesStore`, falling back to raw value.
+- Sort logic lives in `RegistryTable` via `useMemo` (not in `useRegistryStore`). The store only tracks `sortField` and `sortDirection`. `tag_id` uses numeric comparison (added rows with no tag_id sort to end); all other columns use string comparison.
 
 ### `MetaModalBody`
 - Without `dbMeta`: renders meta array as level-by-level list (`meta[0]` = root, `meta[last]` = tag leaf).
@@ -322,7 +331,12 @@ Shared by `CascadeModal` and `CascadePreviewModal`. Props: `newTemplates`, `chil
 
 ### `AppShell`
 - Fetches `GET /api/v1/config` on mount alongside template list. On failure: store retains `{ requiredParentTypes: [], uniqueParentTypes: false }` silently.
+- Fetches `GET /api/v1/tag-types` and `GET /api/v1/module-types` on mount, populating `useTagTypesStore` and `useModuleTypesStore` respectively.
+- `<main>` uses `overflow-hidden` (not `overflow-auto`) — individual pages manage their own scrolling.
 - `_buildDiffEnrichment()` computes `new_templates`, `pending_deletions`, `children_changed` from store state for both `handleSeeChanges` and `handleSave`.
+
+### `EditorPage`
+- Layout: `h-full flex flex-col` outer container. Tree panels row: `flex-1 min-h-0`. Each tree column (`AssetTree`, right panel) has `overflow-y-auto` for independent scrolling. `ValidationPanel` pinned to bottom via `flex-shrink-0` wrapper.
 
 ### `HistoryPage`
 Columns: rev (right-aligned), applied_by, applied_at (`formatDateTime`), comment. Ordered DESC. Read-only.

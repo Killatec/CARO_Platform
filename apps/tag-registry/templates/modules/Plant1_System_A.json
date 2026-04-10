@@ -15,9 +15,7 @@
     {
       "template_name": "rf_power_module",
       "asset_name": "RFPowerModule",
-      "fields": {
-        "description": "Main RF power"
-      }
+      "fields": {}
     }
   ]
 }

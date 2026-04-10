@@ -4,6 +4,7 @@
  */
 
 export const DEFAULT_DATA_TYPE = 'f32';
+export const DEFAULT_MODULE_TYPE = 'HMI';
 
 export const ERROR_CODES = {
   // Template errors

@@ -9,6 +9,8 @@ import * as templatesApi from '../../api/templates.js';
 import { fetchConfig } from '../../api/config.js';
 import { fetchTagTypes } from '../../api/tagTypes.js';
 import { useTagTypesStore } from '../../stores/useTagTypesStore.js';
+import { fetchModuleTypes } from '../../api/moduleTypes.js';
+import { useModuleTypesStore } from '../../stores/useModuleTypesStore.js';
 import type { TemplateListItem } from '../../api/templates.js';
 
 interface ChildChanged {
@@ -77,6 +79,12 @@ export function AppShell({ children }: AppShellProps): React.ReactElement {
     fetchTagTypes()
       .then(types => useTagTypesStore.getState().setTagTypes(types))
       .catch(error => console.error('Failed to load tag types:', error));
+  }, []);
+
+  useEffect(() => {
+    fetchModuleTypes()
+      .then(types => useModuleTypesStore.getState().setModuleTypes(types))
+      .catch(error => console.error('Failed to load module types:', error));
   }, []);
 
   const rootOptions = templates
@@ -194,7 +202,7 @@ export function AppShell({ children }: AppShellProps): React.ReactElement {
 
       <div className="flex flex-1 overflow-hidden">
         <Sidebar />
-        <main className="flex-1 overflow-auto bg-gray-50">
+        <main className="flex-1 overflow-hidden bg-gray-50">
           {children}
         </main>
       </div>

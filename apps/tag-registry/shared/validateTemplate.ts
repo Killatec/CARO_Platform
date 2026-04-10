@@ -1,7 +1,7 @@
 import { ERROR_CODES, MAX_IDENTIFIER_LENGTH } from './constants.js';
 import type { Template, ValidationResult, ValidationMessage } from './types.js';
 
-const VALID_FIELD_TYPES = ['Numeric', 'String', 'Boolean', 'TagType'];
+const VALID_FIELD_TYPES = ['Numeric', 'String', 'Boolean', 'TagType', 'ModuleType'];
 
 export function validateTemplate(template: Template | null | undefined): ValidationResult {
   const errors: ValidationMessage[] = [];
@@ -103,6 +103,27 @@ export function validateTemplate(template: Template | null | undefined): Validat
         code: ERROR_CODES.SCHEMA_VALIDATION_ERROR,
         message: 'Tag templates may not have children',
         ref: { template_name: template.template_name },
+      });
+    }
+  }
+
+  const isModule = template.template_type === 'module';
+
+  if (isModule) {
+    const moduleTypeField = template.fields?.Module_Type;
+    if (!moduleTypeField || typeof moduleTypeField !== 'object' || !('field_type' in moduleTypeField)) {
+      errors.push({
+        severity: 'error',
+        code: ERROR_CODES.SCHEMA_VALIDATION_ERROR,
+        message: 'Module templates must have a "Module_Type" field',
+        ref: { template_name: template.template_name, field: 'Module_Type' },
+      });
+    } else if (moduleTypeField.field_type !== 'ModuleType') {
+      errors.push({
+        severity: 'error',
+        code: ERROR_CODES.SCHEMA_VALIDATION_ERROR,
+        message: `Field "Module_Type" must have field_type "ModuleType", got "${moduleTypeField.field_type}"`,
+        ref: { template_name: template.template_name, field: 'Module_Type' },
       });
     }
   }

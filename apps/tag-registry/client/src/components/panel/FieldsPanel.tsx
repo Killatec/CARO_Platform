@@ -3,12 +3,13 @@ import { Input } from '@caro/ui/primitives';
 import { useUIStore } from '../../stores/useUIStore.js';
 import { useTemplateGraphStore } from '../../stores/useTemplateGraphStore.js';
 import { useTagTypesStore } from '../../stores/useTagTypesStore.js';
+import { useModuleTypesStore } from '../../stores/useModuleTypesStore.js';
 import { AddFieldModal } from '../shared/AddFieldModal.jsx';
 import { TrashIcon } from '../shared/TrashIcon.jsx';
 import { deepNotEqual } from '@caro/tag-registry-shared';
 import type { FieldDef } from '@caro/tag-registry-shared';
 
-type FieldType = 'Numeric' | 'String' | 'Boolean' | 'TagType';
+type FieldType = 'Numeric' | 'String' | 'Boolean' | 'TagType' | 'ModuleType';
 
 function coerceValue(rawValue: unknown, fieldType: FieldType): number | string | boolean {
   if (fieldType === 'Boolean') return Boolean(rawValue);
@@ -35,6 +36,7 @@ function FieldTableRow({
   isDirtyField = false, readOnly = false, onChange, onDelete
 }: FieldTableRowProps): React.ReactElement {
   const tagTypes = useTagTypesStore(state => state.tagTypes);
+  const moduleTypes = useModuleTypesStore(state => state.moduleTypes);
   const colorClass = isDirtyField
     ? 'text-orange-700 font-semibold'
     : isOverride
@@ -54,6 +56,34 @@ function FieldTableRow({
             className={`w-[20ch] text-sm border border-gray-300 rounded px-1 py-0.5 ${colorClass}`}
           >
             {tagTypes.map(t => (
+              <option key={t.type_name} value={t.type_name}>{t.display_name}</option>
+            ))}
+          </select>
+        </td>
+        <td className="py-1.5 pl-1 w-6">
+          {onDelete && (
+            <button type="button" onClick={onDelete} title={`Delete field "${fieldName}"`}
+              className="p-1 text-gray-400 hover:text-red-500 transition-colors rounded">
+              <TrashIcon />
+            </button>
+          )}
+        </td>
+      </tr>
+    );
+  }
+
+  if (fieldType === 'ModuleType') {
+    return (
+      <tr>
+        <td className={nameCellClass}>{fieldName}</td>
+        <td className="py-1.5">
+          <select
+            value={value != null ? String(value) : ''}
+            onChange={onChange ? (e) => onChange(e.target.value) : undefined}
+            disabled={readOnly}
+            className={`w-[20ch] text-sm border border-gray-300 rounded px-1 py-0.5 ${colorClass}`}
+          >
+            {moduleTypes.map(t => (
               <option key={t.type_name} value={t.type_name}>{t.display_name}</option>
             ))}
           </select>

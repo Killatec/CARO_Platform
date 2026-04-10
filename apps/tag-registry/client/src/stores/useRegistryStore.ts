@@ -25,17 +25,6 @@ export const useRegistryStore = create<RegistryStoreState>((set, get) => ({
   setSort: (field) => {
     const current = get();
     const direction: 'asc' | 'desc' = current.sortField === field && current.sortDirection === 'asc' ? 'desc' : 'asc';
-
-    const sortedTags = [...current.tags].sort((a, b) => {
-      const aVal = (a as unknown as Record<string, unknown>)[field];
-      const bVal = (b as unknown as Record<string, unknown>)[field];
-      const aStr = String(aVal ?? '');
-      const bStr = String(bVal ?? '');
-      if (aStr < bStr) return direction === 'asc' ? -1 : 1;
-      if (aStr > bStr) return direction === 'asc' ? 1 : -1;
-      return 0;
-    });
-
-    set({ sortField: field, sortDirection: direction, tags: sortedTags });
+    set({ sortField: field, sortDirection: direction });
   }
 }));

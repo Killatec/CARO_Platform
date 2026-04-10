@@ -5,7 +5,7 @@
 import { readdir, readFile, writeFile, unlink, rename } from 'fs/promises';
 import { join, dirname, relative } from 'path';
 import { existsSync } from 'fs';
-import { getTagTypes } from '@caro/db';
+import { getTagTypes, getModuleTypes } from '@caro/db';
 import {
   hashTemplate,
   validateTemplate,
@@ -292,15 +292,22 @@ export async function batchSave(
     }
   }
 
-  // Step 1c: Validate TagType field values against tag_types lookup table
+  // Step 1c: Validate TagType and ModuleType field values against lookup tables
   if (hasChanges) {
-    const tagTypes = await getTagTypes();
-    const validTypeNames = new Set(tagTypes.map(t => t.type_name));
+    const [tagTypes, moduleTypes] = await Promise.all([getTagTypes(), getModuleTypes()]);
+    const validTagTypeNames = new Set(tagTypes.map(t => t.type_name));
+    const validModuleTypeNames = new Set(moduleTypes.map(t => t.type_name));
 
     for (const { template } of changes) {
       for (const [fieldName, fieldDef] of Object.entries(template.fields || {})) {
-        if (fieldDef.field_type === 'TagType' && typeof fieldDef.default === 'string' && !validTypeNames.has(fieldDef.default)) {
-          const err = new Error(`Field "${fieldName}" has invalid TagType value "${fieldDef.default}". Valid type names: ${[...validTypeNames].join(', ')}`) as CaroError;
+        if (fieldDef.field_type === 'TagType' && typeof fieldDef.default === 'string' && !validTagTypeNames.has(fieldDef.default)) {
+          const err = new Error(`Field "${fieldName}" has invalid TagType value "${fieldDef.default}". Valid type names: ${[...validTagTypeNames].join(', ')}`) as CaroError;
+          err.code = ERROR_CODES.SCHEMA_VALIDATION_ERROR;
+          err.status = 400;
+          throw err;
+        }
+        if (fieldDef.field_type === 'ModuleType' && typeof fieldDef.default === 'string' && !validModuleTypeNames.has(fieldDef.default)) {
+          const err = new Error(`Field "${fieldName}" has invalid ModuleType value "${fieldDef.default}". Valid module type names: ${[...validModuleTypeNames].join(', ')}`) as CaroError;
           err.code = ERROR_CODES.SCHEMA_VALIDATION_ERROR;
           err.status = 400;
           throw err;

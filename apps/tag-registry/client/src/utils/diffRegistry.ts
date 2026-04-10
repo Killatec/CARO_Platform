@@ -2,6 +2,8 @@ import { deepEqual } from '@caro/tag-registry-shared';
 
 export interface ProposedTag {
   tag_path: string;
+  module: string | null;
+  module_type: string | null;
   data_type: string;
   is_setpoint: boolean;
   trends?: boolean;
@@ -65,6 +67,8 @@ function isModified(proposed: ProposedTag, dbTag: DbTag): boolean {
   if (proposed.data_type !== dbTag.data_type) return true;
   if (proposed.is_setpoint !== dbTag.is_setpoint) return true;
   if ((proposed.trends ?? false) !== (dbTag.trends ?? false)) return true;
+  if ((proposed.module ?? null) !== (dbTag.module ?? null)) return true;
+  if ((proposed.module_type ?? null) !== (dbTag.module_type ?? null)) return true;
   if (!deepEqual(proposed.meta, dbTag.meta)) return true;
   return false;
 }
@@ -75,6 +79,8 @@ function getChangedFields(proposed: ProposedTag, dbTag: DbTag): string[] {
   if (proposed.data_type !== dbTag.data_type) changed.push('data_type');
   if (proposed.is_setpoint !== dbTag.is_setpoint) changed.push('is_setpoint');
   if ((proposed.trends ?? false) !== (dbTag.trends ?? false)) changed.push('trends');
+  if ((proposed.module ?? null) !== (dbTag.module ?? null)) changed.push('module');
+  if ((proposed.module_type ?? null) !== (dbTag.module_type ?? null)) changed.push('module_type');
   if (!deepEqual(proposed.meta, dbTag.meta)) changed.push('meta');
   return changed;
 }

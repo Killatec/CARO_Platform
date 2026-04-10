@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Modal, Button, Input } from '@caro/ui/primitives';
 import { useTagTypesStore } from '../../stores/useTagTypesStore.js';
+import { useModuleTypesStore } from '../../stores/useModuleTypesStore.js';
 
-const TYPE_OPTIONS = ['Numeric', 'String', 'Boolean', 'TagType'] as const;
+const TYPE_OPTIONS = ['Numeric', 'String', 'Boolean', 'TagType', 'ModuleType'] as const;
 type FieldType = typeof TYPE_OPTIONS[number];
 
 const EMPTY_DEFAULTS: Record<FieldType, number | string | boolean> = {
@@ -10,6 +11,7 @@ const EMPTY_DEFAULTS: Record<FieldType, number | string | boolean> = {
   String: '',
   Boolean: false,
   TagType: 'f32',
+  ModuleType: 'HMI',
 };
 
 interface AddFieldModalProps {
@@ -26,6 +28,7 @@ export function AddFieldModal({
   isOpen, onConfirm, onCancel, existingFieldNames = []
 }: AddFieldModalProps): React.ReactElement | null {
   const tagTypes = useTagTypesStore(state => state.tagTypes);
+  const moduleTypes = useModuleTypesStore(state => state.moduleTypes);
   const [fieldName, setFieldName] = useState('');
   const [fieldType, setFieldType] = useState<FieldType>('String');
   const [defaultValue, setDefaultValue] = useState<number | string | boolean>(EMPTY_DEFAULTS['String']);
@@ -120,6 +123,17 @@ export function AddFieldModal({
               className="border border-gray-300 rounded px-2 py-1.5 text-sm w-full"
             >
               {tagTypes.map(t => (
+                <option key={t.type_name} value={t.type_name}>{t.display_name}</option>
+              ))}
+            </select>
+          ) : fieldType === 'ModuleType' ? (
+            <select
+              id="add-field-default"
+              value={String(defaultValue)}
+              onChange={(e) => setDefaultValue(e.target.value)}
+              className="border border-gray-300 rounded px-2 py-1.5 text-sm w-full"
+            >
+              {moduleTypes.map(t => (
                 <option key={t.type_name} value={t.type_name}>{t.display_name}</option>
               ))}
             </select>

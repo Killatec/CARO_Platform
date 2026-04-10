@@ -21,13 +21,13 @@ export function EditorPage(): React.ReactElement {
   const { messages } = useValidation(templateMap, rootTemplateName);
 
   return (
-    <div className="w-fit flex flex-col overflow-auto">
-      <div className="flex flex-shrink-0">
-        <div className="flex-shrink-0 min-w-[25rem] border-r border-gray-200 bg-white">
+    <div className="flex flex-col h-full">
+      <div className="flex flex-1 min-h-0">
+        <div className="min-w-[25rem] border-r border-gray-200 bg-white overflow-y-auto">
           <AssetTree />
         </div>
 
-        <div className="flex-shrink-0 min-w-[20rem] flex flex-col bg-white">
+        <div className="min-w-[20rem] flex flex-col bg-white overflow-y-auto">
           <div className="flex-shrink-0 border-b border-gray-200">
             <TemplatesTree onTemplateSelect={setSelectedTemplateTree} />
           </div>
@@ -37,7 +37,9 @@ export function EditorPage(): React.ReactElement {
         </div>
       </div>
 
-      <ValidationPanel messages={messages} />
+      <div className="flex-shrink-0">
+        <ValidationPanel messages={messages} />
+      </div>
 
       <CascadeModal />
       <CascadePreviewModal />

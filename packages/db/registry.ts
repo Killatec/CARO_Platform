@@ -11,11 +11,24 @@ export async function getTagTypes(): Promise<TagType[]> {
   return result.rows as TagType[];
 }
 
+export interface ModuleType {
+  id: number;
+  type_name: string;
+  display_name: string;
+}
+
+export async function getModuleTypes(): Promise<ModuleType[]> {
+  const result = await query('SELECT id, type_name, display_name FROM module_types ORDER BY id');
+  return result.rows as ModuleType[];
+}
+
 /** Shape of a row returned by getActiveTags(). tag_id is coerced to number. */
 export interface ActiveTag {
   tag_id: number;
   registry_rev: number;
   tag_path: string;
+  module: string | null;
+  module_type: string | null;
   data_type: string;
   is_setpoint: boolean;
   trends: boolean;
@@ -28,6 +41,8 @@ export interface RevisionTag {
   tag_id: number;
   registry_rev: number;
   tag_path: string;
+  module: string | null;
+  module_type: string | null;
   data_type: string;
   is_setpoint: boolean;
   retired: boolean;
@@ -37,6 +52,8 @@ export interface RevisionTag {
 /** Input shape for a new tag (no tag_id — assigned by applyRegistryRevision). */
 export interface NewTagInput {
   tag_path: string;
+  module?: string | null;
+  module_type?: string | null;
   data_type: string;
   is_setpoint: boolean;
   trends?: boolean;
@@ -76,6 +93,8 @@ export async function getActiveTags(): Promise<ActiveTag[]> {
         tag_id,
         registry_rev,
         tag_path,
+        module,
+        module_type,
         data_type,
         is_setpoint,
         trends,
@@ -95,7 +114,7 @@ export async function getActiveTags(): Promise<ActiveTag[]> {
  */
 export async function getRevisionTags(rev: number): Promise<RevisionTag[] | null> {
   const result = await query(
-    'SELECT tag_id, registry_rev, tag_path, data_type, is_setpoint, retired, meta FROM tag_registry WHERE registry_rev = $1 ORDER BY tag_path ASC',
+    'SELECT tag_id, registry_rev, tag_path, module, module_type, data_type, is_setpoint, retired, meta FROM tag_registry WHERE registry_rev = $1 ORDER BY tag_path ASC',
     [rev]
   );
   if (result.rows.length === 0) return null;
@@ -140,9 +159,9 @@ export async function applyRegistryRevision(
     for (const tag of added) {
       nextTagId++;
       await client.query(
-        `INSERT INTO tag_registry (tag_id, registry_rev, tag_path, data_type, is_setpoint, trends, retired, meta)
-         VALUES ($1, $2, $3, $4, $5, $6, false, $7)`,
-        [nextTagId, next_rev, tag.tag_path, tag.data_type, tag.is_setpoint, tag.trends ?? false, JSON.stringify(tag.meta)]
+        `INSERT INTO tag_registry (tag_id, registry_rev, tag_path, module, module_type, data_type, is_setpoint, trends, retired, meta)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false, $9)`,
+        [nextTagId, next_rev, tag.tag_path, tag.module ?? null, tag.module_type ?? null, tag.data_type, tag.is_setpoint, tag.trends ?? false, JSON.stringify(tag.meta)]
       );
     }
 
@@ -150,18 +169,18 @@ export async function applyRegistryRevision(
     // by DISTINCT ON ordering in getActiveTags).
     for (const tag of modified) {
       await client.query(
-        `INSERT INTO tag_registry (tag_id, registry_rev, tag_path, data_type, is_setpoint, trends, retired, meta)
-         VALUES ($1, $2, $3, $4, $5, $6, false, $7)`,
-        [tag.tag_id, next_rev, tag.tag_path, tag.data_type, tag.is_setpoint, tag.trends ?? false, JSON.stringify(tag.meta)]
+        `INSERT INTO tag_registry (tag_id, registry_rev, tag_path, module, module_type, data_type, is_setpoint, trends, retired, meta)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false, $9)`,
+        [tag.tag_id, next_rev, tag.tag_path, tag.module ?? null, tag.module_type ?? null, tag.data_type, tag.is_setpoint, tag.trends ?? false, JSON.stringify(tag.meta)]
       );
     }
 
     // Retired tags — insert a new row with retired=true.
     for (const tag of retired) {
       await client.query(
-        `INSERT INTO tag_registry (tag_id, registry_rev, tag_path, data_type, is_setpoint, trends, retired, meta)
-         VALUES ($1, $2, $3, $4, $5, $6, true, $7)`,
-        [tag.tag_id, next_rev, tag.tag_path, tag.data_type, tag.is_setpoint, tag.trends ?? false, JSON.stringify(tag.meta)]
+        `INSERT INTO tag_registry (tag_id, registry_rev, tag_path, module, module_type, data_type, is_setpoint, trends, retired, meta)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, $9)`,
+        [tag.tag_id, next_rev, tag.tag_path, tag.module ?? null, tag.module_type ?? null, tag.data_type, tag.is_setpoint, tag.trends ?? false, JSON.stringify(tag.meta)]
       );
     }
 

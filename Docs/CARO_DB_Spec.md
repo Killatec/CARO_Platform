@@ -43,6 +43,10 @@ hmi_API_spec*
                                           (§3.1): BOOLEAN NOT NULL DEFAULT false,
                                           derived from hierarchy field resolution.
                                           Migration 006 added.
+
+  1.4           2026-04-10   PM / Claude  Added module_types lookup table (§3.4).
+                                          Added module and module_type columns to
+                                          tag_registry (§3.1). Migrations 010, 011.
   ------------- ------------ ------------ ------------------------------------------
 
 **1. Purpose**
@@ -106,6 +110,8 @@ Current migrations:
 -   007_create_tag_types.sql
 -   008_revert_data_type_to_string.sql
 -   009_cleanup_tag_types.sql
+-   010_create_module_types.sql
+-   011_add_module_columns.sql
 
 > *NOTE: The schema_migrations table is created programmatically inside
 > migrations.js on every runMigrations() call — it is not created via a
@@ -142,6 +148,15 @@ false.
   tag_path         VARCHAR NOT NULL Full dot-separated path starting with
                                     root template name.
 
+  module           VARCHAR(40)      Name of the parent module instance
+                   NULL             in the asset hierarchy (e.g. "RF1").
+                                    NULL for tags not under a module.
+
+  module_type      VARCHAR(40)      Module_Type field value from the
+                   NULL             parent module template (e.g. "HMI",
+                                    "MQTT"). NULL for tags not under a
+                                    module.
+
   data_type        VARCHAR(40) NOT  FK → tag_types.type_name. Identifies
                    NULL             the tag's value type.
 
@@ -165,7 +180,7 @@ false.
   ---------------- ---------------- -------------------------------------
 
 > *NOTE: Unique constraint on (tag_id, registry_rev). GIN index on meta.
-> B-tree indexes on tag_id, registry_rev, data_type, retired.*
+> B-tree indexes on tag_id, registry_rev, data_type, module, module_type, retired.*
 >
 > *NOTE: `getActiveTags()` in `packages/db/registry.js` is the canonical
 > query for this table. It returns the latest non-retired row per tag_id.
@@ -213,6 +228,23 @@ human-friendly labels for UI.
   ---------------- ---------------- -------------------------------------
 
 > *NOTE: After migration 009, only `f32` and `bool` remain. Migration 009 renamed all `f64` references in `tag_registry.data_type` to `f32`, then deleted unused types (`f64`, `i32`, `i32_array`, `string`). New types can be added via INSERT. `display_name` can be renamed freely — all FK references use `type_name`.*
+
+**3.4 module_types**
+
+Lookup table for valid module types. Same shape as tag_types.
+Referenced by template validation only — no FK from tag_registry.
+
+  ---------------- ---------------- -------------------------------------
+  **Column**       **Type**         **Description**
+
+  id               SERIAL           Surrogate key for ordering.
+
+  type_name        VARCHAR(40) NOT  Stable internal identifier
+                   NULL UNIQUE      (e.g. HMI, MQTT).
+
+  display_name     VARCHAR(80) NOT  Human-friendly label for UI.
+                   NULL
+  ---------------- ---------------- -------------------------------------
 
 **4. Users and Sessions**
 

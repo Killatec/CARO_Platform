@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Table, TableHeader, TableBody, TableRow, TableHeaderCell, TableCell, Modal } from '@caro/ui/primitives';
 import { TagPathLabel } from '../shared/TagPathLabel.jsx';
 import { MetaModalBody } from '../shared/MetaModalBody.jsx';
 import { useRegistryStore } from '../../stores/useRegistryStore.js';
 import { useTagTypesStore } from '../../stores/useTagTypesStore.js';
+import { useModuleTypesStore } from '../../stores/useModuleTypesStore.js';
 import type { DiffRow } from '../../utils/diffRegistry.js';
 
 const DIFF_ROW_CLASS: Record<string, string> = {
@@ -38,10 +39,38 @@ export function RegistryTable({ rows }: RegistryTableProps): React.ReactElement 
   const setSort = useRegistryStore(state => state.setSort);
 
   const displayNameMap = useTagTypesStore(state => state.displayNameMap);
+  const moduleDisplayNameMap = useModuleTypesStore(state => state.displayNameMap);
 
   const [metaModal, setMetaModal] = useState<MetaModalState | null>(null);
 
-  const displayRows: DiffRow[] = rows ?? tags.map(t => ({ ...t, diffStatus: 'unchanged' as const }));
+  const unsortedRows: DiffRow[] = rows ?? tags.map(t => ({
+    ...t,
+    module: t.module ?? null,
+    module_type: t.module_type ?? null,
+    diffStatus: 'unchanged' as const,
+  }));
+
+  const displayRows = useMemo(() => {
+    const sorted = [...unsortedRows];
+    sorted.sort((a, b) => {
+      const aRaw = (a as unknown as Record<string, unknown>)[sortField];
+      const bRaw = (b as unknown as Record<string, unknown>)[sortField];
+
+      // Numeric comparison for tag_id
+      if (sortField === 'tag_id') {
+        const aNum = typeof aRaw === 'number' ? aRaw : Infinity;
+        const bNum = typeof bRaw === 'number' ? bRaw : Infinity;
+        return sortDirection === 'asc' ? aNum - bNum : bNum - aNum;
+      }
+
+      const aVal = String(aRaw ?? '');
+      const bVal = String(bRaw ?? '');
+      if (aVal < bVal) return sortDirection === 'asc' ? -1 : 1;
+      if (aVal > bVal) return sortDirection === 'asc' ? 1 : -1;
+      return 0;
+    });
+    return sorted;
+  }, [unsortedRows, sortField, sortDirection]);
 
   if (displayRows.length === 0) {
     return (
@@ -57,8 +86,12 @@ export function RegistryTable({ rows }: RegistryTableProps): React.ReactElement 
       <Table className="w-auto table-auto">
         <TableHeader>
           <TableRow>
-            <TableHeaderCell className={`px-4 w-px whitespace-nowrap text-right ${HDR_BORDER} ${COL_BORDER}`}>
-              tag_id
+            <TableHeaderCell
+              sortable
+              onClick={() => setSort('tag_id')}
+              className={`px-4 w-px whitespace-nowrap text-center cursor-pointer hover:bg-gray-100 ${HDR_BORDER} ${COL_BORDER}`}
+            >
+              tag_id {sortField === 'tag_id' && (sortDirection === 'asc' ? '↑' : '↓')}
             </TableHeaderCell>
             <TableHeaderCell
               sortable
@@ -66,6 +99,20 @@ export function RegistryTable({ rows }: RegistryTableProps): React.ReactElement 
               className={`px-4 w-0 whitespace-nowrap cursor-pointer hover:bg-gray-100 ${HDR_BORDER} ${COL_BORDER}`}
             >
               tag_path {sortField === 'tag_path' && (sortDirection === 'asc' ? '↑' : '↓')}
+            </TableHeaderCell>
+            <TableHeaderCell
+              sortable
+              onClick={() => setSort('module')}
+              className={`px-4 w-px whitespace-nowrap cursor-pointer hover:bg-gray-100 ${HDR_BORDER} ${COL_BORDER}`}
+            >
+              module {sortField === 'module' && (sortDirection === 'asc' ? '↑' : '↓')}
+            </TableHeaderCell>
+            <TableHeaderCell
+              sortable
+              onClick={() => setSort('module_type')}
+              className={`px-4 w-px whitespace-nowrap text-center cursor-pointer hover:bg-gray-100 ${HDR_BORDER} ${COL_BORDER}`}
+            >
+              module_type {sortField === 'module_type' && (sortDirection === 'asc' ? '↑' : '↓')}
             </TableHeaderCell>
             <TableHeaderCell
               sortable
@@ -102,13 +149,19 @@ export function RegistryTable({ rows }: RegistryTableProps): React.ReactElement 
 
             return (
               <TableRow key={idx} className={DIFF_ROW_CLASS[tag.diffStatus] ?? ''}>
-                <TableCell className={`px-4 w-px whitespace-nowrap text-right text-sm text-gray-500 ${ROW_BORDER} ${COL_BORDER}`}>
+                <TableCell className={`px-4 w-px whitespace-nowrap text-center text-sm ${ROW_BORDER} ${COL_BORDER}`}>
                   {tag.diffStatus === 'added'
                     ? <span className="text-gray-400 italic">new</span>
                     : (tag.tag_id ?? '—')}
                 </TableCell>
                 <TableCell className={`px-4 w-0 whitespace-nowrap ${ROW_BORDER} ${COL_BORDER} ${cellClass('tag_path')}`}>
                   <TagPathLabel tagPath={tag.tag_path} />
+                </TableCell>
+                <TableCell className={`px-4 w-px whitespace-nowrap text-center ${ROW_BORDER} ${COL_BORDER} ${cellClass('module')}`}>
+                  {tag.module ?? '—'}
+                </TableCell>
+                <TableCell className={`px-4 w-px whitespace-nowrap text-center ${ROW_BORDER} ${COL_BORDER} ${cellClass('module_type')}`}>
+                  {tag.module_type ? (moduleDisplayNameMap.get(tag.module_type) ?? tag.module_type) : '—'}
                 </TableCell>
                 <TableCell className={`px-4 w-px whitespace-nowrap text-center ${ROW_BORDER} ${COL_BORDER} ${cellClass('data_type')}`}>
                   {displayNameMap.get(tag.data_type) ?? tag.data_type}

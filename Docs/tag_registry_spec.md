@@ -12,6 +12,7 @@ Companion documents: [Bootstrap](tag_registry_bootstrap.md) | [API Spec](tag_reg
 | template_type | A user-defined classification for a template. The `template_type` field in the JSON file is the source of truth. |
 | structural template | Any template that may contain children. All template types except `tag` are structural templates and behave identically. |
 | tag template | A leaf template defining a single data point. No children. Tag-level fields include `data_type` (field_type `TagType`, default `f32`) and `is_setpoint` (field_type `Boolean`, default `false`), resolved from the fields record. |
+| module template | A structural template representing a hardware or logical module. Must include a `Module_Type` field (field_type `ModuleType`). Can have children. |
 | asset_name | The name assigned to a child template instance within a parent template. |
 | root template | The template selected by the user as the starting point for tree resolution and registry generation. Any template type may serve as the root. |
 | template graph | The full set of templates reachable from the selected root, held in client memory after a load-root fetch. Used for local cascade simulation and validation. |
@@ -71,12 +72,12 @@ Validation and cascade simulation logic lives in `apps/tag-registry/shared/`. Bo
 
 The shared module exports:
 
-- `validateTemplate(template)` — schema conformance, field rules, `asset_name` rules for a single template. Each field in `template.fields` must be `{ field_type, default }` where `field_type` is one of `"Numeric" | "String" | "Boolean" | "TagType"` and `default` matches the corresponding JS type.
+- `validateTemplate(template)` — schema conformance, field rules, `asset_name` rules for a single template. Each field in `template.fields` must be `{ field_type, default }` where `field_type` is one of `"Numeric" | "String" | "Boolean" | "TagType" | "ModuleType"` and `default` matches the corresponding JS type.
 - `validateGraph(templates)` — circular references, broken references, duplicate template names across the full map.
 - `simulateCascade(currentTemplateMap, proposedChanges, originalTemplateMap?)` — computes field-level diffs, dropped instance values, and the list of affected parent templates given a proposed set of changes.
 - `applyFieldCascade(templateMap, changedTemplate)` — given a template that has changed, propagates the effect to all child instances in the map. Returns an updated `templateMap`. Pure function — does not mutate its input.
 - `validateParentTypes(templateMap, rootName, options)` — evaluates `VALIDATE_REQUIRED_PARENT_TYPES` and `VALIDATE_UNIQUE_PARENT_TYPES` rules. Returns `{ errors: [], warnings: [] }`.
-- `resolveRegistry(templateMap, rootName)` — resolves the full hierarchy into a flat tag list with `tag_path`, `data_type`, `is_setpoint`, `trends`, and `meta`. Pure function. Extracts `.default` from each field definition before merging with instance overrides. The `trends` field is `true` if any level in the resolved hierarchy has a field key matching `"trends"` (case-insensitive) with value `true` after instance override resolution, `false` otherwise. The `meta` array is ordered root-to-tag: `meta[0]` is the root level entry, `meta[meta.length - 1]` is the tag-level entry.
+- `resolveRegistry(templateMap, rootName)` — resolves the full hierarchy into a flat tag list with `tag_path`, `module`, `module_type`, `data_type`, `is_setpoint`, `trends`, and `meta`. Pure function. Extracts `.default` from each field definition before merging with instance overrides. `module` is the name of the nearest ancestor with `template_type: "module"` (null if none). `module_type` is the `Module_Type` field value from that module template (null if none). The `trends` field is `true` if any level in the resolved hierarchy has a field key matching `"trends"` (case-insensitive) with value `true` after instance override resolution, `false` otherwise. The `meta` array is ordered root-to-tag: `meta[0]` is the root level entry, `meta[meta.length - 1]` is the tag-level entry.
 - `constants` — error codes, `DEFAULT_DATA_TYPE`, `MAX_TAG_PATH_LENGTH` default.
 - `deepEqual(a, b)` / `deepNotEqual(a, b)` — JSON-serialization-based deep equality utilities (`utils.js`).
 
@@ -130,7 +131,7 @@ New unsaved templates (null hash) are deleted instantly client-side via `removeT
 | `f32` | Float 32 | 32-bit IEEE 754 floating-point |
 | `bool` | Boolean | Boolean |
 
-Data types are stored in the `tag_types` database table (see DB Spec §3.3). The hardcoded `DATA_TYPES` enum has been removed; `DEFAULT_DATA_TYPE = 'f32'` is the only constant. The server validates `TagType` field values against `tag_types.type_name` on template save. New types can be added by inserting rows into `tag_types`.
+Data types are stored in the `tag_types` database table (see DB Spec §3.3). The hardcoded `DATA_TYPES` enum has been removed; `DEFAULT_DATA_TYPE = 'f32'` is the only constant. The server validates `TagType` field values against `tag_types.type_name` on template save. Fields with `field_type: "ModuleType"` must have a `default` value matching a row in `module_types.type_name`. The server validates both TagType and ModuleType fields on template save using `Promise.all` to fetch both lookup tables concurrently. New types can be added by inserting rows into `tag_types` or `module_types`.
 
 ---
 
@@ -150,7 +151,7 @@ Fields are stored as structured objects:
 }
 ```
 
-`field_type` is one of: `"Numeric"` | `"String"` | `"Boolean"` | `"TagType"`. For `Numeric`, `String`, and `Boolean`, the `default` value must be the correct JS type (number, string, boolean). For `TagType`, the `default` is a string referencing a `tag_types.type_name` value (e.g. `"f32"`); the server validates it against the `tag_types` table on save.
+`field_type` is one of: `"Numeric"` | `"String"` | `"Boolean"` | `"TagType"` | `"ModuleType"`. For `Numeric`, `String`, and `Boolean`, the `default` value must be the correct JS type (number, string, boolean). For `TagType`, the `default` is a string referencing a `tag_types.type_name` value (e.g. `"f32"`); the server validates it against the `tag_types` table on save. For `ModuleType`, the `default` is a string referencing a `module_types.type_name` value (e.g. `"HMI"`); the server validates it against the `module_types` table on save.
 
 Instance override values (`child.fields`) remain raw values — the `field_type` is always read from the underlying template definition, never from an override.
 
@@ -163,7 +164,8 @@ Migration script: `apps/tag-registry/scripts/migrate_field_types.js` converts th
   "template_type": "module",
   "template_name": "rf_power_module",
   "fields": {
-    "description": { "field_type": "String", "default": "" }
+    "Module_Type":  { "field_type": "ModuleType", "default": "MQTT" },
+    "description":  { "field_type": "String",     "default": "" }
   },
   "children": [
     {
@@ -236,7 +238,7 @@ Failures block the operation and display a detailed error report in the Validati
 ### 10.1 Schema Conformance
 
 - Every template must conform to its JSON Schema draft-07 definition.
-- Each field must be `{ field_type, default }` where `field_type` ∈ `{ "Numeric", "String", "Boolean", "TagType" }` and `default` matches the declared type.
+- Each field must be `{ field_type, default }` where `field_type` ∈ `{ "Numeric", "String", "Boolean", "TagType", "ModuleType" }` and `default` matches the declared type.
 - Child instance field values must be a subset of fields defined in the referenced child template.
 
 ### 10.2 Name Rules
@@ -254,8 +256,9 @@ Failures block the operation and display a detailed error report in the Validati
 
 ### 10.4 Tag-Specific Rules
 
-- Fields with `field_type: "TagType"` must have a `default` value matching a row in `tag_types.type_name`. The server validates this on template save. The `data_type` and `is_setpoint` values are extracted from the resolved fields record by the registry resolver (defaults: `data_type` → `'f32'`, `is_setpoint` → `false`).
+- Fields with `field_type: "TagType"` must have a `default` value matching a row in `tag_types.type_name`. Fields with `field_type: "ModuleType"` must have a `default` value matching a row in `module_types.type_name`. The server validates both TagType and ModuleType fields on template save using `Promise.all` to fetch both lookup tables concurrently. The `data_type` and `is_setpoint` values are extracted from the resolved fields record by the registry resolver (defaults: `data_type` → `'f32'`, `is_setpoint` → `false`).
 - Tag templates must include three required fields: `data_type` (field_type `TagType`), `is_setpoint` (field_type `Boolean`), and `Trends` (field_type `Boolean`). `validateTemplate` returns `SCHEMA_VALIDATION_ERROR` if any are missing or have the wrong field_type.
+- Module templates (`template_type: "module"`) must include the required field `Module_Type` (field_type `ModuleType`). `validateTemplate` returns `SCHEMA_VALIDATION_ERROR` if it is missing or has the wrong field_type.
 - Tags may not declare children.
 - Identifier string fields (`template_name`, `asset_name`) must not exceed 40 characters.
 

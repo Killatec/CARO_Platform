@@ -15,16 +15,12 @@
     {
       "template_name": "rf_power_module",
       "asset_name": "RF1",
-      "fields": {
-        "description": "RF_Control_1"
-      }
+      "fields": {}
     },
     {
       "template_name": "rf_power_module",
       "asset_name": "RF2",
-      "fields": {
-        "description": "Rf2"
-      }
+      "fields": {}
     }
   ]
 }

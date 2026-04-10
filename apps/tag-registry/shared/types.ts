@@ -1,5 +1,5 @@
 export interface FieldDef {
-  field_type: 'Numeric' | 'String' | 'Boolean' | 'TagType';
+  field_type: 'Numeric' | 'String' | 'Boolean' | 'TagType' | 'ModuleType';
   default: number | string | boolean;
 }
 
@@ -99,6 +99,8 @@ export interface MetaLevel {
 export interface ResolvedTag {
   tag_path: string;
   data_type: string;
+  module: string | null;
+  module_type: string | null;
   is_setpoint: boolean;
   trends: boolean;
   meta: MetaLevel[];
