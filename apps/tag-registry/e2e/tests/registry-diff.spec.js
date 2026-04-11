@@ -52,7 +52,7 @@ test.describe('Registry Diff Display', () => {
     ]);
     await createStructuralTemplate(modName, 'module', [
       { template_name: paramName, asset_name: 'Chan1', fields: {} },
-    ]);
+    ], { Module_Type: { field_type: 'ModuleType', default: 'HMI' } });
 
     await po.selectRoot(modName);
     await po.navigateToRegistry();

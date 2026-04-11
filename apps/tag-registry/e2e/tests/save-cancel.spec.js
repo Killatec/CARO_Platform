@@ -122,7 +122,7 @@ test.describe('Save and Cancel', () => {
     ]);
     await createStructuralTemplate(mName, 'module', [
       { template_name: pName, asset_name: 'Chan1', fields: {} },
-    ]);
+    ], { Module_Type: { field_type: 'ModuleType', default: 'HMI' } });
 
     // selectRoot(mName) loads the full hierarchy (mName + pName + tName) into the store
     // so simulateCascade can detect that editing tName affects pName.
@@ -155,7 +155,7 @@ test.describe('Save and Cancel', () => {
     ]);
     await createStructuralTemplate(mName2, 'module', [
       { template_name: pName, asset_name: 'Chan1', fields: {} },
-    ]);
+    ], { Module_Type: { field_type: 'ModuleType', default: 'HMI' } });
 
     // selectRoot(mName2) loads the full hierarchy (mName2 + pName + tName) into the store
     // so simulateCascade can detect that editing tName affects pName.

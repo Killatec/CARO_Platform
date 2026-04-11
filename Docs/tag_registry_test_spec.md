@@ -176,7 +176,7 @@ await page.getByRole('button', { name: /history/i }).click();
 
 **Setup:** Creates one tag template via API in `beforeEach`.
 
-### 4.2 tests/fields-panel.spec.js — Fields Panel (7 tests)
+### 4.2 tests/fields-panel.spec.js — Fields Panel (8 tests)
 
 | # | Test | Covers |
 |---|---|---|
@@ -187,6 +187,7 @@ await page.getByRole('button', { name: /history/i }).click();
 | 5 | Instance mode: shows template name, type, and asset name | Functional spec §14: instance mode display |
 | 6 | Instance mode: editing a field override turns it blue | Functional spec §14: override colour |
 | 7 | Instance mode: changing asset name is reflected in the tree | Functional spec §14: asset name edit |
+| 8 | Instance mode: editing asset name turns it orange | Functional spec §14: dirty asset name indicator |
 
 **Setup:** Creates tag + parameter + module hierarchy via API. Navigates by `selectRoot`.
 
@@ -344,17 +345,34 @@ function metaModal(page, tagPath) {
 | 2 | Tag row shows false when no trends field in any template | shared/resolveRegistry — trends defaults to false |
 | 3 | Tag row shows true when module template has trends field set to true | shared/resolveRegistry — case-insensitive trends detection, Boolean field_type |
 
-**Setup:** Each test creates a module → parameter → tag hierarchy via API. Test 3 additionally passes `{ trends: { field_type: 'Boolean', default: true } }` as the module-level `fields` argument to `createStructuralTemplate`. `po.selectRoot(modName)` loads the hierarchy, `po.navigateToRegistry()` switches to the Registry page client-side. The trends cell is the 5th `<td>` (0-indexed: 4) in each row: `tag_id(0), tag_path(1), data_type(2), is_setpoint(3), trends(4), meta(5)`.
+**Setup:** Each test creates a module → parameter → tag hierarchy via API. Test 3 additionally passes `{ trends: { field_type: 'Boolean', default: true } }` as the module-level `fields` argument to `createStructuralTemplate`. `po.selectRoot(modName)` loads the hierarchy, `po.navigateToRegistry()` switches to the Registry page client-side. The trends cell is the 7th `<td>` (0-indexed: 6) in each row: `tag_id(0), tag_path(1), module(2), module_type(3), data_type(4), is_setpoint(5), trends(6), meta(7)`.
+
+---
+
+#### 4.8.7 tests/module-type.spec.js — Module Type (6 tests)
+
+| # | Test | Covers |
+|---|---|---|
+| 1 | module template without Module_Type shows validation error | validateTemplate module requirement surfaced in ValidationPanel |
+| 2 | module template with Module_Type field passes validation | clean validation state with ModuleType field present |
+| 3 | Module_Type field renders as a dropdown in FieldsPanel template mode | ModuleType field_type → `<select>` with HMI/MQTT options from module_types lookup |
+| 4 | changing Module_Type dropdown value marks template dirty and saves | dirty detection, save round-trip, persistence across reload |
+| 5 | registry table shows module and module_type columns after apply | module/module_type columns visible in RegistryTable, correct values after applyRegistryApi |
+| 6 | AddFieldModal offers ModuleType as a field type option | ModuleType in AddFieldModal type dropdown |
+
+**Setup:** Each test creates its own hierarchy via API in the test body (not in `beforeEach`). Module templates include `{ Module_Type: { field_type: 'ModuleType', default: 'HMI' } }` in the fields argument. `afterEach` navigates to `about:blank` and cleans up via `deleteTemplates(created.splice(0))`.
+
+**Column verification (test 5):** Uses `page.getByRole('columnheader', { name: /^module$/i })` and `page.getByRole('columnheader', { name: /module_type/i })` to verify the two new columns. Row data verified via `page.locator('td').filter({ hasText: modName })`.
 
 ---
 
 ## 4.9 Registry Unit Test Files
 
-#### 4.9.1 client/__tests__/diffRegistry.test.js (34 tests)
+#### 4.9.1 client/__tests__/diffRegistry.test.js (44 tests)
 
-Covers: `deepEqual` key-order insensitivity (via meta comparison), all `diffStatus` classifications (added/retired/unchanged/modified), sort order (added→modified→unchanged→retired), `changedFields` array on modified rows, `dbMeta` present on all modified rows, `tag_id` carry-over from db row onto unchanged/modified/retired rows. Edge cases: empty proposed array, empty db array, both empty.
+Covers: `deepEqual` key-order insensitivity (via meta comparison), all `diffStatus` classifications (added/retired/unchanged/modified), sort order (added→modified→unchanged→retired), `changedFields` array on modified rows, `dbMeta` present on all modified rows, `tag_id` carry-over from db row onto unchanged/modified/retired rows, `module` diff detection (including null vs non-null), `module_type` diff detection (including null vs non-null), six-field combo change test. Edge cases: empty proposed array, empty db array, both empty.
 
-Uses `makeProposed()` and `makeDb()` fixture helpers. No DOM, no network — pure function tests.
+Uses `makeProposed()` and `makeDb()` fixture helpers. `makeProposed()` includes `module` and `module_type` defaults matching the `ProposedTag` interface. No DOM, no network — pure function tests.
 
 #### 4.9.2 client/__tests__/formatDate.test.js (22 tests)
 
@@ -373,6 +391,24 @@ Covers: `getActiveRegistry` (SQL contains `DISTINCT ON`, `ORDER BY registry_rev 
 HTTP route tests via `node:http.createServer(createApp())` + Node 18 global `fetch`. No supertest dependency. Server lifecycle: `beforeAll` starts server, `afterAll` closes it. All service deps mocked via `vi.mock`.
 
 Covers: `GET /api/v1/registry` (success with tag array, service error → 500); `POST /api/v1/registry/apply` (missing rootName → 400, missing comment → 400, template not found → 404, success → 200 with rev/counts, no changes → 200 with null rev); `GET /api/v1/registry/revisions` (success); `GET /api/v1/registry/revisions/:rev` (success, non-integer → 400, not found → 404).
+
+#### 4.9.5 shared/__tests__/validateTemplate.test.js (42 tests)
+
+Covers: valid tag templates (minimal, with TagType, Boolean, Numeric, String fields, at max identifier length), null/missing inputs (null, undefined, empty object, missing name/type), tag-specific errors (missing/wrong data_type, is_setpoint, Trends; numeric TagType default; children on tags), module-specific errors (missing Module_Type field, wrong field_type, numeric ModuleType default; modules with children allowed; non-module types don't require Module_Type; tag template with extra Module_Type field allowed), identifier length, children validation (dot in asset_name, empty asset_name, duplicate sibling names, long asset_name).
+
+Uses `makeTag()` and `makeStruct()` helpers for tag and structural templates, plus `makeModule()` helper scoped to the module-specific tests. No DOM, no network — pure function tests.
+
+#### 4.9.6 shared/__tests__/resolveRegistry.test.js (33 tests)
+
+Covers: null/empty inputs, single tag path resolution, root prefix, nested path assembly, multiple tags, meta structure (root-to-tag ordering), meta field resolution (instance override vs template default), trends (extensive: defaults, inheritance, case-insensitive key match, instance override, string/number type rejection, multi-level, parameter-level overrides), module/module_type extraction (module name propagation, Module_Type field default extraction, instance override wins, null when no module level, null when no Module_Type field, null on non-string default, nested hierarchy propagation), tag path too long exclusion.
+
+Uses `makeTag(name, dataType, isSetpoint, fields)`, `makeStruct(name, type, children, fields)`, and `wrap(template)` helpers. No DOM, no network — pure function tests.
+
+#### 4.9.7 server/__tests__/batchSave.test.js (21 tests)
+
+Covers: no-op (empty changes/deletions), hash checking (stale hash, not found, name conflict), new template creation (tag in `tags/`, parameter in `parameters/`, module in `modules/`), update existing (writes content, returns modified_files, updates in-memory index), deletion (removes file, returns deleted_files, stale hash, not found), graph validation (INVALID_REFERENCE rejected), ModuleType field validation (valid HMI saves, valid MQTT saves, invalid ModuleType default rejected with SCHEMA_VALIDATION_ERROR, invalid TagType regression, mixed batch with both valid types, mixed batch rejected when one ModuleType is invalid).
+
+`@caro/db` fully mocked: `getTagTypes` returns `[f32, bool]`, `getModuleTypes` returns `[HMI, MQTT]`. Uses temporary filesystem directories (`mkdtemp`) — each test gets a fresh `TEMPLATES_DIR`. No real PostgreSQL connection required.
 
 ---
 
@@ -517,6 +553,18 @@ History page navigation uses `page.getByRole('button', { name: /history/i }).cli
 
 `tag_registry` and `registry_revisions` rows written during registry E2E tests are not deleted after each test. The append-only schema means stale rows from prior runs are harmless — `getActiveRegistry()` always returns the latest revision per `tag_id`, and timestamp-based template names ensure unique `tag_path`s per run. Rows from prior runs never interfere with new test assertions.
 
+### 5.15 Module templates require Module_Type field
+
+`validateTemplate()` now requires all `template_type === 'module'` templates to have a `Module_Type` field with `field_type: 'ModuleType'`. This validation was added alongside the `module_types` database table (migration 010) and the `module`/`module_type` columns on `tag_registry` (migration 011).
+
+All E2E specs that create module templates via `createStructuralTemplate(name, 'module', children)` must pass a 4th argument containing at minimum:
+
+```js
+{ Module_Type: { field_type: 'ModuleType', default: 'HMI' } }
+```
+
+Without this field, `isValid` will be `false`, the save button will be disabled, and the Registry page will show an error banner instead of the table. This affects: `registry.spec.js`, `registry-apply.spec.js`, `registry-diff.spec.js`, `meta-modal.spec.js`, `history.spec.js`, `save-cancel.spec.js`, `trends.spec.js`, and `module-type.spec.js`.
+
 ---
 
 ## 6. Intentionally Skipped Tests
@@ -587,6 +635,17 @@ The `INVALID_REFERENCE` error state in the registry is only reachable by manuall
 | Skipped | 0 |
 | Failed | 0 |
 | Baseline date | 2026-04-07 |
+
+### 9.7 Baseline (2026-04-11)
+
+**Changes from prior baseline:**
+- New E2E spec: `module-type.spec.js` (6 tests) — covers Module_Type validation, dropdown rendering, save round-trip, registry columns, AddFieldModal
+- New unit tests: `validateTemplate.test.js` +8 module-specific tests (34→42 total), `resolveRegistry.test.js` +7 module/module_type extraction tests (26→33 total), `diffRegistry.test.js` +11 module/module_type diff tests (33→44 total), `batchSave.test.js` +6 ModuleType validation tests (15→21 total)
+- All E2E module template creation calls updated with `Module_Type` field — fixes 25 failures caused by new validation rule
+- `createTagTemplate` helper fixed: `data_type`/`is_setpoint`/`Trends` now correctly placed inside `fields` as `{field_type, default}` objects
+- `trends.spec.js` column indexes updated from `trends(4)` to `trends(6)` after `module`/`module_type` columns inserted
+- `batchSave.test.js` mock updated: `getModuleTypes` added to `@caro/db` mock alongside existing `getTagTypes`
+- Total test counts: 75 E2E (Chromium), 42 validateTemplate, 33 resolveRegistry, 44 diffRegistry, 21 batchSave
 
 ---
 

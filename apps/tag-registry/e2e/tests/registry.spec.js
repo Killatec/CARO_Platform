@@ -27,7 +27,7 @@ test.describe('Registry Page', () => {
     ]);
     await createStructuralTemplate(modMName, 'module', [
       { template_name: paramPName, asset_name: 'Chan1', fields: {} },
-    ]);
+    ], { Module_Type: { field_type: 'ModuleType', default: 'HMI' } });
 
     // Load the full hierarchy into the store (scoped to test templates only)
     // so validateGraph sees a clean graph, isValid=true, and RegistryPage

@@ -81,38 +81,53 @@ test.describe('Templates Tree', () => {
     const name = `tag_new_${Date.now()}`;
     created.push(name); // will be discarded in afterEach; delete is a no-op
 
-    // Click the 'New' button (search whole page — button may be outside .select-none container)
-    await page.getByRole('button', { name: 'New' }).first().click();
+    // The Templates Tree header contains the 'New' button for creating templates.
+    // Use the templatesTree-scoped locator to avoid matching the FieldsPanel 'New' button.
+    const newButton = po.templatesTree.getByRole('button', { name: 'New' });
+    await newButton.waitFor({ state: 'visible', timeout: 5000 });
+    await newButton.click();
 
     // Modal primitive renders without role="dialog"; locate by .shadow-xl + title text.
-    // Name field: <Input type="text" placeholder="e.g. RF_Param" />  (first text input)
-    // Type field: <input list="new-template-type-options" />         (datalist input)
     const dialog = page.locator('.shadow-xl').filter({ hasText: 'New Template' });
+    await expect(dialog).toBeVisible({ timeout: 5000 });
+
+    // Name field: first text input in the modal
     await dialog.locator('input[type="text"]').first().fill(name);
+    // Type field: datalist input
     await dialog.locator('input[list]').fill('tag');
 
     // Confirm
     await dialog.getByRole('button', { name: /confirm/i }).click();
 
-    await expect(po.templatesTree).toContainText(name);
-    await expect(po.seeChangesButton).toBeVisible();
+    // Wait for the modal to close before asserting tree contents
+    await expect(dialog).not.toBeVisible({ timeout: 3000 });
+
+    // The new template should appear in the tree
+    await po.expandTemplateFolder('tag');
+    await expect(po.templatesTree).toContainText(name, { timeout: 5000 });
+    await expect(po.seeChangesButton).toBeVisible({ timeout: 3000 });
   });
 
   // ── Test 5 ─────────────────────────────────────────────────────────────────
   test('deleting a new unsaved template removes it instantly without Save', async ({ page }) => {
     const name = `tag_del_new_${Date.now()}`;
 
-    // Create via modal (search whole page — button may be outside .select-none container)
-    await page.getByRole('button', { name: 'New' }).first().click();
+    // Create via modal — scope to Templates Tree to avoid FieldsPanel 'New' button
+    const newButton = po.templatesTree.getByRole('button', { name: 'New' });
+    await newButton.waitFor({ state: 'visible', timeout: 5000 });
+    await newButton.click();
+
     const dialog = page.locator('.shadow-xl').filter({ hasText: 'New Template' });
+    await expect(dialog).toBeVisible({ timeout: 5000 });
     await dialog.locator('input[type="text"]').first().fill(name);
     await dialog.locator('input[list]').fill('tag');
     await dialog.getByRole('button', { name: /confirm/i }).click();
+    await expect(dialog).not.toBeVisible({ timeout: 3000 });
 
-    await expect(po.templatesTree).toContainText(name);
+    await po.expandTemplateFolder('tag');
+    await expect(po.templatesTree).toContainText(name, { timeout: 5000 });
 
     // Click the trash button on the new leaf — target by title to avoid ambiguity
-    await po.expandTemplateFolder('tag');
     await po.templatesTree.getByRole('button', { name: `Delete template "${name}"` }).click();
 
     await expect(po.templatesTree).not.toContainText(name);

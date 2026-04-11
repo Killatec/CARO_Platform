@@ -29,14 +29,17 @@ async function request(method, path, body) {
  * server-assigned hash.
  * Returns { template, hash }.
  */
-export async function createTagTemplate(name, dataType = 'f32', isSetpoint = false, fields = {}) {
+export async function createTagTemplate(name, dataType = 'f32', isSetpoint = false, extraFields = {}) {
   const template = {
     template_type: 'tag',
     template_name: name,
-    data_type:     dataType,
-    is_setpoint:   isSetpoint,
-    fields:        fields,
-    children:      [],
+    fields: {
+      data_type:   { field_type: 'TagType',  default: dataType   },
+      is_setpoint: { field_type: 'Boolean',  default: isSetpoint },
+      Trends:      { field_type: 'Boolean',  default: false      },
+      ...extraFields,
+    },
+    children: [],
   };
 
   await request('POST', '/templates/batch', {

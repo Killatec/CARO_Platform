@@ -9,6 +9,8 @@ function makeProposed(tag_path, overrides = {}) {
     data_type: 'f32',
     is_setpoint: false,
     trends: false,
+    module: 'Plant1_System_A',
+    module_type: 'HMI',
     meta: [
       { type: 'tag',       name: tag_path.split('.').pop(), fields: { eng_min: 0, eng_max: 100 } },
       { type: 'parameter', name: 'Chan1',                   fields: { description: 'Channel 1' } },
@@ -200,24 +202,108 @@ describe('classification — modified (trends)', () => {
   });
 });
 
+describe('classification — modified (module)', () => {
+  it('module differs → diffStatus modified', () => {
+    const proposed = makeProposed(PATH_A, { module: 'Plant2_System_B' });
+    const db       = makeDb(PATH_A, 1001, { module: 'Plant1_System_A' });
+    const [row] = diffRegistry([proposed], [db]);
+    expect(row.diffStatus).toBe('modified');
+  });
+
+  it('module change → changedFields includes module', () => {
+    const proposed = makeProposed(PATH_A, { module: 'Plant2_System_B' });
+    const db       = makeDb(PATH_A, 1001, { module: 'Plant1_System_A' });
+    const [row] = diffRegistry([proposed], [db]);
+    expect(row.changedFields).toContain('module');
+  });
+
+  it('module change only → changedFields does not include data_type or meta', () => {
+    const proposed = makeProposed(PATH_A, { module: 'Plant2_System_B' });
+    const db       = makeDb(PATH_A, 1001, { module: 'Plant1_System_A' });
+    const [row] = diffRegistry([proposed], [db]);
+    expect(row.changedFields).not.toContain('data_type');
+    expect(row.changedFields).not.toContain('meta');
+  });
+
+  it('same module value → not in changedFields', () => {
+    const proposed = makeProposed(PATH_A, { module: 'Plant1_System_A' });
+    const db       = makeDb(PATH_A, 1001, { module: 'Plant1_System_A' });
+    const [row] = diffRegistry([proposed], [db]);
+    expect(row.diffStatus).toBe('unchanged');
+  });
+
+  it('null proposed module vs non-null db module → modified', () => {
+    const proposed = makeProposed(PATH_A, { module: null });
+    const db       = makeDb(PATH_A, 1001, { module: 'Plant1_System_A' });
+    const [row] = diffRegistry([proposed], [db]);
+    expect(row.diffStatus).toBe('modified');
+    expect(row.changedFields).toContain('module');
+  });
+});
+
+describe('classification — modified (module_type)', () => {
+  it('module_type differs → diffStatus modified', () => {
+    const proposed = makeProposed(PATH_A, { module_type: 'MQTT' });
+    const db       = makeDb(PATH_A, 1001, { module_type: 'HMI' });
+    const [row] = diffRegistry([proposed], [db]);
+    expect(row.diffStatus).toBe('modified');
+  });
+
+  it('module_type change → changedFields includes module_type', () => {
+    const proposed = makeProposed(PATH_A, { module_type: 'MQTT' });
+    const db       = makeDb(PATH_A, 1001, { module_type: 'HMI' });
+    const [row] = diffRegistry([proposed], [db]);
+    expect(row.changedFields).toContain('module_type');
+  });
+
+  it('module_type change only → changedFields does not include module or data_type', () => {
+    const proposed = makeProposed(PATH_A, { module_type: 'MQTT' });
+    const db       = makeDb(PATH_A, 1001, { module_type: 'HMI' });
+    const [row] = diffRegistry([proposed], [db]);
+    expect(row.changedFields).not.toContain('module');
+    expect(row.changedFields).not.toContain('data_type');
+  });
+
+  it('same module_type value → not in changedFields', () => {
+    const proposed = makeProposed(PATH_A, { module_type: 'MQTT' });
+    const db       = makeDb(PATH_A, 1001, { module_type: 'MQTT' });
+    const [row] = diffRegistry([proposed], [db]);
+    expect(row.diffStatus).toBe('unchanged');
+  });
+
+  it('null proposed module_type vs non-null db module_type → modified', () => {
+    const proposed = makeProposed(PATH_A, { module_type: null });
+    const db       = makeDb(PATH_A, 1001, { module_type: 'HMI' });
+    const [row] = diffRegistry([proposed], [db]);
+    expect(row.diffStatus).toBe('modified');
+    expect(row.changedFields).toContain('module_type');
+  });
+});
+
 describe('classification — multiple fields changed', () => {
-  it('all four fields changed → changedFields has data_type, is_setpoint, trends, and meta', () => {
+  it('all six fields changed → changedFields has data_type, is_setpoint, trends, module, module_type, and meta', () => {
     const proposed = makeProposed(PATH_A, {
       data_type: 'i32',
       is_setpoint: true,
       trends: true,
+      module: 'NewModule',
+      module_type: 'MQTT',
       meta: [{ type: 'tag', name: 'x', fields: { val: 999 } }],
     });
     const db = makeDb(PATH_A, 1001, {
       data_type: 'f32',
       is_setpoint: false,
       trends: false,
+      module: 'Plant1_System_A',
+      module_type: 'HMI',
       meta: [{ type: 'tag', name: 'x', fields: { val: 0 } }],
     });
     const [row] = diffRegistry([proposed], [db]);
     expect(row.changedFields).toContain('data_type');
     expect(row.changedFields).toContain('is_setpoint');
     expect(row.changedFields).toContain('trends');
+    expect(row.changedFields).toContain('module');
+    expect(row.changedFields).toContain('module_type');
     expect(row.changedFields).toContain('meta');
   });
 });

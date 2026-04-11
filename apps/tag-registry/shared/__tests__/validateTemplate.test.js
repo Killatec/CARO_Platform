@@ -153,6 +153,92 @@ describe('tag-specific errors', () => {
   });
 });
 
+// ── Module-specific errors ──────────────────────────────────────────────────
+
+describe('module-specific errors', () => {
+  function makeModule(overrides = {}) {
+    return {
+      template_type: 'module',
+      template_name: 'my_module',
+      fields: {
+        Module_Type: { field_type: 'ModuleType', default: 'HMI' },
+      },
+      children: [],
+      ...overrides,
+    };
+  }
+
+  it('minimal valid module template', () => {
+    const r = validateTemplate(makeModule());
+    expect(r.valid).toBe(true);
+    expect(r.errors).toHaveLength(0);
+  });
+
+  it('module with Module_Type default "MQTT" is valid', () => {
+    const r = validateTemplate(makeModule({
+      fields: { Module_Type: { field_type: 'ModuleType', default: 'MQTT' } },
+    }));
+    expect(r.valid).toBe(true);
+  });
+
+  it('module without Module_Type field → invalid', () => {
+    const r = validateTemplate(makeModule({ fields: {} }));
+    expect(r.valid).toBe(false);
+    expect(r.errors.some(e =>
+      e.code === ERROR_CODES.SCHEMA_VALIDATION_ERROR &&
+      e.message.includes('Module_Type')
+    )).toBe(true);
+  });
+
+  it('module with Module_Type field_type "String" instead of "ModuleType" → invalid', () => {
+    const r = validateTemplate(makeModule({
+      fields: { Module_Type: { field_type: 'String', default: 'HMI' } },
+    }));
+    expect(r.valid).toBe(false);
+    expect(r.errors.some(e =>
+      e.code === ERROR_CODES.SCHEMA_VALIDATION_ERROR &&
+      e.message.includes('ModuleType')
+    )).toBe(true);
+  });
+
+  it('ModuleType Module_Type field with numeric default → invalid (type mismatch)', () => {
+    const r = validateTemplate(makeModule({
+      fields: { Module_Type: { field_type: 'ModuleType', default: 99 } },
+    }));
+    expect(r.valid).toBe(false);
+  });
+
+  it('module with children is valid (unlike tags)', () => {
+    const r = validateTemplate(makeModule({
+      children: [{ template_name: 'child_tpl', asset_name: 'ch1', fields: {} }],
+    }));
+    expect(r.valid).toBe(true);
+  });
+
+  it('non-module template_type does NOT require Module_Type', () => {
+    // A parameter template with no Module_Type should still be valid
+    const r = validateTemplate({
+      template_type: 'parameter',
+      template_name: 'my_param',
+      fields: {},
+      children: [],
+    });
+    expect(r.valid).toBe(true);
+  });
+
+  it('tag template with a Module_Type field is still valid (extra field allowed)', () => {
+    const r = validateTemplate(makeTag({
+      fields: {
+        data_type: { field_type: 'TagType', default: 'f32' },
+        is_setpoint: { field_type: 'Boolean', default: false },
+        Trends: { field_type: 'Boolean', default: true },
+        Module_Type: { field_type: 'ModuleType', default: 'HMI' },
+      },
+    }));
+    expect(r.valid).toBe(true);
+  });
+});
+
 // ── Identifier length ────────────────────────────────────────────────────────
 
 describe('identifier length', () => {

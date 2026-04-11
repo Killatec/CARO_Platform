@@ -11,8 +11,9 @@
  * RegistryTable. No database apply is required — the proposed (in-memory)
  * registry is sufficient to observe the trends column.
  *
- * Column order in RegistryTable: tag_id(0), tag_path(1), data_type(2),
- * is_setpoint(3), trends(4), meta(5). The trends cell is td.nth(4).
+ * Column order in RegistryTable: tag_id(0), tag_path(1), module(2),
+ * module_type(3), data_type(4), is_setpoint(5), trends(6), meta(7).
+ * The trends cell is td.nth(6).
  */
 import { test, expect } from '@playwright/test';
 import {
@@ -51,7 +52,7 @@ test.describe('Registry Table — trends column', () => {
     ]);
     await createStructuralTemplate(modName, 'module', [
       { template_name: paramName, asset_name: 'chan', fields: {} },
-    ]);
+    ], { Module_Type: { field_type: 'ModuleType', default: 'HMI' } });
 
     await po.selectRoot(modName);
     await po.navigateToRegistry();
@@ -76,7 +77,7 @@ test.describe('Registry Table — trends column', () => {
     ]);
     await createStructuralTemplate(modName, 'module', [
       { template_name: paramName, asset_name: 'chan', fields: {} },
-    ]);
+    ], { Module_Type: { field_type: 'ModuleType', default: 'HMI' } });
 
     await po.selectRoot(modName);
     await po.navigateToRegistry();
@@ -85,9 +86,9 @@ test.describe('Registry Table — trends column', () => {
 
     const tagPath = `${modName}.chan.setpoint`;
     const row = page.locator('tr').filter({ hasText: tagPath });
-    // trends is the 5th td (0-indexed: 4) in column order:
-    // tag_id(0), tag_path(1), data_type(2), is_setpoint(3), trends(4), meta(5)
-    const trendsCell = row.locator('td').nth(4);
+    // trends is the 7th td (0-indexed: 6) in column order:
+    // tag_id(0), tag_path(1), module(2), module_type(3), data_type(4), is_setpoint(5), trends(6), meta(7)
+    const trendsCell = row.locator('td').nth(6);
     await expect(trendsCell).toContainText('false');
   });
 
@@ -109,7 +110,10 @@ test.describe('Registry Table — trends column', () => {
     // Module template carries a trends field with default: true
     await createStructuralTemplate(modName, 'module', [
       { template_name: paramName, asset_name: 'chan', fields: {} },
-    ], { trends: { field_type: 'Boolean', default: true } });
+    ], {
+      Module_Type: { field_type: 'ModuleType', default: 'HMI' },
+      trends: { field_type: 'Boolean', default: true },
+    });
 
     await po.selectRoot(modName);
     await po.navigateToRegistry();
@@ -118,8 +122,8 @@ test.describe('Registry Table — trends column', () => {
 
     const tagPath = `${modName}.chan.setpoint`;
     const row = page.locator('tr').filter({ hasText: tagPath });
-    // trends is the 5th td (0-indexed: 4)
-    const trendsCell = row.locator('td').nth(4);
+    // trends is the 7th td (0-indexed: 6)
+    const trendsCell = row.locator('td').nth(6);
     await expect(trendsCell).toContainText('true');
   });
 });

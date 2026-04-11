@@ -34,7 +34,7 @@ test.describe('History Page', () => {
     ]);
     await createStructuralTemplate(modName, 'module', [
       { template_name: paramName, asset_name: 'Chan1', fields: {} },
-    ]);
+    ], { Module_Type: { field_type: 'ModuleType', default: 'HMI' } });
 
     await po.waitForServer();
     await page.goto('/');
@@ -77,7 +77,13 @@ test.describe('History Page', () => {
     await batchSave([{
       template_name: tagName,
       original_hash: tagHash,
-      template: { ...tagTemplate, is_setpoint: true },
+      template: {
+        ...tagTemplate,
+        fields: {
+          ...tagTemplate.fields,
+          is_setpoint: { ...tagTemplate.fields.is_setpoint, default: true },
+        },
+      },
     }], [], true);
 
     // Second apply

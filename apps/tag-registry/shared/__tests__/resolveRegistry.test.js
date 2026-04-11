@@ -163,6 +163,100 @@ describe('meta field resolution', () => {
   });
 });
 
+// ── module / module_type extraction ──────────────────────────────────────────
+
+describe('module / module_type extraction', () => {
+  it('module name propagated to resolved tag', () => {
+    const tag = makeTag('T');
+    const mod = makeStruct('M', 'module', [
+      { template_name: 'T', asset_name: 'ch', fields: {} },
+    ], { Module_Type: { field_type: 'ModuleType', default: 'HMI' } });
+    const map = { M: wrap(mod), T: wrap(tag) };
+
+    const result = resolveRegistry(map, 'M');
+    expect(result[0].module).toBe('M');
+  });
+
+  it('module_type extracted from Module_Type field default', () => {
+    const tag = makeTag('T');
+    const mod = makeStruct('M', 'module', [
+      { template_name: 'T', asset_name: 'ch', fields: {} },
+    ], { Module_Type: { field_type: 'ModuleType', default: 'MQTT' } });
+    const map = { M: wrap(mod), T: wrap(tag) };
+
+    const result = resolveRegistry(map, 'M');
+    expect(result[0].module_type).toBe('MQTT');
+  });
+
+  it('module_type from instance override wins over template default', () => {
+    const tag = makeTag('T');
+    // Template default is HMI, but the system-level child entry overrides to MQTT
+    const mod = makeStruct('M', 'module', [
+      { template_name: 'T', asset_name: 'ch', fields: {} },
+    ], { Module_Type: { field_type: 'ModuleType', default: 'HMI' } });
+    const sys = makeStruct('S', 'system', [
+      { template_name: 'M', asset_name: 'M', fields: { Module_Type: 'MQTT' } },
+    ]);
+    const map = { S: wrap(sys), M: wrap(mod), T: wrap(tag) };
+
+    const result = resolveRegistry(map, 'S');
+    expect(result[0].module_type).toBe('MQTT');
+  });
+
+  it('module is null when hierarchy has no module level', () => {
+    // A tag directly under a system (no module in between)
+    const tag = makeTag('T');
+    const sys = makeStruct('S', 'system', [
+      { template_name: 'T', asset_name: 'ch', fields: {} },
+    ]);
+    const map = { S: wrap(sys), T: wrap(tag) };
+
+    const result = resolveRegistry(map, 'S');
+    expect(result[0].module).toBeNull();
+  });
+
+  it('module_type is null when module has no Module_Type field', () => {
+    const tag = makeTag('T');
+    const mod = makeStruct('M', 'module', [
+      { template_name: 'T', asset_name: 'ch', fields: {} },
+    ]);
+    const map = { M: wrap(mod), T: wrap(tag) };
+
+    const result = resolveRegistry(map, 'M');
+    expect(result[0].module_type).toBeNull();
+  });
+
+  it('module_type is null when Module_Type default is non-string', () => {
+    const tag = makeTag('T');
+    const mod = makeStruct('M', 'module', [
+      { template_name: 'T', asset_name: 'ch', fields: {} },
+    ], { Module_Type: { field_type: 'ModuleType', default: 42 } });
+    const map = { M: wrap(mod), T: wrap(tag) };
+
+    const result = resolveRegistry(map, 'M');
+    expect(result[0].module_type).toBeNull();
+  });
+
+  it('nested hierarchy: module → parameter → tag — all tags get same module and module_type', () => {
+    const tag = makeTag('T');
+    const param = makeStruct('P', 'parameter', [
+      { template_name: 'T', asset_name: 'setpoint', fields: {} },
+      { template_name: 'T', asset_name: 'monitor', fields: {} },
+    ]);
+    const mod = makeStruct('M', 'module', [
+      { template_name: 'P', asset_name: 'chan', fields: {} },
+    ], { Module_Type: { field_type: 'ModuleType', default: 'MQTT' } });
+    const map = { M: wrap(mod), P: wrap(param), T: wrap(tag) };
+
+    const result = resolveRegistry(map, 'M');
+    expect(result).toHaveLength(2);
+    result.forEach(r => {
+      expect(r.module).toBe('M');
+      expect(r.module_type).toBe('MQTT');
+    });
+  });
+});
+
 // ── trends ────────────────────────────────────────────────────────────────────
 
 describe('trends', () => {

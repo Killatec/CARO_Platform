@@ -5,6 +5,10 @@ vi.mock('@caro/db', () => ({
     { id: 1, type_name: 'f32',  display_name: 'Float 32' },
     { id: 5, type_name: 'bool', display_name: 'Boolean' },
   ]),
+  getModuleTypes: vi.fn().mockResolvedValue([
+    { id: 1, type_name: 'HMI',  display_name: 'HMI' },
+    { id: 2, type_name: 'MQTT', display_name: 'MQTT' },
+  ]),
 }));
 import { mkdtemp, writeFile, mkdir, rm, readFile, access } from 'fs/promises';
 import { join } from 'path';
@@ -139,6 +143,118 @@ describe('batchSave — new template (original_hash: null)', () => {
 
     const expectedPath = join(tmpDir, 'modules', 'new_mod.json');
     expect(await fileExists(expectedPath)).toBe(true);
+  });
+});
+
+// ── ModuleType field validation ──────────────────────────────────────────────
+
+describe('batchSave — ModuleType field validation', () => {
+  it('module template with valid ModuleType default "HMI" → saves successfully', async () => {
+    await mkdir(join(tmpDir, 'modules'), { recursive: true });
+    const newMod = {
+      template_type: 'module', template_name: 'mod_hmi',
+      fields: { Module_Type: { field_type: 'ModuleType', default: 'HMI' } },
+      children: [],
+    };
+    const result = await batchSave([{ template_name: 'mod_hmi', original_hash: null, template: newMod }]);
+    expect(result.requires_confirmation).toBe(false);
+    expect(result.modified_files.length).toBeGreaterThan(0);
+  });
+
+  it('module template with valid ModuleType default "MQTT" → saves successfully', async () => {
+    await mkdir(join(tmpDir, 'modules'), { recursive: true });
+    const newMod = {
+      template_type: 'module', template_name: 'mod_mqtt',
+      fields: { Module_Type: { field_type: 'ModuleType', default: 'MQTT' } },
+      children: [],
+    };
+    const result = await batchSave([{ template_name: 'mod_mqtt', original_hash: null, template: newMod }]);
+    expect(result.requires_confirmation).toBe(false);
+  });
+
+  it('module template with invalid ModuleType default → throws SCHEMA_VALIDATION_ERROR', async () => {
+    await mkdir(join(tmpDir, 'modules'), { recursive: true });
+    const newMod = {
+      template_type: 'module', template_name: 'mod_bad',
+      fields: { Module_Type: { field_type: 'ModuleType', default: 'INVALID_TYPE' } },
+      children: [],
+    };
+    try {
+      await batchSave([{ template_name: 'mod_bad', original_hash: null, template: newMod }]);
+      expect.fail('should have thrown');
+    } catch (err) {
+      expect(err.code).toBe(ERROR_CODES.SCHEMA_VALIDATION_ERROR);
+      expect(err.message).toContain('ModuleType');
+      expect(err.message).toContain('INVALID_TYPE');
+    }
+  });
+
+  it('tag template with invalid TagType default still rejected (regression)', async () => {
+    const newTag = {
+      template_type: 'tag', template_name: 'tag_bad',
+      fields: {
+        data_type: { field_type: 'TagType', default: 'not_a_real_type' },
+        is_setpoint: { field_type: 'Boolean', default: false },
+      },
+      children: [],
+    };
+    try {
+      await batchSave([{ template_name: 'tag_bad', original_hash: null, template: newTag }]);
+      expect.fail('should have thrown');
+    } catch (err) {
+      expect(err.code).toBe(ERROR_CODES.SCHEMA_VALIDATION_ERROR);
+      expect(err.message).toContain('TagType');
+    }
+  });
+
+  it('batch with both valid TagType and valid ModuleType → saves both', async () => {
+    await mkdir(join(tmpDir, 'modules'), { recursive: true });
+    const newTag = {
+      template_type: 'tag', template_name: 'tag_ok',
+      fields: {
+        data_type: { field_type: 'TagType', default: 'f32' },
+        is_setpoint: { field_type: 'Boolean', default: false },
+      },
+      children: [],
+    };
+    const newMod = {
+      template_type: 'module', template_name: 'mod_ok',
+      fields: { Module_Type: { field_type: 'ModuleType', default: 'MQTT' } },
+      children: [],
+    };
+    const result = await batchSave([
+      { template_name: 'tag_ok', original_hash: null, template: newTag },
+      { template_name: 'mod_ok', original_hash: null, template: newMod },
+    ]);
+    expect(result.requires_confirmation).toBe(false);
+    expect(result.modified_files.length).toBe(2);
+  });
+
+  it('batch with valid TagType but invalid ModuleType → entire batch rejected', async () => {
+    await mkdir(join(tmpDir, 'modules'), { recursive: true });
+    const newTag = {
+      template_type: 'tag', template_name: 'tag_fine',
+      fields: {
+        data_type: { field_type: 'TagType', default: 'f32' },
+        is_setpoint: { field_type: 'Boolean', default: false },
+      },
+      children: [],
+    };
+    const newMod = {
+      template_type: 'module', template_name: 'mod_bad2',
+      fields: { Module_Type: { field_type: 'ModuleType', default: 'BOGUS' } },
+      children: [],
+    };
+    try {
+      await batchSave([
+        { template_name: 'tag_fine', original_hash: null, template: newTag },
+        { template_name: 'mod_bad2', original_hash: null, template: newMod },
+      ]);
+      expect.fail('should have thrown');
+    } catch (err) {
+      expect(err.code).toBe(ERROR_CODES.SCHEMA_VALIDATION_ERROR);
+      expect(err.message).toContain('BOGUS');
+    }
   });
 });
 
