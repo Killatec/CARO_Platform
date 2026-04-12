@@ -33,23 +33,23 @@ export function AssetTree(): React.ReactElement {
   const rootTemplateName = useTemplateGraphStore(state => state.rootTemplateName);
   const isLoading = useTemplateGraphStore(state => state.isLoading);
 
-  const [expandedNodes, setExpandedNodes] = useState<Record<string, boolean>>({});
-  const hasRestoredRef = useRef(false);
+  const [expandedNodes, setExpandedNodes] = useState<Record<string, boolean>>(() => {
+    const stored = lsGet();
+    return (stored && typeof stored === 'object' && !Array.isArray(stored))
+      ? stored
+      : {};
+  });
+
+  const prevRootRef = useRef<string | null>(rootTemplateName);
 
   useEffect(() => {
     if (!rootTemplateName) return;
 
-    if (!hasRestoredRef.current) {
-      hasRestoredRef.current = true;
-      const stored = lsGet();
-      if (stored && typeof stored === 'object' && !Array.isArray(stored)) {
-        setExpandedNodes(stored);
-        return;
-      }
+    if (prevRootRef.current !== null && prevRootRef.current !== rootTemplateName) {
+      lsClear();
+      setExpandedNodes({});
     }
-
-    lsClear();
-    setExpandedNodes({});
+    prevRootRef.current = rootTemplateName;
   }, [rootTemplateName]);
 
   const header = (

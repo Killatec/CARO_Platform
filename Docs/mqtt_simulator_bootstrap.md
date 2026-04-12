@@ -215,10 +215,11 @@ const protoPath = path.resolve(__dirname, '../../../../packages/proto/tag.proto'
 
 Tag value `oneof` field per `data_type`:
 
-| `data_type` | Protobuf field | JS type |
-|---|---|---|
-| `f32` | `float_value` | number |
-| `bool` | `bool_value` | boolean |
+| `data_type` | Protobuf field | Proto type | JS type |
+|---|---|---|---|
+| `f32` | `float_value` | `float` (32-bit IEEE 754) | number |
+| `bool` | `bool_value` | `bool` | boolean |
+| `i16` | `int_value` | `int32` (clamped to −32768…32767) | number |
 
 `protobufjs` installed at monorepo root (not server-local — blocked by `@caro/db` workspace resolution). Run `npm install` from monorepo root if missing.
 

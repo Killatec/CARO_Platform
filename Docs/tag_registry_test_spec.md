@@ -322,18 +322,17 @@ function metaModal(page, tagPath) {
 
 ---
 
-### 4.8.5 tests/validation-parent-types.spec.js — Parent Type Validation (4 tests)
+### 4.8.5 tests/validation-parent-types.spec.js — Parent Type Validation (3 tests)
 
-**Prerequisite:** `VALIDATE_REQUIRED_PARENT_TYPES=module,parameter` and `VALIDATE_UNIQUE_PARENT_TYPES=true` must be set in `apps/tag-registry/server/.env`. Without these vars the config endpoint returns empty arrays/false and all four tests will fail to observe the expected error codes.
+**Prerequisite:** `VALIDATE_REQUIRED_PARENT_TYPES=module` and `VALIDATE_UNIQUE_PARENT_TYPES=true` must be set in `apps/tag-registry/server/.env`. Without these vars the config endpoint returns empty arrays/false and tests will fail to observe the expected error codes.
 
 | # | Test | Covers |
 |---|---|---|
 | 1 | PARENT_TYPE_MISSING shown when tag has no module ancestor | Bootstrap §8.6, §8.10 — validateParentTypes wired via config endpoint |
-| 2 | PARENT_TYPE_MISSING shown when tag has no parameter ancestor | Same setup as test 1 — second error message for second missing type |
-| 3 | No validation errors when tag has both module and parameter ancestors | Full hierarchy: system → module → parameter → tag |
-| 4 | DUPLICATE_PARENT_TYPE shown when tag has two module ancestors | Hierarchy: system → module → module → parameter → tag |
+| 2 | No validation errors when tag has a module ancestor | Hierarchy: system → module → tag |
+| 3 | DUPLICATE_PARENT_TYPE shown when tag has two module ancestors | Hierarchy: system → module → module → tag |
 
-**Setup:** Each test creates its own hierarchy via API in `beforeEach`. Test 1 and 2 share the same fixture (system root → tag directly, no module or parameter between them). Test 3 builds the full four-level chain. Test 4 builds a five-level chain with two `module` type nodes. All created templates are cleaned up via `deleteTemplates(created.splice(0))` in `afterEach`.
+**Setup:** Each test creates its own hierarchy via API in `beforeEach`. Test 1 uses a system root with a tag directly attached (no module between them). Test 2 builds a three-level chain: system → module → tag. Test 3 builds a four-level chain with two `module` type nodes. All created templates are cleaned up via `deleteTemplates(created.splice(0))` in `afterEach`.
 
 ---
 

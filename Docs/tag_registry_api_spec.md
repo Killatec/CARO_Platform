@@ -81,7 +81,7 @@ Returns the server-side validation configuration so the client can apply the sam
 {
   "ok": true,
   "data": {
-    "requiredParentTypes": ["module", "parameter"],
+    "requiredParentTypes": ["module"],
     "uniqueParentTypes": false
   }
 }

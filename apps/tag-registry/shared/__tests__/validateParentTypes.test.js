@@ -36,13 +36,13 @@ describe('no-op when unconfigured', () => {
 // ── REQUIRED PARENT TYPE — satisfied ─────────────────────────────────────────
 
 describe('required parent type — satisfied', () => {
-  it('M → P (parameter) → T: "parameter" required → no errors', () => {
+  it('S → M (module) → T: "module" required → no errors', () => {
     const tag = makeTag('T');
-    const param = makeStruct('P', 'parameter', [{ template_name: 'T', asset_name: 'ch', fields: {} }]);
-    const mod = makeStruct('M', 'module', [{ template_name: 'P', asset_name: 'p', fields: {} }]);
-    const map = { M: wrap(mod), P: wrap(param), T: wrap(tag) };
+    const mod = makeStruct('M', 'module', [{ template_name: 'T', asset_name: 'ch', fields: {} }]);
+    const sys = makeStruct('S', 'system', [{ template_name: 'M', asset_name: 'mod', fields: {} }]);
+    const map = { S: wrap(sys), M: wrap(mod), T: wrap(tag) };
 
-    const r = validateParentTypes(map, 'M', { requiredParentTypes: ['parameter'] });
+    const r = validateParentTypes(map, 'S', { requiredParentTypes: ['module'] });
     expect(r.errors).toHaveLength(0);
   });
 });
@@ -50,12 +50,12 @@ describe('required parent type — satisfied', () => {
 // ── REQUIRED PARENT TYPE — missing ────────────────────────────────────────────
 
 describe('required parent type — missing', () => {
-  it('M → T (no parameter in chain): "parameter" required → PARENT_TYPE_MISSING', () => {
+  it('S → T (no module in chain): "module" required → PARENT_TYPE_MISSING', () => {
     const tag = makeTag('T');
-    const mod = makeStruct('M', 'module', [{ template_name: 'T', asset_name: 'ch', fields: {} }]);
-    const map = { M: wrap(mod), T: wrap(tag) };
+    const sys = makeStruct('S', 'system', [{ template_name: 'T', asset_name: 'ch', fields: {} }]);
+    const map = { S: wrap(sys), T: wrap(tag) };
 
-    const r = validateParentTypes(map, 'M', { requiredParentTypes: ['parameter'] });
+    const r = validateParentTypes(map, 'S', { requiredParentTypes: ['module'] });
     expect(r.errors.some(e => e.code === ERROR_CODES.PARENT_TYPE_MISSING)).toBe(true);
   });
 });

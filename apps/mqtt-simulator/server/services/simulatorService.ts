@@ -98,6 +98,7 @@ function initSimState(): void {
       simValue = tag.data_type === 'bool' ? false : 0;
     } else {
       simValue = tag.data_type === 'f32'  ? 50.0
+               : tag.data_type === 'i16'  ? 50
                : tag.data_type === 'bool' ? false
                : 50.0;
     }
@@ -116,6 +117,12 @@ function advanceTag(tag: SimTag, state: SimTagState, deltaMs: number): void {
       state.simT += deltaMs;
       state.simValue = 50 + 25 * Math.sin((2 * Math.PI * state.simT) / SINE_PERIOD_MS);
       break;
+    case 'i16': {
+      state.simT += deltaMs;
+      const raw = 50 + 25 * Math.sin((2 * Math.PI * state.simT) / SINE_PERIOD_MS);
+      state.simValue = Math.max(-32768, Math.min(32767, Math.round(raw)));
+      break;
+    }
     case 'bool':
       if (Math.random() < 0.005) state.simValue = !state.simValue; // ~0.5% per tick
       break;
@@ -462,6 +469,7 @@ export function injectSetValues(moduleId: string): void {
     let value: number | boolean;
     switch (tag.data_type) {
       case 'bool': value = Math.random() > 0.5; break;
+      case 'i16':  value = Math.round(Math.random() * 200 - 100); break;
       default:     value = Math.round(Math.random() * 10000) / 100; break; // f32
     }
     return { tag_id: tag.tag_id, value };

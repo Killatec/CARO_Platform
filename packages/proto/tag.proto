@@ -2,10 +2,9 @@ syntax = "proto3";
 
 message TagValue {
   oneof value {
-    double float_value  = 1;
-    int32  int_value    = 2;
-    bool   bool_value   = 3;
-    string string_value = 4;
+    float  float_value = 1;
+    bool   bool_value  = 3;
+    int32  int_value   = 4;
   }
 }
 

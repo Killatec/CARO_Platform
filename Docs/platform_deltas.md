@@ -22,6 +22,3 @@ Read once at session start alongside `Docs/platform_handoff.md`.
 
 ---
 
-- module_types lookup table added (migration 010); ModuleType field type added to tag-registry shared/server/client; module templates now require Module_Type field
-- module and module_type columns added to tag_registry (migration 011); resolved from meta chain during registry apply; displayed in RegistryTable UI with sort and diff support
-- module_types lookup table added (migration 010) with HMI and MQTT seed rows; getModuleTypes() and ModuleType interface added to @caro/db and exported from index

@@ -18,7 +18,7 @@ export async function loadProto(): Promise<void> {
   TelemetryMessage = root.lookupType('TelemetryMessage');
 }
 
-export function encodeProto(moduleId: string, tags: ProtoTag[], status: string): Buffer {
+export function encodeProto(_moduleId: string, tags: ProtoTag[], status: string): Buffer {
   if (!TelemetryMessage) throw new Error('Proto not loaded');
   const payload = {
     timestamp: Date.now(),
@@ -27,6 +27,7 @@ export function encodeProto(moduleId: string, tags: ProtoTag[], status: string):
       const value: Record<string, unknown> = {};
       if (t.data_type === 'f32')  value.float_value = t.simValue;
       if (t.data_type === 'bool') value.bool_value  = t.simValue;
+      if (t.data_type === 'i16')  value.int_value   = t.simValue;
       return { tag_id: t.tag_id, value };
     }),
   };

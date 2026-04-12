@@ -5,10 +5,6 @@
     "description": {
       "field_type": "String",
       "default": "CARO_1 System"
-    },
-    "version": {
-      "field_type": "Numeric",
-      "default": 155
     }
   },
   "children": [
@@ -20,6 +16,11 @@
     {
       "template_name": "rf_power_module",
       "asset_name": "RF2",
+      "fields": {}
+    },
+    {
+      "template_name": "HMI",
+      "asset_name": "HMI",
       "fields": {}
     }
   ]

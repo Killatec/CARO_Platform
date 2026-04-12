@@ -112,6 +112,7 @@ Current migrations:
 -   009_cleanup_tag_types.sql
 -   010_create_module_types.sql
 -   011_add_module_columns.sql
+-   012_add_i16_tag_type.sql
 
 > *NOTE: The schema_migrations table is created programmatically inside
 > migrations.js on every runMigrations() call — it is not created via a
@@ -227,7 +228,7 @@ human-friendly labels for UI.
                                     references.
   ---------------- ---------------- -------------------------------------
 
-> *NOTE: After migration 009, only `f32` and `bool` remain. Migration 009 renamed all `f64` references in `tag_registry.data_type` to `f32`, then deleted unused types (`f64`, `i32`, `i32_array`, `string`). New types can be added via INSERT. `display_name` can be renamed freely — all FK references use `type_name`.*
+> *NOTE: After migration 012, the valid types are `f32`, `bool`, and `i16`. Migration 009 renamed all `f64` references in `tag_registry.data_type` to `f32`, then deleted unused types (`f64`, `i32`, `i32_array`, `string`). Migration 012 added `i16` (Int 16). New types can be added via INSERT. `display_name` can be renamed freely — all FK references use `type_name`.*
 
 **3.4 module_types**
 

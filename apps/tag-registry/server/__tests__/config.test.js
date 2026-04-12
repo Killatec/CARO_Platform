@@ -86,22 +86,22 @@ describe('GET /api/v1/config — requiredParentTypes', () => {
     expect(body.data.requiredParentTypes).toEqual(['module']);
   });
 
-  it('returns [\'module\', \'parameter\'] for VALIDATE_REQUIRED_PARENT_TYPES=module,parameter', async () => {
-    process.env.VALIDATE_REQUIRED_PARENT_TYPES = 'module,parameter';
+  it('returns [\'module\', \'system\'] for VALIDATE_REQUIRED_PARENT_TYPES=module,system', async () => {
+    process.env.VALIDATE_REQUIRED_PARENT_TYPES = 'module,system';
     const { body } = await getConfig();
-    expect(body.data.requiredParentTypes).toEqual(['module', 'parameter']);
+    expect(body.data.requiredParentTypes).toEqual(['module', 'system']);
   });
 
   it('trims whitespace around each value', async () => {
-    process.env.VALIDATE_REQUIRED_PARENT_TYPES = ' module , parameter ';
+    process.env.VALIDATE_REQUIRED_PARENT_TYPES = ' module , system ';
     const { body } = await getConfig();
-    expect(body.data.requiredParentTypes).toEqual(['module', 'parameter']);
+    expect(body.data.requiredParentTypes).toEqual(['module', 'system']);
   });
 
   it('filters empty strings from consecutive commas', async () => {
-    process.env.VALIDATE_REQUIRED_PARENT_TYPES = 'module,,parameter';
+    process.env.VALIDATE_REQUIRED_PARENT_TYPES = 'module,,system';
     const { body } = await getConfig();
-    expect(body.data.requiredParentTypes).toEqual(['module', 'parameter']);
+    expect(body.data.requiredParentTypes).toEqual(['module', 'system']);
   });
 
   it('filters trailing comma', async () => {
