@@ -1,6 +1,7 @@
 import http from 'http';
 import { WebSocket, WebSocketServer } from 'ws';
 import type { LkvCache } from './lkv.js';
+import type { DutyTracker } from './duty-tracker.js';
 
 interface WsClient {
   ws: WebSocket;
@@ -20,10 +21,12 @@ export class WsServer {
 
   private readonly lkv: LkvCache;
   private readonly tickMs: number;
+  private readonly dutyTracker: DutyTracker;
 
-  constructor({ lkv, tickMs }: { lkv: LkvCache; tickMs: number }) {
+  constructor({ lkv, tickMs, dutyTracker }: { lkv: LkvCache; tickMs: number; dutyTracker: DutyTracker }) {
     this.lkv = lkv;
     this.tickMs = tickMs;
+    this.dutyTracker = dutyTracker;
   }
 
   attach(server: http.Server): void {
@@ -103,24 +106,26 @@ export class WsServer {
   }
 
   private tick(): void {
-    for (const client of this.clients) {
-      if (client.ws.readyState !== WebSocket.OPEN) continue;
+    this.dutyTracker.track(() => {
+      for (const client of this.clients) {
+        if (client.ws.readyState !== WebSocket.OPEN) continue;
 
-      const delta: Record<string, number | boolean | string | null> = {};
+        const delta: Record<string, number | boolean | string | null> = {};
 
-      for (const tagId of client.subscriptions) {
-        const currentGen = this.lkv.getGeneration(tagId);
-        const lastGen = client.lastSentGen.get(tagId) ?? 0;
-        if (currentGen > lastGen) {
-          delta[String(tagId)] = this.lkv.getValue(tagId);
-          client.lastSentGen.set(tagId, currentGen);
+        for (const tagId of client.subscriptions) {
+          const currentGen = this.lkv.getGeneration(tagId);
+          const lastGen = client.lastSentGen.get(tagId) ?? 0;
+          if (currentGen > lastGen) {
+            delta[String(tagId)] = this.lkv.getValue(tagId);
+            client.lastSentGen.set(tagId, currentGen);
+          }
+        }
+
+        if (Object.keys(delta).length > 0) {
+          this.send(client, { type: 'DELTA', values: delta });
         }
       }
-
-      if (Object.keys(delta).length > 0) {
-        this.send(client, { type: 'DELTA', values: delta });
-      }
-    }
+    });
   }
 
   private send(client: WsClient, payload: object): void {

@@ -3,6 +3,7 @@ import { WebSocket } from 'ws';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { LkvCache } from '../lkv.js';
 import { WsServer } from '../ws-server.js';
+import { DutyTracker } from '../duty-tracker.js';
 
 const TICK_MS = 20;
 
@@ -60,7 +61,7 @@ const openClients: WebSocket[] = [];
 
 beforeEach(async () => {
   lkv = new LkvCache();
-  wsServer = new WsServer({ lkv, tickMs: TICK_MS });
+  wsServer = new WsServer({ lkv, tickMs: TICK_MS, dutyTracker: new DutyTracker() });
   httpServer = http.createServer();
   wsServer.attach(httpServer);
   await new Promise<void>(r => httpServer.listen(0, r));

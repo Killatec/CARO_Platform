@@ -9,6 +9,7 @@ import { HmiTagSource } from './hmi-tag-source.js';
 import { MqttBridge } from './mqtt-bridge.js';
 import { WsServer } from './ws-server.js';
 import { createApp } from './app.js';
+import { DutyTracker } from './duty-tracker.js';
 
 async function start(): Promise<void> {
   // 0. Verify DB connectivity and run migrations
@@ -49,6 +50,7 @@ async function start(): Promise<void> {
   // 2. Core data structures
   const lkv = new LkvCache();
   const dbPipeline = new DbPipeline();
+  const dutyTracker = new DutyTracker();
 
   // 3. Telemetry intake (LKV writes, watchdog, DB pipeline enqueue)
   const intake = new TelemetryIntake({
@@ -58,6 +60,7 @@ async function start(): Promise<void> {
     trendableTagIds,
     dbPipeline,
     watchdogTimeoutMs: config.watchdogTimeoutMs,
+    dutyTracker,
   });
   intake.startWatchdog();
 
@@ -65,6 +68,10 @@ async function start(): Promise<void> {
   const hmiTags = HmiTagSource.create(rows, {
     intake,
     hmiPublishIntervalMs: config.hmiPublishIntervalMs,
+    dutyTracker,
+    onBeforePublish: () => {
+      hmiTags.Telemetry_CPU = Math.round(intake.getDutyCycle() * 100) / 100;
+    },
   });
   hmiTags.startPublishing();
   hmiTags.Module_Count = moduleTagIds.size;
@@ -80,18 +87,19 @@ async function start(): Promise<void> {
       mqttUrl:             config.mqttUrl,
       heartbeatIntervalMs: config.heartbeatIntervalMs,
     },
+    dutyTracker,
   });
 
   // 6. Express app + HTTP server
-  const app = createApp(tagMap);
+  const app = createApp(tagMap, intake);
   const httpServer = http.createServer(app);
 
   // 7. WS server
-  const wsServer = new WsServer({ lkv, tickMs: config.wsTickMs });
+  const wsServer = new WsServer({ lkv, tickMs: config.wsTickMs, dutyTracker });
   wsServer.attach(httpServer);
 
   // 7b. DB pipeline flush timer (placeholder — just drains the queue)
-  const dbFlushTimer = setInterval(() => dbPipeline.flush(), config.dbTickMs);
+  const dbFlushTimer = setInterval(() => dutyTracker.track(() => dbPipeline.flush()), config.dbTickMs);
 
   // 8. Start MQTT (soft-fail — broker may be absent in dev)
   try {

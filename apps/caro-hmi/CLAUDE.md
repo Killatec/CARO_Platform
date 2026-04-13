@@ -28,12 +28,13 @@ Prerequisites: PostgreSQL running with tag registry populated, Mosquitto on 1883
 | Telemetry Intake | `server/src/telemetry-intake.ts` | Transport-agnostic ingestion: LKV writes, watchdog (lastSeen tracking, null-write on timeout), DB pipeline enqueue. Universal entry point for all telemetry via `ingest(moduleId, message)`. |
 | MQTT Bridge | `server/src/mqtt-bridge.ts` | Transport only — subscribes `caro/+/telemetry`, parses payload, delegates to `TelemetryIntake.ingest()`. Publishes commands to `caro/{module_id}/cmd`. Heartbeat. |
 | HMI Tag Source | `server/src/hmi-tag-source.ts` | Proxy-based telemetry producer for `module_type='HMI'` tags. Property names derived from `tag_path` (strips module segment, joins remaining with `_`). Publishes to TelemetryIntake on configurable timer (default 250ms). |
+| Duty Tracker | `server/src/duty-tracker.ts` | Wraps telemetry hot paths with `performance.now()` timing. `snapshot(intervalMs)` returns duty cycle as percentage, resets accumulator. Fed into `hmiTags.Telemetry_CPU` via `onBeforePublish`. |
 | WS Server | `server/src/ws-server.ts` | Pull-based at configurable tick (default 8 Hz / 125 ms). Per-client generation tracking. SUBSCRIBE → SNAPSHOT → DELTA. JSON encoding. |
 | DB Pipeline | `server/src/db-pipeline.ts` | Push-based queue from telemetry intake. Module-level timestamp. Placeholder — real implementation writes to TimescaleDB. |
 | Tag Map | `server/src/tag-map.ts` | Loads tag registry from DB. Builds `Map<tag_id, TagDef>`. Meta field resolution: root-to-leaf, first match wins (`getMetaField`). Accepts pre-fetched `ActiveTag[]` to avoid a second DB call. |
 | Config | `server/src/config.ts` | All env vars with defaults. |
 | Express | `server/src/app.ts` | Express shell with `/api/v1/tags` route. Auth stubbed. |
-| Entry | `server/src/index.ts` | Startup sequence: tag rows → tag map → LKV → TelemetryIntake → HmiTagSource → MQTT bridge → WS attach → DB flush timer. |
+| Entry | `server/src/index.ts` | Startup sequence: tag rows → tag map → LKV → DutyTracker → TelemetryIntake → HmiTagSource → MQTT bridge → WS attach → DB flush timer. |
 
 ## Client Architecture
 
@@ -42,6 +43,7 @@ Prerequisites: PostgreSQL running with tag registry populated, Mosquitto on 1883
 | Shell | `client/src/shell/` | Header, NavTree, ContentArea. Generic HMI chrome. |
 | HMI Definitions | `client/src/hmi-definitions/` | Machine-specific nav trees and page components. Currently `demo/` only. |
 | Demo Page | `client/src/hmi-definitions/demo/pages/OverviewPage.tsx` | NumericMon × 4, BooleanMon × 3, NumericSet × 2 with WidgetErrorBoundary wrappers. |
+| Module Status Table | `client/src/components/ModuleStatusTable.tsx` | Fetches `GET /api/v1/modules/status` on a polling interval (default 1s). Renders per-module stats: status, packets/s, KB/s, tag count, stalled indicator. |
 
 Client is a standard Vite React app. `vite.config.ts` proxies `/api` and `/ws` to the server on port 3003.
 

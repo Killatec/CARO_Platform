@@ -17,7 +17,7 @@ export const COL = {
 export const ROW_CONTAINER = 'inline-flex flex-row items-center gap-3 px-2 py-1.5 rounded border border-gray-200 bg-white self-start';
 
 /** Shared label class */
-export const LABEL_CLASS = `${COL.label} text-xs text-gray-900 font-medium uppercase tracking-wide truncate`;
+export const LABEL_CLASS = `${COL.label} text-xs text-gray-900 font-medium tracking-wide truncate`;
 
 /** Shared unit class — fixed width, centered */
 export const UNIT_CLASS = `${COL.unit} min-w-[2rem] text-xs text-gray-900 text-left`;

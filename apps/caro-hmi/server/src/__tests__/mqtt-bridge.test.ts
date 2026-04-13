@@ -4,6 +4,7 @@ import { MqttBridge } from '../mqtt-bridge.js';
 import { TelemetryIntake } from '../telemetry-intake.js';
 import { LkvCache } from '../lkv.js';
 import { DbPipeline } from '../db-pipeline.js';
+import { DutyTracker } from '../duty-tracker.js';
 import type { TagDef } from '@caro/hmi-context';
 
 // Module-level variable — reassigned in beforeEach so the factory closure
@@ -50,6 +51,7 @@ function makeIntake() {
     trendableTagIds,
     dbPipeline: new DbPipeline(),
     watchdogTimeoutMs: 1000,
+    dutyTracker: new DutyTracker(),
   });
 }
 
@@ -58,6 +60,7 @@ function makeBridge(intake = makeIntake()) {
     intake,
     moduleIds: [...moduleTagIds.keys()],
     config: bridgeConfig,
+    dutyTracker: new DutyTracker(),
   });
 }
 
@@ -132,6 +135,7 @@ describe('MqttBridge', () => {
       lkv, tagMap, moduleTagIds, trendableTagIds,
       dbPipeline: new DbPipeline(),
       watchdogTimeoutMs: 1000,
+      dutyTracker: new DutyTracker(),
     });
     const bridge = makeBridge(intake);
     await startBridge(bridge);

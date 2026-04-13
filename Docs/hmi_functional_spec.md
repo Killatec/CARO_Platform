@@ -548,6 +548,18 @@ The HMI server is both a telemetry consumer (via MQTT bridge) and a telemetry pr
 
 **Transport-agnostic ingestion:** `TelemetryIntake.ingest(moduleId, message)` is the universal entry point for all telemetry regardless of source. `MqttBridge` and `HmiTagSource` are both adapters that call it. Future adapters (OPC-UA, Modbus, REST pollers) follow the same pattern.
 
+**Telemetry_CPU (DutyTracker):** The HMI server measures its own telemetry processing duty cycle and publishes it as the HMI tag `Telemetry_CPU`. A lightweight `DutyTracker` utility (`server/src/duty-tracker.ts`) wraps hot-path functions with `performance.now()` timing:
+
+- `MqttBridge.handleMessage()` — MQTT parse + ingest
+- `TelemetryIntake.watchdogTick()` — module timeout scan
+- `TelemetryIntake` rate timer — per-second stats computation
+- `WsServer.tick()` — WebSocket delta broadcast
+- DB flush timer — TimescaleDB write queue drain
+
+Each wrapped call accumulates busy-time in milliseconds. Once per second, `DutyTracker.snapshot(intervalMs)` computes `(busyMs / intervalMs) * 100` and resets the accumulator. The result is written to `hmiTags.Telemetry_CPU` via the `onBeforePublish` callback on `HmiTagSource`, so it flows through the standard telemetry pipeline and appears on the dashboard like any other tag.
+
+The snapshot call itself runs outside `track()` so it does not inflate the window it is closing.
+
 ---
 
 ## 9. Module Commissioning and Handshake

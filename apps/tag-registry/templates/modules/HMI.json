@@ -25,6 +25,15 @@
         "data_type": "i16",
         "format": "#"
       }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Telemetry_CPU",
+      "fields": {
+        "Trends": false,
+        "format": "#.#",
+        "unit": "%"
+      }
     }
   ]
 }

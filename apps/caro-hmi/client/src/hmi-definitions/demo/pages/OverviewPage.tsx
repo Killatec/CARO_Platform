@@ -7,6 +7,7 @@
 import type { CSSProperties } from 'react';
 import { NumericMon, NumericSet, BooleanMon, BooleanSet } from '@caro/widgets';
 import { WidgetErrorBoundary } from '../../../shell/WidgetErrorBoundary.js';
+import { ModuleStatusTable } from '../../../components/ModuleStatusTable.js';
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
 
@@ -34,9 +35,6 @@ const MODULE_BOX: CSSProperties = {
   borderRadius: 8,
   padding: 16,
   background: '#fafafa',
-  minWidth: 280,
-  flex: '1 1 0',
-  maxWidth: 400,
 };
 
 const MODULE_TITLE: CSSProperties = {
@@ -56,12 +54,32 @@ const WIDGET_STACK: CSSProperties = {
   gap: 3,
 };
 
+// ─── Module Status Table Box ─────────────────────────────────────────────────
+
+const MODULE_STATUS_BOX: CSSProperties = {
+  border: '1px solid #d1d5db',
+  borderRadius: 8,
+  padding: 16,
+  background: '#fafafa',
+  marginBottom: 16,
+};
+
+function ModuleStatusBox() {
+  return (
+    <div style={MODULE_STATUS_BOX}>
+      <h2 style={MODULE_TITLE}>Module Status</h2>
+      <ModuleStatusTable />
+    </div>
+  );
+}
+
 // ─── HMI Status Box ──────────────────────────────────────────────────────────
 
 const HMI_BOX: CSSProperties = {
-  ...MODULE_BOX,
-  maxWidth: 'none',
-  flex: '1 1 100%',
+  border: '1px solid #d1d5db',
+  borderRadius: 8,
+  padding: 16,
+  background: '#fafafa',
   marginBottom: 16,
 };
 
@@ -75,6 +93,9 @@ function HmiStatusBox() {
         </WidgetErrorBoundary>
         <WidgetErrorBoundary assetPath="HMI.Tag_Count">
           <NumericMon assetPath="HMI.Tag_Count" label="Tag Count" />
+        </WidgetErrorBoundary>
+        <WidgetErrorBoundary assetPath="HMI.Tag_Count">
+          <NumericMon assetPath="HMI.Telemetry_CPU" label="Telemetry_CPU" />
         </WidgetErrorBoundary>
       </div>
     </div>
@@ -139,9 +160,15 @@ export function OverviewPage() {
     <div style={PAGE_STYLE}>
       <h1 style={HEADING_STYLE}>System Overview — Live Telemetry</h1>
       <div style={MODULES_CONTAINER}>
-        <HmiStatusBox />
-        <RfModuleBox module="RF1" />
-        <RfModuleBox module="RF2" />
+        <div style={{ flexBasis: '100%', display: 'flex' }}>
+          <HmiStatusBox />
+        </div>
+        <div style={{ flexBasis: '100%', display: 'flex' }}>
+          <ModuleStatusBox />
+        </div>
+        {(['RF1', 'RF2'] as const).map(m => (
+          <RfModuleBox key={m} module={m} />
+        ))}
       </div>
     </div>
   );

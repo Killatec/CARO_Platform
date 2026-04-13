@@ -1,8 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { TelemetryIntake } from '../telemetry-intake.js';
 import type { TelemetryMessage } from '../telemetry-intake.js';
 import { LkvCache } from '../lkv.js';
 import { DbPipeline } from '../db-pipeline.js';
+import { DutyTracker } from '../duty-tracker.js';
 import type { TagDef } from '@caro/hmi-context';
 
 // ── Fixture data ──────────────────────────────────────────────────────────────
@@ -33,7 +34,7 @@ const trendableTagIds = new Set<number>([TAG_TREND]);
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function makeIntake(lkv = new LkvCache(), dbPipeline = new DbPipeline(), watchdogTimeoutMs = 1000) {
-  return new TelemetryIntake({ lkv, tagMap, moduleTagIds, trendableTagIds, dbPipeline, watchdogTimeoutMs });
+  return new TelemetryIntake({ lkv, tagMap, moduleTagIds, trendableTagIds, dbPipeline, watchdogTimeoutMs, dutyTracker: new DutyTracker() });
 }
 
 function telemetryMsg(
@@ -141,5 +142,122 @@ describe('TelemetryIntake', () => {
 
     intake.watchdogTick(); // second tick: already in timedOutModules, no re-null
     expect(lkv.getGeneration(TAG_MONITOR)).toBe(genAfterFirst);
+  });
+
+  // ── getModuleStats ────────────────────────────────────────────────────────────
+
+  it('getModuleStats returns empty array when no modules known', () => {
+    const intake = new TelemetryIntake({
+      lkv: new LkvCache(),
+      tagMap,
+      moduleTagIds: new Map(),
+      trendableTagIds,
+      dbPipeline: new DbPipeline(),
+      watchdogTimeoutMs: 1000,
+      dutyTracker: new DutyTracker(),
+    });
+    expect(intake.getModuleStats()).toEqual([]);
+  });
+
+  it('getModuleStats returns entry for each known module', () => {
+    const twoModules = new Map<string, number[]>([
+      ['modA', [TAG_MONITOR]],
+      ['modB', [TAG_TREND]],
+    ]);
+    const intake = new TelemetryIntake({
+      lkv: new LkvCache(),
+      tagMap,
+      moduleTagIds: twoModules,
+      trendableTagIds,
+      dbPipeline: new DbPipeline(),
+      watchdogTimeoutMs: 1000,
+      dutyTracker: new DutyTracker(),
+    });
+    expect(intake.getModuleStats()).toHaveLength(2);
+  });
+
+  it('ingest updates tags_in_last_packet', () => {
+    const intake = makeIntake();
+    intake.ingest(MODULE_ID, telemetryMsg([
+      { tag_id: TAG_MONITOR, value: 1 },
+      { tag_id: TAG_TREND,   value: 2 },
+      { tag_id: TAG_UNKNOWN, value: 3 },
+    ]));
+    const stats = intake.getModuleStats().find(s => s.module_id === MODULE_ID)!;
+    expect(stats.tags_in_last_packet).toBe(3);
+  });
+
+  it('ingest updates stalled from timedOutModules', () => {
+    const intake = makeIntake(new LkvCache(), new DbPipeline(), 0);
+    intake.watchdogTick();
+    const stats = intake.getModuleStats().find(s => s.module_id === MODULE_ID)!;
+    expect(stats.stalled).toBe(true);
+  });
+
+  it('ingest clears stalled status', () => {
+    const intake = makeIntake(new LkvCache(), new DbPipeline(), 0);
+    intake.watchdogTick();
+    intake.ingest(MODULE_ID, telemetryMsg([{ tag_id: TAG_MONITOR, value: 1 }]));
+    const stats = intake.getModuleStats().find(s => s.module_id === MODULE_ID)!;
+    expect(stats.stalled).toBe(false);
+  });
+
+  it('packets_per_sec and bytes_per_sec are 0 before rate timer fires', () => {
+    const intake = makeIntake();
+    intake.ingest(MODULE_ID, telemetryMsg([{ tag_id: TAG_MONITOR, value: 1 }]));
+    intake.ingest(MODULE_ID, telemetryMsg([{ tag_id: TAG_MONITOR, value: 2 }]));
+    const stats = intake.getModuleStats().find(s => s.module_id === MODULE_ID)!;
+    expect(stats.packets_per_sec).toBe(0);
+    expect(stats.bytes_per_sec).toBe(0);
+  });
+
+  it('rate timer computes packets_per_sec and bytes_per_sec', () => {
+    vi.useFakeTimers();
+    try {
+      const intake = makeIntake();
+      intake.startRateTimer();
+      for (let i = 0; i < 5; i++) {
+        intake.ingest(MODULE_ID, telemetryMsg([{ tag_id: TAG_MONITOR, value: i }]));
+      }
+      vi.advanceTimersByTime(1000);
+      const stats = intake.getModuleStats().find(s => s.module_id === MODULE_ID)!;
+      expect(stats.packets_per_sec).toBe(5);
+      expect(stats.bytes_per_sec).toBeGreaterThan(0);
+      intake.stopRateTimer();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('status is UNKNOWN before any ingest', () => {
+    const intake = makeIntake();
+    const stats = intake.getModuleStats().find(s => s.module_id === MODULE_ID)!;
+    expect(stats.status).toBe('UNKNOWN');
+  });
+
+  it('status reflects last ingested message status', () => {
+    const intake = makeIntake();
+    intake.ingest(MODULE_ID, telemetryMsg([], 'ONLINE'));
+    expect(intake.getModuleStats().find(s => s.module_id === MODULE_ID)!.status).toBe('ONLINE');
+    intake.ingest(MODULE_ID, telemetryMsg([], 'FAULT'));
+    expect(intake.getModuleStats().find(s => s.module_id === MODULE_ID)!.status).toBe('FAULT');
+  });
+
+  it('FAULT packets are counted in rate stats', () => {
+    vi.useFakeTimers();
+    try {
+      const intake = makeIntake();
+      intake.startRateTimer();
+      for (let i = 0; i < 3; i++) {
+        intake.ingest(MODULE_ID, telemetryMsg([], 'FAULT'));
+      }
+      vi.advanceTimersByTime(1000);
+      const stats = intake.getModuleStats().find(s => s.module_id === MODULE_ID)!;
+      expect(stats.packets_per_sec).toBe(3);
+      expect(stats.bytes_per_sec).toBeGreaterThan(0);
+      intake.stopRateTimer();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

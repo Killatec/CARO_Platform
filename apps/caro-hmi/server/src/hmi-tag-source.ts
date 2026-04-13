@@ -10,10 +10,13 @@
 
 import type { ActiveTag } from '@caro/db';
 import type { TelemetryIntake, TelemetryMessage } from './telemetry-intake.js';
+import type { DutyTracker } from './duty-tracker.js';
 
 export interface HmiTagSourceDeps {
   intake: TelemetryIntake;
   hmiPublishIntervalMs: number;
+  dutyTracker: DutyTracker;
+  onBeforePublish?: () => void;
 }
 
 function derivePropertyName(tagPath: string, module: string): string | null {
@@ -26,6 +29,8 @@ function derivePropertyName(tagPath: string, module: string): string | null {
 export class HmiTagSource {
   private readonly intake: TelemetryIntake;
   private readonly hmiPublishIntervalMs: number;
+  private readonly dutyTracker: DutyTracker;
+  private readonly onBeforePublish: (() => void) | undefined;
   private readonly values: Map<number, number | boolean | string | null>;
   private readonly propertyToTagId: Map<string, number>;
   // tagIdToProperty is for debugging only — not on the hot path
@@ -42,6 +47,8 @@ export class HmiTagSource {
   ) {
     this.intake = deps.intake;
     this.hmiPublishIntervalMs = deps.hmiPublishIntervalMs;
+    this.dutyTracker = deps.dutyTracker;
+    this.onBeforePublish = deps.onBeforePublish;
     this.values = values;
     this.propertyToTagId = propertyToTagId;
     this.tagIdToProperty = tagIdToProperty;
@@ -140,11 +147,14 @@ export class HmiTagSource {
 
   private publishTick(): void {
     if (this.values.size === 0) return;
-    const message: TelemetryMessage = {
-      timestamp: Date.now(),
-      status: 'ONLINE',
-      tags: [...this.values.entries()].map(([tag_id, value]) => ({ tag_id, value })),
-    };
-    this.intake.ingest(this.moduleId, message);
+    this.onBeforePublish?.();
+    this.dutyTracker.track(() => {
+      const message: TelemetryMessage = {
+        timestamp: Date.now(),
+        status: 'ONLINE',
+        tags: [...this.values.entries()].map(([tag_id, value]) => ({ tag_id, value })),
+      };
+      this.intake.ingest(this.moduleId, message);
+    });
   }
 }

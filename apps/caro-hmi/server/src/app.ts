@@ -4,9 +4,11 @@ import cors from 'cors';
 import type { TagDef } from '@caro/hmi-context';
 import { errorHandler } from '@caro/server';
 import { createTagsRouter } from './routes/tags.js';
+import { createModulesRouter } from './routes/modules.js';
 import { authStub } from './middleware/auth-stub.js';
+import type { TelemetryIntake } from './telemetry-intake.js';
 
-export function createApp(tagMap: Map<number, TagDef>): Application {
+export function createApp(tagMap: Map<number, TagDef>, intake: TelemetryIntake): Application {
   const app = express();
 
   app.use(cors({
@@ -21,6 +23,7 @@ export function createApp(tagMap: Map<number, TagDef>): Application {
   app.use(authStub);
 
   app.use('/api/v1/tags', createTagsRouter(tagMap));
+  app.use('/api/v1/modules', createModulesRouter(intake));
 
   app.use(errorHandler as ErrorRequestHandler);
 

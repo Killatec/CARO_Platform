@@ -1,6 +1,7 @@
 import mqtt from 'mqtt';
 import type { MqttClient } from 'mqtt';
 import type { TelemetryIntake, TelemetryMessage } from './telemetry-intake.js';
+import type { DutyTracker } from './duty-tracker.js';
 
 export interface MqttBridgeConfig {
   mqttUrl: string;
@@ -11,6 +12,7 @@ export interface MqttBridgeDeps {
   intake: TelemetryIntake;
   moduleIds: string[];
   config: MqttBridgeConfig;
+  dutyTracker: DutyTracker;
 }
 
 export class MqttBridge {
@@ -20,11 +22,13 @@ export class MqttBridge {
   private readonly intake: TelemetryIntake;
   private readonly moduleIds: string[];
   private readonly config: MqttBridgeConfig;
+  private readonly dutyTracker: DutyTracker;
 
   constructor(deps: MqttBridgeDeps) {
     this.intake = deps.intake;
     this.moduleIds = deps.moduleIds;
     this.config = deps.config;
+    this.dutyTracker = deps.dutyTracker;
   }
 
   start(): Promise<void> {
@@ -90,16 +94,18 @@ export class MqttBridge {
   }
 
   private handleMessage(topic: string, payload: Buffer): void {
-    const parts = topic.split('/');
-    const moduleId = parts[1];
+    this.dutyTracker.track(() => {
+      const parts = topic.split('/');
+      const moduleId = parts[1];
 
-    let message: TelemetryMessage;
-    try {
-      message = JSON.parse(payload.toString()) as TelemetryMessage;
-    } catch {
-      return;
-    }
+      let message: TelemetryMessage;
+      try {
+        message = JSON.parse(payload.toString()) as TelemetryMessage;
+      } catch {
+        return;
+      }
 
-    this.intake.ingest(moduleId, message);
+      this.intake.ingest(moduleId, message);
+    });
   }
 }

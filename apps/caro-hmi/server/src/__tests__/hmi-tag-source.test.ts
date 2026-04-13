@@ -3,6 +3,7 @@ import { HmiTagSource } from '../hmi-tag-source.js';
 import { TelemetryIntake } from '../telemetry-intake.js';
 import { LkvCache } from '../lkv.js';
 import { DbPipeline } from '../db-pipeline.js';
+import { DutyTracker } from '../duty-tracker.js';
 import type { ActiveTag } from '@caro/db';
 import type { TagDef } from '@caro/hmi-context';
 
@@ -56,6 +57,7 @@ function makeIntake(tagIds: number[], lkv = new LkvCache(), moduleId = 'HMI') {
     trendableTagIds: new Set(),
     dbPipeline: new DbPipeline(),
     watchdogTimeoutMs: 5000,
+    dutyTracker: new DutyTracker(),
   });
   return { lkv, intake };
 }
@@ -67,7 +69,7 @@ describe('HmiTagSource', () => {
     const { intake } = makeIntake([1066]);
     const hmiTags = HmiTagSource.create(
       [makeActiveTag(1066, 'CARO_1.HMI.Module_Count')],
-      { intake, hmiPublishIntervalMs: HMI_PUBLISH_INTERVAL_MS },
+      { intake, hmiPublishIntervalMs: HMI_PUBLISH_INTERVAL_MS, dutyTracker: new DutyTracker() },
     );
 
     hmiTags.Module_Count = 11;
@@ -78,7 +80,7 @@ describe('HmiTagSource', () => {
     const { intake } = makeIntake([1066]);
     const hmiTags = HmiTagSource.create(
       [makeActiveTag(1066, 'CARO_1.HMI.Module_Count')],
-      { intake, hmiPublishIntervalMs: HMI_PUBLISH_INTERVAL_MS },
+      { intake, hmiPublishIntervalMs: HMI_PUBLISH_INTERVAL_MS, dutyTracker: new DutyTracker() },
     );
 
     expect(() => { (hmiTags as Record<string, unknown>).Nonexistent = 5; })
@@ -89,7 +91,7 @@ describe('HmiTagSource', () => {
     const { intake } = makeIntake([1066]);
     const hmiTags = HmiTagSource.create(
       [makeActiveTag(1066, 'CARO_1.HMI.Module_Count')],
-      { intake, hmiPublishIntervalMs: HMI_PUBLISH_INTERVAL_MS },
+      { intake, hmiPublishIntervalMs: HMI_PUBLISH_INTERVAL_MS, dutyTracker: new DutyTracker() },
     );
 
     expect((hmiTags as Record<string, unknown>).Nonexistent).toBeUndefined();
@@ -105,7 +107,7 @@ describe('HmiTagSource', () => {
           makeActiveTag(1066, 'CARO_1.HMI.Module_Count'),
           makeActiveTag(1067, 'CARO_1.HMI.Status'),
         ],
-        { intake, hmiPublishIntervalMs: HMI_PUBLISH_INTERVAL_MS },
+        { intake, hmiPublishIntervalMs: HMI_PUBLISH_INTERVAL_MS, dutyTracker: new DutyTracker() },
       );
 
       hmiTags.Module_Count = 11;
@@ -130,7 +132,7 @@ describe('HmiTagSource', () => {
       const { intake } = makeIntake([], lkv);
       const hmiTags = HmiTagSource.create(
         [],
-        { intake, hmiPublishIntervalMs: HMI_PUBLISH_INTERVAL_MS },
+        { intake, hmiPublishIntervalMs: HMI_PUBLISH_INTERVAL_MS, dutyTracker: new DutyTracker() },
       );
 
       hmiTags.startPublishing();
@@ -146,7 +148,7 @@ describe('HmiTagSource', () => {
     const { intake } = makeIntake([2001], new LkvCache(), 'MyHMI');
     const hmiTags = HmiTagSource.create(
       [makeActiveTag(2001, 'Plant1.MyHMI.Status.Active', 'MyHMI')],
-      { intake, hmiPublishIntervalMs: HMI_PUBLISH_INTERVAL_MS },
+      { intake, hmiPublishIntervalMs: HMI_PUBLISH_INTERVAL_MS, dutyTracker: new DutyTracker() },
     );
 
     (hmiTags as Record<string, unknown>).Status_Active = 'OK';
@@ -162,7 +164,7 @@ describe('HmiTagSource', () => {
           makeActiveTag(1066, 'CARO_1.HMI.Module_Count'),
           makeActiveTag(1067, 'CARO_1.HMI.Module_Count'), // same resolved property name
         ],
-        { intake, hmiPublishIntervalMs: HMI_PUBLISH_INTERVAL_MS },
+        { intake, hmiPublishIntervalMs: HMI_PUBLISH_INTERVAL_MS, dutyTracker: new DutyTracker() },
       )
     ).toThrow('collision');
   });
@@ -171,7 +173,7 @@ describe('HmiTagSource', () => {
     const { intake } = makeIntake([1066]);
     const hmiTags = HmiTagSource.create(
       [makeActiveTag(1066, 'CARO_1.HMI.Module_Count')],
-      { intake, hmiPublishIntervalMs: HMI_PUBLISH_INTERVAL_MS },
+      { intake, hmiPublishIntervalMs: HMI_PUBLISH_INTERVAL_MS, dutyTracker: new DutyTracker() },
     );
 
     expect(typeof hmiTags.startPublishing).toBe('function');

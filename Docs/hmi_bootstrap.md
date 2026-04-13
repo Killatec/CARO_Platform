@@ -62,6 +62,7 @@ MQTT Simulator (10 Hz)
           → watchdog (lastSeen tracking, null-write on timeout)
 
 HmiTagSource (250ms timer, module_type='HMI' tags)
+  → onBeforePublish: writes DutyTracker.snapshot() → hmiTags.Telemetry_CPU
   → TelemetryIntake.ingest(moduleId, message)
       → (same LKV / DB pipeline path as above)
 
@@ -96,11 +97,13 @@ apps/caro-hmi/
 │       ├── telemetry-intake.ts  # Transport-agnostic ingest: LKV write, watchdog, DB enqueue
 │       ├── mqtt-bridge.ts       # MQTT transport only — delegates to TelemetryIntake
 │       ├── hmi-tag-source.ts    # Proxy-based HMI telemetry producer (module_type='HMI')
+│       ├── duty-tracker.ts      # Telemetry_CPU: wraps hot paths with performance.now() timing
 │       ├── ws-server.ts         # WebSocket server, per-client subscriptions
 │       ├── db-pipeline.ts       # DB write queue (placeholder)
 │       ├── tag-map.ts           # Tag registry loader, meta field resolution
 │       ├── routes/
-│       │   └── tags.ts          # GET /api/v1/tags
+│       │   ├── tags.ts          # GET /api/v1/tags
+│       │   └── modules.ts       # GET /api/v1/modules/status
 │       └── middleware/
 │           └── auth-stub.ts     # Placeholder auth — accepts all
 ├── client/
@@ -111,6 +114,8 @@ apps/caro-hmi/
 │   └── src/
 │       ├── main.tsx             # Entry — HmiContextProvider wraps App
 │       ├── App.tsx              # Routes to Shell
+│       ├── components/
+│       │   └── ModuleStatusTable.tsx  # Per-module telemetry stats (polls /api/v1/modules/status)
 │       ├── shell/
 │       │   ├── Shell.tsx        # Layout: Header + NavTree + ContentArea
 │       │   ├── Header.tsx
