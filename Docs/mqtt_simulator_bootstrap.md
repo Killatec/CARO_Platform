@@ -59,8 +59,8 @@ Server reads from `apps/mqtt-simulator/server/.env`.
 
 1. Validate `PGPASSWORD`. Exit with clear error if missing.
 2. Connect to PostgreSQL via `@caro/db`. Call `getActiveTags()`.
-3. If zero active tags returned: log warning and exit.
-4. Build in-memory tag map: `Map<tag_id, SimTag>`. Extract `module_id` from `meta` array. Coerce `tag_id` to `Number`.
+3. Filter rows to `module_type = 'MQTT'` only. If zero MQTT tags returned: log warning and exit.
+4. Build in-memory tag map: `Map<tag_id, SimTag>`. Derive `module_id` from `tag_registry.module` column (fallback `'unknown'` if null). Coerce `tag_id` to `Number`.
 5. Group tags by `module_id`: `Map<module_id, SimTag[]>`.
 6. Initialize simulated values — see Section 5.
 7. Load Protobuf schema via `protobuf.js`.
@@ -85,12 +85,11 @@ Server reads from `apps/mqtt-simulator/server/.env`.
 }
 ```
 
-`module_id` extraction:
-```js
-const moduleAncestor = meta.find(m => m.type === 'module');
-return moduleAncestor?.name ?? 'unknown';
+`module_id` derivation:
+```ts
+module_id: row.module ?? 'unknown'
 ```
-`meta` is ordered root-to-tag; `find()` is order-agnostic.
+Taken directly from the `tag_registry.module` column — no meta array parsing.
 
 ---
 

@@ -402,7 +402,7 @@ Summary of MQTT channels used by the backend:
 
 ## 8. Backend — Telemetry and WebSocket Bridge
 
-The backend bridges MQTT device telemetry to WebSocket frontend clients. This is the core of the server architecture.
+The backend is both a telemetry consumer (receiving device data via MQTT) and a telemetry producer (publishing HMI-internal state via HmiTagSource). All telemetry — regardless of source — flows through a single transport-agnostic `TelemetryIntake` pipeline before reaching the LKV cache and WebSocket clients.
 
 ### 8.1 Last-Known-Value Cache
 
@@ -531,6 +531,22 @@ All event types written to audit_log:
 | module.validated | Administrator validated a commissioned module instance. |
 | user.created | New user account created by Administrator. |
 | user.modified | User account modified or role changed by Administrator. |
+
+### 8.8 HMI-Originated Telemetry (HmiTagSource)
+
+The HMI server is both a telemetry consumer (via MQTT bridge) and a telemetry producer for tags with `module_type = 'HMI'` in the tag registry. These tags represent HMI-internal state (e.g., module count, tag count, system status) that is published into the same telemetry pipeline as device data.
+
+**Architecture:** At startup, the HMI server creates an `HmiTagSource` instance that:
+1. Filters the tag registry for `module_type = 'HMI'`
+2. Derives typed property names from `tag_path` (strips the module segment, joins remaining segments with `_`; e.g., `CARO_1.HMI.Module_Count` → `Module_Count`)
+3. Exposes a Proxy-based interface so server code writes values as direct property assignments (e.g., `hmiTags.Module_Count = 11`)
+4. Publishes a `TelemetryMessage` to `TelemetryIntake` on a configurable timer (default 250ms, env: `HMI_PUBLISH_INTERVAL_MS`)
+
+**Data path:** HmiTagSource values flow through the same `TelemetryIntake` pipeline as MQTT telemetry — LKV write, generation bump, DB pipeline enqueue, WebSocket delta broadcast. Widgets subscribed to HMI tags receive updates identically to device tags.
+
+**Zero HMI tags:** If the tag registry contains no `module_type = 'HMI'` tags, the HmiTagSource is created with empty maps and publishing is a no-op. No error.
+
+**Transport-agnostic ingestion:** `TelemetryIntake.ingest(moduleId, message)` is the universal entry point for all telemetry regardless of source. `MqttBridge` and `HmiTagSource` are both adapters that call it. Future adapters (OPC-UA, Modbus, REST pollers) follow the same pattern.
 
 ---
 

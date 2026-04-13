@@ -25,13 +25,15 @@ Prerequisites: PostgreSQL running with tag registry populated, Mosquitto on 1883
 | Module | File | Purpose |
 |---|---|---|
 | LKV Cache | `server/src/lkv.ts` | In-memory `Map<tag_id, { value, generation }>`. Generation bumps only on value change (strict equality). |
-| MQTT Bridge | `server/src/mqtt-bridge.ts` | Subscribes `caro/+/telemetry`, writes to LKV and DB pipeline. Publishes commands to `caro/{module_id}/cmd`. Watchdog writes null on telemetry loss. Heartbeat. |
+| Telemetry Intake | `server/src/telemetry-intake.ts` | Transport-agnostic ingestion: LKV writes, watchdog (lastSeen tracking, null-write on timeout), DB pipeline enqueue. Universal entry point for all telemetry via `ingest(moduleId, message)`. |
+| MQTT Bridge | `server/src/mqtt-bridge.ts` | Transport only — subscribes `caro/+/telemetry`, parses payload, delegates to `TelemetryIntake.ingest()`. Publishes commands to `caro/{module_id}/cmd`. Heartbeat. |
+| HMI Tag Source | `server/src/hmi-tag-source.ts` | Proxy-based telemetry producer for `module_type='HMI'` tags. Property names derived from `tag_path` (strips module segment, joins remaining with `_`). Publishes to TelemetryIntake on configurable timer (default 250ms). |
 | WS Server | `server/src/ws-server.ts` | Pull-based at configurable tick (default 8 Hz / 125 ms). Per-client generation tracking. SUBSCRIBE → SNAPSHOT → DELTA. JSON encoding. |
-| DB Pipeline | `server/src/db-pipeline.ts` | Push-based queue from MQTT handler. Module-level timestamp. Placeholder — real implementation writes to TimescaleDB. |
-| Tag Map | `server/src/tag-map.ts` | Loads tag registry from DB. Builds `Map<tag_id, TagDef>`. Meta field resolution: root-to-leaf, first match wins (`getMetaField`). |
+| DB Pipeline | `server/src/db-pipeline.ts` | Push-based queue from telemetry intake. Module-level timestamp. Placeholder — real implementation writes to TimescaleDB. |
+| Tag Map | `server/src/tag-map.ts` | Loads tag registry from DB. Builds `Map<tag_id, TagDef>`. Meta field resolution: root-to-leaf, first match wins (`getMetaField`). Accepts pre-fetched `ActiveTag[]` to avoid a second DB call. |
 | Config | `server/src/config.ts` | All env vars with defaults. |
 | Express | `server/src/app.ts` | Express shell with `/api/v1/tags` route. Auth stubbed. |
-| Entry | `server/src/index.ts` | Startup sequence: tag map → LKV init → MQTT connect → WS attach → DB flush timer. |
+| Entry | `server/src/index.ts` | Startup sequence: tag rows → tag map → LKV → TelemetryIntake → HmiTagSource → MQTT bridge → WS attach → DB flush timer. |
 
 ## Client Architecture
 
@@ -49,9 +51,20 @@ Client is a standard Vite React app. `vite.config.ts` proxies `/api` and `/ws` t
 - **No per-tag timestamp in LKV.** Generation counters drive WS change detection. DB uses module-level timestamp from MQTT.
 - **Widgets use `assetPath` string prop**, not pre-resolved TagDef. `useResolveAssetPath(assetPath)` does contiguous segment matching on dot-separated tag_path. Abbreviated paths supported.
 - **Meta field resolution:** `eng_min`, `eng_max`, `unit`, `format` resolved root-to-leaf from meta array, first match wins.
-- **Decimal formatting:** From tag.meta `format` field via resolution rule, default 2.
-- **WS pipeline is pull-based** (generation comparison per client per tick). DB pipeline is push-based (MQTT handler enqueues directly).
+- **Numeric formatting:** `resolveFormat(tag)` calls `compileFormat(pattern)` once at widget mount. Supports `"#.##"` (fixed-point) and `"#.##E+0"` (exponential) patterns. Numeric `format` values are backward-compatible (treated as decimal count). Default: `"#.##"`.
+- **WS pipeline is pull-based** (generation comparison per client per tick). DB pipeline is push-based (TelemetryIntake enqueues directly on every ingest call).
+- **TelemetryIntake is the universal ingest entry point.** MqttBridge and HmiTagSource are both adapters. `ingest(moduleId, message)` handles LKV writes, watchdog updates, and DB pipeline enqueue.
+- **HmiTagSource uses Proxy for typed property access** (e.g., `hmiTags.Module_Count = 11`). Property names derived from tag_path by stripping the module segment and joining remaining segments with `_`. Publishes to TelemetryIntake every 250ms (env: `HMI_PUBLISH_INTERVAL_MS`).
 - **Auth is stubbed** — all connections accepted in dev mode.
+
+## Reading Order by Topic
+
+| If your task involves… | Read (in order)… |
+|---|---|
+| HMI tag telemetry (HmiTagSource, TelemetryIntake) | 1. This file 2. `server/src/telemetry-intake.ts` 3. `server/src/hmi-tag-source.ts` 4. `server/src/index.ts` (wiring) 5. `Docs/hmi_functional_spec.md` §8.8 |
+| MQTT bridge / device telemetry | 1. This file 2. `server/src/mqtt-bridge.ts` 3. `server/src/telemetry-intake.ts` 4. `Docs/CARO_MQTT_Spec.md` |
+| Widget rendering / formatting | 1. `Docs/hmi_widget_spec.md` 2. `packages/widgets/src/shared/utils.ts` (compileFormat, resolveFormat) |
+| LKV / WebSocket pipeline | 1. This file 2. `server/src/lkv.ts` 3. `server/src/ws-server.ts` 4. `Docs/CARO_Telemetry_Path_Reference.docx` |
 
 ## Environment (.env)
 

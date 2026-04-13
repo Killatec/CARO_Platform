@@ -55,15 +55,24 @@ The root `npm run dev` starts all six with `concurrently`, color-coded. The `scr
 ```
 MQTT Simulator (10 Hz)
   → Mosquitto (port 1883)
-    → HMI Server mqtt-bridge.ts
-      → LKV cache (generation bump on value change)
-      → DB pipeline (module-level timestamp, placeholder flush)
-      → WS server (8 Hz tick, per-client generation diff)
-        → Browser WebSocket
-          → HmiContextProvider (batched SUBSCRIBE)
-            → useLiveValue(tagId) → widget re-render
+    → HMI Server mqtt-bridge.ts  (transport only — parses payload, extracts moduleId)
+      → TelemetryIntake.ingest(moduleId, message)
+          → LKV cache (generation bump on value change)
+          → DB pipeline (module-level timestamp, placeholder flush)
+          → watchdog (lastSeen tracking, null-write on timeout)
+
+HmiTagSource (250ms timer, module_type='HMI' tags)
+  → TelemetryIntake.ingest(moduleId, message)
+      → (same LKV / DB pipeline path as above)
+
+LKV cache
+  → WS server (8 Hz tick, per-client generation diff)
+    → Browser WebSocket
+      → HmiContextProvider (batched SUBSCRIBE)
+        → useLiveValue(tagId) → widget re-render
 
 > **Note:** `HmiContextProvider` returns `null` (renders nothing) until the REST tag map fetch completes (`tagMapLoaded = true`). Children do not mount until tags are available, preventing widgets from throwing "no tags found" before the map is populated.
+> **Note:** `TelemetryIntake.ingest()` is the universal entry point for all telemetry regardless of source. MqttBridge and HmiTagSource are both adapters that call it. Future adapters (OPC-UA, Modbus, REST pollers) follow the same pattern.
 ```
 
 To verify E2E is working: open http://localhost:5175, start the MQTT Simulator from http://localhost:5174, and watch live values update on the demo dashboard.
@@ -84,7 +93,9 @@ apps/caro-hmi/
 │       ├── app.ts               # Express shell
 │       ├── config.ts            # Env var loader with defaults
 │       ├── lkv.ts               # LKV cache with generation counters
-│       ├── mqtt-bridge.ts       # MQTT client, telemetry handler, watchdog
+│       ├── telemetry-intake.ts  # Transport-agnostic ingest: LKV write, watchdog, DB enqueue
+│       ├── mqtt-bridge.ts       # MQTT transport only — delegates to TelemetryIntake
+│       ├── hmi-tag-source.ts    # Proxy-based HMI telemetry producer (module_type='HMI')
 │       ├── ws-server.ts         # WebSocket server, per-client subscriptions
 │       ├── db-pipeline.ts       # DB write queue (placeholder)
 │       ├── tag-map.ts           # Tag registry loader, meta field resolution
@@ -141,7 +152,18 @@ Widgets receive an `assetPath` string, not a pre-resolved TagDef object:
 
 Internally, widgets call `useResolveAssetPath(assetPath)` from `@caro/hmi-context` which does contiguous segment matching against `tag_path` values in the in-memory tag map. Abbreviated paths work as long as they're unambiguous.
 
-Quality is represented by `value === null` — there is no quality enum. Decimal formatting comes from the `format` field in `tag.meta`, resolved root-to-leaf (first match wins, default 2).
+Quality is represented by `value === null` — there is no quality enum.
+
+Numeric formatting uses string format patterns resolved from the `format` field in `tag.meta` (root-to-leaf, first match wins). Patterns are parsed once at widget mount by `compileFormat()`:
+
+| Pattern | Output |
+|---|---|
+| `"#"` | `toFixed(0)` |
+| `"#.##"` | `toFixed(2)` |
+| `"#.##E+0"` | `toExponential(2)` |
+| `2` (number, backward compat) | treated as `"#.##"` |
+
+Default when no `format` field is found: `"#.##"` (2 decimal places).
 
 ---
 

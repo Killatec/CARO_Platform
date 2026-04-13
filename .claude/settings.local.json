@@ -64,7 +64,15 @@
       "Bash(node -e ':*)",
       "Bash(git stash:*)",
       "Bash(node -e \"require\\('fs'\\).existsSync\\('c:/KillaTec/CARO_Platform/packages/hmi-context/dist/MockHmiProvider.js'\\) && console.log\\('exists'\\)\")",
-      "Bash(python3 -c ':*)"
+      "Bash(python3 -c ':*)",
+      "Bash(node scripts/wait-for-port.js 19999 2000)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(node -e \"const p = JSON.parse\\(require\\('fs'\\).readFileSync\\('package.json','utf-8'\\)\\); console.log\\(p.scripts.dev\\)\")",
+      "Bash(node -e 'const p=JSON.parse\\(require\\('\\\\''fs'\\\\''\\).readFileSync\\('\\\\''c:/KillaTec/CARO_Platform/__TRACKED_VAR__/package.json'\\\\'','\\\\''utf-8'\\\\''\\)\\); console.log\\(p.name, '\\\\''| build:'\\\\'', p.scripts?.build ?? '\\\\''NONE'\\\\''\\)')",
+      "Bash(node -e \"const p=JSON.parse\\(require\\('fs'\\).readFileSync\\('c:/KillaTec/CARO_Platform/package.json','utf-8'\\)\\); console.log\\('dev:fresh:', p.scripts['dev:fresh']\\)\")",
+      "Bash(node scripts/wait-for-port.js 99999 2000)",
+      "Bash(node -e \"console.log\\(Math.fround\\(62.34\\), typeof Math.fround\\(62.34\\)\\)\")",
+      "Bash(cat /c/KillaTec/CARO_Platform/apps/tag-registry/templates/tags/*.json)"
     ]
   }
 }

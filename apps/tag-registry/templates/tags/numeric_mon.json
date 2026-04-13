@@ -2,8 +2,25 @@
   "template_type": "tag",
   "template_name": "numeric_mon",
   "fields": {
-    "data_type": { "field_type": "TagType", "default": "f32" },
-    "is_setpoint": { "field_type": "Boolean", "default": false },
-    "Trends": { "field_type": "Boolean", "default": true }
+    "data_type": {
+      "field_type": "TagType",
+      "default": "f32"
+    },
+    "is_setpoint": {
+      "field_type": "Boolean",
+      "default": false
+    },
+    "Trends": {
+      "field_type": "Boolean",
+      "default": true
+    },
+    "format": {
+      "field_type": "String",
+      "default": "#.##"
+    },
+    "unit": {
+      "field_type": "String",
+      "default": "#"
+    }
   }
 }

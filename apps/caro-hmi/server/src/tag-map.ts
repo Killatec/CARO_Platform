@@ -1,4 +1,5 @@
 import { getActiveTags } from '@caro/db';
+import type { ActiveTag } from '@caro/db';
 import type { TagDef, MetaLevel } from '@caro/hmi-context';
 
 export interface TagMapResult {
@@ -23,8 +24,8 @@ function getMetaField<T>(meta: MetaLevel[], key: string): T | null {
   return null;
 }
 
-export async function loadTagMap(): Promise<TagMapResult> {
-  const rows = await getActiveTags();
+export async function loadTagMap(rows?: ActiveTag[]): Promise<TagMapResult> {
+  if (!rows) rows = await getActiveTags();
 
   const tagMap = new Map<number, TagDef>();
   const moduleTagIds = new Map<string, number[]>();

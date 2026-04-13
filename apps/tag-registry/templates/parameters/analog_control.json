@@ -14,7 +14,11 @@
       "field_type": "Numeric",
       "default": 100
     },
-    "Units": {
+    "format": {
+      "field_type": "String",
+      "default": "#.##"
+    },
+    "unit": {
       "field_type": "String",
       "default": "V"
     }

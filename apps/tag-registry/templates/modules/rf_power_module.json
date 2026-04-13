@@ -17,27 +17,35 @@
       "asset_name": "Acc_Fwd",
       "fields": {
         "description": "Forward RF power channel",
-        "eng_min": 56
+        "eng_min": 56,
+        "format": "#.###",
+        "unit": "W"
       }
     },
     {
       "template_name": "analog_control",
       "asset_name": "Acc_Ref",
       "fields": {
-        "eng_min": 51
+        "eng_min": 51,
+        "unit": "kW"
       }
     },
     {
       "template_name": "analog_control",
       "asset_name": "Kly_Fwd",
       "fields": {
-        "eng_min": 50
+        "eng_min": 50,
+        "format": "#.#",
+        "unit": "MW"
       }
     },
     {
       "template_name": "analog_control",
       "asset_name": "Kly_Ref",
-      "fields": {}
+      "fields": {
+        "format": "#.###E+0",
+        "unit": "dBm"
+      }
     }
   ]
 }

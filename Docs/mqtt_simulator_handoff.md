@@ -52,7 +52,8 @@ Read order: this file → deltas → task-specific spec.
 - **Full publish is default; delta is opt-in per module.** Spec implied on-change-only for setpoints — overridden for dev simplicity.
 - **POST /start returns 202.** MQTT connect is async; `running` flips to `true` ~100ms after response. Do not assert `running: true` immediately.
 - **One MQTT client for all modules.**
-- **`module_id` extracted from tag `meta` array** — `name` of first ancestor with `type === 'module'`.
+- **Simulator filters to `module_type = 'MQTT'` tags only.** Tags with other module_type values (e.g., `'HMI'`) are excluded at registry load time.
+- **`module_id` derived from `tag_registry.module` column** — not from meta array parsing. Falls back to `'unknown'` if the column is null.
 - **`tag_id` coerced to `Number` on registry load** — node-postgres returns INTEGER as string.
 - **`protobufjs` installed at monorepo root** — server-local install blocked by `@caro/db` workspace resolution. Run `npm install` from monorepo root if missing.
 - **`asyncWrap` and `errorHandler` imported from `@caro/server`** — no local `middleware/` directory. **`apiClient` imported from `@caro/ui/api/client`** — no local `api/client.js`.
@@ -62,7 +63,7 @@ Read order: this file → deltas → task-specific spec.
 
 ## Gotchas
 
-- **Zero active tags = process exit.** Apply a registry in Tag Registry before starting the simulator.
+- **Zero active MQTT tags = process exit.** Apply a registry in Tag Registry before starting the simulator. The simulator requires at least one tag with `module_type = 'MQTT'`.
 - **Bootstrap §16 references port 4000** — stale, describes an earlier single-process design. Ignore. Correct ports: API 3002, UI 5174.
 
 ---

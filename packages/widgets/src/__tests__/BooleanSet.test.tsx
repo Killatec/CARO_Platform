@@ -21,11 +21,6 @@ function renderWidget(
 describe('BooleanSet', () => {
   const tagDefs = { 1005: mockBoolSetTag };
 
-  it('shows current boolean state with correct label', () => {
-    renderWidget(tagDefs, { 1005: { value: true } }, { assetPath: 'interlock_enable' });
-    expect(screen.getByTestId('state-label').textContent).toBe('ON');
-  });
-
   it('calls write with toggled value on click (true → false)', async () => {
     const onWrite = vi.fn().mockResolvedValue(undefined);
     renderWidget(

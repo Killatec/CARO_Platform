@@ -13,7 +13,8 @@
       "asset_name": "Module_Count",
       "fields": {
         "Trends": false,
-        "data_type": "i16"
+        "data_type": "i16",
+        "format": "#"
       }
     },
     {
@@ -21,7 +22,8 @@
       "asset_name": "Tag_Count",
       "fields": {
         "Trends": false,
-        "data_type": "i16"
+        "data_type": "i16",
+        "format": "#"
       }
     }
   ]

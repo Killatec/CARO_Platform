@@ -2,7 +2,7 @@ import { useState, useRef } from 'react';
 import { useLiveValue, useTagWriter } from '@caro/hmi-context';
 import { Button, Input, Modal, Tooltip } from '@caro/ui';
 import { useSingleTag } from './shared/useSingleTag.js';
-import { resolveDecimalPlaces, resolveLabel } from './shared/utils.js';
+import { resolveFormat, resolveLabel } from './shared/utils.js';
 import { ROW_CONTAINER, LABEL_CLASS, VALUE_BAD_CLASS, UNIT_CLASS, COL } from './shared/widgetStyles.js';
 import { PendingOverlay } from './shared/PendingOverlay.js';
 
@@ -17,7 +17,7 @@ export function NumericSet({ assetPath, label, requireConfirm = false, confirmMe
   const tag = useSingleTag(assetPath, 'NumericSet');
   const lv = useLiveValue(tag.tag_id);
   const { write, isPending, error } = useTagWriter();
-  const decimals = resolveDecimalPlaces(tag);
+  const fmt = resolveFormat(tag);
   const displayLabel = resolveLabel(assetPath, label);
 
   const badQuality = lv.value === null;
@@ -32,7 +32,7 @@ export function NumericSet({ assetPath, label, requireConfirm = false, confirmMe
 
   function openEdit() {
     if (badQuality || pending) return;
-    const current = lv.value !== null ? (lv.value as number).toFixed(decimals) : '';
+    const current = lv.value !== null ? fmt(lv.value as number) : '';
     setInputValue(current);
     setValidationError(null);
     setEditing(true);
@@ -87,7 +87,7 @@ export function NumericSet({ assetPath, label, requireConfirm = false, confirmMe
     confirmMessage ?? `Set ${displayLabel} to ${pendingValueRef.current}?`;
 
   const displayValue =
-    lv.value !== null ? (lv.value as number).toFixed(decimals) : '---';
+    lv.value !== null ? fmt(lv.value as number) : '---';
 
   return (
     <div className="flex flex-col self-start">
@@ -126,7 +126,7 @@ export function NumericSet({ assetPath, label, requireConfirm = false, confirmMe
           </Tooltip>
         )}
 
-        <span className={UNIT_CLASS}>{tag.unit ?? 'U'}</span>
+        <span className={UNIT_CLASS}>{tag.unit ?? '-'}</span>
       </div>
 
       {validationError && editing && (

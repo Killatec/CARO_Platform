@@ -1,9 +1,11 @@
 import http from 'http';
-import { ping, runMigrations } from '@caro/db';
+import { ping, runMigrations, getActiveTags } from '@caro/db';
 import { config } from './config.js';
 import { loadTagMap } from './tag-map.js';
 import { LkvCache } from './lkv.js';
 import { DbPipeline } from './db-pipeline.js';
+import { TelemetryIntake } from './telemetry-intake.js';
+import { HmiTagSource } from './hmi-tag-source.js';
 import { MqttBridge } from './mqtt-bridge.js';
 import { WsServer } from './ws-server.js';
 import { createApp } from './app.js';
@@ -25,13 +27,21 @@ async function start(): Promise<void> {
     process.exit(1);
   }
 
-  // 1. Load tag map from DB
+  // 1. Fetch raw tag rows, then build tag map
+  let rows: Awaited<ReturnType<typeof getActiveTags>>;
+  try {
+    rows = await getActiveTags();
+  } catch (err) {
+    console.error('[HMI] Failed to fetch active tags from DB:', (err as Error).message);
+    process.exit(1);
+  }
+
   let tagMapResult: Awaited<ReturnType<typeof loadTagMap>>;
   try {
-    tagMapResult = await loadTagMap();
+    tagMapResult = await loadTagMap(rows);
     console.log(`[HMI] Tag map loaded: ${tagMapResult.tagMap.size} tags, ${tagMapResult.moduleTagIds.size} modules`);
   } catch (err) {
-    console.error('[HMI] Failed to load tag map from DB:', (err as Error).message);
+    console.error('[HMI] Failed to build tag map:', (err as Error).message);
     process.exit(1);
   }
   const { tagMap, moduleTagIds, trendableTagIds } = tagMapResult;
@@ -40,32 +50,50 @@ async function start(): Promise<void> {
   const lkv = new LkvCache();
   const dbPipeline = new DbPipeline();
 
-  // 3. MQTT bridge
-  const mqttBridge = new MqttBridge({
+  // 3. Telemetry intake (LKV writes, watchdog, DB pipeline enqueue)
+  const intake = new TelemetryIntake({
     lkv,
     tagMap,
     moduleTagIds,
     trendableTagIds,
     dbPipeline,
+    watchdogTimeoutMs: config.watchdogTimeoutMs,
+  });
+  intake.startWatchdog();
+
+  // 4. HMI tag source (produces telemetry for module_type='HMI' tags)
+  const hmiTags = HmiTagSource.create(rows, {
+    intake,
+    hmiPublishIntervalMs: config.hmiPublishIntervalMs,
+  });
+  hmiTags.startPublishing();
+  hmiTags.Module_Count = moduleTagIds.size;
+  hmiTags.Tag_Count    = tagMap.size;
+  const hmiTagCount = rows.filter(r => r.module_type === 'HMI').length;
+  console.log(`[HMI] HMI tag source: ${hmiTagCount} tags, publishing every ${config.hmiPublishIntervalMs}ms`);
+
+  // 5. MQTT bridge (transport only — delegates ingestion to TelemetryIntake)
+  const mqttBridge = new MqttBridge({
+    intake,
+    moduleIds: [...moduleTagIds.keys()],
     config: {
       mqttUrl:             config.mqttUrl,
-      watchdogTimeoutMs:   config.watchdogTimeoutMs,
       heartbeatIntervalMs: config.heartbeatIntervalMs,
     },
   });
 
-  // 4. Express app + HTTP server
+  // 6. Express app + HTTP server
   const app = createApp(tagMap);
   const httpServer = http.createServer(app);
 
-  // 5. WS server
+  // 7. WS server
   const wsServer = new WsServer({ lkv, tickMs: config.wsTickMs });
   wsServer.attach(httpServer);
 
-  // 5b. DB pipeline flush timer (placeholder — just drains the queue)
+  // 7b. DB pipeline flush timer (placeholder — just drains the queue)
   const dbFlushTimer = setInterval(() => dbPipeline.flush(), config.dbTickMs);
 
-  // 6. Start MQTT (soft-fail — broker may be absent in dev)
+  // 8. Start MQTT (soft-fail — broker may be absent in dev)
   try {
     await mqttBridge.start();
     console.log(`[HMI] MQTT bridge connected: ${config.mqttUrl}`);
@@ -74,17 +102,19 @@ async function start(): Promise<void> {
     console.warn('[HMI] Continuing — REST and WS will serve from LKV without live telemetry');
   }
 
-  // 7. Start HTTP server
+  // 9. Start HTTP server
   await new Promise<void>(resolve => httpServer.listen(config.hmiPort, resolve));
 
   console.log(`[HMI] Server started on port ${config.hmiPort}`);
   console.log(`[HMI]   Tags: ${tagMap.size} | Modules: ${moduleTagIds.size}`);
   console.log(`[HMI]   WS tick: ${config.wsTickMs}ms | Watchdog: ${config.watchdogTimeoutMs}ms`);
 
-  // 8. Graceful shutdown
+  // 10. Graceful shutdown
   const shutdown = async (signal: string): Promise<void> => {
     console.log(`[HMI] ${signal} — shutting down`);
     clearInterval(dbFlushTimer);
+    hmiTags.stopPublishing();
+    intake.stopWatchdog();
     await mqttBridge.stop().catch(() => {});
     wsServer.stop();
     httpServer.close(() => process.exit(0));
