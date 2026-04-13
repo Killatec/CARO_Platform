@@ -16,6 +16,7 @@ hmi_functional_spec | hmi_API_spec | CARO_DB_Spec
 | 1.3 | 2026-03-26 | PM / Claude | Fix 1: usage examples updated to hook-based API. Fix 2: Section 6.3 evolution note updated. Fix 3: companion doc version corrected. Fix 4: OI-05 reworded for hook contract. Section 6.4 added: useTagSubtree reference with nested node shape and dashboard panel example. |
 | 1.4 | 2026-03-26 | PM / Claude | useTag renamed to useLiveValue (granular single-tag subscription for efficient partial re-renders). useWriteTag renamed to useTagWriter. write() accepts single {tagId,value} or array for batch writes. isPending/error keyed by tagId. Quality is backend-evaluated and pushed as delta — no frontend stale logic. OI-05 closed. Companion docs updated. |
 | 1.5 | 2026-04-08 | PM / Claude | Quality enum removed — null value = bad quality. LiveValue.timestamp removed. Widget `tag` prop replaced with `assetPath` string + useResolveAssetPath. Meta field resolution rule: root-to-leaf, first match wins. Decimal formatting from tag.meta format field. Dashboard examples updated. |
+| 1.6 | 2026-04-13 | PM / Claude | Single-row layout with shared column widths. BooleanMon dot-only. BooleanSet toggle switch. Fixed columns for alignment. |
 
 ---
 
@@ -193,11 +194,11 @@ After a Supervisor submits a write, the widget enters pending state. This commun
 
 ### 4.3 Label and Unit
 
-All widgets accept a `label` prop displayed above or beside the value. Unit (where applicable) is shown after the value in a muted style. Labels and units are display-only — never sent to the backend.
+All widgets accept a `label` prop displayed above or beside the value. Unit (where applicable) is shown after the value. Labels and units are display-only — never sent to the backend.
 
 ### 4.4 Sizing
 
-Widgets are compact by default — designed to be composed in dashboard grids. They do not enforce a fixed width or height. The parent dashboard layout controls sizing. Widgets should be responsive within their container.
+Widgets use shared fixed column widths (label, value, unit) from `widgetStyles.ts` for vertical alignment when stacked. They render as `inline-flex` rows and do not stretch to fill their container.
 
 ---
 
@@ -283,7 +284,7 @@ Read-only boolean state indicator. Displays ON/OFF, ACTIVE/CLEAR, or any custom 
 **Behavior**
 
 - Resolves tag via `useResolveAssetPath(assetPath)` (must match exactly one tag).
-- Displays a colored dot indicator alongside the label and trueLabel/falseLabel text.
+- Displays a colored dot indicator right-aligned in the value column. No ON/OFF text rendered — dot color conveys state. trueLabel/falseLabel retained for accessibility.
 - value === null: indicator shown as dashed circle, label shown as `---` with red tint.
 - No user interaction.
 
@@ -315,7 +316,7 @@ Toggleable boolean setpoint. Displays the confirmed state and allows Supervisors
 **Behavior**
 
 - Resolves tag via `useResolveAssetPath(assetPath)` (must match exactly one tag).
-- Displays a toggle button or indicator showing the confirmed state.
+- Displays a toggle switch (28×14px). Track color follows trueColor/falseColor props. Uses role='switch' and aria-checked.
 - On click: if `requireConfirm=true`, opens a confirmation dialog. On confirm (or immediately if `requireConfirm=false`), calls `write(tag.tag_id, !currentValue)` from useTagWriter.
 - Pending state follows the same rules as Numeric_Set — managed via `useTagWriter.isPending` and `useTagWriter.error`.
 - value === null: toggle is disabled with tooltip 'Cannot write — device not connected.'

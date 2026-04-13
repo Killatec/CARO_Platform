@@ -1,7 +1,7 @@
 import { useLiveValue } from '@caro/hmi-context';
 import { useSingleTag } from './shared/useSingleTag.js';
 import { resolveDecimalPlaces, resolveLabel } from './shared/utils.js';
-import { WidgetLabel } from './shared/WidgetLabel.js';
+import { ROW_CONTAINER, LABEL_CLASS, VALUE_CLASS, VALUE_BAD_CLASS, UNIT_CLASS } from './shared/widgetStyles.js';
 
 export interface NumericMonProps {
   assetPath: string;
@@ -17,20 +17,14 @@ export function NumericMon({ assetPath, label }: NumericMonProps) {
   const badQuality = lv.value === null;
 
   return (
-    <div className="inline-flex flex-col p-2 rounded border border-gray-200 bg-white min-w-[80px]">
-      <WidgetLabel label={displayLabel} unit={tag.unit} />
+    <div className={ROW_CONTAINER}>
+      <span className={LABEL_CLASS}>{displayLabel}</span>
       {badQuality ? (
-        <div className="px-2 py-1 rounded bg-red-500/10 border border-red-400 text-red-600 font-mono text-sm">
-          ---
-        </div>
+        <span className={VALUE_BAD_CLASS}>---</span>
       ) : (
-        <div className="font-mono text-sm text-gray-900">
-          {(lv.value as number).toFixed(decimals)}
-          {tag.unit && (
-            <span className="text-gray-500 text-xs ml-1">{tag.unit}</span>
-          )}
-        </div>
+        <span className={VALUE_CLASS}>{(lv.value as number).toFixed(decimals)}</span>
       )}
+      <span className={UNIT_CLASS}>{tag.unit ?? 'U'}</span>
     </div>
   );
 }

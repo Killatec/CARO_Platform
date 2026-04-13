@@ -1,18 +1,11 @@
 /**
  * Demo Overview Page
  *
- * Asset paths are derived from the CARO_1 system template hierarchy:
- *   CARO_1 (system) → RF1 (rf_power_module) → Acc_Fwd / Acc_Ref / Kly_Fwd (analog_control)
- *     → monitor (f32, readback), setpoint (f32, setpoint),
- *       interlock_status (bool, readback), interlock_enable (bool, setpoint)
- *
- * If the registry is empty or uses different paths, each widget degrades to
- * its WidgetErrorBoundary — the page will not crash.
- *
- * Update these assetPaths to match your actual tag_path values in the registry.
+ * Two RF module boxes displayed side-by-side (responsive).
+ * Each box: setpoints → monitors → interlock enable → interlock status
  */
 import type { CSSProperties } from 'react';
-import { NumericMon, NumericSet, BooleanMon } from '@caro/widgets';
+import { NumericMon, NumericSet, BooleanMon, BooleanSet } from '@caro/widgets';
 import { WidgetErrorBoundary } from '../../../shell/WidgetErrorBoundary.js';
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
@@ -28,60 +21,113 @@ const HEADING_STYLE: CSSProperties = {
   marginBottom: 20,
 };
 
-const SECTION_STYLE: CSSProperties = {
-  marginBottom: 28,
+const MODULES_CONTAINER: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'row',
+  flexWrap: 'wrap',
+  gap: 16,
+  alignItems: 'flex-start',
 };
 
-const SECTION_TITLE_STYLE: CSSProperties = {
-  fontSize: 13,
-  fontWeight: 600,
-  color: '#555',
-  textTransform: 'uppercase',
-  letterSpacing: '0.06em',
+const MODULE_BOX: CSSProperties = {
+  border: '1px solid #d1d5db',
+  borderRadius: 8,
+  padding: 16,
+  background: '#fafafa',
+  minWidth: 280,
+  flex: '1 1 0',
+  maxWidth: 400,
+};
+
+const MODULE_TITLE: CSSProperties = {
+  fontSize: 14,
+  fontWeight: 700,
+  color: '#1a1a2e',
   marginBottom: 12,
-  borderBottom: '1px solid #e5e7eb',
   paddingBottom: 6,
+  borderBottom: '2px solid #e5e7eb',
+  textTransform: 'uppercase',
+  letterSpacing: '0.05em',
 };
 
-const GRID_STYLE: CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
-  gap: 12,
-};
-
-const CARD_STYLE: CSSProperties = {
-  background: '#fff',
-  border: '1px solid #e5e7eb',
-  borderRadius: 6,
-  padding: '12px 14px',
+const WIDGET_STACK: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 8,
+  gap: 3,
 };
 
-const CARD_LABEL_STYLE: CSSProperties = {
-  fontSize: 11,
-  color: '#6b7280',
-  fontWeight: 500,
-  textTransform: 'uppercase',
-  letterSpacing: '0.04em',
+// ─── HMI Status Box ──────────────────────────────────────────────────────────
+
+const HMI_BOX: CSSProperties = {
+  ...MODULE_BOX,
+  maxWidth: 'none',
+  flex: '1 1 100%',
+  marginBottom: 16,
 };
 
-// ─── Widget card wrapper ──────────────────────────────────────────────────────
-
-interface WidgetCardProps {
-  label: string;
-  assetPath: string;
-  children: React.ReactNode;
+function HmiStatusBox() {
+  return (
+    <div style={HMI_BOX}>
+      <h2 style={MODULE_TITLE}>HMI Status</h2>
+      <div style={WIDGET_STACK}>
+        <WidgetErrorBoundary assetPath="HMI.Module_Count">
+          <NumericMon assetPath="HMI.Module_Count" label="Module Count" />
+        </WidgetErrorBoundary>
+        <WidgetErrorBoundary assetPath="HMI.Tag_Count">
+          <NumericMon assetPath="HMI.Tag_Count" label="Tag Count" />
+        </WidgetErrorBoundary>
+      </div>
+    </div>
+  );
 }
 
-function WidgetCard({ label, assetPath, children }: WidgetCardProps) {
+// ─── Channels ────────────────────────────────────────────────────────────────
+
+const CHANNELS = ['Acc_Fwd', 'Acc_Ref', 'Kly_Fwd', 'Kly_Ref'] as const;
+
+function channelLabel(ch: string): string {
+  return ch.replace('_', ' ');
+}
+
+// ─── RF Module Box ───────────────────────────────────────────────────────────
+
+interface RfModuleBoxProps {
+  module: string; // e.g. "RF1", "RF2"
+}
+
+function RfModuleBox({ module }: RfModuleBoxProps) {
   return (
-    <div style={CARD_STYLE}>
-      <span style={CARD_LABEL_STYLE}>{label}</span>
-      <WidgetErrorBoundary assetPath={assetPath}>
-        {children}
-      </WidgetErrorBoundary>
+    <div style={MODULE_BOX}>
+      <h2 style={MODULE_TITLE}>{module}</h2>
+      <div style={WIDGET_STACK}>
+        {/* Setpoints */}
+        {CHANNELS.map(ch => (
+          <WidgetErrorBoundary key={`${module}.${ch}.sp`} assetPath={`${module}.${ch}.setpoint`}>
+            <NumericSet assetPath={`${module}.${ch}.setpoint`} label={`${channelLabel(ch)} SP`} />
+          </WidgetErrorBoundary>
+        ))}
+
+        {/* Monitors */}
+        {CHANNELS.map(ch => (
+          <WidgetErrorBoundary key={`${module}.${ch}.mon`} assetPath={`${module}.${ch}.monitor`}>
+            <NumericMon assetPath={`${module}.${ch}.monitor`} label={`${channelLabel(ch)}`} />
+          </WidgetErrorBoundary>
+        ))}
+
+        {/* Interlock Enable (BooleanSet) */}
+        {CHANNELS.map(ch => (
+          <WidgetErrorBoundary key={`${module}.${ch}.ie`} assetPath={`${module}.${ch}.interlock_enable`}>
+            <BooleanSet assetPath={`${module}.${ch}.interlock_enable`} label={`${channelLabel(ch)} Intlk En`} />
+          </WidgetErrorBoundary>
+        ))}
+
+        {/* Interlock Status (BooleanMon) */}
+        {CHANNELS.map(ch => (
+          <WidgetErrorBoundary key={`${module}.${ch}.is`} assetPath={`${module}.${ch}.interlock_status`}>
+            <BooleanMon assetPath={`${module}.${ch}.interlock_status`} label={`${channelLabel(ch)} Intlk`} />
+          </WidgetErrorBoundary>
+        ))}
+      </div>
     </div>
   );
 }
@@ -92,60 +138,11 @@ export function OverviewPage() {
   return (
     <div style={PAGE_STYLE}>
       <h1 style={HEADING_STYLE}>System Overview — Live Telemetry</h1>
-
-      {/* RF Module 1 — Monitor values */}
-      <section style={SECTION_STYLE}>
-        <h2 style={SECTION_TITLE_STYLE}>RF1 — Monitor Channels</h2>
-        <div style={GRID_STYLE}>
-          <WidgetCard label="Acc Fwd Power" assetPath="RF1.Acc_Fwd.monitor">
-            <NumericMon assetPath="RF1.Acc_Fwd.monitor" label="Acc Fwd" />
-          </WidgetCard>
-
-          <WidgetCard label="Acc Ref Power" assetPath="RF1.Acc_Ref.monitor">
-            <NumericMon assetPath="RF1.Acc_Ref.monitor" label="Acc Ref" />
-          </WidgetCard>
-
-          <WidgetCard label="Kly Fwd Power" assetPath="RF1.Kly_Fwd.monitor">
-            <NumericMon assetPath="RF1.Kly_Fwd.monitor" label="Kly Fwd" />
-          </WidgetCard>
-
-          <WidgetCard label="Kly Ref Power" assetPath="RF1.Kly_Ref.monitor">
-            <NumericMon assetPath="RF1.Kly_Ref.monitor" label="Kly Ref" />
-          </WidgetCard>
-        </div>
-      </section>
-
-      {/* RF Module 1 — Status */}
-      <section style={SECTION_STYLE}>
-        <h2 style={SECTION_TITLE_STYLE}>RF1 — Status &amp; Interlocks</h2>
-        <div style={GRID_STYLE}>
-          <WidgetCard label="Acc Fwd Interlock" assetPath="RF1.Acc_Fwd.interlock_status">
-            <BooleanMon assetPath="RF1.Acc_Fwd.interlock_status" label="Acc Fwd Interlock" />
-          </WidgetCard>
-
-          <WidgetCard label="Acc Ref Interlock" assetPath="RF1.Acc_Ref.interlock_status">
-            <BooleanMon assetPath="RF1.Acc_Ref.interlock_status" label="Acc Ref Interlock" />
-          </WidgetCard>
-
-          <WidgetCard label="Kly Fwd Interlock" assetPath="RF1.Kly_Fwd.interlock_status">
-            <BooleanMon assetPath="RF1.Kly_Fwd.interlock_status" label="Kly Fwd Interlock" />
-          </WidgetCard>
-        </div>
-      </section>
-
-      {/* Setpoints — writes will fail without auth in Phase 3 */}
-      <section style={SECTION_STYLE}>
-        <h2 style={SECTION_TITLE_STYLE}>RF1 — Setpoints (Phase 3: writes not yet wired)</h2>
-        <div style={GRID_STYLE}>
-          <WidgetCard label="Acc Fwd Setpoint" assetPath="RF1.Acc_Fwd.setpoint">
-            <NumericSet assetPath="RF1.Acc_Fwd.setpoint" label="Acc Fwd SP" />
-          </WidgetCard>
-
-          <WidgetCard label="Acc Ref Setpoint" assetPath="RF1.Acc_Ref.setpoint">
-            <NumericSet assetPath="RF1.Acc_Ref.setpoint" label="Acc Ref SP" />
-          </WidgetCard>
-        </div>
-      </section>
+      <div style={MODULES_CONTAINER}>
+        <HmiStatusBox />
+        <RfModuleBox module="RF1" />
+        <RfModuleBox module="RF2" />
+      </div>
     </div>
   );
 }

@@ -2,7 +2,7 @@ import { useLiveValue, useTagWriter } from '@caro/hmi-context';
 import { Button, Modal, Tooltip } from '@caro/ui';
 import { useSingleTag } from './shared/useSingleTag.js';
 import { resolveLabel } from './shared/utils.js';
-import { WidgetLabel } from './shared/WidgetLabel.js';
+import { ROW_CONTAINER, LABEL_CLASS, COL } from './shared/widgetStyles.js';
 import { PendingOverlay } from './shared/PendingOverlay.js';
 import { useState } from 'react';
 
@@ -17,12 +17,12 @@ export interface BooleanSetProps {
   confirmMessage?: string;
 }
 
-const COLOR_MAP: Record<string, string> = {
-  green: 'bg-green-500',
-  red: 'bg-red-500',
-  amber: 'bg-amber-500',
-  blue: 'bg-blue-500',
-  gray: 'bg-gray-400',
+const TRACK_COLOR_MAP: Record<string, string> = {
+  green: '#22c55e',
+  red: '#ef4444',
+  amber: '#f59e0b',
+  blue: '#3b82f6',
+  gray: '#d1d5db',
 };
 
 export function BooleanSet({
@@ -67,47 +67,69 @@ export function BooleanSet({
   }
 
   const isTrue = lv.value === true;
-  let dotClass: string;
-  let stateText: string;
-
-  if (badQuality) {
-    dotClass = 'w-3 h-3 rounded-full border-2 border-dashed border-red-400 bg-transparent';
-    stateText = '---';
-  } else {
-    const colorKey = isTrue ? trueColor : falseColor;
-    dotClass = `w-3 h-3 rounded-full ${COLOR_MAP[colorKey] ?? 'bg-gray-400'}`;
-    stateText = isTrue ? trueLabel : falseLabel;
-  }
-
   const nextLabel = isTrue ? falseLabel : trueLabel;
   const resolvedConfirmMessage =
     confirmMessage ?? `Set ${displayLabel} to ${pendingNewValue ? trueLabel : falseLabel}?`;
 
+  // Switch track and thumb styles
+  const trackColor = badQuality
+    ? '#e5e7eb'
+    : isTrue
+      ? (TRACK_COLOR_MAP[trueColor] ?? '#22c55e')
+      : (TRACK_COLOR_MAP[falseColor] ?? '#d1d5db');
+
+  const trackStyle: React.CSSProperties = {
+    width: 28,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: trackColor,
+    position: 'relative',
+    transition: 'background-color 0.2s ease',
+    cursor: badQuality ? 'not-allowed' : pending ? 'wait' : 'pointer',
+    opacity: (badQuality || pending) ? 0.5 : 1,
+    border: badQuality ? '1px dashed #f87171' : 'none',
+    flexShrink: 0,
+  };
+
+  const thumbStyle: React.CSSProperties = {
+    width: 10,
+    height: 10,
+    borderRadius: '50%',
+    backgroundColor: '#fff',
+    position: 'absolute',
+    top: 2,
+    left: (!badQuality && isTrue) ? 16 : 2,
+    transition: 'left 0.2s ease',
+    boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+  };
+
   return (
-    <div className="inline-flex flex-col p-2 rounded border border-gray-200 bg-white min-w-[100px]">
-      <WidgetLabel label={displayLabel} />
-      <Tooltip content={badQuality ? 'Cannot write — device not connected' : undefined}>
-        <button
-          type="button"
-          onClick={handleToggle}
-          disabled={badQuality || pending}
-          className={`flex items-center gap-1.5 rounded px-2 py-1 text-sm font-medium transition-colors ${
-            badQuality
-              ? 'cursor-not-allowed opacity-60'
-              : pending
-                ? 'opacity-60 cursor-wait'
-                : 'hover:bg-gray-100 cursor-pointer'
-          }`}
-          data-testid="toggle-button"
-          aria-label={`Toggle ${displayLabel}. Current: ${stateText}. Click to set ${nextLabel}`}
-        >
-          <span className={dotClass} data-testid="state-dot" />
-          <span data-testid="state-label">{badQuality ? '---' : stateText}</span>
-          <PendingOverlay isPending={pending} />
-        </button>
-      </Tooltip>
+    <div className="flex flex-col self-start">
+      <div className={ROW_CONTAINER}>
+        <span className={LABEL_CLASS}>{displayLabel}</span>
+        <div className={`${COL.value} flex justify-end`}>
+        <Tooltip content={badQuality ? 'Cannot write — device not connected' : undefined}>
+          <button
+            type="button"
+            onClick={handleToggle}
+            disabled={badQuality || pending}
+            className="flex items-center bg-transparent border-none p-0"
+            data-testid="toggle-button"
+            aria-label={`Toggle ${displayLabel}. Current: ${isTrue ? trueLabel : falseLabel}. Click to set ${nextLabel}`}
+            role="switch"
+            aria-checked={!badQuality && isTrue}
+          >
+            <div style={trackStyle}>
+              <div style={thumbStyle} />
+            </div>
+            <PendingOverlay isPending={pending} />
+          </button>
+        </Tooltip>
+        </div>
+      </div>
+
       {writeError && (
-        <span className="text-xs text-red-600 mt-1" data-testid="write-error">{writeError}</span>
+        <span className="text-xs text-red-600 mt-1 ml-[138px]" data-testid="write-error">{writeError}</span>
       )}
 
       <Modal
@@ -117,12 +139,8 @@ export function BooleanSet({
       >
         <p className="mb-4 text-gray-700">{resolvedConfirmMessage}</p>
         <div className="flex justify-end gap-2">
-          <Button variant="secondary" onClick={() => { setShowConfirm(false); setPendingNewValue(null); }}>
-            Cancel
-          </Button>
-          <Button variant="primary" onClick={handleModalConfirm}>
-            Confirm
-          </Button>
+          <Button variant="secondary" onClick={() => { setShowConfirm(false); setPendingNewValue(null); }}>Cancel</Button>
+          <Button variant="primary" onClick={handleModalConfirm}>Confirm</Button>
         </div>
       </Modal>
     </div>

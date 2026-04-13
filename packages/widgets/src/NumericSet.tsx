@@ -3,7 +3,7 @@ import { useLiveValue, useTagWriter } from '@caro/hmi-context';
 import { Button, Input, Modal, Tooltip } from '@caro/ui';
 import { useSingleTag } from './shared/useSingleTag.js';
 import { resolveDecimalPlaces, resolveLabel } from './shared/utils.js';
-import { WidgetLabel } from './shared/WidgetLabel.js';
+import { ROW_CONTAINER, LABEL_CLASS, VALUE_BAD_CLASS, UNIT_CLASS, COL } from './shared/widgetStyles.js';
 import { PendingOverlay } from './shared/PendingOverlay.js';
 
 export interface NumericSetProps {
@@ -90,64 +90,50 @@ export function NumericSet({ assetPath, label, requireConfirm = false, confirmMe
     lv.value !== null ? (lv.value as number).toFixed(decimals) : '---';
 
   return (
-    <div className="inline-flex flex-col p-2 rounded border border-gray-200 bg-white min-w-[120px]">
-      <WidgetLabel label={displayLabel} unit={tag.unit} />
+    <div className="flex flex-col self-start">
+      <div className={ROW_CONTAINER}>
+        <span className={LABEL_CLASS}>{displayLabel}</span>
 
-      {editing ? (
-        <div className="flex flex-col gap-1">
-          <div className="flex items-center gap-1">
+        {editing ? (
+          <div className={`${COL.value} flex items-center gap-1`}>
             <Input
               type="number"
               value={inputValue}
-              onChange={e => {
-                setInputValue(e.target.value);
-                setValidationError(null);
-              }}
-              onKeyDown={e => {
-                if (e.key === 'Enter') handleConfirm();
-                if (e.key === 'Escape') cancelEdit();
-              }}
+              onChange={e => { setInputValue(e.target.value); setValidationError(null); }}
+              onKeyDown={e => { if (e.key === 'Enter') handleConfirm(); if (e.key === 'Escape') cancelEdit(); }}
               disabled={pending}
-              className="w-24 text-sm"
+              className="w-20 text-sm"
               autoFocus
             />
-            <Button variant="primary" onClick={handleConfirm} disabled={pending} className="px-2 py-1 text-xs">
-              Set
-            </Button>
-            <Button variant="secondary" onClick={cancelEdit} disabled={pending} className="px-2 py-1 text-xs">
-              ✕
-            </Button>
+            <Button variant="primary" onClick={handleConfirm} disabled={pending} className="px-2 py-1 text-xs">Set</Button>
+            <Button variant="secondary" onClick={cancelEdit} disabled={pending} className="px-2 py-1 text-xs">✕</Button>
             <PendingOverlay isPending={pending} />
           </div>
-          {validationError && (
-            <span className="text-xs text-red-600" data-testid="validation-error">{validationError}</span>
-          )}
-          {writeError && (
-            <span className="text-xs text-red-600" data-testid="write-error">{writeError}</span>
-          )}
-        </div>
-      ) : (
-        <Tooltip content={badQuality ? 'Cannot write — device not connected' : undefined}>
-          <div
-            className={`flex items-center gap-1 font-mono text-sm cursor-pointer select-none rounded px-1 py-0.5 ${
-              badQuality
-                ? 'text-red-600 bg-red-500/10 border border-red-400 cursor-not-allowed'
-                : 'text-gray-900 hover:bg-gray-100'
-            }`}
-            onClick={openEdit}
-            data-testid="display-value"
-          >
-            {displayValue}
-            {tag.unit && !badQuality && (
-              <span className="text-gray-500 text-xs">{tag.unit}</span>
-            )}
-            <PendingOverlay isPending={pending} />
-          </div>
-        </Tooltip>
-      )}
+        ) : (
+          <Tooltip content={badQuality ? 'Cannot write — device not connected' : undefined}>
+            <div
+              className={`${COL.value} flex items-center justify-end gap-1 font-mono text-sm cursor-pointer select-none rounded px-1 py-0.5 ${
+                badQuality
+                  ? 'text-red-600 bg-red-500/10 border border-red-400 cursor-not-allowed'
+                  : 'text-blue-600 hover:bg-blue-50'
+              }`}
+              onClick={openEdit}
+              data-testid="display-value"
+            >
+              {displayValue}
+              <PendingOverlay isPending={pending} />
+            </div>
+          </Tooltip>
+        )}
 
+        <span className={UNIT_CLASS}>{tag.unit ?? 'U'}</span>
+      </div>
+
+      {validationError && editing && (
+        <span className="text-xs text-red-600 ml-[148px]" data-testid="validation-error">{validationError}</span>
+      )}
       {writeError && !editing && (
-        <span className="text-xs text-red-600 mt-1" data-testid="write-error">{writeError}</span>
+        <span className="text-xs text-red-600 ml-[148px]" data-testid="write-error">{writeError}</span>
       )}
 
       <Modal
@@ -157,12 +143,8 @@ export function NumericSet({ assetPath, label, requireConfirm = false, confirmMe
       >
         <p className="mb-4 text-gray-700">{resolvedConfirmMessage}</p>
         <div className="flex justify-end gap-2">
-          <Button variant="secondary" onClick={() => { setShowConfirm(false); pendingValueRef.current = null; }}>
-            Cancel
-          </Button>
-          <Button variant="primary" onClick={handleModalConfirm}>
-            Confirm
-          </Button>
+          <Button variant="secondary" onClick={() => { setShowConfirm(false); pendingValueRef.current = null; }}>Cancel</Button>
+          <Button variant="primary" onClick={handleModalConfirm}>Confirm</Button>
         </div>
       </Modal>
     </div>
