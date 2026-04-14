@@ -7,6 +7,7 @@ import { DbPipeline } from './db-pipeline.js';
 import { TelemetryIntake } from './telemetry-intake.js';
 import { HmiTagSource } from './hmi-tag-source.js';
 import { MqttBridge } from './mqtt-bridge.js';
+import { CommandPublisher } from './command-publisher.js';
 import { WsServer } from './ws-server.js';
 import { createApp } from './app.js';
 import { DutyTracker } from './duty-tracker.js';
@@ -90,8 +91,11 @@ async function start(): Promise<void> {
     dutyTracker,
   });
 
+  // 5b. Command publisher (setpoint write + ACK tracking)
+  const commandPublisher = new CommandPublisher({ mqttBridge, tagMap });
+
   // 6. Express app + HTTP server
-  const app = createApp(tagMap, intake);
+  const app = createApp(tagMap, intake, commandPublisher);
   const httpServer = http.createServer(app);
 
   // 7. WS server

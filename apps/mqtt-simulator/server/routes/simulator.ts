@@ -1,6 +1,6 @@
 import express, { Request, Response } from 'express';
 import { asyncWrap } from '@caro/server/asyncWrap';
-import { start, stop, getStatus, getLogs, isKnownModule, activateModule, deactivateModule, activateDeltaMode, deactivateDeltaMode, activateProtobuf, deactivateProtobuf, publishSnapshot, injectSetValues } from '../services/simulatorService.js';
+import { start, stop, getStatus, getLogs, isKnownModule, activateModule, deactivateModule, activateDeltaMode, deactivateDeltaMode, activateProtobuf, deactivateProtobuf, activateAcceptSets, deactivateAcceptSets, activateSkipAck, deactivateSkipAck, publishSnapshot, injectSetValues } from '../services/simulatorService.js';
 
 const router = express.Router();
 
@@ -205,6 +205,102 @@ router.post('/protobuf/disable/:module_id', asyncWrap(async (req: Request, res: 
     return;
   }
   deactivateProtobuf(module_id);
+  res.json({ ok: true });
+}));
+
+/**
+ * POST /api/v1/simulator/accept-sets/:module_id/activate
+ * Enables acceptance of SET_VALUES commands for the module (default state).
+ */
+router.post('/accept-sets/:module_id/activate', asyncWrap(async (req: Request, res: Response) => {
+  if (!getStatus().running) {
+    res.status(409).json({
+      ok: false,
+      error: { code: 'SIMULATOR_NOT_RUNNING', message: 'Simulator is not running.' },
+    });
+    return;
+  }
+  const module_id = req.params['module_id'] as string;
+  if (!isKnownModule(module_id)) {
+    res.status(404).json({
+      ok: false,
+      error: { code: 'MODULE_NOT_FOUND', message: `Module ${module_id} not found.` },
+    });
+    return;
+  }
+  activateAcceptSets(module_id);
+  res.json({ ok: true });
+}));
+
+/**
+ * POST /api/v1/simulator/accept-sets/:module_id/deactivate
+ * Disables acceptance of SET_VALUES commands — all writes rejected with MODULE_FAULT.
+ */
+router.post('/accept-sets/:module_id/deactivate', asyncWrap(async (req: Request, res: Response) => {
+  if (!getStatus().running) {
+    res.status(409).json({
+      ok: false,
+      error: { code: 'SIMULATOR_NOT_RUNNING', message: 'Simulator is not running.' },
+    });
+    return;
+  }
+  const module_id = req.params['module_id'] as string;
+  if (!isKnownModule(module_id)) {
+    res.status(404).json({
+      ok: false,
+      error: { code: 'MODULE_NOT_FOUND', message: `Module ${module_id} not found.` },
+    });
+    return;
+  }
+  deactivateAcceptSets(module_id);
+  res.json({ ok: true });
+}));
+
+/**
+ * POST /api/v1/simulator/skip-ack/:module_id/activate
+ * Enables skip-ack for the module — all commands are silently dropped, no CMD_ACK published.
+ */
+router.post('/skip-ack/:module_id/activate', asyncWrap(async (req: Request, res: Response) => {
+  if (!getStatus().running) {
+    res.status(409).json({
+      ok: false,
+      error: { code: 'SIMULATOR_NOT_RUNNING', message: 'Simulator is not running.' },
+    });
+    return;
+  }
+  const module_id = req.params['module_id'] as string;
+  if (!isKnownModule(module_id)) {
+    res.status(404).json({
+      ok: false,
+      error: { code: 'MODULE_NOT_FOUND', message: `Module ${module_id} not found.` },
+    });
+    return;
+  }
+  activateSkipAck(module_id);
+  res.json({ ok: true });
+}));
+
+/**
+ * POST /api/v1/simulator/skip-ack/:module_id/deactivate
+ * Disables skip-ack — CMD_ACK is published normally.
+ */
+router.post('/skip-ack/:module_id/deactivate', asyncWrap(async (req: Request, res: Response) => {
+  if (!getStatus().running) {
+    res.status(409).json({
+      ok: false,
+      error: { code: 'SIMULATOR_NOT_RUNNING', message: 'Simulator is not running.' },
+    });
+    return;
+  }
+  const module_id = req.params['module_id'] as string;
+  if (!isKnownModule(module_id)) {
+    res.status(404).json({
+      ok: false,
+      error: { code: 'MODULE_NOT_FOUND', message: `Module ${module_id} not found.` },
+    });
+    return;
+  }
+  deactivateSkipAck(module_id);
   res.json({ ok: true });
 }));
 

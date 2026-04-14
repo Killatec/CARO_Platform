@@ -268,6 +268,7 @@ At startup the backend builds a rich in-memory map keyed by tag_id from the Tag 
 | tag_id | uint32 | Map key. Primary identifier for all operations. |
 | tag_path | VARCHAR | Display label for frontend. Never used as identifier on the wire. |
 | module_id | string | MQTT module_id derived from the module asset_name in the meta column. Used to route commands to the correct `caro/{module_id}/cmd` topic. |
+| module_type | string | Module transport type (`'MQTT'` or `'HMI'`). Sourced from tag_registry.module_type column, default `'MQTT'`. Used by POST /tags/write to reject writes to non-MQTT modules. |
 | data_type | string | Value type (f32, bool). Used for write validation and Protobuf encoding. |
 | is_setpoint | boolean | If true, tag accepts SET_VALUES commands (via useTagWriter). If false, write attempts are rejected with NOT_AUTHORIZED. |
 | eng_min / eng_max | number | Engineering limits. Reserved for future server-side OUT_OF_RANGE pre-validation before commands are sent to devices. |

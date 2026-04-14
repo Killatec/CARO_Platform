@@ -71,7 +71,7 @@ describe('NumericSet', () => {
     expect(onWrite).toHaveBeenCalledWith(1003, 75);
   });
 
-  it('shows pending state during write (finds the pending indicator)', async () => {
+  it('prevents re-opening edit during write (double-click prevention)', async () => {
     let resolveWrite!: () => void;
     const pendingPromise = new Promise<void>(r => { resolveWrite = r; });
     const onWrite = vi.fn().mockReturnValue(pendingPromise);
@@ -85,7 +85,10 @@ describe('NumericSet', () => {
       fireEvent.click(screen.getByText('Set'));
     });
 
-    expect(screen.getByTestId('pending-overlay')).toBeDefined();
+    // Edit closes immediately on confirm; display-value re-appears but clicking it
+    // should not reopen the input while awaitedValue is set.
+    fireEvent.click(screen.getByTestId('display-value'));
+    expect(screen.queryByRole('spinbutton')).toBeNull();
 
     await act(async () => {
       resolveWrite();

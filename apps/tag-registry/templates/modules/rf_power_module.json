@@ -46,6 +46,14 @@
         "format": "#.###E+0",
         "unit": "dBm"
       }
+    },
+    {
+      "template_name": "Analog_In",
+      "asset_name": "PRF",
+      "fields": {
+        "format": "#",
+        "unit": "Hz"
+      }
     }
   ]
 }

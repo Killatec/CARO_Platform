@@ -17,6 +17,7 @@ hmi_functional_spec | hmi_API_spec | CARO_DB_Spec
 | 1.4 | 2026-03-26 | PM / Claude | useTag renamed to useLiveValue (granular single-tag subscription for efficient partial re-renders). useWriteTag renamed to useTagWriter. write() accepts single {tagId,value} or array for batch writes. isPending/error keyed by tagId. Quality is backend-evaluated and pushed as delta — no frontend stale logic. OI-05 closed. Companion docs updated. |
 | 1.5 | 2026-04-08 | PM / Claude | Quality enum removed — null value = bad quality. LiveValue.timestamp removed. Widget `tag` prop replaced with `assetPath` string + useResolveAssetPath. Meta field resolution rule: root-to-leaf, first match wins. Decimal formatting from tag.meta format field. Dashboard examples updated. |
 | 1.6 | 2026-04-13 | PM / Claude | Single-row layout with shared column widths. BooleanMon dot-only. BooleanSet toggle switch. Fixed columns for alignment. |
+| 1.7 | 2026-04-14 | PM / Claude | Pending visual state (spinner, muted value, locked input styling) removed. Replaced with `useWriteGuard` hook — invisible double-click guard only, no visual feedback during writes. `module_type` field added to TagDef shape. `writeTag` in HmiContextProvider now surfaces CMD_ACK device-level rejections (MODULE_FAULT, TIMEOUT, etc.) as thrown errors, surfacing through useTagWriter error state to the widget. |
 
 ---
 
@@ -95,6 +96,8 @@ export function useTagWriter(): {
 
 The write function calls `POST /api/v1/tags/write`. isPending is managed entirely within useTagWriter — widgets do not track pending state independently.
 
+> *NOTE: The `HmiContextProvider.writeTag()` implementation inspects the CMD_ACK results embedded in the server response. If any tag in the response has `accepted: false`, `writeTag` throws an `Error` with the rejection code as the message (e.g. `'Device rejected: MODULE_FAULT'`, `'Device rejected: TIMEOUT'`). This surfaces through `useTagWriter`'s catch block into `error(tagId)`, which the widget reads to display an inline rejection message. This means device-level rejections (including 1-second CMD_ACK timeouts) surface identically to network and backend errors — the widget sees a string error message regardless of origin.*
+
 ```ts
 // useTagWriter implementation sketch
 export function useTagWriter() {
@@ -147,6 +150,7 @@ Error evaluation (wrong number of matches, missing expected children) is the wid
   data_type: string,    // "f32" | "bool"
   is_setpoint: boolean,
   module_id: string,
+  module_type: string,     // 'MQTT' | 'HMI' — source: tag_registry.module_type column
   eng_min: number | null,  // resolved from meta (see resolution rule below)
   eng_max: number | null,
   unit: string | null,     // resolved from meta (see resolution rule below)
@@ -183,14 +187,16 @@ Quality is evaluated by the backend per tag based on device telemetry. When a de
 
 ### 4.2 Pending State (Setpoint Widgets)
 
-After a Supervisor submits a write, the widget enters pending state. This communicates that a write is in flight but the device has not yet confirmed.
+Visual pending state (spinner, muted previous value, locked-looking input) is **not implemented**. The widget appearance does not change between click and telemetry confirmation — no dimming, no cursor change, no overlay.
+
+Instead, widgets use the `useWriteGuard` hook (`packages/widgets/src/shared/useWriteGuard.ts`) which provides an invisible double-click guard. The toggle/input is **disabled** while a write is in flight to prevent double-clicks, but no visual change accompanies this. The guard clears when: (a) telemetry confirms the expected value arrives, (b) a write error is reported via `useTagWriter.error`, or (c) a configurable safety timeout fires (default `DEFAULT_WRITE_GUARD_TIMEOUT_MS = 1000 ms`).
 
 | Pending State | Visual Treatment |
 |---|---|
-| Write submitted — `write(tagId, value)` called | Input locked. A subtle spinner or pulsing indicator shown alongside the submitted value. Previous confirmed value shown in muted style below. |
-| `write()` Promise resolves (CMD_ACK accepted: true) | Pending state cleared. Confirmed value updated to the new value. Normal display resumes. |
-| `write()` Promise rejects — network or backend error | Pending state cleared. Error message shown inline (e.g. 'Write failed — check connection'). Confirmed value restored. |
-| `write()` Promise rejects — device rejection (OUT_OF_RANGE, INTERLOCKED, etc.) | Pending state cleared immediately. Rejection reason shown inline. Confirmed value restored. |
+| Write submitted — `write(tagId, value)` called | No visual change. Toggle/input disabled (prevents double-click). `useWriteGuard.isWriting` is true. |
+| Telemetry confirms the new value | Guard cleared. Toggle/input re-enabled. No visual change. |
+| `write()` rejects — network, backend, or device rejection | Guard cleared. Inline error message shown below the widget (e.g. `'Device rejected: MODULE_FAULT'`). Toggle/input re-enabled. |
+| Safety timeout (1000 ms) fires without telemetry confirmation | Guard cleared. Toggle/input re-enabled. No error shown unless `writeError` is already set. |
 
 ### 4.3 Label and Unit
 

@@ -47,6 +47,8 @@ export interface ModuleStatus {
   bytes: number;
   delta: boolean;
   protobuf: boolean;
+  acceptSets: boolean;
+  skipAck: boolean;
 }
 
 export interface SimulatorStatus {
@@ -71,6 +73,12 @@ const deltaMode: Set<string>          = new Set();
 
 // module_ids publishing in Protobuf encoding — empty on startup (JSON mode)
 const protobufMode: Set<string>       = new Set();
+
+// module_ids that reject SET_VALUES commands — empty on startup (accept writes)
+const acceptSetsDisabled: Set<string> = new Set();
+
+// module_ids that silently drop all incoming commands — empty on startup (ACKs sent normally)
+const skipAckEnabled: Set<string>     = new Set();
 
 // module_id -> number of tags included in the last telemetry publish
 const lastPublishedCount: Map<string, number> = new Map();
@@ -195,6 +203,16 @@ function handleCommand(topic: string, rawMessage: Buffer): void {
   if (parts.length !== 3 || parts[2] !== 'cmd') return;
   const moduleId = parts[1];
 
+  if (skipAckEnabled.has(moduleId)) {
+    log('INFO', `[SIM] Module ${moduleId} skip-ack enabled — dropping command (no ACK)`);
+    return;
+  }
+
+  if (!activeModules.has(moduleId)) {
+    log('INFO', `[SIM] Module ${moduleId} not transmitting — dropping command (no ACK)`);
+    return;
+  }
+
   let cmd: { command_id?: string; command_type?: string; payload?: { values?: { tag_id: number; value: number | boolean }[] } };
   try {
     cmd = JSON.parse(rawMessage.toString());
@@ -224,21 +242,28 @@ function handleCommand(topic: string, rawMessage: Buffer): void {
   const results: { tag_id: number; accepted: boolean; rejection_code?: string }[] = [];
 
   if (command_type === 'SET_VALUES') {
-    for (const { tag_id, value } of payload?.values ?? []) {
-      const tag = tags.find(t => t.tag_id === tag_id);
-      if (!tag) {
-        log('WARN', `[SIM] SET_VALUES: unknown tag_id ${tag_id}`);
-        results.push({ tag_id, accepted: false, rejection_code: 'UNKNOWN_TAG' });
-        continue;
+    if (acceptSetsDisabled.has(moduleId)) {
+      log('WARN', `[SIM] SET_VALUES rejected — acceptSets disabled for ${moduleId}`);
+      for (const { tag_id } of payload?.values ?? []) {
+        results.push({ tag_id, accepted: false, rejection_code: 'MODULE_FAULT' });
       }
-      if (!tag.is_setpoint) {
-        log('WARN', `[SIM] SET_VALUES: tag_id ${tag_id} (${tag.tag_path}) is not a setpoint — rejected`);
-        results.push({ tag_id, accepted: false, rejection_code: 'UNKNOWN_TAG' });
-        continue;
+    } else {
+      for (const { tag_id, value } of payload?.values ?? []) {
+        const tag = tags.find(t => t.tag_id === tag_id);
+        if (!tag) {
+          log('WARN', `[SIM] SET_VALUES: unknown tag_id ${tag_id}`);
+          results.push({ tag_id, accepted: false, rejection_code: 'UNKNOWN_TAG' });
+          continue;
+        }
+        if (!tag.is_setpoint) {
+          log('WARN', `[SIM] SET_VALUES: tag_id ${tag_id} (${tag.tag_path}) is not a setpoint — rejected`);
+          results.push({ tag_id, accepted: false, rejection_code: 'UNKNOWN_TAG' });
+          continue;
+        }
+        simState.get(tag.tag_id)!.simValue = value;
+        log('INFO', `[SIM] SET_VALUES: tag_id ${tag_id} (${tag.tag_path}) → ${value}`);
+        results.push({ tag_id, accepted: true });
       }
-      simState.get(tag.tag_id)!.simValue = value;
-      log('INFO', `[SIM] SET_VALUES: tag_id ${tag_id} (${tag.tag_path}) → ${value}`);
-      results.push({ tag_id, accepted: true });
     }
 
   } else if (command_type === 'REQUEST_SNAPSHOT') {
@@ -393,6 +418,8 @@ export function stop(): void {
   activeModules.clear();
   deltaMode.clear();
   protobufMode.clear();
+  acceptSetsDisabled.clear();
+  skipAckEnabled.clear();
   lastPublishedCount.clear();
   lastPublishedBytes.clear();
   log('INFO', '[SIM] Stopped.');
@@ -403,12 +430,14 @@ export function getStatus(): SimulatorStatus {
     running:     timer !== null,
     intervalMs:  currentInterval,
     modules:     moduleIds.map(id => ({
-      module_id: id,
-      active:    activeModules.has(id),
-      tag_count: lastPublishedCount.get(id) ?? 0,
-      bytes:     lastPublishedBytes.get(id) ?? 0,
-      delta:     deltaMode.has(id),
-      protobuf:  protobufMode.has(id),
+      module_id:  id,
+      active:     activeModules.has(id),
+      tag_count:  lastPublishedCount.get(id) ?? 0,
+      bytes:      lastPublishedBytes.get(id) ?? 0,
+      delta:      deltaMode.has(id),
+      protobuf:   protobufMode.has(id),
+      acceptSets: !acceptSetsDisabled.has(id),
+      skipAck:    skipAckEnabled.has(id),
     })),
     uptime_s:    startedAt ? Math.floor((Date.now() - startedAt) / 1000) : 0,
     tickCount,
@@ -445,6 +474,22 @@ export function activateProtobuf(moduleId: string): void {
 
 export function deactivateProtobuf(moduleId: string): void {
   protobufMode.delete(moduleId);
+}
+
+export function activateAcceptSets(moduleId: string): void {
+  acceptSetsDisabled.delete(moduleId);
+}
+
+export function deactivateAcceptSets(moduleId: string): void {
+  acceptSetsDisabled.add(moduleId);
+}
+
+export function activateSkipAck(moduleId: string): void {
+  skipAckEnabled.add(moduleId);
+}
+
+export function deactivateSkipAck(moduleId: string): void {
+  skipAckEnabled.delete(moduleId);
 }
 
 export function publishSnapshot(moduleId: string): void {

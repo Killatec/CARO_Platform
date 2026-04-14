@@ -8,6 +8,7 @@ export interface TagDef {
   data_type: string;
   is_setpoint: boolean;
   module_id: string;
+  module_type: string;
   eng_min: number | null;
   eng_max: number | null;
   unit: string | null;
@@ -27,10 +28,20 @@ export interface NestedTagNode {
   children: Record<string, NestedTagNode> | null;
 }
 
+/** Client-side WebSocket connection statistics. */
+export interface WsStats {
+  connected: boolean;
+  latencyMs: number | null;       // PING/PONG round-trip
+  messagesPerSec: number;         // SNAPSHOT + DELTA messages received per second
+  bytesPerSec: number;            // WebSocket bytes received per second
+  subscribedCount: number;        // number of unique tags currently subscribed on server
+}
+
 /** Shape of the context value shared between provider and hooks. */
 export interface HmiContextValue {
   tagMap: Map<number, TagDef>;
   getLiveValue: (tagId: number) => LiveValue;
   subscribeLiveValue: (tagId: number, callback: (lv: LiveValue) => void) => () => void;
   writeTag: (tagId: number, value: number | boolean | string) => Promise<void>;
+  wsStats: WsStats;
 }

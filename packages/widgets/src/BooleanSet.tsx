@@ -3,7 +3,7 @@ import { Button, Modal, Tooltip } from '@caro/ui';
 import { useSingleTag } from './shared/useSingleTag.js';
 import { resolveLabel } from './shared/utils.js';
 import { ROW_CONTAINER, LABEL_CLASS, COL } from './shared/widgetStyles.js';
-import { PendingOverlay } from './shared/PendingOverlay.js';
+import { useWriteGuard } from './shared/useWriteGuard.js';
 import { useState } from 'react';
 
 export interface BooleanSetProps {
@@ -37,23 +37,25 @@ export function BooleanSet({
 }: BooleanSetProps) {
   const tag = useSingleTag(assetPath, 'BooleanSet');
   const lv = useLiveValue(tag.tag_id);
-  const { write, isPending, error } = useTagWriter();
+  const { write, error } = useTagWriter();
   const displayLabel = resolveLabel(assetPath, label);
 
   const badQuality = lv.value === null;
-  const pending = isPending(tag.tag_id);
   const writeError = error(tag.tag_id);
+
+  const { setAwaitedValue, isWriting } = useWriteGuard(tag.tag_id, lv.value, writeError);
 
   const [showConfirm, setShowConfirm] = useState(false);
   const [pendingNewValue, setPendingNewValue] = useState<boolean | null>(null);
 
   function handleToggle() {
-    if (badQuality || pending) return;
+    if (badQuality || isWriting) return;
     const newValue = !(lv.value as boolean);
     if (requireConfirm) {
       setPendingNewValue(newValue);
       setShowConfirm(true);
     } else {
+      setAwaitedValue(newValue);
       void write(tag.tag_id, newValue);
     }
   }
@@ -63,6 +65,7 @@ export function BooleanSet({
     const value = pendingNewValue;
     setPendingNewValue(null);
     setShowConfirm(false);
+    setAwaitedValue(value);
     void write(tag.tag_id, value);
   }
 
@@ -85,8 +88,8 @@ export function BooleanSet({
     backgroundColor: trackColor,
     position: 'relative',
     transition: 'background-color 0.2s ease',
-    cursor: badQuality ? 'not-allowed' : pending ? 'wait' : 'pointer',
-    opacity: (badQuality || pending) ? 0.5 : 1,
+    cursor: badQuality ? 'not-allowed' : 'pointer',
+    opacity: badQuality ? 0.5 : 1,
     border: badQuality ? '1px dashed #f87171' : 'none',
     flexShrink: 0,
   };
@@ -112,7 +115,7 @@ export function BooleanSet({
           <button
             type="button"
             onClick={handleToggle}
-            disabled={badQuality || pending}
+            disabled={badQuality || isWriting}
             className="flex items-center bg-transparent border-none p-0"
             data-testid="toggle-button"
             aria-label={`Toggle ${displayLabel}. Current: ${isTrue ? trueLabel : falseLabel}. Click to set ${nextLabel}`}
@@ -122,7 +125,6 @@ export function BooleanSet({
             <div style={trackStyle}>
               <div style={thumbStyle} />
             </div>
-            <PendingOverlay isPending={pending} />
           </button>
         </Tooltip>
         </div>

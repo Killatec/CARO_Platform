@@ -158,6 +158,13 @@ All commands arrive and are responded to as JSON. Protobuf is for telemetry only
 
 Subscription: `caro/+/cmd`, QoS 1.
 
+**Pre-processing guards** (checked in order, before any command parsing or dedup):
+
+1. **Skip ACK:** if enabled for the module (`skipAckEnabled.has(moduleId)`), the command is silently dropped — no parsing, no processing, no CMD_ACK published. Log: `[SIM] Module {moduleId} skip-ack enabled — dropping command (no ACK)`.
+2. **Transmitting off:** if the module is not in `activeModules`, the command is silently dropped — no CMD_ACK. Log: `[SIM] Module {moduleId} not transmitting — dropping command (no ACK)`.
+
+These guards fire before command_id deduplication — dropped commands are not recorded in the dedup Set.
+
 **SET_VALUES** — incoming `CommandEnvelope` per `CARO_MQTT_Spec` §6.1:
 ```js
 {
@@ -175,10 +182,13 @@ Subscription: `caro/+/cmd`, QoS 1.
 Note: `values` nested under `payload.values` — not top-level on the envelope.
 
 Processing:
-1. Validate `command_type === 'SET_VALUES'`.
-2. For each `{ tag_id, value }`: validate tag exists for this `module_id` and `is_setpoint === true`. If valid: update `simValue`. If not: mark `UNKNOWN_TAG` in CMD_ACK.
-3. Publish CMD_ACK immediately to `caro/{module_id}/cmd_ack`, QoS 1.
-4. Updated values surface on next scheduled tick — no out-of-tick publish.
+1. **Accept Sets guard:** if disabled for the module (`acceptSetsDisabled.has(moduleId)`), all tags in the command are rejected with `rejection_code: 'MODULE_FAULT'`. CMD_ACK is still published. No tag values are updated. Log: `[SIM] SET_VALUES rejected — acceptSets disabled for {moduleId}`.
+2. Validate `command_type === 'SET_VALUES'`.
+3. For each `{ tag_id, value }`: validate tag exists for this `module_id` and `is_setpoint === true`. If valid: update `simValue`. If not: mark `UNKNOWN_TAG` in CMD_ACK.
+4. Publish CMD_ACK immediately to `caro/{module_id}/cmd_ack`, QoS 1.
+5. Updated values surface on next scheduled tick — no out-of-tick publish.
+
+> *NOTE: The Accept Sets guard only affects SET_VALUES commands. REQUEST_SNAPSHOT and RESET commands are unaffected.*
 
 **CMD_ACK shape** per `CARO_MQTT_Spec` §6.2:
 ```js
@@ -258,6 +268,10 @@ Response envelope: `{ ok, data }` / `{ ok, error: { code, message } }`.
 | `POST` | `/protobuf/disable/:module_id` | Disable Protobuf encoding. 404/409. |
 | `POST` | `/snapshot/:module_id` | Immediate full publish, bypasses delta. 404/409. |
 | `POST` | `/inject/:module_id` | Randomize all setpoint values. 404/409/400 (no setpoints). |
+| `POST` | `/accept-sets/:module_id/activate` | Enable SET_VALUES acceptance (default state). 404/409. |
+| `POST` | `/accept-sets/:module_id/deactivate` | Disable SET_VALUES acceptance — rejects all tags with `MODULE_FAULT`. CMD_ACK still published. 404/409. |
+| `POST` | `/skip-ack/:module_id/activate` | Enable silent command drop — no parsing, no CMD_ACK published. 404/409. |
+| `POST` | `/skip-ack/:module_id/deactivate` | Disable silent command drop — CMD_ACK published normally. 404/409. |
 
 ### `/status` Response Shape
 
@@ -273,8 +287,10 @@ Response envelope: `{ ok, data }` / `{ ok, error: { code, message } }`.
         active:    true,
         tag_count: 12,    // live count from last publish, not static registry count
         bytes:     284,   // byte size of last published payload
-        delta:     false,
-        protobuf:  false
+        delta:      false,
+        protobuf:   false,
+        acceptSets: true,
+        skipAck:    false
       }
     ],
     uptime_s:  142,
@@ -311,7 +327,7 @@ React+Vite at port 5174. Mirrors `apps/tag-registry/client/` conventions.
 
 **`SimulatorPanel`** layout:
 - Header: title, RUNNING/STOPPED badge, Start/Stop button.
-- Modules table (`max-w-5xl`): Module | Tags | Bytes | Transmitting | Delta | Protobuf | Actions. Transmitting/Delta/Protobuf are checkbox toggles — each calls corresponding REST endpoint then re-fetches status. Actions: "Rqst Snapshot", "Change Sets" buttons per row.
+- Modules table (`max-w-5xl`): Module | Tags | Bytes | Transmitting | Delta | Protobuf | Accept Sets | Skip ACK | Actions. All checkbox columns (Transmitting, Delta, Protobuf, Accept Sets, Skip ACK) are centered. Each checkbox calls the corresponding REST endpoint then re-fetches status. Actions: "Rqst Snapshot", "Change Sets" buttons per row.
 - Logs terminal (`max-w-5xl`, `h-64`, dark bg): auto-scrolls to bottom unless user has scrolled up. Entries: `{ ts, level, msg }` with level-coloured brackets.
 
 Poll intervals: status 200ms; logs 2000ms.

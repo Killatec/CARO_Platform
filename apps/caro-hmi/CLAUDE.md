@@ -26,14 +26,16 @@ Prerequisites: PostgreSQL running with tag registry populated, Mosquitto on 1883
 |---|---|---|
 | LKV Cache | `server/src/lkv.ts` | In-memory `Map<tag_id, { value, generation }>`. Generation bumps only on value change (strict equality). |
 | Telemetry Intake | `server/src/telemetry-intake.ts` | Transport-agnostic ingestion: LKV writes, watchdog (lastSeen tracking, null-write on timeout), DB pipeline enqueue. Universal entry point for all telemetry via `ingest(moduleId, message)`. |
-| MQTT Bridge | `server/src/mqtt-bridge.ts` | Transport only — subscribes `caro/+/telemetry`, parses payload, delegates to `TelemetryIntake.ingest()`. Publishes commands to `caro/{module_id}/cmd`. Heartbeat. |
+| MQTT Bridge | `server/src/mqtt-bridge.ts` | Transport only — subscribes `caro/+/telemetry`, parses payload, delegates to `TelemetryIntake.ingest()`. Routes `caro/+/cmd_ack` to `CommandPublisher`. Publishes commands to `caro/{module_id}/cmd`. Heartbeat. |
 | HMI Tag Source | `server/src/hmi-tag-source.ts` | Proxy-based telemetry producer for `module_type='HMI'` tags. Property names derived from `tag_path` (strips module segment, joins remaining with `_`). Publishes to TelemetryIntake on configurable timer (default 250ms). |
 | Duty Tracker | `server/src/duty-tracker.ts` | Wraps telemetry hot paths with `performance.now()` timing. `snapshot(intervalMs)` returns duty cycle as percentage, resets accumulator. Fed into `hmiTags.Telemetry_CPU` via `onBeforePublish`. |
 | WS Server | `server/src/ws-server.ts` | Pull-based at configurable tick (default 8 Hz / 125 ms). Per-client generation tracking. SUBSCRIBE → SNAPSHOT → DELTA. JSON encoding. |
 | DB Pipeline | `server/src/db-pipeline.ts` | Push-based queue from telemetry intake. Module-level timestamp. Placeholder — real implementation writes to TimescaleDB. |
 | Tag Map | `server/src/tag-map.ts` | Loads tag registry from DB. Builds `Map<tag_id, TagDef>`. Meta field resolution: root-to-leaf, first match wins (`getMetaField`). Accepts pre-fetched `ActiveTag[]` to avoid a second DB call. |
 | Config | `server/src/config.ts` | All env vars with defaults. |
-| Express | `server/src/app.ts` | Express shell with `/api/v1/tags` route. Auth stubbed. |
+| Command Publisher | `server/src/command-publisher.ts` | Publishes SET_VALUES to MQTT, tracks in-flight commands by command_id, resolves/rejects on CMD_ACK or 1s timeout. |
+| Write Route | `server/src/routes/tags.ts` | GET /tags (tag list) and POST /tags/write (setpoint writes). Validates is_setpoint, module_type='MQTT', type coercion. Delegates to CommandPublisher. |
+| Express | `server/src/app.ts` | Express shell with GET + POST `/api/v1/tags` routes. Auth stubbed. |
 | Entry | `server/src/index.ts` | Startup sequence: tag rows → tag map → LKV → DutyTracker → TelemetryIntake → HmiTagSource → MQTT bridge → WS attach → DB flush timer. |
 
 ## Client Architecture
@@ -58,6 +60,9 @@ Client is a standard Vite React app. `vite.config.ts` proxies `/api` and `/ws` t
 - **TelemetryIntake is the universal ingest entry point.** MqttBridge and HmiTagSource are both adapters. `ingest(moduleId, message)` handles LKV writes, watchdog updates, and DB pipeline enqueue.
 - **HmiTagSource uses Proxy for typed property access** (e.g., `hmiTags.Module_Count = 11`). Property names derived from tag_path by stripping the module segment and joining remaining segments with `_`. Publishes to TelemetryIntake every 250ms (env: `HMI_PUBLISH_INTERVAL_MS`).
 - **Auth is stubbed** — all connections accepted in dev mode.
+- **Setpoint write flow:** Widget → `useTagWriter.write()` → `HmiContextProvider.writeTag()` → `POST /api/v1/tags/write` → `CommandPublisher.publish()` → MQTT SET_VALUES → CMD_ACK → resolve/reject. On `accepted: false`, `writeTag()` throws so the error surfaces in the widget's error display.
+- **No visual pending state on write widgets.** `BooleanSet` and `NumericSet` look identical during writes — no spinner, no opacity change. Double-click prevention only: button/input disabled while `isWriting` (via `useWriteGuard`).
+- **`module_type` on TagDef.** All tag definitions include `module_type: string` (sourced from `tag_registry.module_type`). Write route rejects setpoint writes targeting non-MQTT modules with `MODULE_TYPE_UNSUPPORTED`.
 
 ## Reading Order by Topic
 
@@ -66,6 +71,7 @@ Client is a standard Vite React app. `vite.config.ts` proxies `/api` and `/ws` t
 | HMI tag telemetry (HmiTagSource, TelemetryIntake) | 1. This file 2. `server/src/telemetry-intake.ts` 3. `server/src/hmi-tag-source.ts` 4. `server/src/index.ts` (wiring) 5. `Docs/hmi_functional_spec.md` §8.8 |
 | MQTT bridge / device telemetry | 1. This file 2. `server/src/mqtt-bridge.ts` 3. `server/src/telemetry-intake.ts` 4. `Docs/CARO_MQTT_Spec.md` |
 | Widget rendering / formatting | 1. `Docs/hmi_widget_spec.md` 2. `packages/widgets/src/shared/utils.ts` (compileFormat, resolveFormat) |
+| Setpoint write pipeline | 1. This file 2. `server/src/command-publisher.ts` 3. `server/src/routes/tags.ts` 4. `packages/hmi-context/src/HmiContextProvider.tsx` (writeTag) 5. `packages/widgets/src/shared/useWriteGuard.ts` |
 | LKV / WebSocket pipeline | 1. This file 2. `server/src/lkv.ts` 3. `server/src/ws-server.ts` 4. `Docs/CARO_Telemetry_Path_Reference.docx` |
 
 ## Environment (.env)
@@ -91,7 +97,7 @@ DB_TICK_MS=1000
 | 3 — Client Shell | ✅ Complete | Vite React app, shell components, demo page, E2E pipeline working |
 | 4 — Auth | Not started | express-session, Argon2id, TOTP MFA |
 | 4.5 — DB Migrations | Not started | HMI tables (users, sessions, audit_log, etc.) |
-| 5 — REST Endpoints | Not started | Full CRUD per hmi_API_spec |
+| 5 — REST Endpoints | In progress | Tag list + setpoint write route implemented; remaining CRUD per hmi_API_spec not started |
 | 6 — Protobuf | Not started | Replace JSON WS messages with Protobuf encoding |
 
 ## Related Docs

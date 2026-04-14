@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Button, Badge } from '@caro/ui/primitives';
 import { useSimulatorStore } from '../stores/useSimulatorStore.js';
-import { getStatus, startSim, stopSim, stopModuleTelemetry, startModuleTelemetry, enableModuleDelta, disableModuleDelta, enableModuleProtobuf, disableModuleProtobuf, getLogs, requestSnapshot, injectSetValues, ModuleStatus, LogEntry } from '../api/simulator.js';
+import { getStatus, startSim, stopSim, stopModuleTelemetry, startModuleTelemetry, enableModuleDelta, disableModuleDelta, enableModuleProtobuf, disableModuleProtobuf, enableAcceptSets, disableAcceptSets, enableSkipAck, disableSkipAck, getLogs, requestSnapshot, injectSetValues, ModuleStatus, LogEntry } from '../api/simulator.js';
 
 const STATUS_POLL_MS  = 200;
 const LOG_POLL_MS     = 2000;
@@ -81,6 +81,34 @@ export const SimulatorPanel: React.FC = () => {
   async function handleInjectSetValues(module: ModuleStatus) {
     try {
       await injectSetValues(module.module_id);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  async function handleSkipAckToggle(module: ModuleStatus) {
+    try {
+      if (module.skipAck) {
+        await disableSkipAck(module.module_id);
+      } else {
+        await enableSkipAck(module.module_id);
+      }
+      const data = await getStatus();
+      setStatus(data);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  async function handleAcceptSetsToggle(module: ModuleStatus) {
+    try {
+      if (module.acceptSets) {
+        await disableAcceptSets(module.module_id);
+      } else {
+        await enableAcceptSets(module.module_id);
+      }
+      const data = await getStatus();
+      setStatus(data);
     } catch (err) {
       setError((err as Error).message);
     }
@@ -183,9 +211,11 @@ export const SimulatorPanel: React.FC = () => {
                   <th className="px-6 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Module</th>
                   <th className="px-6 py-2 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide">Tags</th>
                   <th className="px-6 py-2 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide">Bytes</th>
-                  <th className="px-6 py-2 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide">Transmitting</th>
-                  <th className="px-6 py-2 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide">Delta</th>
-                  <th className="px-6 py-2 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide">Protobuf</th>
+                  <th className="px-6 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Transmitting</th>
+                  <th className="px-6 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Delta</th>
+                  <th className="px-6 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Protobuf</th>
+                  <th className="px-6 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Accept Sets</th>
+                  <th className="px-6 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Skip ACK</th>
                   <th className="px-6 py-2 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide">Actions</th>
                 </tr>
               </thead>
@@ -195,7 +225,7 @@ export const SimulatorPanel: React.FC = () => {
                     <td className="px-6 py-3 font-medium text-gray-900">{module.module_id}</td>
                     <td className="px-6 py-3 text-right text-gray-700">{module.tag_count}</td>
                     <td className="px-6 py-3 text-right text-gray-700">{module.bytes}</td>
-                    <td className="px-6 py-3 text-right">
+                    <td className="px-6 py-3 text-center">
                       <input
                         type="checkbox"
                         checked={module.active}
@@ -204,7 +234,7 @@ export const SimulatorPanel: React.FC = () => {
                         className="h-4 w-4 rounded border-gray-300 text-blue-600 cursor-pointer disabled:cursor-not-allowed"
                       />
                     </td>
-                    <td className="px-6 py-3 text-right">
+                    <td className="px-6 py-3 text-center">
                       <input
                         type="checkbox"
                         checked={module.delta}
@@ -213,12 +243,30 @@ export const SimulatorPanel: React.FC = () => {
                         className="h-4 w-4 rounded border-gray-300 text-blue-600 cursor-pointer disabled:cursor-not-allowed"
                       />
                     </td>
-                    <td className="px-6 py-3 text-right">
+                    <td className="px-6 py-3 text-center">
                       <input
                         type="checkbox"
                         checked={module.protobuf}
                         disabled={!running}
                         onChange={() => handleProtobufToggle(module)}
+                        className="h-4 w-4 rounded border-gray-300 text-blue-600 cursor-pointer disabled:cursor-not-allowed"
+                      />
+                    </td>
+                    <td className="px-6 py-3 text-center">
+                      <input
+                        type="checkbox"
+                        checked={module.acceptSets}
+                        disabled={!running}
+                        onChange={() => handleAcceptSetsToggle(module)}
+                        className="h-4 w-4 rounded border-gray-300 text-blue-600 cursor-pointer disabled:cursor-not-allowed"
+                      />
+                    </td>
+                    <td className="px-6 py-3 text-center">
+                      <input
+                        type="checkbox"
+                        checked={module.skipAck}
+                        disabled={!running}
+                        onChange={() => handleSkipAckToggle(module)}
                         className="h-4 w-4 rounded border-gray-300 text-blue-600 cursor-pointer disabled:cursor-not-allowed"
                       />
                     </td>

@@ -49,7 +49,7 @@ describe('BooleanSet', () => {
     expect(onWrite).toHaveBeenCalledWith(1005, true);
   });
 
-  it('shows pending state during write', async () => {
+  it('disables button during write to prevent double-click', async () => {
     let resolveWrite!: () => void;
     const pendingPromise = new Promise<void>(r => { resolveWrite = r; });
     const onWrite = vi.fn().mockReturnValue(pendingPromise);
@@ -65,7 +65,7 @@ describe('BooleanSet', () => {
       fireEvent.click(screen.getByTestId('toggle-button'));
     });
 
-    expect(screen.getByTestId('pending-overlay')).toBeDefined();
+    expect((screen.getByTestId('toggle-button') as HTMLButtonElement).disabled).toBe(true);
 
     await act(async () => {
       resolveWrite();

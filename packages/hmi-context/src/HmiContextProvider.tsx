@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { HmiContext } from './HmiContext.js';
-import type { HmiContextValue, LiveValue, TagDef } from './types.js';
+import type { HmiContextValue, LiveValue, TagDef, WsStats } from './types.js';
 
 interface HmiContextProviderProps {
   children: ReactNode;
@@ -31,6 +31,19 @@ export function HmiContextProvider({ children, apiUrl, wsUrl }: HmiContextProvid
   // Pending-subscribe batching via queueMicrotask
   const pendingSubscribeRef = useRef<Set<number>>(new Set());
   const flushScheduledRef = useRef(false);
+
+  // ─── WS Statistics ───────────────────────────────────────────────────────────
+  const wsStatsRef = useRef({ messageCount: 0, byteCount: 0 });
+  const latencyRef = useRef<number | null>(null);
+  const pingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const statsIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [wsStats, setWsStats] = useState<WsStats>({
+    connected: false,
+    latencyMs: null,
+    messagesPerSec: 0,
+    bytesPerSec: 0,
+    subscribedCount: 0,
+  });
 
   // ─── A. Fetch tag map on mount ───────────────────────────────────────────────
 
@@ -75,6 +88,14 @@ export function HmiContextProvider({ children, apiUrl, wsUrl }: HmiContextProvid
       ws.onopen = () => {
         reconnectDelayRef.current = 1000;
 
+        // Start PING interval for round-trip latency tracking
+        if (pingIntervalRef.current !== null) clearInterval(pingIntervalRef.current);
+        pingIntervalRef.current = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'PING', ts: Date.now() }));
+          }
+        }, 5000);
+
         // Clear optimistic state — onopen is the authoritative subscription point
         subscribedOnServerRef.current.clear();
         pendingSubscribeRef.current.clear();
@@ -91,17 +112,25 @@ export function HmiContextProvider({ children, apiUrl, wsUrl }: HmiContextProvid
       };
 
       ws.onmessage = (event: MessageEvent) => {
-        let msg: { type: string; values?: Record<string, unknown> };
+        // Byte counting — runs for every message regardless of type
+        wsStatsRef.current.byteCount +=
+          typeof event.data === 'string'
+            ? event.data.length
+            : ((event.data as ArrayBuffer).byteLength ?? 0);
+
+        let msg: { type: string; values?: Record<string, unknown>; ts?: number };
         try {
           msg = JSON.parse(event.data as string) as {
             type: string;
             values?: Record<string, unknown>;
+            ts?: number;
           };
         } catch {
           return;
         }
 
         if (msg.type === 'SNAPSHOT' || msg.type === 'DELTA') {
+          wsStatsRef.current.messageCount++;
           const entries = msg.values ?? {};
           for (const [key, rawValue] of Object.entries(entries)) {
             const tagId = Number(key);
@@ -109,12 +138,17 @@ export function HmiContextProvider({ children, apiUrl, wsUrl }: HmiContextProvid
             valuesRef.current.set(tagId, lv);
             subscribersRef.current.get(tagId)?.forEach(cb => cb(lv));
           }
+        } else if (msg.type === 'PONG' && msg.ts !== undefined) {
+          latencyRef.current = Date.now() - msg.ts;
         }
-        // PONG: ignore (future latency tracking)
       };
 
       const onDisconnect = () => {
         subscribedOnServerRef.current.clear();
+        if (pingIntervalRef.current !== null) {
+          clearInterval(pingIntervalRef.current);
+          pingIntervalRef.current = null;
+        }
         if (!destroyed) {
           reconnectTimerRef.current = setTimeout(() => {
             reconnectDelayRef.current = Math.min(reconnectDelayRef.current * 2, 30000);
@@ -129,8 +163,33 @@ export function HmiContextProvider({ children, apiUrl, wsUrl }: HmiContextProvid
 
     connect();
 
+    // Stats snapshot interval — reads accumulated counts once per second
+    statsIntervalRef.current = setInterval(() => {
+      const ws = wsRef.current;
+      const connected = ws !== null && ws.readyState === WebSocket.OPEN;
+      const messagesPerSec = wsStatsRef.current.messageCount;
+      const bytesPerSec = wsStatsRef.current.byteCount;
+      wsStatsRef.current.messageCount = 0;
+      wsStatsRef.current.byteCount = 0;
+      setWsStats({
+        connected,
+        latencyMs: latencyRef.current,
+        messagesPerSec,
+        bytesPerSec,
+        subscribedCount: subscribedOnServerRef.current.size,
+      });
+    }, 1000);
+
     return () => {
       destroyed = true;
+      if (pingIntervalRef.current !== null) {
+        clearInterval(pingIntervalRef.current);
+        pingIntervalRef.current = null;
+      }
+      if (statsIntervalRef.current !== null) {
+        clearInterval(statsIntervalRef.current);
+        statsIntervalRef.current = null;
+      }
       if (reconnectTimerRef.current !== null) {
         clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
@@ -202,11 +261,27 @@ export function HmiContextProvider({ children, apiUrl, wsUrl }: HmiContextProvid
       const json = (await res.json()) as {
         ok: boolean;
         error?: { code: string; message: string };
+        data?: {
+          devices: Array<{
+            module_id: string;
+            command_id: string;
+            results: Array<{ tag_id: number; accepted: boolean; rejection_code?: string }>;
+          }>;
+        };
       };
       if (!json.ok) {
         const err = new Error(json.error?.message ?? 'Write failed') as Error & { code?: string };
         err.code = json.error?.code;
         throw err;
+      }
+      // Surface device-level rejections (MODULE_FAULT, TIMEOUT, etc.) as errors.
+      // Uses optional chaining so mocks/tests that return { ok: true } with no data are safe.
+      for (const device of json.data?.devices ?? []) {
+        for (const result of device.results) {
+          if (!result.accepted) {
+            throw new Error(`Device rejected: ${result.rejection_code ?? 'UNKNOWN'}`);
+          }
+        }
       }
     },
     [apiUrl]
@@ -214,9 +289,10 @@ export function HmiContextProvider({ children, apiUrl, wsUrl }: HmiContextProvid
 
   // tagMapLoaded in deps triggers a re-memo once tags are loaded, surfacing the populated tagMap.
   // getLiveValue/subscribeLiveValue/writeTag are stable refs (useCallback with []).
+  // wsStats is state, so it triggers re-memo on each stats tick.
   const contextValue = useMemo<HmiContextValue>(
-    () => ({ tagMap: tagMapRef.current, getLiveValue, subscribeLiveValue, writeTag }),
-    [tagMapLoaded, getLiveValue, subscribeLiveValue, writeTag] // eslint-disable-line react-hooks/exhaustive-deps
+    () => ({ tagMap: tagMapRef.current, getLiveValue, subscribeLiveValue, writeTag, wsStats }),
+    [tagMapLoaded, getLiveValue, subscribeLiveValue, writeTag, wsStats] // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   if (!tagMapLoaded) return null;

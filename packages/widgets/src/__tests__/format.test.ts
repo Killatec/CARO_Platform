@@ -11,6 +11,7 @@ function makeTag(metaFields: Record<string, unknown>[]): TagDef {
     data_type:   'f32',
     is_setpoint: false,
     module_id:   'X',
+    module_type: 'MQTT',
     eng_min:     null,
     eng_max:     null,
     unit:        null,

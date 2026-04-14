@@ -1,0 +1,61 @@
+{
+  "template_name": "Analog_In",
+  "template_type": "parameter",
+  "fields": {
+    "format": {
+      "field_type": "String",
+      "default": "#.##"
+    },
+    "unit": {
+      "field_type": "String",
+      "default": "V"
+    }
+  },
+  "children": [
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Set",
+      "fields": {}
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Mon",
+      "fields": {}
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Tol",
+      "fields": {}
+    },
+    {
+      "template_name": "boolean_set",
+      "asset_name": "By",
+      "fields": {}
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "Intk",
+      "fields": {}
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "RSS",
+      "fields": {}
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Per",
+      "fields": {}
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "In_A",
+      "fields": {}
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "In_B",
+      "fields": {}
+    }
+  ]
+}

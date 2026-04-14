@@ -101,8 +101,9 @@ apps/caro-hmi/
 │       ├── ws-server.ts         # WebSocket server, per-client subscriptions
 │       ├── db-pipeline.ts       # DB write queue (placeholder)
 │       ├── tag-map.ts           # Tag registry loader, meta field resolution
+│       ├── command-publisher.ts  # SET_VALUES command lifecycle: publish, ACK tracking, timeout
 │       ├── routes/
-│       │   ├── tags.ts          # GET /api/v1/tags
+│       │   ├── tags.ts          # GET /api/v1/tags + POST /api/v1/tags/write
 │       │   └── modules.ts       # GET /api/v1/modules/status
 │       └── middleware/
 │           └── auth-stub.ts     # Placeholder auth — accepts all
@@ -169,6 +170,23 @@ Numeric formatting uses string format patterns resolved from the `format` field 
 | `2` (number, backward compat) | treated as `"#.##"` |
 
 Default when no `format` field is found: `"#.##"` (2 decimal places).
+
+---
+
+## Write Guard
+
+Set widgets (`BooleanSet`, `NumericSet`) use `useWriteGuard` from `packages/widgets/src/shared/useWriteGuard.ts` to prevent double-click submissions. There is no visual pending state — widgets look identical during writes. The hook tracks `awaitedValue` and clears it when:
+
+1. The live telemetry value matches the awaited value (write confirmed).
+2. A write error is set (rejection surfaced).
+3. A safety timeout fires (default 1000ms, configurable via `options.timeoutMs`).
+
+Usage:
+```tsx
+const { setAwaitedValue, isWriting } = useWriteGuard(tag.tag_id, lv.value, writeError);
+// isWriting = true while a write is in flight
+// disabled={badQuality || isWriting}
+```
 
 ---
 

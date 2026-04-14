@@ -39,6 +39,7 @@ function makeTagDef(tag_id: number, module_id = 'HMI'): TagDef {
     data_type:   'i16',
     is_setpoint: false,
     module_id,
+    module_type: 'HMI',
     eng_min:     null,
     eng_max:     null,
     unit:        null,

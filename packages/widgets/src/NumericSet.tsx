@@ -4,7 +4,7 @@ import { Button, Input, Modal, Tooltip } from '@caro/ui';
 import { useSingleTag } from './shared/useSingleTag.js';
 import { resolveFormat, resolveLabel } from './shared/utils.js';
 import { ROW_CONTAINER, LABEL_CLASS, VALUE_BAD_CLASS, UNIT_CLASS, COL } from './shared/widgetStyles.js';
-import { PendingOverlay } from './shared/PendingOverlay.js';
+import { useWriteGuard } from './shared/useWriteGuard.js';
 
 export interface NumericSetProps {
   assetPath: string;
@@ -16,13 +16,14 @@ export interface NumericSetProps {
 export function NumericSet({ assetPath, label, requireConfirm = false, confirmMessage }: NumericSetProps) {
   const tag = useSingleTag(assetPath, 'NumericSet');
   const lv = useLiveValue(tag.tag_id);
-  const { write, isPending, error } = useTagWriter();
+  const { write, error } = useTagWriter();
   const fmt = resolveFormat(tag);
   const displayLabel = resolveLabel(assetPath, label);
 
   const badQuality = lv.value === null;
-  const pending = isPending(tag.tag_id);
   const writeError = error(tag.tag_id);
+
+  const { setAwaitedValue, isWriting } = useWriteGuard(tag.tag_id, lv.value, writeError);
 
   const [editing, setEditing] = useState(false);
   const [inputValue, setInputValue] = useState('');
@@ -31,7 +32,7 @@ export function NumericSet({ assetPath, label, requireConfirm = false, confirmMe
   const pendingValueRef = useRef<number | null>(null);
 
   function openEdit() {
-    if (badQuality || pending) return;
+    if (badQuality || isWriting) return;
     const current = lv.value !== null ? fmt(lv.value as number) : '';
     setInputValue(current);
     setValidationError(null);
@@ -70,6 +71,7 @@ export function NumericSet({ assetPath, label, requireConfirm = false, confirmMe
       setShowConfirm(true);
     } else {
       setEditing(false);
+      setAwaitedValue(parsed);
       void write(tag.tag_id, parsed);
     }
   }
@@ -80,6 +82,7 @@ export function NumericSet({ assetPath, label, requireConfirm = false, confirmMe
     pendingValueRef.current = null;
     setShowConfirm(false);
     setEditing(false);
+    setAwaitedValue(value);
     void write(tag.tag_id, value);
   }
 
@@ -101,13 +104,12 @@ export function NumericSet({ assetPath, label, requireConfirm = false, confirmMe
               value={inputValue}
               onChange={e => { setInputValue(e.target.value); setValidationError(null); }}
               onKeyDown={e => { if (e.key === 'Enter') handleConfirm(); if (e.key === 'Escape') cancelEdit(); }}
-              disabled={pending}
+              disabled={isWriting}
               className="w-20 text-sm"
               autoFocus
             />
-            <Button variant="primary" onClick={handleConfirm} disabled={pending} className="px-2 py-1 text-xs">Set</Button>
-            <Button variant="secondary" onClick={cancelEdit} disabled={pending} className="px-2 py-1 text-xs">✕</Button>
-            <PendingOverlay isPending={pending} />
+            <Button variant="primary" onClick={handleConfirm} disabled={isWriting} className="px-2 py-1 text-xs">Set</Button>
+            <Button variant="secondary" onClick={cancelEdit} disabled={isWriting} className="px-2 py-1 text-xs">✕</Button>
           </div>
         ) : (
           <Tooltip content={badQuality ? 'Cannot write — device not connected' : undefined}>
@@ -121,7 +123,6 @@ export function NumericSet({ assetPath, label, requireConfirm = false, confirmMe
               data-testid="display-value"
             >
               {displayValue}
-              <PendingOverlay isPending={pending} />
             </div>
           </Tooltip>
         )}

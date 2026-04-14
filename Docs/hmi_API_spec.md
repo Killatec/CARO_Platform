@@ -15,6 +15,7 @@ hmi_functional_spec | CARO_MQTT_Spec | Tag Registry Functional Spec | CARO_DB_Sp
 | 1.2 | 2026-03-26 | PM / Claude | Companion documents updated to include CARO_DB_Spec and updated versions of all companion specs. |
 | 1.3 | 2026-03-26 | PM / Claude | Rate limiting defaults added: 100 req/min read, 20 req/min write, both configurable (OI-02 closed). Idempotency note added: write retries are safe — telemetry loop resolves ambiguity. command_id correlation via WebSocket not required — out-of-sync detection handles outcome visibility. |
 | 1.4 | 2026-03-28 | PM / Claude | Audit log endpoint updated: tag.write split into tag.write.request and tag.write.outcome (two-row pattern with shared command_id); tag.sync.lost and tag.sync.reset added; comment no longer required on tag writes (mode save only). Sync reset endpoint added: POST /api/v1/tags/{tag_id}/sync-reset. PENDING_TABLE_EMPTY error code updated: no longer references cmd_status. |
+| 1.5 | 2026-04-14 | PM / Claude | POST /tags/write: `comment` field changed from required to optional for individual tag writes. The HMI client sends a default value but the field is not validated as required. `comment` remains required only for mode save operations (Section 8, POST /modes/{mode_id}/save). |
 
 ---
 
@@ -232,9 +233,11 @@ Request body:
     { "tag_id": 1001, "value": 90.0 },
     { "tag_id": 2001, "value": 25.0 }
   ],
-  "comment": "string (required)"
+  "comment": "string (optional)"
 }
 ```
+
+> *NOTE: `comment` is accepted but not required for individual tag writes. The HMI client sends a default value (`'HMI write'`). `comment` remains required for mode save operations (Section 8, POST /modes/{mode_id}/save).*
 
 The backend validates each tag_id (must exist and is_setpoint = true), groups tags by module_id, and publishes one SET_VALUES MQTT command per device. Each command carries only that device's tags.
 

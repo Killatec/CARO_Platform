@@ -7,8 +7,13 @@ import { createTagsRouter } from './routes/tags.js';
 import { createModulesRouter } from './routes/modules.js';
 import { authStub } from './middleware/auth-stub.js';
 import type { TelemetryIntake } from './telemetry-intake.js';
+import type { CommandPublisher } from './command-publisher.js';
 
-export function createApp(tagMap: Map<number, TagDef>, intake: TelemetryIntake): Application {
+export function createApp(
+  tagMap: Map<number, TagDef>,
+  intake: TelemetryIntake,
+  commandPublisher: CommandPublisher,
+): Application {
   const app = express();
 
   app.use(cors({
@@ -22,7 +27,7 @@ export function createApp(tagMap: Map<number, TagDef>, intake: TelemetryIntake):
   app.use(express.json());
   app.use(authStub);
 
-  app.use('/api/v1/tags', createTagsRouter(tagMap));
+  app.use('/api/v1/tags', createTagsRouter(tagMap, commandPublisher));
   app.use('/api/v1/modules', createModulesRouter(intake));
 
   app.use(errorHandler as ErrorRequestHandler);

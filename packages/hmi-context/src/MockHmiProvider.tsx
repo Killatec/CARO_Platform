@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { HmiContext } from './HmiContext.js';
-import type { HmiContextValue, LiveValue, TagDef } from './types.js';
+import type { HmiContextValue, LiveValue, TagDef, WsStats } from './types.js';
 
 interface MockHmiProviderProps {
   children: ReactNode;
@@ -79,9 +79,14 @@ export function MockHmiProvider({
     [onWrite]
   );
 
+  const mockWsStats: WsStats = useMemo(
+    () => ({ connected: true, latencyMs: null, messagesPerSec: 0, bytesPerSec: 0, subscribedCount: 0 }),
+    []
+  );
+
   const contextValue = useMemo<HmiContextValue>(
-    () => ({ tagMap, getLiveValue, subscribeLiveValue, writeTag }),
-    [tagMap, getLiveValue, subscribeLiveValue, writeTag]
+    () => ({ tagMap, getLiveValue, subscribeLiveValue, writeTag, wsStats: mockWsStats }),
+    [tagMap, getLiveValue, subscribeLiveValue, writeTag, mockWsStats]
   );
 
   return <HmiContext.Provider value={contextValue}>{children}</HmiContext.Provider>;

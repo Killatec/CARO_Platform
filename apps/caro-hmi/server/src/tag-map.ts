@@ -41,6 +41,7 @@ export async function loadTagMap(rows?: ActiveTag[]): Promise<TagMapResult> {
       data_type:   row.data_type as TagDef['data_type'],
       is_setpoint: row.is_setpoint,
       module_id:   moduleId,
+      module_type: row.module_type ?? 'MQTT',
       eng_min:     getMetaField<number>(meta, 'eng_min'),
       eng_max:     getMetaField<number>(meta, 'eng_max'),
       unit:        getMetaField<string>(meta, 'unit'),

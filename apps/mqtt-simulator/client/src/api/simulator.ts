@@ -7,6 +7,8 @@ export interface ModuleStatus {
   bytes: number;
   delta: boolean;
   protobuf: boolean;
+  acceptSets: boolean;
+  skipAck: boolean;
 }
 
 export interface SimulatorStatus {
@@ -37,6 +39,12 @@ export const getLogs = (): Promise<LogEntry[]> => apiClient.get<LogEntry[]>('/si
 
 export const enableModuleProtobuf  = (moduleId: string): Promise<unknown> => apiClient.post(`/simulator/protobuf/enable/${moduleId}`, {});
 export const disableModuleProtobuf = (moduleId: string): Promise<unknown> => apiClient.post(`/simulator/protobuf/disable/${moduleId}`, {});
+
+export const enableAcceptSets  = (moduleId: string): Promise<unknown> => apiClient.post(`/simulator/accept-sets/${moduleId}/activate`, {});
+export const disableAcceptSets = (moduleId: string): Promise<unknown> => apiClient.post(`/simulator/accept-sets/${moduleId}/deactivate`, {});
+
+export const enableSkipAck  = (moduleId: string): Promise<unknown> => apiClient.post(`/simulator/skip-ack/${moduleId}/activate`, {});
+export const disableSkipAck = (moduleId: string): Promise<unknown> => apiClient.post(`/simulator/skip-ack/${moduleId}/deactivate`, {});
 
 export const requestSnapshot = (moduleId: string): Promise<unknown> => apiClient.post(`/simulator/snapshot/${moduleId}`, {});
 export const injectSetValues = (moduleId: string): Promise<unknown> => apiClient.post(`/simulator/inject/${moduleId}`, {});
