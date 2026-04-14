@@ -94,7 +94,7 @@ function HmiStatusBox() {
         <WidgetErrorBoundary assetPath="HMI.Tag_Count">
           <NumericMon assetPath="HMI.Tag_Count" label="Tag Count" />
         </WidgetErrorBoundary>
-        <WidgetErrorBoundary assetPath="HMI.Tag_Count">
+        <WidgetErrorBoundary assetPath="HMI.Telemetry_CPU">
           <NumericMon assetPath="HMI.Telemetry_CPU" label="Telemetry_CPU" />
         </WidgetErrorBoundary>
       </div>

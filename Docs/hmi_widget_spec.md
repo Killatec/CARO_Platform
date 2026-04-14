@@ -18,6 +18,7 @@ hmi_functional_spec | hmi_API_spec | CARO_DB_Spec
 | 1.5 | 2026-04-08 | PM / Claude | Quality enum removed — null value = bad quality. LiveValue.timestamp removed. Widget `tag` prop replaced with `assetPath` string + useResolveAssetPath. Meta field resolution rule: root-to-leaf, first match wins. Decimal formatting from tag.meta format field. Dashboard examples updated. |
 | 1.6 | 2026-04-13 | PM / Claude | Single-row layout with shared column widths. BooleanMon dot-only. BooleanSet toggle switch. Fixed columns for alignment. |
 | 1.7 | 2026-04-14 | PM / Claude | Pending visual state (spinner, muted value, locked input styling) removed. Replaced with `useWriteGuard` hook — invisible double-click guard only, no visual feedback during writes. `module_type` field added to TagDef shape. `writeTag` in HmiContextProvider now surfaces CMD_ACK device-level rejections (MODULE_FAULT, TIMEOUT, etc.) as thrown errors, surfacing through useTagWriter error state to the widget. |
+| 1.8 | 2026-04-14 | PM / Claude | NumericSet refactored: two-mode toggle replaced with inline click-to-edit input. `requireConfirm` and `confirmMessage` props removed — safety gate is at mode save time. Client-side eng_min/eng_max validation removed — server is sole authority. Write error shown regardless of focus state. `isWriting` uses readOnly instead of disabled to retain focus. |
 
 ---
 
@@ -131,7 +132,7 @@ export function useTagWriter() {
 1. Widget mounts. Calls `useLiveValue(tag.tag_id)` — subscribes to live value. Calls `useTagWriter()` if setpoint widget.
 2. HmiContextProvider triggers WebSocket SUBSCRIBE. Backend sends SNAPSHOT. useLiveValue returns current value immediately.
 3. Widget displays value. Subsequent deltas update useLiveValue automatically.
-4. For setpoint widgets: user edits value and confirms. Widget calls `write(tag.tag_id, newValue)`. `isPending(tag.tag_id)` becomes true. Input locked.
+4. For setpoint widgets: user clicks the value to enter edit mode, types a new value, and presses Enter. Widget calls `write(tag.tag_id, newValue)`. Input remains focused for immediate follow-up edits. `useWriteGuard.isWriting` becomes true, making input read-only until the guard clears.
 5. `write()` Promise resolves (CMD_ACK accepted: true). finally block clears isPending. Widget shows confirmed value.
 6. `write()` Promise rejects (network error or device rejection). finally block clears isPending. `error(tag.tag_id)` is set. Widget shows rejection reason.
 7. Widget unmounts. useLiveValue cleanup unsubscribes. WebSocket UNSUBSCRIBE sent if no other widgets need this tag_id.
@@ -243,7 +244,7 @@ Read-only display of a numeric tag value (f32). No user interaction. Suitable fo
 
 ### SET Numeric_Set
 
-Editable numeric setpoint widget for f32 tags. Displays the confirmed device value and allows Supervisors to submit new values. Manages the full pending lifecycle.
+Editable numeric setpoint widget for f32 tags. Displays the confirmed device value and allows operators to submit new values via a click-to-edit inline input.
 
 **Props**
 
@@ -251,18 +252,23 @@ Editable numeric setpoint widget for f32 tags. Displays the confirmed device val
 |---|---|---|---|---|
 | assetPath | string | Yes | — | Dot-separated path identifying the tag. Resolved via useResolveAssetPath. |
 | label | string | No | — | Display label override. Defaults to last segment of tag.tag_path. |
-| requireConfirm | boolean | No | false | If true, shows a confirmation dialog before submitting the write. |
-| confirmMessage | string | No | — | Custom confirmation message. |
 
 **Behavior**
 
 - Resolves tag via `useResolveAssetPath(assetPath)` (must match exactly one tag).
-- Displays confirmed value in normal state. An edit icon or click on the value opens an inline input pre-filled with the current value.
-- Input validates against `tag.eng_min` / `tag.eng_max` client-side. Shows inline validation error if out of range without calling `write()`.
-- On confirm: calls `write(tag.tag_id, parsedValue)` from useTagWriter. `isPending(tag.tag_id)` becomes true.
-- Pending state clears in the finally block of `write()` — on CMD_ACK acceptance, device rejection, or network error. `error(tag.tag_id)` is set on rejection.
-- `useTagWriter.isPending` and `useTagWriter.error` are used to drive pending spinner and inline error display.
-- value === null: edit button is disabled with tooltip 'Cannot write — device not connected.'
+- A single `<input type="text" inputMode="decimal">` is always rendered — there is no display-mode vs. edit-mode DOM swap.
+- **Idle:** Input displays the formatted live value (from useLiveValue). Blue text (`text-blue-600`) indicates the value is editable. Input is read-only.
+- **Click / Focus → Edit:** Input value clears to empty. Current live value shown as placeholder (ghost text, faint gray). Amber highlight (`bg-amber-100 border-blue-500`). Input accepts typing.
+- **Enter → Submit + retain focus:** Parses input with parseFloat. If empty or NaN, does nothing. Otherwise calls `setAwaitedValue(parsed)` then `write(tag.tag_id, parsed)`. Clears input, updates placeholder to submitted value. Focus is retained — operator can immediately type the next value.
+- **Escape → Cancel:** Blurs the input, triggering the blur handler.
+- **Blur → Restore:** Input value restored to current formatted live value. Edit highlight removed. No write sent.
+- **Live value update while focused:** Placeholder updated only — input value not overwritten. Operator's typing is never interrupted.
+- **Live value update while idle:** Input value updated directly to new formatted value.
+- **ArrowUp / ArrowDown:** Prevented via `e.preventDefault()` on keydown.
+- **No client-side range validation.** The server validates all writes before publishing MQTT commands. Server-side rejections surface through `useTagWriter.error()` and display as inline error text below the widget.
+- **Write error:** Displayed below the widget as red text whenever `useTagWriter.error(tag.tag_id)` is non-null, regardless of whether the input is focused or idle.
+- value === null: input displays `---`, is disabled, red styling applied. Cannot edit.
+- Write in progress (`useWriteGuard.isWriting`): input is read-only (not disabled) to prevent double-submits while retaining focus. Enter handler returns early if isWriting is true.
 
 **Usage Example**
 

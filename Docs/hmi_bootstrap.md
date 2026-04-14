@@ -175,7 +175,7 @@ Default when no `format` field is found: `"#.##"` (2 decimal places).
 
 ## Write Guard
 
-Set widgets (`BooleanSet`, `NumericSet`) use `useWriteGuard` from `packages/widgets/src/shared/useWriteGuard.ts` to prevent double-click submissions. There is no visual pending state — widgets look identical during writes. The hook tracks `awaitedValue` and clears it when:
+Set widgets (`BooleanSet`, `NumericSet`) use `useWriteGuard` from `packages/widgets/src/shared/useWriteGuard.ts` to prevent double-click submissions. There is no visual pending state — widgets look identical during writes. NumericSet uses `readOnly` (not `disabled`) while a write is in flight, so the input retains focus and the operator can type the next value as soon as the guard clears. The hook tracks `awaitedValue` and clears it when:
 
 1. The live telemetry value matches the awaited value (write confirmed).
 2. A write error is set (rejection surfaced).
@@ -185,7 +185,8 @@ Usage:
 ```tsx
 const { setAwaitedValue, isWriting } = useWriteGuard(tag.tag_id, lv.value, writeError);
 // isWriting = true while a write is in flight
-// disabled={badQuality || isWriting}
+// NumericSet: readOnly={!isFocused || isWriting}  (disabled only for badQuality)
+// BooleanSet: toggle disabled={badQuality || isWriting}
 ```
 
 ---
