@@ -50,6 +50,18 @@ The root `npm run dev` starts all six with `concurrently`, color-coded. The `scr
 
 ---
 
+## Server Startup Sequence
+
+All three servers (tag-registry, caro-hmi, mqtt-simulator) follow the same startup sequence:
+
+1. `ping()` — verify PostgreSQL connectivity. Exits with `process.exit(1)` on failure.
+2. `runMigrations()` — run pending migrations under advisory lock `pg_advisory_lock(1)`. Exits on failure.
+3. App-level init — MQTT client, WebSocket server, route registration, etc.
+
+The advisory lock in `packages/db/migrations.ts` prevents concurrent migration races when all three servers start simultaneously (e.g. `npm run dev`).
+
+---
+
 ## E2E Data Flow
 
 ```
@@ -145,6 +157,29 @@ Both packages have full Vitest test suites. Run from monorepo root:
 npx tsc --noEmit -p packages/hmi-context/tsconfig.json
 npx tsc --noEmit -p packages/widgets/tsconfig.json
 ```
+
+### @caro/widgets folder structure
+
+```
+packages/widgets/src/
+├── index.ts                      # Public exports (widgets + types only)
+├── NumericMon.tsx
+├── NumericSet.tsx
+├── BooleanMon.tsx
+├── BooleanSet.tsx
+├── AnalogIn.tsx                  # Composite multi-tag widget (9 children)
+└── shared/
+    ├── colorMap.ts               # Boolean color constants (hex + Tailwind) keyed by name
+    ├── ToggleSwitch.tsx          # Shared toggle switch button (BooleanSet + AnalogIn)
+    ├── useNumericInput.ts        # Shared focus/blur/write state for numeric inputs (NumericSet + AnalogIn)
+    ├── useTagGroup.ts            # Multi-tag resolver for composite widgets — avoids hooks-in-loops
+    ├── useWriteGuard.ts          # Double-click guard (no visual state — invisible)
+    ├── useSingleTag.ts           # Single-tag resolver — throws on zero or multiple matches
+    ├── utils.ts                  # resolveFormat, resolveLabel
+    └── widgetStyles.ts           # Shared column widths and class constants
+```
+
+`shared/` utilities are internal to `@caro/widgets` and not exported from `index.ts`.
 
 ---
 

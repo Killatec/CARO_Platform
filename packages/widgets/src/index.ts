@@ -9,3 +9,6 @@ export type { BooleanMonProps } from './BooleanMon.js';
 
 export { BooleanSet } from './BooleanSet.js';
 export type { BooleanSetProps } from './BooleanSet.js';
+
+export { AnalogIn } from './AnalogIn.js';
+export type { AnalogInProps } from './AnalogIn.js';

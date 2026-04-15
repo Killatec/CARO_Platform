@@ -1,10 +1,11 @@
+import { useState } from 'react';
 import { useLiveValue, useTagWriter } from '@caro/hmi-context';
 import { Button, Modal, Tooltip } from '@caro/ui';
 import { useSingleTag } from './shared/useSingleTag.js';
 import { resolveLabel } from './shared/utils.js';
 import { ROW_CONTAINER, LABEL_CLASS, COL } from './shared/widgetStyles.js';
 import { useWriteGuard } from './shared/useWriteGuard.js';
-import { useState } from 'react';
+import { ToggleSwitch } from './shared/ToggleSwitch.js';
 
 export interface BooleanSetProps {
   assetPath: string;
@@ -17,13 +18,6 @@ export interface BooleanSetProps {
   confirmMessage?: string;
 }
 
-const TRACK_COLOR_MAP: Record<string, string> = {
-  green: '#22c55e',
-  red: '#ef4444',
-  amber: '#f59e0b',
-  blue: '#3b82f6',
-  gray: '#d1d5db',
-};
 
 export function BooleanSet({
   assetPath,
@@ -74,59 +68,22 @@ export function BooleanSet({
   const resolvedConfirmMessage =
     confirmMessage ?? `Set ${displayLabel} to ${pendingNewValue ? trueLabel : falseLabel}?`;
 
-  // Switch track and thumb styles
-  const trackColor = badQuality
-    ? '#e5e7eb'
-    : isTrue
-      ? (TRACK_COLOR_MAP[trueColor] ?? '#22c55e')
-      : (TRACK_COLOR_MAP[falseColor] ?? '#d1d5db');
-
-  const trackStyle: React.CSSProperties = {
-    width: 28,
-    height: 14,
-    borderRadius: 7,
-    backgroundColor: trackColor,
-    position: 'relative',
-    transition: 'background-color 0.2s ease',
-    cursor: badQuality ? 'not-allowed' : 'pointer',
-    opacity: badQuality ? 0.5 : 1,
-    border: badQuality ? '1px dashed #f87171' : 'none',
-    flexShrink: 0,
-  };
-
-  const thumbStyle: React.CSSProperties = {
-    width: 10,
-    height: 10,
-    borderRadius: '50%',
-    backgroundColor: '#fff',
-    position: 'absolute',
-    top: 2,
-    left: (!badQuality && isTrue) ? 16 : 2,
-    transition: 'left 0.2s ease',
-    boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
-  };
-
   return (
     <div className="flex flex-col self-start">
       <div className={ROW_CONTAINER}>
         <span className={LABEL_CLASS}>{displayLabel}</span>
         <div className={`${COL.value} flex justify-end`}>
-        <Tooltip content={badQuality ? 'Cannot write — device not connected' : undefined}>
-          <button
-            type="button"
-            onClick={handleToggle}
-            disabled={badQuality || isWriting}
-            className="flex items-center bg-transparent border-none p-0"
-            data-testid="toggle-button"
-            aria-label={`Toggle ${displayLabel}. Current: ${isTrue ? trueLabel : falseLabel}. Click to set ${nextLabel}`}
-            role="switch"
-            aria-checked={!badQuality && isTrue}
-          >
-            <div style={trackStyle}>
-              <div style={thumbStyle} />
-            </div>
-          </button>
-        </Tooltip>
+          <Tooltip content={badQuality ? 'Cannot write — device not connected' : undefined}>
+            <ToggleSwitch
+              isTrue={isTrue}
+              badQuality={badQuality}
+              isWriting={isWriting}
+              onClick={handleToggle}
+              trueColor={trueColor}
+              falseColor={falseColor}
+              ariaLabel={`Toggle ${displayLabel}. Current: ${isTrue ? trueLabel : falseLabel}. Click to set ${nextLabel}`}
+            />
+          </Tooltip>
         </div>
       </div>
 

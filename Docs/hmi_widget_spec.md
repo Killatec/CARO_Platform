@@ -19,6 +19,8 @@ hmi_functional_spec | hmi_API_spec | CARO_DB_Spec
 | 1.6 | 2026-04-13 | PM / Claude | Single-row layout with shared column widths. BooleanMon dot-only. BooleanSet toggle switch. Fixed columns for alignment. |
 | 1.7 | 2026-04-14 | PM / Claude | Pending visual state (spinner, muted value, locked input styling) removed. Replaced with `useWriteGuard` hook — invisible double-click guard only, no visual feedback during writes. `module_type` field added to TagDef shape. `writeTag` in HmiContextProvider now surfaces CMD_ACK device-level rejections (MODULE_FAULT, TIMEOUT, etc.) as thrown errors, surfacing through useTagWriter error state to the widget. |
 | 1.8 | 2026-04-14 | PM / Claude | NumericSet refactored: two-mode toggle replaced with inline click-to-edit input. `requireConfirm` and `confirmMessage` props removed — safety gate is at mode save time. Client-side eng_min/eng_max validation removed — server is sole authority. Write error shown regardless of focus state. `isWriting` uses readOnly instead of disabled to retain focus. |
+| 1.9 | 2026-04-14 | PM / Claude | Spec text fixes: removed erroneous useTagWriter reference from NumericMon NOTE; corrected BooleanSet pending-state reference from useTagWriter.isPending to useWriteGuard; clarified disabled vs readOnly in Section 4.2; fixed BooleanMon bad-quality description (label always shown); clarified write() is single-tag for widgets, batch at server level; documented Boolean 2-column layout in Section 4.4. |
+| 2.0 | 2026-04-14 | PM / Claude | Added useTagGroup utility (Section 3.6). Added Analog_In composite widget (Section 5). First multi-tag widget in the catalog. |
 
 ---
 
@@ -47,6 +49,10 @@ The `@caro/widgets` package lives at `packages/widgets/` in the CARO_Platform mo
 `@caro/widgets` has no runtime dependencies beyond React. It does NOT depend on Zustand, any WebSocket library, or any HTTP client. These are peer dependencies of the HMI application, not the widget package.
 
 > *NOTE: `@caro/widgets` may import primitives from `@caro/ui` (Button, Input, Badge) and Tailwind utility classes for styling. It must never import from `@caro/db` or any server-side module.*
+
+> *NOTE: `@caro/widgets` now includes composite multi-tag widgets (AnalogIn) alongside the foundational single-tag widgets.*
+
+> *NOTE: Several widget behaviors are implemented via internal shared utilities in `packages/widgets/src/shared/`. These are not exported from `@caro/widgets` but are important for contributors: `useNumericInput` (focus/blur/write state for numeric inputs — shared by NumericSet and AnalogIn NumericSetCell), `ToggleSwitch` (toggle button component — shared by BooleanSet and AnalogIn BooleanSetCell), `colorMap` (boolean color constants keyed by name — shared across BooleanMon, BooleanSet, and AnalogIn).*
 
 ---
 
@@ -80,7 +86,7 @@ The HmiContextProvider implementation subscribes to the WebSocket layer and main
 
 ### 3.3 useTagWriter
 
-`useTagWriter()` — called by setpoint widgets. Returns a write function and per-tag pending and error state. `write()` accepts either a single `{tagId, value}` pair or an array for batch writes. `isPending` and `error` are keyed by tagId so multi-tag widgets can show state per tag independently.
+`useTagWriter()` — called by setpoint widgets. Returns a write function and per-tag pending and error state. `write()` accepts a tagId and value as separate arguments. Widgets always write a single tag per call. Batch writes (multiple tags in one request) are supported at the server level for mode-loading workflows but are not exposed through this hook. `isPending` and `error` are keyed by tagId so multi-tag widgets can show state per tag independently.
 
 ```ts
 // Signature (in @caro/hmi-context)
@@ -89,7 +95,7 @@ export function useTagWriter(): {
   isPending: (tagId: number) => boolean,
   error: (tagId: number) => string | null
 }
-// write() resolves on CMD_ACK accepted: true
+// write() sends a single tag write. Batch writes are a server-level concern (mode loading).
 // write() rejects on network error, backend validation failure,
 //   or device rejection (CMD_ACK with accepted: false)
 // isPending clears in the finally block — guaranteed regardless of outcome
@@ -167,6 +173,18 @@ Error evaluation (wrong number of matches, missing expected children) is the wid
 
 ---
 
+### 3.6 useTagGroup — Multi-Tag Resolution
+
+For composite widgets that display multiple related tags under a common path prefix, `@caro/widgets` provides a `useTagGroup` utility:
+
+```ts
+useTagGroup(basePath: string, children: string[], widgetName: string): Record<string, TagDef>
+```
+
+Resolves each child as `${basePath}.${child}` via useResolveAssetPath. Validates exactly one match per child — throws on zero or multiple matches. The `children` array must be a static constant (React hooks rule). Single-tag widgets continue to use `useSingleTag` directly.
+
+---
+
 ## 4. Visual Standards
 
 All widgets in `@caro/widgets` follow these standards consistently. They use `@caro/ui` primitives and `@caro/ui` design tokens for colors, spacing, and typography.
@@ -194,7 +212,7 @@ Instead, widgets use the `useWriteGuard` hook (`packages/widgets/src/shared/useW
 
 | Pending State | Visual Treatment |
 |---|---|
-| Write submitted — `write(tagId, value)` called | No visual change. Toggle/input disabled (prevents double-click). `useWriteGuard.isWriting` is true. |
+| Write submitted — `write(tagId, value)` called | No visual change. Toggle disabled (BooleanSet) or input set to readOnly (NumericSet) to prevent double-click. `useWriteGuard.isWriting` is true. |
 | Telemetry confirms the new value | Guard cleared. Toggle/input re-enabled. No visual change. |
 | `write()` rejects — network, backend, or device rejection | Guard cleared. Inline error message shown below the widget (e.g. `'Device rejected: MODULE_FAULT'`). Toggle/input re-enabled. |
 | Safety timeout (1000 ms) fires without telemetry confirmation | Guard cleared. Toggle/input re-enabled. No error shown unless `writeError` is already set. |
@@ -205,7 +223,7 @@ All widgets accept a `label` prop displayed above or beside the value. Unit (whe
 
 ### 4.4 Sizing
 
-Widgets use shared fixed column widths (label, value, unit) from `widgetStyles.ts` for vertical alignment when stacked. They render as `inline-flex` rows and do not stretch to fill their container.
+Widgets use shared fixed column widths (label, value, unit) from `widgetStyles.ts` for vertical alignment when stacked. They render as `inline-flex` rows and do not stretch to fill their container. Numeric widgets render three columns (label, value, unit). Boolean widgets render two columns (label, indicator/toggle) — they have no unit column.
 
 ---
 
@@ -224,7 +242,7 @@ Read-only display of a numeric tag value (f32). No user interaction. Suitable fo
 | assetPath | string | Yes | — | Dot-separated path identifying the tag. Resolved via useResolveAssetPath. Abbreviated paths supported. |
 | label | string | No | — | Display label override. If omitted, the last segment of tag.tag_path is used. |
 
-> *NOTE: This widget calls useLiveValue and useTagWriter internally from @caro/hmi-context. No subscription or write props are required.*
+> *NOTE: This widget calls useLiveValue internally from @caro/hmi-context. No subscription or write props are required.*
 
 **Behavior**
 
@@ -297,7 +315,7 @@ Read-only boolean state indicator. Displays ON/OFF, ACTIVE/CLEAR, or any custom 
 
 - Resolves tag via `useResolveAssetPath(assetPath)` (must match exactly one tag).
 - Displays a colored dot indicator right-aligned in the value column. No ON/OFF text rendered — dot color conveys state. trueLabel/falseLabel retained for accessibility.
-- value === null: indicator shown as dashed circle, label shown as `---` with red tint.
+- value === null: indicator shown as dashed red circle. Label is always displayed regardless of quality — only the value indicator reflects bad quality.
 - No user interaction.
 
 **Usage Example**
@@ -330,13 +348,44 @@ Toggleable boolean setpoint. Displays the confirmed state and allows Supervisors
 - Resolves tag via `useResolveAssetPath(assetPath)` (must match exactly one tag).
 - Displays a toggle switch (28×14px). Track color follows trueColor/falseColor props. Uses role='switch' and aria-checked.
 - On click: if `requireConfirm=true`, opens a confirmation dialog. On confirm (or immediately if `requireConfirm=false`), calls `write(tag.tag_id, !currentValue)` from useTagWriter.
-- Pending state follows the same rules as Numeric_Set — managed via `useTagWriter.isPending` and `useTagWriter.error`.
+- Write-in-flight state is managed by `useWriteGuard` — toggle is disabled while `isWriting` is true. Write errors surface through `useTagWriter.error(tag.tag_id)` and display as inline red text below the widget.
 - value === null: toggle is disabled with tooltip 'Cannot write — device not connected.'
 
 **Usage Example**
 
 ```jsx
 <BooleanSet assetPath="RF_Fwd.enable" label="RF Enable" trueLabel="ENABLED" falseLabel="DISABLED" requireConfirm={true} confirmMessage="Enable RF output? Ensure area is clear." />
+```
+
+---
+
+### COMP Analog_In
+
+Composite multi-tag widget displaying a complete analog input parameter as a single dense row. Contains 5 NumericSet cells, 1 NumericMon cell, 1 BooleanSet cell, and 1 BooleanMon cell.
+
+**Props**
+
+| Prop | Type | Required | Default | Description |
+|---|---|---|---|---|
+| assetPath | string | Yes | — | Base path. Children (Set, Mon, Tol, By, Intk, RSS, Per, In_A, In_B) resolved underneath. |
+| label | string | No | — | Display label. Defaults to last segment of assetPath. |
+| showHeader | boolean | No | false | If true, renders a header row above the data row with column labels. |
+
+**Children (display order)**
+
+Set (NumericSet), Mon (NumericMon), Tol (NumericSet), By (BooleanSet), Intk (BooleanMon), RSS (NumericSet), Per (NumericSet), In_A (NumericSet), In_B (NumericSet)
+
+**Behavior**
+
+- Resolves all 9 children via `useTagGroup`. Throws if any child is missing or ambiguous.
+- Unit displayed once after the label, resolved from any numeric child tag.
+- Each cell handles quality independently — a single null value shows `---` or dashed dot for that cell only.
+- Write errors displayed below the row, prefixed with child name (e.g. `Set: Device rejected: MODULE_FAULT`).
+- Uses fixed column widths for vertical alignment when multiple AnalogIn rows are stacked.
+
+```tsx
+<AnalogIn assetPath="RF1.PRF" label="PRF" showHeader={true} />
+<AnalogIn assetPath="RF2.PRF" label="PRF" />
 ```
 
 ---

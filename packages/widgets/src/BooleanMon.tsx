@@ -2,6 +2,7 @@ import { useLiveValue } from '@caro/hmi-context';
 import { useSingleTag } from './shared/useSingleTag.js';
 import { resolveLabel } from './shared/utils.js';
 import { ROW_CONTAINER, LABEL_CLASS, COL } from './shared/widgetStyles.js';
+import { getDotClass } from './shared/colorMap.js';
 
 export interface BooleanMonProps {
   assetPath: string;
@@ -12,13 +13,6 @@ export interface BooleanMonProps {
   falseColor?: string;
 }
 
-const COLOR_MAP: Record<string, string> = {
-  green: 'bg-green-500',
-  red: 'bg-red-500',
-  amber: 'bg-amber-500',
-  blue: 'bg-blue-500',
-  gray: 'bg-gray-400',
-};
 
 export function BooleanMon({
   assetPath,
@@ -41,7 +35,7 @@ export function BooleanMon({
   } else {
     const isTrue = lv.value === true;
     const colorKey = isTrue ? trueColor : falseColor;
-    dotClass = `w-3 h-3 rounded-full ${COLOR_MAP[colorKey] ?? 'bg-gray-400'}`;
+    dotClass = `w-3 h-3 rounded-full ${getDotClass(colorKey)}`;
   }
 
   return (

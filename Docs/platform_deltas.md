@@ -14,11 +14,3 @@ Read once at session start alongside `Docs/platform_handoff.md`.
 
 ---
 
-## Delta PL-002 — All servers run DB migrations at startup
-
-**Spec:** platform_handoff.md, hmi_bootstrap.md, mqtt_simulator_bootstrap.md
-**Status:** Open
-**Detail:** `runMigrations()` from `@caro/db` is now called at startup in all three servers (tag-registry, caro-hmi, mqtt-simulator). Advisory lock `pg_advisory_lock(1)` in `packages/db/migrations.ts` prevents concurrent migration races when all three servers start simultaneously. Each server calls `ping()` first to verify DB connectivity, then `runMigrations()`, failing fast with `process.exit(1)` on error before any app-level init runs.
-
----
-

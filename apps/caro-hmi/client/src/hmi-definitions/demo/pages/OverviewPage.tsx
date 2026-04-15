@@ -5,7 +5,7 @@
  * Each box: setpoints → monitors → interlock enable → interlock status
  */
 import type { CSSProperties } from 'react';
-import { NumericMon, NumericSet, BooleanMon, BooleanSet } from '@caro/widgets';
+import { NumericMon, NumericSet, BooleanMon, BooleanSet, AnalogIn } from '@caro/widgets';
 import { WidgetErrorBoundary } from '../../../shell/WidgetErrorBoundary.js';
 import { ModuleStatusTable } from '../../../components/ModuleStatusTable.js';
 
@@ -52,6 +52,21 @@ const WIDGET_STACK: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   gap: 3,
+};
+
+const SECTION_BOX: CSSProperties = {
+  border: '1px solid #d1d5db',
+  borderRadius: 8,
+  padding: 16,
+  background: '#fafafa',
+  width: 'fit-content',
+};
+
+const ANALOG_IN_STACK: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 0,
+  alignItems: 'flex-start',
 };
 
 // ─── Module Status Table Box ─────────────────────────────────────────────────
@@ -169,6 +184,21 @@ export function OverviewPage() {
         {(['RF1', 'RF2'] as const).map(m => (
           <RfModuleBox key={m} module={m} />
         ))}
+
+        {/* Analog Inputs — stacked alignment demo */}
+        <div>
+          <div style={SECTION_BOX}>
+            <h2 style={MODULE_TITLE}>Analog Inputs</h2>
+            <div style={ANALOG_IN_STACK}>
+              <WidgetErrorBoundary assetPath="RF1.PRF">
+                <AnalogIn assetPath="RF1.PRF" label="PRF" showHeader={true} />
+              </WidgetErrorBoundary>
+              <WidgetErrorBoundary assetPath="RF2.PRF">
+                <AnalogIn assetPath="RF2.PRF" label="PRF" />
+              </WidgetErrorBoundary>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );

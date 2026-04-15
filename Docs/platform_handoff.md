@@ -22,7 +22,7 @@
 | `@caro/server` | `packages/server/` | Shared Express middleware — asyncWrap, errorHandler |
 | `@caro/proto` | `packages/proto/` | Shared Protobuf schemas (`tag.proto`) |
 | `@caro/hmi-context` | `packages/hmi-context/` | HMI React context, hooks (useLiveValue, useTagWriter, useTagMap, useTagSubtree, useResolveAssetPath), MockHmiProvider |
-| `@caro/widgets` | `packages/widgets/` | HMI widget components (NumericMon, NumericSet, BooleanMon, BooleanSet) |
+| `@caro/widgets` | `packages/widgets/` | HMI widget components (NumericMon, NumericSet, BooleanMon, BooleanSet, AnalogIn). AnalogIn is the first composite multi-tag widget. |
 | `@caro/tag-registry-shared` | `apps/tag-registry/shared/` | Tag Registry shared validation, types, and utilities |
 
 ---
@@ -67,6 +67,8 @@ Migrations: `db/postgres/migrations/` — never edit existing files, add new one
 Applied: `001` `002` `003` `004` `006` `007` `008` `009` `010` `011` `012`
 
 HMI tables (`users`, `sessions`, `commissioned_modules`, `operation_modes`, `mode_revisions`, `setpoint_values`, `pending_setpoint_values`, `system_settings`, `audit_log`) specified in DB Spec, not yet migrated. Create when HMI development starts.
+
+All three servers (tag-registry, caro-hmi, mqtt-simulator) call `runMigrations()` from `@caro/db` at startup. Advisory lock `pg_advisory_lock(1)` in `packages/db/migrations.ts` prevents concurrent migration races when all three start simultaneously. Startup sequence per server: `ping()` → `runMigrations()` → app init. Either step failing causes `process.exit(1)` before any app-level init runs.
 
 ---
 
