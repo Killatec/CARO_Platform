@@ -5,14 +5,17 @@ import type { TagDef } from '@caro/hmi-context';
 import { errorHandler } from '@caro/server';
 import { createTagsRouter } from './routes/tags.js';
 import { createModulesRouter } from './routes/modules.js';
+import { createResetRouter } from './routes/reset.js';
 import { authStub } from './middleware/auth-stub.js';
 import type { TelemetryIntake } from './telemetry-intake.js';
-import type { CommandPublisher } from './command-publisher.js';
+import type { CmdController } from './cmd-controller.js';
+import type { ResetBus } from './reset-bus.js';
 
 export function createApp(
   tagMap: Map<number, TagDef>,
   intake: TelemetryIntake,
-  commandPublisher: CommandPublisher,
+  cmdController: CmdController,
+  resetBus: ResetBus,
 ): Application {
   const app = express();
 
@@ -27,8 +30,9 @@ export function createApp(
   app.use(express.json());
   app.use(authStub);
 
-  app.use('/api/v1/tags', createTagsRouter(tagMap, commandPublisher));
+  app.use('/api/v1/tags', createTagsRouter(tagMap, cmdController));
   app.use('/api/v1/modules', createModulesRouter(intake));
+  app.use('/api/v1/reset', createResetRouter(resetBus));
 
   app.use(errorHandler as ErrorRequestHandler);
 

@@ -170,6 +170,23 @@ describe('HmiTagSource', () => {
     ).toThrow('collision');
   });
 
+  it('reset() increments Reset_Count tag on each call', () => {
+    const { intake } = makeIntake([1066, 1099]);
+    const hmiTags = HmiTagSource.create(
+      [
+        makeActiveTag(1066, 'CARO_1.HMI.Module_Count'),
+        makeActiveTag(1099, 'CARO_1.HMI.Reset_Count'),
+      ],
+      { intake, hmiPublishIntervalMs: HMI_PUBLISH_INTERVAL_MS, dutyTracker: new DutyTracker() },
+    );
+
+    hmiTags.reset();
+    expect((hmiTags as Record<string, unknown>).Reset_Count).toBe(1);
+
+    hmiTags.reset();
+    expect((hmiTags as Record<string, unknown>).Reset_Count).toBe(2);
+  });
+
   it('class methods (startPublishing, stopPublishing) accessible through proxy', () => {
     const { intake } = makeIntake([1066]);
     const hmiTags = HmiTagSource.create(

@@ -1,5 +1,5 @@
 # CARO_Platform — Platform Handoff
-**Updated:** 2026-04-08 | **Root:** `C:\KillaTec\CARO_Platform` | **GitHub:** `Killatec/CARO_Platform` | **Branch:** `dev`
+**Updated:** 2026-04-15 | **Root:** `C:\KillaTec\CARO_Platform` | **GitHub:** `Killatec/CARO_Platform` | **Branch:** `dev`
 
 ---
 
@@ -9,7 +9,7 @@
 |---|---|---|---|
 | Tag Registry | 3001 | 5173 | Complete |
 | MQTT Simulator | 3002 | 5174 | Active development |
-| CARO HMI | 3003 | 5175 | Phase 3 complete — server core + client shell + demo page, E2E pipeline working |
+| CARO HMI | 3003 | 5175 | Phase 3 complete — server core + client shell + demo page, E2E pipeline working. MqttBridge scoped to MQTT-only modules. CmdController routes writes/resets by module_type. ResetBus fans out system reset to registered subsystems. |
 
 ---
 

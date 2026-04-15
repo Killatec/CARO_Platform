@@ -29,4 +29,4 @@ export const VALUE_CLASS = `${COL.value} font-mono text-sm text-gray-900 text-ri
 export const VALUE_EDITABLE_CLASS = `${COL.value} font-mono text-sm text-blue-600 text-right`;
 
 /** Shared value class (bad quality / disconnected) */
-export const VALUE_BAD_CLASS = `${COL.value} font-mono text-sm text-red-600 text-right border border-red-400 rounded`;
+export const VALUE_BAD_CLASS = `${COL.value} font-mono text-sm text-red-600 text-right`;

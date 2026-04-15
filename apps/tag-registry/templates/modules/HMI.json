@@ -34,6 +34,15 @@
         "format": "#.#",
         "unit": "%"
       }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Reset_Count",
+      "fields": {
+        "data_type": "i16",
+        "Trends": false,
+        "format": "#"
+      }
     }
   ]
 }

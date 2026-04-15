@@ -4,6 +4,4 @@
 
 ---
 
-_(no open divergences)_
-
 ---

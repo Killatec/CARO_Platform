@@ -2,12 +2,11 @@ import { Router } from 'express';
 import { asyncWrap } from '@caro/server';
 import type { CaroError } from '@caro/server';
 import type { TagDef } from '@caro/hmi-context';
-import type { CommandPublisher } from '../command-publisher.js';
+import type { CmdController } from '../cmd-controller.js';
 
 type ValidationDetail =
   | { tag_id: number; code: 'TAG_NOT_FOUND' }
   | { tag_id: number; code: 'TAG_NOT_WRITABLE' }
-  | { tag_id: number; code: 'MODULE_TYPE_NOT_SUPPORTED'; message: string }
   | { tag_id: number; code: 'TYPE_MISMATCH'; message: string };
 
 function coerceValue(raw: unknown): number | boolean | null {
@@ -21,7 +20,7 @@ function coerceValue(raw: unknown): number | boolean | null {
 
 export function createTagsRouter(
   tagMap: Map<number, TagDef>,
-  commandPublisher: CommandPublisher,
+  cmdController: CmdController,
 ): Router {
   const router = Router();
 
@@ -70,11 +69,6 @@ export function createTagsRouter(
         continue;
       }
 
-      if (tagDef.module_type !== 'MQTT') {
-        errors.push({ tag_id, code: 'MODULE_TYPE_NOT_SUPPORTED', message: 'Only MQTT modules support writes currently' });
-        continue;
-      }
-
       const value = coerceValue(entry.value);
       if (value === null) {
         errors.push({ tag_id, code: 'TYPE_MISMATCH', message: `Expected number or boolean, got ${typeof entry.value}` });
@@ -92,7 +86,7 @@ export function createTagsRouter(
       throw err;
     }
 
-    const writeResult = await commandPublisher.writeValues(valid);
+    const writeResult = await cmdController.writeValues(valid);
     res.json({ ok: true, data: writeResult });
   }));
 

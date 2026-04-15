@@ -112,6 +112,9 @@ function HmiStatusBox() {
         <WidgetErrorBoundary assetPath="HMI.Telemetry_CPU">
           <NumericMon assetPath="HMI.Telemetry_CPU" label="Telemetry_CPU" />
         </WidgetErrorBoundary>
+        <WidgetErrorBoundary assetPath="HMI.Reset_Count">
+          <NumericMon assetPath="HMI.Reset_Count" label="Reset Count" />
+        </WidgetErrorBoundary>
       </div>
     </div>
   );
@@ -136,6 +139,11 @@ function RfModuleBox({ module }: RfModuleBoxProps) {
     <div style={MODULE_BOX}>
       <h2 style={MODULE_TITLE}>{module}</h2>
       <div style={WIDGET_STACK}>
+        {/* Reset Count */}
+        <WidgetErrorBoundary assetPath={`${module}.Reset_Count`}>
+          <NumericMon assetPath={`${module}.Reset_Count`} label="Reset Count" />
+        </WidgetErrorBoundary>
+
         {/* Setpoints */}
         {CHANNELS.map(ch => (
           <WidgetErrorBoundary key={`${module}.${ch}.sp`} assetPath={`${module}.${ch}.setpoint`}>

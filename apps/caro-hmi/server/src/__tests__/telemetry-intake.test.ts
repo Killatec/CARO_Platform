@@ -188,19 +188,198 @@ describe('TelemetryIntake', () => {
     expect(stats.tags_in_last_packet).toBe(3);
   });
 
-  it('ingest updates stalled from timedOutModules', () => {
+  it('watchdogTick sets watchdogLatched (stalled indicator)', () => {
     const intake = makeIntake(new LkvCache(), new DbPipeline(), 0);
     intake.watchdogTick();
     const stats = intake.getModuleStats().find(s => s.module_id === MODULE_ID)!;
     expect(stats.stalled).toBe(true);
   });
 
-  it('ingest clears stalled status', () => {
+  it('ingest does NOT clear stalled status (watchdog is latching)', () => {
     const intake = makeIntake(new LkvCache(), new DbPipeline(), 0);
     intake.watchdogTick();
     intake.ingest(MODULE_ID, telemetryMsg([{ tag_id: TAG_MONITOR, value: 1 }]));
     const stats = intake.getModuleStats().find(s => s.module_id === MODULE_ID)!;
-    expect(stats.stalled).toBe(false);
+    expect(stats.stalled).toBe(true);
+  });
+
+  it('resetAllWatchdogs() clears stalled status', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(3000);
+      const intake = makeIntake(new LkvCache(), new DbPipeline(), 2000);
+      intake.watchdogTick(); // 3000 - 0 = 3000 > 2000 → trips
+      expect(intake.getModuleStats().find(s => s.module_id === MODULE_ID)!.stalled).toBe(true);
+      intake.ingest(MODULE_ID, telemetryMsg([{ tag_id: TAG_MONITOR, value: 1 }])); // lastSeen = 3000
+      intake.resetAllWatchdogs(); // 3000 - 3000 = 0 ≤ 2000 → clears
+      expect(intake.getModuleStats().find(s => s.module_id === MODULE_ID)!.stalled).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('resetWatchdog(moduleId) clears only that module', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(3000);
+      const MODULE_B = 'modB';
+      const twoModules = new Map<string, number[]>([
+        [MODULE_ID, [TAG_MONITOR]],
+        [MODULE_B,  [TAG_TREND]],
+      ]);
+      const intake = new TelemetryIntake({
+        lkv: new LkvCache(),
+        tagMap,
+        moduleTagIds: twoModules,
+        trendableTagIds,
+        dbPipeline: new DbPipeline(),
+        watchdogTimeoutMs: 2000,
+        dutyTracker: new DutyTracker(),
+      });
+
+      intake.watchdogTick(); // both modules time out: 3000 - 0 = 3000 > 2000
+      expect(intake.getModuleStats().find(s => s.module_id === MODULE_ID)!.stalled).toBe(true);
+      expect(intake.getModuleStats().find(s => s.module_id === MODULE_B)!.stalled).toBe(true);
+
+      intake.ingest(MODULE_ID, telemetryMsg([{ tag_id: TAG_MONITOR, value: 1 }])); // lastSeen=3000 for MODULE_ID only
+      intake.resetWatchdog(MODULE_ID); // 3000 - 3000 = 0 ≤ 2000 → clears MODULE_ID
+      expect(intake.getModuleStats().find(s => s.module_id === MODULE_ID)!.stalled).toBe(false);
+      expect(intake.getModuleStats().find(s => s.module_id === MODULE_B)!.stalled).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('resetAllWatchdogs does not clear modules with stale lastSeen', () => {
+    const intake = makeIntake(new LkvCache(), new DbPipeline(), 0);
+    intake.watchdogTick(); // lastSeen=0, Date.now()-0 >> 0 → trips
+    intake.resetAllWatchdogs(); // Date.now()-0 >> 0 → stale → stays latched
+    expect(intake.getModuleStats().find(s => s.module_id === MODULE_ID)!.stalled).toBe(true);
+  });
+
+  it('resetAllWatchdogs clears modules with fresh lastSeen', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(3000);
+      const intake = makeIntake(new LkvCache(), new DbPipeline(), 2000);
+      intake.watchdogTick(); // trips: 3000 - 0 = 3000 > 2000
+      intake.ingest(MODULE_ID, telemetryMsg([{ tag_id: TAG_MONITOR, value: 1 }])); // lastSeen=3000, latch stays
+      expect(intake.getModuleStats().find(s => s.module_id === MODULE_ID)!.stalled).toBe(true);
+      intake.resetAllWatchdogs(); // 3000 - 3000 = 0 ≤ 2000 → clears
+      expect(intake.getModuleStats().find(s => s.module_id === MODULE_ID)!.stalled).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('resetWatchdog(moduleId) only clears if lastSeen is fresh', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(3000);
+      const intake = makeIntake(new LkvCache(), new DbPipeline(), 2000);
+      intake.watchdogTick(); // trips: 3000 - 0 = 3000 > 2000
+
+      // stale lastSeen — reset should not clear
+      intake.resetWatchdog(MODULE_ID);
+      expect(intake.getModuleStats().find(s => s.module_id === MODULE_ID)!.stalled).toBe(true);
+
+      // fresh lastSeen — reset should clear
+      intake.ingest(MODULE_ID, telemetryMsg([{ tag_id: TAG_MONITOR, value: 1 }]));
+      intake.resetWatchdog(MODULE_ID);
+      expect(intake.getModuleStats().find(s => s.module_id === MODULE_ID)!.stalled).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('watchdogTick sets moduleStatus to STALLED on timeout', () => {
+    const intake = makeIntake(new LkvCache(), new DbPipeline(), 0);
+    intake.watchdogTick();
+    expect(intake.getModuleStats().find(s => s.module_id === MODULE_ID)!.status).toBe('STALLED');
+  });
+
+  it('ingest updates moduleStatus even while watchdog is latched', () => {
+    const intake = makeIntake(new LkvCache(), new DbPipeline(), 0);
+    intake.watchdogTick();
+    expect(intake.getModuleStats().find(s => s.module_id === MODULE_ID)!.status).toBe('STALLED');
+    intake.ingest(MODULE_ID, telemetryMsg([], 'ONLINE'));
+    expect(intake.getModuleStats().find(s => s.module_id === MODULE_ID)!.status).toBe('ONLINE');
+  });
+
+  it('watchdogTick auto-clears real-time stall when comms resume', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(3000);
+      const intake = makeIntake(new LkvCache(), new DbPipeline(), 1000);
+      intake.watchdogTick(); // trips: 3000 - 0 = 3000 > 1000
+      expect(intake.getModuleStats().find(s => s.module_id === MODULE_ID)!.status).toBe('STALLED');
+
+      // comms resume — ingest at T=3000
+      intake.ingest(MODULE_ID, telemetryMsg([{ tag_id: TAG_MONITOR, value: 1 }], 'ONLINE'));
+      expect(intake.getModuleStats().find(s => s.module_id === MODULE_ID)!.status).toBe('ONLINE');
+
+      // tick within timeout (T=3500, 3500 - 3000 = 500 ≤ 1000) — auto-clears timedOutModules
+      vi.setSystemTime(3500);
+      intake.watchdogTick(); // not timed out → timedOutModules.delete()
+      // STATUS stays live (timedOutModules cleared, no re-STALLED)
+      expect(intake.getModuleStats().find(s => s.module_id === MODULE_ID)!.status).toBe('ONLINE');
+      // watchdogLatched still set — dot remains red until manual reset
+      expect(intake.getModuleStats().find(s => s.module_id === MODULE_ID)!.stalled).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('LKV re-nulls on second comms loss after comms resumed', () => {
+    vi.useFakeTimers();
+    try {
+      const lkv = new LkvCache();
+      lkv.set(TAG_MONITOR, 100);
+      lkv.set(TAG_TREND, 200);
+      vi.setSystemTime(3000);
+      const intake = makeIntake(lkv, new DbPipeline(), 1000);
+
+      // First trip — LKV nulled
+      intake.watchdogTick();
+      expect(lkv.getValue(TAG_MONITOR)).toBeNull();
+
+      // Comms resume — ingest + tick within timeout (auto-clears timedOutModules)
+      intake.ingest(MODULE_ID, telemetryMsg([{ tag_id: TAG_MONITOR, value: 50 }], 'ONLINE')); // lastSeen=3000
+      vi.setSystemTime(3500); // 3500 - 3000 = 500 ≤ 1000 → not timed out
+      intake.watchdogTick(); // auto-clears timedOutModules
+      expect(lkv.getValue(TAG_MONITOR)).toBe(50);
+
+      // Comms stop again — advance past timeout, tick re-nulls LKV
+      vi.setSystemTime(5000); // 5000 - 3000 = 2000 > 1000
+      const genBefore = lkv.getGeneration(TAG_MONITOR);
+      intake.watchdogTick(); // not in timedOutModules → re-trips → nulls LKV
+      expect(lkv.getValue(TAG_MONITOR)).toBeNull();
+      expect(lkv.getGeneration(TAG_MONITOR)).toBeGreaterThan(genBefore);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('STATUS shows STALLED on second comms loss after auto-clear', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(3000);
+      const intake = makeIntake(new LkvCache(), new DbPipeline(), 1000);
+      intake.watchdogTick(); // first trip, STALLED
+
+      // comms resume — ingest + tick within timeout (auto-clears timedOutModules)
+      intake.ingest(MODULE_ID, telemetryMsg([{ tag_id: TAG_MONITOR, value: 1 }], 'ONLINE'));
+      vi.setSystemTime(3500); // 3500 - 3000 = 500 ≤ 1000
+      intake.watchdogTick(); // auto-clears timedOutModules, status stays ONLINE
+      expect(intake.getModuleStats().find(s => s.module_id === MODULE_ID)!.status).toBe('ONLINE');
+
+      // comms stop again — advance past timeout, tick re-trips
+      vi.setSystemTime(5000); // 5000 - 3000 = 2000 > 1000
+      intake.watchdogTick(); // not in timedOutModules → re-trips → STALLED
+      expect(intake.getModuleStats().find(s => s.module_id === MODULE_ID)!.status).toBe('STALLED');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('packets_per_sec and bytes_per_sec are 0 before rate timer fires', () => {

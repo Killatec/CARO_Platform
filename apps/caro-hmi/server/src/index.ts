@@ -7,7 +7,8 @@ import { DbPipeline } from './db-pipeline.js';
 import { TelemetryIntake } from './telemetry-intake.js';
 import { HmiTagSource } from './hmi-tag-source.js';
 import { MqttBridge } from './mqtt-bridge.js';
-import { CommandPublisher } from './command-publisher.js';
+import { CmdController } from './cmd-controller.js';
+import { ResetBus } from './reset-bus.js';
 import { WsServer } from './ws-server.js';
 import { createApp } from './app.js';
 import { DutyTracker } from './duty-tracker.js';
@@ -80,10 +81,16 @@ async function start(): Promise<void> {
   const hmiTagCount = rows.filter(r => r.module_type === 'HMI').length;
   console.log(`[HMI] HMI tag source: ${hmiTagCount} tags, publishing every ${config.hmiPublishIntervalMs}ms`);
 
-  // 5. MQTT bridge (transport only — delegates ingestion to TelemetryIntake)
+  // 5. MQTT bridge (transport only — scoped to MQTT modules, delegates ingestion to TelemetryIntake)
+  const mqttModuleIds = [...new Set(
+    [...tagMap.values()]
+      .filter(t => t.module_type === 'MQTT')
+      .map(t => t.module_id),
+  )];
+
   const mqttBridge = new MqttBridge({
     intake,
-    moduleIds: [...moduleTagIds.keys()],
+    moduleIds: mqttModuleIds,
     config: {
       mqttUrl:             config.mqttUrl,
       heartbeatIntervalMs: config.heartbeatIntervalMs,
@@ -91,11 +98,16 @@ async function start(): Promise<void> {
     dutyTracker,
   });
 
-  // 5b. Command publisher (setpoint write + ACK tracking)
-  const commandPublisher = new CommandPublisher({ mqttBridge, tagMap });
+  // 5b. Command controller (routes writes by module_type: MQTT→broker, HMI→HmiTagSource)
+  const cmdController = new CmdController({ mqttBridge, hmiTagSource: hmiTags, tagMap });
+
+  // 5c. Reset bus (fans out reset signal to registered subsystems)
+  const resetBus = new ResetBus();
+  resetBus.register('watchdog', () => intake.resetAllWatchdogs());
+  resetBus.register('module-reset', () => cmdController.sendResetAll());
 
   // 6. Express app + HTTP server
-  const app = createApp(tagMap, intake, commandPublisher);
+  const app = createApp(tagMap, intake, cmdController, resetBus);
   const httpServer = http.createServer(app);
 
   // 7. WS server

@@ -59,7 +59,7 @@ describe('NumericMon', () => {
       )
     );
     const el = screen.getByText('---');
-    expect(el.className).toContain('border-red-400');
+    expect(el.className).toContain('text-red-600');
   });
 
   it('derives label from assetPath when no label prop (last segment)', () => {

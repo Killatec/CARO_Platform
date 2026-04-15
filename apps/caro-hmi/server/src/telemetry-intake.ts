@@ -39,7 +39,8 @@ export class TelemetryIntake {
   private readonly dutyTracker: DutyTracker;
 
   private lastSeen = new Map<string, number>();
-  private timedOutModules = new Set<string>();
+  private timedOutModules = new Set<string>();   // non-latching: auto-clears when comms resume
+  private watchdogLatched = new Set<string>();   // latching: cleared only by manual reset
   private watchdogTimer: ReturnType<typeof setInterval> | null = null;
   private rateTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -63,7 +64,6 @@ export class TelemetryIntake {
 
   ingest(moduleId: string, message: TelemetryMessage): void {
     this.lastSeen.set(moduleId, Date.now());
-    this.timedOutModules.delete(moduleId);
 
     this.packetCount.set(moduleId, (this.packetCount.get(moduleId) ?? 0) + 1);
     this.packetsInWindow.set(moduleId, (this.packetsInWindow.get(moduleId) ?? 0) + 1);
@@ -100,18 +100,27 @@ export class TelemetryIntake {
         const last = this.lastSeen.get(moduleId) ?? 0;
         const timedOut = now - last > this.watchdogTimeoutMs;
 
-        if (timedOut && !this.timedOutModules.has(moduleId)) {
-          this.timedOutModules.add(moduleId);
-          for (const tagId of tagIds) {
-            this.lkv.set(tagId, null);
+        if (timedOut) {
+          if (!this.timedOutModules.has(moduleId)) {
+            // Transition into stalled — null LKV and set status
+            this.timedOutModules.add(moduleId);
+            for (const tagId of tagIds) {
+              this.lkv.set(tagId, null);
+            }
+            this.moduleStatus.set(moduleId, 'STALLED');
           }
+          // Latch the watchdog indicator (survives comms resumption until manual reset)
+          this.watchdogLatched.add(moduleId);
+        } else {
+          // Comms are live — auto-clear the real-time stall flag
+          this.timedOutModules.delete(moduleId);
         }
       }
     });
   }
 
   startWatchdog(): void {
-    this.watchdogTimer = setInterval(() => this.watchdogTick(), this.watchdogTimeoutMs);
+    this.watchdogTimer = setInterval(() => this.watchdogTick(), Math.min(this.watchdogTimeoutMs, 500));
     this.startRateTimer();
   }
 
@@ -150,6 +159,24 @@ export class TelemetryIntake {
     }
   }
 
+  resetWatchdog(moduleId: string): void {
+    const now = Date.now();
+    const last = this.lastSeen.get(moduleId) ?? 0;
+    if (now - last <= this.watchdogTimeoutMs) {
+      this.watchdogLatched.delete(moduleId);
+    }
+  }
+
+  resetAllWatchdogs(): void {
+    const now = Date.now();
+    for (const moduleId of [...this.watchdogLatched]) {
+      const last = this.lastSeen.get(moduleId) ?? 0;
+      if (now - last <= this.watchdogTimeoutMs) {
+        this.watchdogLatched.delete(moduleId);
+      }
+    }
+  }
+
   getModuleStats(): ModuleStats[] {
     const result: ModuleStats[] = [];
     for (const moduleId of this.moduleTagIds.keys()) {
@@ -160,7 +187,7 @@ export class TelemetryIntake {
         packets_per_sec: snapshot.packetsPerSec,
         bytes_per_sec: snapshot.bytesPerSec,
         tags_in_last_packet: this.tagCountLast.get(moduleId) ?? 0,
-        stalled: this.timedOutModules.has(moduleId),
+        stalled: this.watchdogLatched.has(moduleId),
         last_seen_ms: this.lastSeen.get(moduleId) ?? 0,
       });
     }

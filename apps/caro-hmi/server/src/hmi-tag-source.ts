@@ -102,6 +102,11 @@ export class HmiTagSource {
       else if (moduleId === 'HMI') moduleId = module;
     }
 
+    const resetCountTagId = propertyToTagId.get('Reset_Count');
+    if (resetCountTagId !== undefined) {
+      values.set(resetCountTagId, 0);
+    }
+
     const instance = new HmiTagSource(deps, values, propertyToTagId, tagIdToProperty, moduleId);
 
     return new Proxy(instance, {
@@ -142,6 +147,27 @@ export class HmiTagSource {
     if (this.publishTimer !== null) {
       clearInterval(this.publishTimer);
       this.publishTimer = null;
+    }
+  }
+
+  /** Trigger an immediate publish outside the normal interval. */
+  publishNow(): void {
+    this.publishTick();
+  }
+
+  /** Write a tag value directly by tag_id (for CmdController HMI writes). */
+  setValue(tagId: number, value: number | boolean): void {
+    if (this.values.has(tagId)) {
+      this.values.set(tagId, value);
+    }
+  }
+
+  /** Receive a RESET command — increments the Reset_Count tag if present. */
+  reset(): void {
+    const tagId = this.propertyToTagId.get('Reset_Count');
+    if (tagId !== undefined) {
+      const current = (this.values.get(tagId) as number) ?? 0;
+      this.values.set(tagId, current + 1);
     }
   }
 

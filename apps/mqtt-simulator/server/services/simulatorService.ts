@@ -49,6 +49,7 @@ export interface ModuleStatus {
   protobuf: boolean;
   acceptSets: boolean;
   skipAck: boolean;
+  fault: boolean;
 }
 
 export interface SimulatorStatus {
@@ -80,11 +81,17 @@ const acceptSetsDisabled: Set<string> = new Set();
 // module_ids that silently drop all incoming commands — empty on startup (ACKs sent normally)
 const skipAckEnabled: Set<string>     = new Set();
 
+// module_ids publishing FAULT status in telemetry — empty on startup (ONLINE)
+const faultMode: Set<string>          = new Set();
+
 // module_id -> number of tags included in the last telemetry publish
 const lastPublishedCount: Map<string, number> = new Map();
 
 // module_id -> byte size of last published telemetry payload
 const lastPublishedBytes: Map<string, number> = new Map();
+
+// module_id -> cumulative RESET command count
+const resetCount: Map<string, number> = new Map();
 
 // command_id deduplication — 60s rolling TTL
 const DEDUP_TTL_MS   = 60_000;
@@ -100,9 +107,12 @@ let currentInterval: number | null = null;
 // ---------------------------------------------------------------------------
 function initSimState(): void {
   simState.clear();
+  resetCount.clear();
   for (const tag of tags) {
     let simValue: number | boolean;
-    if (tag.is_setpoint) {
+    if (tag.tag_path.endsWith('.Reset_Count')) {
+      simValue = 0;
+    } else if (tag.is_setpoint) {
       simValue = tag.data_type === 'bool' ? false : 0;
     } else {
       simValue = tag.data_type === 'f32'  ? 50.0
@@ -119,6 +129,7 @@ function initSimState(): void {
 // ---------------------------------------------------------------------------
 function advanceTag(tag: SimTag, state: SimTagState, deltaMs: number): void {
   if (tag.is_setpoint) return;
+  if (tag.tag_path.endsWith('.Reset_Count')) return;
 
   switch (tag.data_type) {
     case 'f32':
@@ -163,7 +174,7 @@ function buildMessage(moduleId: string): { timestamp: number; status: string; ta
     tagValues.push({ tag_id: tag.tag_id, value: state.simValue });
   }
 
-  return { timestamp: Date.now(), status: 'ONLINE', tags: tagValues };
+  return { timestamp: Date.now(), status: faultMode.has(moduleId) ? 'FAULT' : 'ONLINE', tags: tagValues };
 }
 
 // ---------------------------------------------------------------------------
@@ -179,7 +190,7 @@ function publishNow(moduleId: string): void {
       .map(t => ({ tag_id: t.tag_id, data_type: t.data_type, simValue: simState.get(t.tag_id)!.simValue }));
     lastPublishedCount.set(moduleId, richTags.length);
     try {
-      const buf = encodeProto(moduleId, richTags, 'ONLINE');
+      const buf = encodeProto(moduleId, richTags, faultMode.has(moduleId) ? 'FAULT' : 'ONLINE');
       lastPublishedBytes.set(moduleId, buf.length);
       client.publish(`caro/${moduleId}/telemetry`, buf, { qos: 0, retain: false });
     } catch (err) {
@@ -270,7 +281,13 @@ function handleCommand(topic: string, rawMessage: Buffer): void {
     publishNow(moduleId);
 
   } else if (command_type === 'RESET') {
-    log('INFO', `[SIM] RESET for module ${moduleId} — no-op`);
+    const count = (resetCount.get(moduleId) ?? 0) + 1;
+    resetCount.set(moduleId, count);
+    log('INFO', `[SIM] RESET for module ${moduleId} — count: ${count}`);
+    const resetCountTag = tags.find(t => t.module_id === moduleId && t.tag_path.endsWith('.Reset_Count'));
+    if (resetCountTag) {
+      simState.get(resetCountTag.tag_id)!.simValue = count;
+    }
   }
 
   // CMD_ACK — §6.2
@@ -320,12 +337,12 @@ function tick(intervalMs: number): void {
       lastPublishedCount.set(moduleId, tagValues.length);
       if (protobufMode.has(moduleId)) {
         try {
-          const buf = encodeProto(moduleId, richTags, 'ONLINE');
+          const buf = encodeProto(moduleId, richTags, faultMode.has(moduleId) ? 'FAULT' : 'ONLINE');
           lastPublishedBytes.set(moduleId, buf.length);
           client.publish(`caro/${moduleId}/telemetry`, buf, { qos: 0, retain: false });
         } catch (err) { log('ERROR', `[SIM] Proto encode failed for ${moduleId}: ${(err as Error).message}`); }
       } else {
-        const json = JSON.stringify({ timestamp: Date.now(), status: 'ONLINE', tags: tagValues });
+        const json = JSON.stringify({ timestamp: Date.now(), status: faultMode.has(moduleId) ? 'FAULT' : 'ONLINE', tags: tagValues });
         lastPublishedBytes.set(moduleId, Buffer.byteLength(json));
         client.publish(`caro/${moduleId}/telemetry`, json, { qos: 0, retain: false });
       }
@@ -336,7 +353,7 @@ function tick(intervalMs: number): void {
           .map(t => ({ tag_id: t.tag_id, data_type: t.data_type, simValue: simState.get(t.tag_id)!.simValue }));
         lastPublishedCount.set(moduleId, richTags.length);
         try {
-          const buf = encodeProto(moduleId, richTags, 'ONLINE');
+          const buf = encodeProto(moduleId, richTags, faultMode.has(moduleId) ? 'FAULT' : 'ONLINE');
           lastPublishedBytes.set(moduleId, buf.length);
           client.publish(`caro/${moduleId}/telemetry`, buf, { qos: 0, retain: false });
         } catch (err) { log('ERROR', `[SIM] Proto encode failed for ${moduleId}: ${(err as Error).message}`); }
@@ -420,8 +437,10 @@ export function stop(): void {
   protobufMode.clear();
   acceptSetsDisabled.clear();
   skipAckEnabled.clear();
+  faultMode.clear();
   lastPublishedCount.clear();
   lastPublishedBytes.clear();
+  resetCount.clear();
   log('INFO', '[SIM] Stopped.');
 }
 
@@ -438,6 +457,7 @@ export function getStatus(): SimulatorStatus {
       protobuf:   protobufMode.has(id),
       acceptSets: !acceptSetsDisabled.has(id),
       skipAck:    skipAckEnabled.has(id),
+      fault:      faultMode.has(id),
     })),
     uptime_s:    startedAt ? Math.floor((Date.now() - startedAt) / 1000) : 0,
     tickCount,
@@ -490,6 +510,14 @@ export function activateSkipAck(moduleId: string): void {
 
 export function deactivateSkipAck(moduleId: string): void {
   skipAckEnabled.delete(moduleId);
+}
+
+export function activateFault(moduleId: string): void {
+  faultMode.add(moduleId);
+}
+
+export function deactivateFault(moduleId: string): void {
+  faultMode.delete(moduleId);
 }
 
 export function publishSnapshot(moduleId: string): void {

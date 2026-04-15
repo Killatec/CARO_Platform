@@ -9,6 +9,7 @@ export interface ModuleStatus {
   protobuf: boolean;
   acceptSets: boolean;
   skipAck: boolean;
+  fault: boolean;
 }
 
 export interface SimulatorStatus {
@@ -45,6 +46,9 @@ export const disableAcceptSets = (moduleId: string): Promise<unknown> => apiClie
 
 export const enableSkipAck  = (moduleId: string): Promise<unknown> => apiClient.post(`/simulator/skip-ack/${moduleId}/activate`, {});
 export const disableSkipAck = (moduleId: string): Promise<unknown> => apiClient.post(`/simulator/skip-ack/${moduleId}/deactivate`, {});
+
+export const enableModuleFault  = (moduleId: string): Promise<unknown> => apiClient.post(`/simulator/fault/enable/${moduleId}`, {});
+export const disableModuleFault = (moduleId: string): Promise<unknown> => apiClient.post(`/simulator/fault/disable/${moduleId}`, {});
 
 export const requestSnapshot = (moduleId: string): Promise<unknown> => apiClient.post(`/simulator/snapshot/${moduleId}`, {});
 export const injectSetValues = (moduleId: string): Promise<unknown> => apiClient.post(`/simulator/inject/${moduleId}`, {});

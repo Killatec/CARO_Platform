@@ -1,5 +1,5 @@
 # MQTT Simulator — Handoff
-**Updated:** 2026-04-07 | **Root:** `apps/mqtt-simulator/` | **API:** 3002 | **UI:** 5174
+**Updated:** 2026-04-15 | **Root:** `apps/mqtt-simulator/` | **API:** 3002 | **UI:** 5174
 ⚠ Dev/test tool only — never deploy to production.
 
 ---
@@ -16,11 +16,12 @@
 - Rolling log buffer — 200-entry in-memory; all log output captured; served via `GET /logs`
 - Auto-start — starts on server boot; startup errors captured in log buffer; process does not exit on failure
 - Frontend — React+Vite at 5174; module table with per-module toggles and action buttons; live log panel
+- Per-module fault toggle — `status` field in telemetry publishes `'FAULT'` instead of `'ONLINE'` for the duration. Simulator-only feature, not in CARO_MQTT_Spec.
+- RESET command handling — increments per-module `Reset_Count` tag (i16 monitor tag, not a setpoint). `Reset_Count` tags are excluded from sine simulation and initialized to 0 at simulator start. CMD_ACK published with empty results array.
 
 ## What Is Not Built
 
 - No automated tests — intentional. The simulator is a dev/test tool; test coverage is not required.
-- RESET command — CMD_ACK published but values not reset
 
 ---
 

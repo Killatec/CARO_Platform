@@ -88,7 +88,7 @@ function NumericSetCell({
     isFocused
       ? 'bg-amber-100 border-blue-500 text-gray-900 cursor-text'
       : badQuality
-        ? 'text-red-600 border-red-400 bg-red-500/10 cursor-not-allowed'
+        ? 'text-red-600 border-transparent cursor-not-allowed'
         : 'text-blue-600 border-transparent cursor-pointer hover:border-blue-300',
   ].join(' ');
 

@@ -1,6 +1,6 @@
 import express, { Request, Response } from 'express';
 import { asyncWrap } from '@caro/server/asyncWrap';
-import { start, stop, getStatus, getLogs, isKnownModule, activateModule, deactivateModule, activateDeltaMode, deactivateDeltaMode, activateProtobuf, deactivateProtobuf, activateAcceptSets, deactivateAcceptSets, activateSkipAck, deactivateSkipAck, publishSnapshot, injectSetValues } from '../services/simulatorService.js';
+import { start, stop, getStatus, getLogs, isKnownModule, activateModule, deactivateModule, activateDeltaMode, deactivateDeltaMode, activateProtobuf, deactivateProtobuf, activateAcceptSets, deactivateAcceptSets, activateSkipAck, deactivateSkipAck, activateFault, deactivateFault, publishSnapshot, injectSetValues } from '../services/simulatorService.js';
 
 const router = express.Router();
 
@@ -301,6 +301,54 @@ router.post('/skip-ack/:module_id/deactivate', asyncWrap(async (req: Request, re
     return;
   }
   deactivateSkipAck(module_id);
+  res.json({ ok: true });
+}));
+
+/**
+ * POST /api/v1/simulator/fault/enable/:module_id
+ * Puts module into FAULT mode — telemetry publishes status: 'FAULT'.
+ */
+router.post('/fault/enable/:module_id', asyncWrap(async (req: Request, res: Response) => {
+  if (!getStatus().running) {
+    res.status(409).json({
+      ok: false,
+      error: { code: 'SIMULATOR_NOT_RUNNING', message: 'Simulator is not running.' },
+    });
+    return;
+  }
+  const module_id = req.params['module_id'] as string;
+  if (!isKnownModule(module_id)) {
+    res.status(404).json({
+      ok: false,
+      error: { code: 'MODULE_NOT_FOUND', message: `Module ${module_id} not found.` },
+    });
+    return;
+  }
+  activateFault(module_id);
+  res.json({ ok: true });
+}));
+
+/**
+ * POST /api/v1/simulator/fault/disable/:module_id
+ * Clears FAULT mode — telemetry reverts to status: 'ONLINE'.
+ */
+router.post('/fault/disable/:module_id', asyncWrap(async (req: Request, res: Response) => {
+  if (!getStatus().running) {
+    res.status(409).json({
+      ok: false,
+      error: { code: 'SIMULATOR_NOT_RUNNING', message: 'Simulator is not running.' },
+    });
+    return;
+  }
+  const module_id = req.params['module_id'] as string;
+  if (!isKnownModule(module_id)) {
+    res.status(404).json({
+      ok: false,
+      error: { code: 'MODULE_NOT_FOUND', message: `Module ${module_id} not found.` },
+    });
+    return;
+  }
+  deactivateFault(module_id);
   res.json({ ok: true });
 }));
 

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 
 interface ModuleStats {
   module_id: string;
@@ -16,7 +16,7 @@ interface Props {
 
 function statusClass(status: string): string {
   if (status === 'ONLINE') return 'text-green-600 font-medium';
-  if (status === 'FAULT')  return 'text-red-600 font-medium';
+  if (status === 'FAULT' || status === 'STALLED') return 'text-red-600 font-medium';
   return 'text-gray-400';
 }
 
@@ -24,22 +24,31 @@ const PR: React.CSSProperties = { paddingRight: '3rem' };
 
 export function ModuleStatusTable({ refreshInterval = 1000 }: Props) {
   const [modules, setModules] = useState<ModuleStats[]>([]);
+  const [refreshTick, setRefreshTick] = useState(0);
 
-  useEffect(() => {
-    async function fetchStats() {
-      try {
-        const res = await fetch('/api/v1/modules/status');
-        const json = await res.json() as { ok: boolean; data: ModuleStats[] };
-        if (json.ok) setModules(json.data);
-      } catch {
-        // network error — keep stale data
-      }
+  const fetchStats = useCallback(async () => {
+    try {
+      const res = await fetch('/api/v1/modules/status');
+      const json = await res.json() as { ok: boolean; data: ModuleStats[] };
+      if (json.ok) setModules(json.data);
+    } catch {
+      // network error — keep stale data
     }
+  }, []);
 
+  // Polling interval — re-runs when refreshTick changes (immediate re-fetch on reset)
+  useEffect(() => {
     void fetchStats();
     const id = setInterval(() => void fetchStats(), refreshInterval);
     return () => clearInterval(id);
-  }, [refreshInterval]);
+  }, [fetchStats, refreshInterval, refreshTick]);
+
+  // Listen for global watchdog reset signal from the header
+  useEffect(() => {
+    function handleReset() { setRefreshTick(t => t + 1); }
+    window.addEventListener('system-reset', handleReset);
+    return () => window.removeEventListener('system-reset', handleReset);
+  }, []);
 
   return (
     <table className="text-sm border-collapse">
@@ -50,7 +59,7 @@ export function ModuleStatusTable({ refreshInterval = 1000 }: Props) {
           <th className="text-center text-xs uppercase text-gray-500 font-medium pb-2" style={PR}>Packets/s</th>
           <th className="text-center text-xs uppercase text-gray-500 font-medium pb-2" style={PR}>KB/s</th>
           <th className="text-center text-xs uppercase text-gray-500 font-medium pb-2" style={PR}>Tags</th>
-          <th className="text-center text-xs uppercase text-gray-500 font-medium pb-2">Stalled</th>
+          <th className="text-center text-xs uppercase text-gray-500 font-medium pb-2">Watchdog</th>
         </tr>
       </thead>
       <tbody>

@@ -1,5 +1,5 @@
 # CARO_HMI Functional Specification
-**Date:** 2026-03-28
+**Date:** 2026-04-15
 **Companion Documents**
 
 Tag Registry Functional Spec | CARO_MQTT_Spec | CARO_DB_Spec | hmi_widget_spec
@@ -560,6 +560,50 @@ The HMI server is both a telemetry consumer (via MQTT bridge) and a telemetry pr
 Each wrapped call accumulates busy-time in milliseconds. Once per second, `DutyTracker.snapshot(intervalMs)` computes `(busyMs / intervalMs) * 100` and resets the accumulator. The result is written to `hmiTags.Telemetry_CPU` via the `onBeforePublish` callback on `HmiTagSource`, so it flows through the standard telemetry pipeline and appears on the dashboard like any other tag.
 
 The snapshot call itself runs outside `track()` so it does not inflate the window it is closing.
+
+### 8.9 Watchdog
+
+The backend watchdog monitors telemetry continuity per module. When a module stops publishing telemetry for longer than the watchdog timeout (default 1 second, env: `WATCHDOG_TIMEOUT_MS`), it is considered stalled.
+
+**Two-Set model:**
+
+| Set | Behaviour | Drives |
+|---|---|---|
+| `timedOutModules` | Non-latching — added when timeout is detected, removed automatically when fresh telemetry arrives. | LKV null-write for all module tags; `moduleStatus = 'STALLED'` |
+| `watchdogLatched` | Latching — added on first timeout, cleared only by explicit manual reset with a fresh `lastSeen`. | Red/green stall indicator in Module Status Table |
+
+**Tick:** The watchdog runs on a timer with interval `min(watchdogTimeoutMs, 500ms)` — independent of the configured timeout so sub-second detection is always possible regardless of the timeout value.
+
+**On timeout trip:** All tags for the module are written to `null` in the LKV (bad quality). `moduleStatus` is set to `'STALLED'` and re-asserted on every subsequent tick while the module remains timed out.
+
+**Auto-recovery:** When fresh telemetry arrives, the module is removed from `timedOutModules` — LKV nulling and STALLED status stop. The `watchdogLatched` entry persists until manually cleared.
+
+**Manual reset:** `POST /api/v1/reset` (see §8.11). A module's latch is cleared only if `lastSeen` is within `watchdogTimeoutMs` of the reset time — i.e., the module must have resumed communication before it can be cleared.
+
+### 8.10 Command Routing (CmdController)
+
+The `CmdController` is the single dispatch point for all outbound commands. It replaces the earlier `CommandPublisher` and routes by `module_type`:
+
+| module_type | SET_VALUES | RESET |
+|---|---|---|
+| MQTT | Published to `caro/{module_id}/cmd` via MqttBridge. ACK tracked with 1-second timeout. | Published to `caro/{module_id}/cmd` via MqttBridge. Fire-and-forget (no ACK tracking). |
+| HMI | Written directly to `HmiTagSource.setValue()`. Immediate accepted result. | Calls `HmiTagSource.reset()` directly. |
+| Other | Returns `MODULE_TYPE_NOT_SUPPORTED` rejection for all tags. | Silently ignored. |
+
+`MqttBridge` is scoped to MQTT-only modules — heartbeats and REQUEST_SNAPSHOT commands are never sent to the HMI module. The HMI module receives telemetry via `TelemetryIntake.ingest()` from `HmiTagSource` only.
+
+**HmiTagSource.reset():** Increments the `Reset_Count` HMI tag (if present in the tag registry). The incremented value is published on the next HmiTagSource tick. `Reset_Count` is initialized to `0` at startup (unlike other HMI tags which start as `null`).
+
+### 8.11 System Reset Endpoint
+
+`POST /api/v1/reset` — triggers a fan-out reset via the server-side `ResetBus`. Registered handlers called in order:
+
+1. **watchdog** — calls `TelemetryIntake.resetAllWatchdogs()`, which clears the latch for all modules whose `lastSeen` is fresh.
+2. **module-reset** — calls `CmdController.sendResetAll()`, which sends a RESET command to every known module (MQTT via broker, HMI via direct call).
+
+Response: `{ ok: true, data: { reset: ["watchdog", "module-reset"] } }`
+
+The client dispatches a `'system-reset'` CustomEvent on `window` after the response, which causes the Module Status Table to immediately re-fetch module stats.
 
 ---
 
