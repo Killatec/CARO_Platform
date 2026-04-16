@@ -2,5 +2,50 @@
   "template_name": "Optics",
   "template_type": "Group",
   "fields": {},
-  "children": []
+  "children": [
+    {
+      "template_name": "Current_PS",
+      "asset_name": "Lense_1",
+      "fields": {
+        "I.format": "#",
+        "I.unit": "kA",
+        "I.RSS.unit": "kA/s",
+        "I.eng_min": 10,
+        "I.eng_max": 200,
+        "V.format": "#.##",
+        "V.unit": "kV",
+        "V.RSS.unit": "kV/s",
+        "V.eng_min": 5,
+        "V.eng_max": 200
+      }
+    },
+    {
+      "template_name": "Current_PS",
+      "asset_name": "Lense_2",
+      "fields": {
+        "I.eng_max": 500,
+        "V.eng_max": 500
+      }
+    },
+    {
+      "template_name": "Current_PS",
+      "asset_name": "Bend_1",
+      "fields": {}
+    },
+    {
+      "template_name": "Current_PS",
+      "asset_name": "Bend_2",
+      "fields": {}
+    },
+    {
+      "template_name": "Current_PS",
+      "asset_name": "Bend_3",
+      "fields": {}
+    },
+    {
+      "template_name": "Current_PS",
+      "asset_name": "Bend_4",
+      "fields": {}
+    }
+  ]
 }

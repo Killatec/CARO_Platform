@@ -1,0 +1,27 @@
+{
+  "template_name": "Voltage_PS",
+  "template_type": "Group",
+  "fields": {},
+  "children": [
+    {
+      "template_name": "boolean_set",
+      "asset_name": "Enable",
+      "fields": {}
+    },
+    {
+      "template_name": "Analog_In",
+      "asset_name": "V",
+      "fields": {
+        "unit": "kV",
+        "eng_max": 50
+      }
+    },
+    {
+      "template_name": "Analog_In",
+      "asset_name": "I",
+      "fields": {
+        "unit": "mA"
+      }
+    }
+  ]
+}

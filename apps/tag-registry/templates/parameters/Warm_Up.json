@@ -1,0 +1,31 @@
+{
+  "template_name": "Warm_Up",
+  "template_type": "parameter",
+  "fields": {},
+  "children": [
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Set",
+      "fields": {
+        "Trends": false,
+        "format": "#",
+        "unit": "s",
+        "eng_max": 100
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Mon",
+      "fields": {
+        "format": "#",
+        "unit": "s",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "Done",
+      "fields": {}
+    }
+  ]
+}

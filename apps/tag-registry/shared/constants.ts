@@ -41,3 +41,6 @@ export const MAX_IDENTIFIER_LENGTH = 40;
  * DUPLICATE_PARENT_TYPE.
  */
 export const UNIQUE_ANCESTOR_TYPES = new Set(['module', 'parameter']);
+
+/** Data types that resolve display columns (unit, format, eng_min, eng_max). */
+export const NUMERIC_DATA_TYPES = new Set(['f32', 'i16']);

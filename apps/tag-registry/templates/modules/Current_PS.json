@@ -1,7 +1,48 @@
 {
   "template_name": "Current_PS",
   "template_type": "Group",
-  "fields": {},
+  "fields": {
+    "I.format": {
+      "field_type": "String",
+      "default": "#.##"
+    },
+    "I.unit": {
+      "field_type": "String",
+      "default": "A"
+    },
+    "I.RSS.unit": {
+      "field_type": "String",
+      "default": "A/s"
+    },
+    "I.eng_min": {
+      "field_type": "Numeric",
+      "default": 0
+    },
+    "I.eng_max": {
+      "field_type": "Numeric",
+      "default": 100
+    },
+    "V.format": {
+      "field_type": "String",
+      "default": "#.#"
+    },
+    "V.unit": {
+      "field_type": "String",
+      "default": "V"
+    },
+    "V.RSS.unit": {
+      "field_type": "String",
+      "default": "V/s"
+    },
+    "V.eng_min": {
+      "field_type": "Numeric",
+      "default": 0
+    },
+    "V.eng_max": {
+      "field_type": "Numeric",
+      "default": 10
+    }
+  },
   "children": [
     {
       "template_name": "boolean_set",

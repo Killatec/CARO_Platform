@@ -103,6 +103,10 @@ export interface ResolvedTag {
   module_type: string | null;
   is_setpoint: boolean;
   trends: boolean;
+  unit: string | null;
+  format: string | null;
+  eng_min: number | null;
+  eng_max: number | null;
   meta: MetaLevel[];
 }
 

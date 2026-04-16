@@ -13,7 +13,9 @@
 - Client-side validation — circular references, invalid references, schema errors, tag path length, configurable parent type rules; blocks save on error
 - Module type support — `module_types` lookup table, `ModuleType` field type with dropdown UI, `Module_Type` required on module templates, `module` and `module_type` columns resolved and persisted to `tag_registry`; `GET /api/v1/module-types` endpoint
 - Drag-and-drop child reordering — system tree children can be reordered within the same parent by dragging. Template panel drops are positional (top/bottom 8 px bands = insert before/after sibling; body = append as child). Cross-parent reparenting is intentionally blocked. Reordering appears in the "See what's changed" preview modal under "Children Reordered".
-- Test suite — 364 Vitest unit tests (server 88, shared 142, client 134) + 79 Playwright E2E tests (Chromium); 443 total, 0 failures
+- Display columns — `unit`, `format`, `eng_min`, `eng_max` stored as flat columns on the `tag_registry` table (migration 013). Resolved via path-aware `resolveDisplayField` algorithm that walks the meta chain root-to-leaf. Non-numeric tags (boolean) get null display values. RegistryTable shows all 4 as sortable columns.
+- Dotted override fields — template fields like `I.eng_min` target descendants by asset_name prefix. Resolution uses relative-path matching at each meta level with specificity ranking: more prefix segments = higher priority; lower level (closer to root) wins over deeper levels. Meta holds only template defaults + direct ChildRef overrides — no propagated values.
+- Test suite — 381 Vitest unit tests (server 88, shared 159, client 134) + 79 Playwright E2E tests (Chromium); 460 total, 0 failures
 
 ## What Is Not Built
 

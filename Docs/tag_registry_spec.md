@@ -77,7 +77,7 @@ The shared module exports:
 - `simulateCascade(currentTemplateMap, proposedChanges, originalTemplateMap?)` — computes field-level diffs, dropped instance values, and the list of affected parent templates given a proposed set of changes.
 - `applyFieldCascade(templateMap, changedTemplate)` — given a template that has changed, propagates the effect to all child instances in the map. Returns an updated `templateMap`. Pure function — does not mutate its input.
 - `validateParentTypes(templateMap, rootName, options)` — evaluates `VALIDATE_REQUIRED_PARENT_TYPES` and `VALIDATE_UNIQUE_PARENT_TYPES` rules. Returns `{ errors: [], warnings: [] }`.
-- `resolveRegistry(templateMap, rootName)` — resolves the full hierarchy into a flat tag list with `tag_path`, `module`, `module_type`, `data_type`, `is_setpoint`, `trends`, and `meta`. Pure function. Extracts `.default` from each field definition before merging with instance overrides. `module` is the name of the nearest ancestor with `template_type: "module"` (null if none). `module_type` is the `Module_Type` field value from that module template (null if none). The `trends` field is `true` if any level in the resolved hierarchy has a field key matching `"trends"` (case-insensitive) with value `true` after instance override resolution, `false` otherwise. The `meta` array is ordered root-to-tag: `meta[0]` is the root level entry, `meta[meta.length - 1]` is the tag-level entry.
+- `resolveRegistry(templateMap, rootName)` — resolves the full hierarchy into a flat tag list with `tag_path`, `module`, `module_type`, `data_type`, `is_setpoint`, `trends`, `unit`, `format`, `eng_min`, `eng_max`, and `meta`. Pure function. Extracts `.default` from each field definition before merging with instance overrides. `module` is the name of the nearest ancestor with `template_type: "module"` (null if none). `module_type` is the `Module_Type` field value from that module template (null if none). The `trends` field is `true` if any level in the resolved hierarchy has a field key matching `"trends"` (case-insensitive) with value `true` after instance override resolution, `false` otherwise. The display columns `unit`, `format`, `eng_min`, `eng_max` are resolved via `resolveDisplayField` and are `null` for non-numeric tags (see §11.3). The `meta` array is ordered root-to-tag: `meta[0]` is the root level entry, `meta[meta.length - 1]` is the tag-level entry.
 - `constants` — error codes, `DEFAULT_DATA_TYPE`, `MAX_TAG_PATH_LENGTH` default.
 - `deepEqual(a, b)` / `deepNotEqual(a, b)` — JSON-serialization-based deep equality utilities (`utils.js`).
 
@@ -311,6 +311,16 @@ Registry generation uses `resolveRegistry(templateMap, rootName)`. It runs clien
 - **Retired:** A `tag_path` exists in the database as an active tag but does not appear in the resolved hierarchy.
 - **Unchanged:** A `tag_path` exists in both with no field value changes.
 
+### 11.3 Display Column Resolution
+
+Four flat display columns — `unit`, `format`, `eng_min`, `eng_max` — are resolved per tag and stored as nullable columns on `tag_registry` (added by migration 013). They are populated only for **numeric tags**: those whose resolved `data_type` is in `NUMERIC_DATA_TYPES` (`shared/constants.ts`, currently `{ 'f32', 'i16' }`). Boolean and all other non-numeric tags receive `null` for all four columns.
+
+Resolution is performed by `resolveDisplayField(fieldName, meta, assetPath)` in `resolveRegistry.ts`. The algorithm walks the meta chain from root (index 0) to tag (index last) and applies these rules:
+
+1. **Root priority** — the first meta level that has any match for the field wins. Lower level (closer to root) always beats a deeper level's match.
+2. **Specificity within a level** — at meta level `i`, the relative path from that node down to the tag is `relPath = assetPath.slice(i)`. A dotted key such as `I.RSS.unit` matches when its prefix segments (`["I", "RSS"]`) are a leading subsequence of `relPath`, and its specificity equals the number of prefix segments. A plain `unit` key has specificity 0. Within the same level, the highest-specificity match wins.
+3. **Meta content** — each meta level's `fields` contains only the template's field defaults merged with the direct `ChildRef.fields` overrides for that instance. Dotted keys (e.g. `I.eng_min`) are stored at the ancestor level that defines them; they are never propagated down into child meta levels.
+
 ---
 
 ## 12. Diff Review UI
@@ -350,6 +360,10 @@ Append-only table. Rows are never updated or deleted.
 | trends | BOOLEAN NOT NULL DEFAULT false | true if any asset in the tag's hierarchy has a field named "trends" (case-insensitive) set to true after instance override resolution. |
 | retired | BOOLEAN NOT NULL DEFAULT false | true if the tag is no longer present in the active template hierarchy. |
 | meta | JSONB NOT NULL | Full provenance chain for the tag, ordered root-to-tag. `meta[0]` is the root level entry; `meta[meta.length - 1]` is the tag-level entry. Each object has: `type`, `name`, `fields`. |
+| unit | VARCHAR(40) NULL | Engineering unit string (e.g. `"kA"`, `"kV"`). Resolved via `resolveDisplayField`. `null` for non-numeric tags. Added by migration 013. |
+| format | VARCHAR(40) NULL | Display format string (e.g. `"#"`, `"#.##"`). Resolved via `resolveDisplayField`. `null` for non-numeric tags. Added by migration 013. |
+| eng_min | DOUBLE PRECISION NULL | Engineering range minimum. Resolved via `resolveDisplayField`. `null` for non-numeric tags. Added by migration 013. |
+| eng_max | DOUBLE PRECISION NULL | Engineering range maximum. Resolved via `resolveDisplayField`. `null` for non-numeric tags. Added by migration 013. |
 
 Constraints: composite (`tag_id`, `registry_rev`) unique. Indexes on `tag_id`, `registry_rev`, `data_type`, `retired`. GIN index on `meta`.
 

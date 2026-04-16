@@ -54,8 +54,8 @@ export function AddFieldModal({
       setError('Field name is required.');
       return;
     }
-    if (/[\s.]/.test(trimmed)) {
-      setError('Field name must not contain spaces or dots.');
+    if (/\s/.test(trimmed) || /(?:^\.|\.\.|\.$)/.test(trimmed)) {
+      setError('Field name must not contain spaces, or start/end with a dot.');
       return;
     }
     if (existingFieldNames.includes(trimmed)) {

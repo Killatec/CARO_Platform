@@ -135,6 +135,34 @@ export function RegistryTable({ rows }: RegistryTableProps): React.ReactElement 
             >
               trends {sortField === 'trends' && (sortDirection === 'asc' ? '↑' : '↓')}
             </TableHeaderCell>
+            <TableHeaderCell
+              sortable
+              onClick={() => setSort('unit')}
+              className={`px-4 w-px whitespace-nowrap text-center cursor-pointer hover:bg-gray-100 ${HDR_BORDER} ${COL_BORDER}`}
+            >
+              unit {sortField === 'unit' && (sortDirection === 'asc' ? '↑' : '↓')}
+            </TableHeaderCell>
+            <TableHeaderCell
+              sortable
+              onClick={() => setSort('format')}
+              className={`px-4 w-px whitespace-nowrap text-center cursor-pointer hover:bg-gray-100 ${HDR_BORDER} ${COL_BORDER}`}
+            >
+              format {sortField === 'format' && (sortDirection === 'asc' ? '↑' : '↓')}
+            </TableHeaderCell>
+            <TableHeaderCell
+              sortable
+              onClick={() => setSort('eng_min')}
+              className={`px-4 w-px whitespace-nowrap text-center cursor-pointer hover:bg-gray-100 ${HDR_BORDER} ${COL_BORDER}`}
+            >
+              eng_min {sortField === 'eng_min' && (sortDirection === 'asc' ? '↑' : '↓')}
+            </TableHeaderCell>
+            <TableHeaderCell
+              sortable
+              onClick={() => setSort('eng_max')}
+              className={`px-4 w-px whitespace-nowrap text-center cursor-pointer hover:bg-gray-100 ${HDR_BORDER} ${COL_BORDER}`}
+            >
+              eng_max {sortField === 'eng_max' && (sortDirection === 'asc' ? '↑' : '↓')}
+            </TableHeaderCell>
             <TableHeaderCell className={`px-4 w-px whitespace-nowrap text-center ${HDR_BORDER}`}>
               meta
             </TableHeaderCell>
@@ -171,6 +199,18 @@ export function RegistryTable({ rows }: RegistryTableProps): React.ReactElement 
                 </TableCell>
                 <TableCell className={`px-4 w-px whitespace-nowrap text-center ${ROW_BORDER} ${COL_BORDER} ${cellClass('trends')}`}>
                   {tag.trends ? 'true' : 'false'}
+                </TableCell>
+                <TableCell className={`px-4 w-px whitespace-nowrap text-center ${ROW_BORDER} ${COL_BORDER} ${cellClass('unit')}`}>
+                  {tag.unit ?? '—'}
+                </TableCell>
+                <TableCell className={`px-4 w-px whitespace-nowrap text-center ${ROW_BORDER} ${COL_BORDER} ${cellClass('format')}`}>
+                  {tag.format ?? '—'}
+                </TableCell>
+                <TableCell className={`px-4 w-px whitespace-nowrap text-center ${ROW_BORDER} ${COL_BORDER} ${cellClass('eng_min')}`}>
+                  {tag.eng_min ?? '—'}
+                </TableCell>
+                <TableCell className={`px-4 w-px whitespace-nowrap text-center ${ROW_BORDER} ${COL_BORDER} ${cellClass('eng_max')}`}>
+                  {tag.eng_max ?? '—'}
                 </TableCell>
                 <TableCell className={`px-4 w-px whitespace-nowrap text-center ${ROW_BORDER} ${cellClass('meta')}`}>
                   <button

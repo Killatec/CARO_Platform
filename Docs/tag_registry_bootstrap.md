@@ -153,10 +153,17 @@ Returns `{ errors: [], warnings: [] }`.
 Options: `{ requiredParentTypes: string[], uniqueParentTypes: boolean }`.
 
 **`resolveRegistry(templateMap, rootName)`**
-Returns `[{ tag_path, module, module_type, data_type, is_setpoint, meta }]`.
+Returns `[{ tag_path, module, module_type, data_type, is_setpoint, trends, unit, format, eng_min, eng_max, meta }]`.
 - First segment of every `tag_path` is `rootName` (not the literal string `'root'`).
 - Extracts `.default` from field definitions before merging with instance overrides.
 - `module` is the `asset_name` of the nearest ancestor with `template_type: "module"` (null if none). `module_type` is the `Module_Type` field value from that ancestor (null if none).
+- Display columns `unit`, `format`, `eng_min`, `eng_max` are resolved by `resolveDisplayField` (see below). They are `null` for tags whose `data_type` is not in `NUMERIC_DATA_TYPES` (`shared/constants.ts`: `new Set(['f32', 'i16'])`).
+
+**`resolveDisplayField(fieldName, meta, assetPath)`** — path-aware display column resolver. Replaces the removed helpers `extractDottedFields` and `firstMatch`.
+- Walks `meta[0]` → `meta[last]` (root-to-tag). At each level `i`, computes `relPath = assetPath.slice(i)` — the path segments from that level's node down to the tag.
+- For each field key in `level.fields`: a plain key (`key === fieldName`) has specificity 0; a dotted key ending with `.fieldName` whose prefix segments are a leading subsequence of `relPath` has specificity equal to the number of prefix segments.
+- **Root priority:** the first level with any match (specificity ≥ 0) wins — lower levels are not consulted. Within a level, the highest-specificity match wins.
+- Meta levels hold only template field defaults merged with the direct `ChildRef.fields` for that instance. Dotted keys are never propagated down into child meta levels.
 
 **`hashTemplate(template)`**
 Returns 6-character hex SHA-1 string.
@@ -328,7 +335,7 @@ Shared by `CascadeModal` and `CascadePreviewModal`. Props: `newTemplates`, `chil
 - Update DB disabled when `isDirty` or no changes. Confirmation modal requires non-empty comment.
 - If DB unavailable: amber warning banner, table displays proposed registry undiffed.
 - Table layout: `w-auto table-auto` in `border border-black/30 rounded-sm w-fit` container.
-- Columns: tag_id, tag_path, module, module_type, data_type, is_setpoint, trends, meta. All columns except meta are sortable. `module_type` displays `display_name` from `useModuleTypesStore`, falling back to raw value.
+- Columns: tag_id, tag_path, module, module_type, data_type, is_setpoint, trends, unit, format, eng_min, eng_max, meta. All columns except meta are sortable. `module_type` displays `display_name` from `useModuleTypesStore`, falling back to raw value. Display columns (`unit`, `format`, `eng_min`, `eng_max`) show `—` when null.
 - Sort logic lives in `RegistryTable` via `useMemo` (not in `useRegistryStore`). The store only tracks `sortField` and `sortDirection`. `tag_id` uses numeric comparison (added rows with no tag_id sort to end); all other columns use string comparison.
 
 ### `MetaModalBody`

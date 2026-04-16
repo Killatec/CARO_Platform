@@ -1,0 +1,12 @@
+{
+  "template_name": "CARO_2",
+  "template_type": "system",
+  "fields": {},
+  "children": [
+    {
+      "template_name": "Module_Test",
+      "asset_name": "Module_Test",
+      "fields": {}
+    }
+  ]
+}

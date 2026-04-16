@@ -82,6 +82,10 @@ function isModified(proposed: NewTagInput, dbTag: ActiveTag): boolean {
   if ((proposed.trends ?? false) !== (dbTag.trends ?? false)) return true;
   if ((proposed.module ?? null) !== (dbTag.module ?? null))           return true;
   if ((proposed.module_type ?? null) !== (dbTag.module_type ?? null)) return true;
+  if ((proposed.unit    ?? null) !== (dbTag.unit    ?? null)) return true;
+  if ((proposed.format  ?? null) !== (dbTag.format  ?? null)) return true;
+  if ((proposed.eng_min ?? null) !== (dbTag.eng_min ?? null)) return true;
+  if ((proposed.eng_max ?? null) !== (dbTag.eng_max ?? null)) return true;
   if (!deepEqual(proposed.meta, dbTag.meta))                 return true;
   return false;
 }

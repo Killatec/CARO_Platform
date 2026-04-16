@@ -16,6 +16,24 @@
       "template_name": "Current_PS",
       "asset_name": "Filament",
       "fields": {}
+    },
+    {
+      "template_name": "Analog_In",
+      "asset_name": "Grid_V",
+      "fields": {
+        "format": "#.#",
+        "eng_max": 300
+      }
+    },
+    {
+      "template_name": "Voltage_PS",
+      "asset_name": "HV",
+      "fields": {}
+    },
+    {
+      "template_name": "Warm_Up",
+      "asset_name": "Warm_Up",
+      "fields": {}
     }
   ]
 }

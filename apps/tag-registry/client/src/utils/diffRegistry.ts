@@ -7,6 +7,10 @@ export interface ProposedTag {
   data_type: string;
   is_setpoint: boolean;
   trends?: boolean;
+  unit?: string | null;
+  format?: string | null;
+  eng_min?: number | null;
+  eng_max?: number | null;
   meta: unknown;
 }
 
@@ -69,6 +73,10 @@ function isModified(proposed: ProposedTag, dbTag: DbTag): boolean {
   if ((proposed.trends ?? false) !== (dbTag.trends ?? false)) return true;
   if ((proposed.module ?? null) !== (dbTag.module ?? null)) return true;
   if ((proposed.module_type ?? null) !== (dbTag.module_type ?? null)) return true;
+  if ((proposed.unit    ?? null) !== (dbTag.unit    ?? null)) return true;
+  if ((proposed.format  ?? null) !== (dbTag.format  ?? null)) return true;
+  if ((proposed.eng_min ?? null) !== (dbTag.eng_min ?? null)) return true;
+  if ((proposed.eng_max ?? null) !== (dbTag.eng_max ?? null)) return true;
   if (!deepEqual(proposed.meta, dbTag.meta)) return true;
   return false;
 }
@@ -81,6 +89,10 @@ function getChangedFields(proposed: ProposedTag, dbTag: DbTag): string[] {
   if ((proposed.trends ?? false) !== (dbTag.trends ?? false)) changed.push('trends');
   if ((proposed.module ?? null) !== (dbTag.module ?? null)) changed.push('module');
   if ((proposed.module_type ?? null) !== (dbTag.module_type ?? null)) changed.push('module_type');
+  if ((proposed.unit    ?? null) !== (dbTag.unit    ?? null)) changed.push('unit');
+  if ((proposed.format  ?? null) !== (dbTag.format  ?? null)) changed.push('format');
+  if ((proposed.eng_min ?? null) !== (dbTag.eng_min ?? null)) changed.push('eng_min');
+  if ((proposed.eng_max ?? null) !== (dbTag.eng_max ?? null)) changed.push('eng_max');
   if (!deepEqual(proposed.meta, dbTag.meta)) changed.push('meta');
   return changed;
 }

@@ -407,6 +407,381 @@ describe('trends — additional edge cases', () => {
   });
 });
 
+// ── dotted-field override propagation ────────────────────────────────────────
+
+describe('dotted-field override propagation', () => {
+  // Shared helpers: a parameter template with eng_max:100 containing one tag child
+  function makeAnalogIn() {
+    return makeStruct('Analog_In', 'parameter', [
+      { template_name: 'Tag_T', asset_name: 'val', fields: {} },
+    ], { eng_max: { field_type: 'Numeric', default: 100 } });
+  }
+  function makeTagT() {
+    return makeTag('Tag_T');
+  }
+
+  it('dotted field on parent: display column resolves to dotted value; child meta shows template default', () => {
+    const parent = makeStruct('Parent', 'module', [
+      { template_name: 'Analog_In', asset_name: 'I', fields: {} },
+    ], { 'I.eng_max': { field_type: 'Numeric', default: 50 } });
+    const map = { Parent: wrap(parent), Analog_In: wrap(makeAnalogIn()), Tag_T: wrap(makeTagT()) };
+
+    const result = resolveRegistry(map, 'Parent');
+    expect(result).toHaveLength(1);
+    // Display column resolves the dotted field from the parent level
+    expect(result[0].eng_max).toBe(50);
+    // I's meta shows only the template default — dotted value does NOT propagate into meta
+    const iMeta = result[0].meta.find(m => m.name === 'I');
+    expect(iMeta.fields.eng_max).toBe(100);
+  });
+
+  it('dotted override wins over direct ChildRef.fields for display column (ancestor root priority)', () => {
+    // ChildRef has eng_max: 10, parent dotted default is 50.
+    // Display column: parent dotted wins (root priority). Meta at I: ChildRef value (10).
+    const parent = makeStruct('Parent', 'module', [
+      { template_name: 'Analog_In', asset_name: 'I', fields: { eng_max: 10 } },
+    ], { 'I.eng_max': { field_type: 'Numeric', default: 50 } });
+    const map = { Parent: wrap(parent), Analog_In: wrap(makeAnalogIn()), Tag_T: wrap(makeTagT()) };
+
+    const result = resolveRegistry(map, 'Parent');
+    // Display column: ancestor dotted field wins via root-first resolution
+    expect(result[0].eng_max).toBe(50);
+    // Meta at I shows the ChildRef override, not the dotted value
+    const iMeta = result[0].meta.find(m => m.name === 'I');
+    expect(iMeta.fields.eng_max).toBe(10);
+  });
+
+  it('grandparent instance override of dotted field: display column resolves correctly; I meta unchanged', () => {
+    // GrandParent overrides Parent's I.eng_max to 200 (template default is 50).
+    // Display column for the tag should be 200 (resolved from P's meta fields).
+    // I's meta should show Analog_In template default (100) — no dotted propagation.
+    const parent = makeStruct('Parent', 'module', [
+      { template_name: 'Analog_In', asset_name: 'I', fields: {} },
+    ], { 'I.eng_max': { field_type: 'Numeric', default: 50 } });
+    const gp = makeStruct('GrandParent', 'system', [
+      { template_name: 'Parent', asset_name: 'P', fields: { 'I.eng_max': 200 } },
+    ]);
+    const map = {
+      GrandParent: wrap(gp),
+      Parent: wrap(parent),
+      Analog_In: wrap(makeAnalogIn()),
+      Tag_T: wrap(makeTagT()),
+    };
+
+    const result = resolveRegistry(map, 'GrandParent');
+    // Display column: resolved via P's meta fields (I.eng_max: 200)
+    expect(result[0].eng_max).toBe(200);
+    // I's meta shows template default — dotted value is NOT propagated into I's meta
+    const iMeta = result[0].meta.find(m => m.name === 'I');
+    expect(iMeta.fields.eng_max).toBe(100);
+  });
+
+  it('dotted field targeting non-existent child is inert — no error, appears only in parent meta', () => {
+    // X.eng_max but no child with asset_name X — should resolve normally
+    const parent = makeStruct('Parent', 'module', [
+      { template_name: 'Analog_In', asset_name: 'I', fields: {} },
+    ], { 'X.eng_max': { field_type: 'Numeric', default: 99 } });
+    const map = { Parent: wrap(parent), Analog_In: wrap(makeAnalogIn()), Tag_T: wrap(makeTagT()) };
+
+    expect(() => resolveRegistry(map, 'Parent')).not.toThrow();
+    const result = resolveRegistry(map, 'Parent');
+    expect(result).toHaveLength(1);
+    // Field remains in the parent's meta but never propagates
+    const parentMeta = result[0].meta.find(m => m.name === 'Parent');
+    expect(parentMeta.fields['X.eng_max']).toBe(99);
+    // I's meta has no X-prefixed field
+    const iMeta = result[0].meta.find(m => m.name === 'I');
+    expect(iMeta.fields['X.eng_max']).toBeUndefined();
+  });
+
+  it('multiple dotted prefixes — each child receives only its own overrides in display columns', () => {
+    const vParam = makeStruct('V_Param', 'parameter', [
+      { template_name: 'Tag_T', asset_name: 'val', fields: {} },
+    ], { eng_min: { field_type: 'Numeric', default: 0 } });
+    const parent = makeStruct('Parent', 'module', [
+      { template_name: 'Analog_In', asset_name: 'I', fields: {} },
+      { template_name: 'V_Param', asset_name: 'V', fields: {} },
+    ], {
+      'I.eng_max': { field_type: 'Numeric', default: 50 },
+      'I.unit': { field_type: 'String', default: 'A' },
+      'V.eng_min': { field_type: 'Numeric', default: 5 },
+    });
+    const map = {
+      Parent: wrap(parent),
+      Analog_In: wrap(makeAnalogIn()),
+      V_Param: wrap(vParam),
+      Tag_T: wrap(makeTagT()),
+    };
+
+    const result = resolveRegistry(map, 'Parent');
+    expect(result).toHaveLength(2);
+
+    // I subtag: display columns from parent dotted fields; no V bleed-through
+    const iResult = result.find(r => r.tag_path === 'Parent.I.val');
+    expect(iResult.eng_max).toBe(50);
+    expect(iResult.unit).toBe('A');
+
+    // I's meta shows template defaults only (no dotted propagation)
+    const iMeta = iResult.meta.find(m => m.name === 'I');
+    expect(iMeta.fields.eng_max).toBe(100);    // Analog_In template default
+    expect(iMeta.fields.unit).toBeUndefined();  // Analog_In has no unit field
+    expect(iMeta.fields.eng_min).toBeUndefined(); // V's override must not bleed into I
+
+    // V subtag: display column from parent V.eng_min dotted field; no I bleed-through
+    const vResult = result.find(r => r.tag_path === 'Parent.V.val');
+    expect(vResult.eng_min).toBe(5);
+
+    // V's meta shows template default (no dotted propagation)
+    const vMeta = vResult.meta.find(m => m.name === 'V');
+    expect(vMeta.fields.eng_min).toBe(0);       // V_Param template default
+    expect(vMeta.fields.eng_max).toBeUndefined(); // I's override must not bleed into V
+  });
+
+  it('regular (non-dotted) fields are unaffected by the new logic', () => {
+    const tag = makeTag('T', 'f32', false, { eng_min: { field_type: 'Numeric', default: 0 } });
+    const mod = makeStruct('M', 'module', [
+      { template_name: 'T', asset_name: 'ch', fields: { eng_min: 7 } },
+    ]);
+    const map = { M: wrap(mod), T: wrap(tag) };
+
+    const result = resolveRegistry(map, 'M');
+    expect(result).toHaveLength(1);
+    expect(result[0].meta[result[0].meta.length - 1].fields.eng_min).toBe(7);
+  });
+});
+
+// ── numeric gate for display fields ──────────────────────────────────────────
+
+describe('numeric gate for display fields', () => {
+  it('boolean tag does not inherit ancestor eng_min/eng_max/unit/format', () => {
+    // Parent has eng_min in its fields; child is a boolean tag
+    const boolTag = makeTag('BoolTag', 'bool', false);
+    const mod = makeStruct('M', 'module', [
+      { template_name: 'BoolTag', asset_name: 'Enable', fields: {} },
+    ], { eng_min: { field_type: 'Numeric', default: 0 }, eng_max: { field_type: 'Numeric', default: 100 }, unit: { field_type: 'String', default: 'mA' } });
+    const map = { M: wrap(mod), BoolTag: wrap(boolTag) };
+
+    const result = resolveRegistry(map, 'M');
+    expect(result).toHaveLength(1);
+    expect(result[0].data_type).toBe('bool');
+    expect(result[0].eng_min).toBeNull();
+    expect(result[0].eng_max).toBeNull();
+    expect(result[0].unit).toBeNull();
+    expect(result[0].format).toBeNull();
+  });
+
+  it('numeric sibling still inherits display fields when boolean sibling gets nulls', () => {
+    // Same parent with eng_min/unit — one boolean child, one f32 child
+    const boolTag = makeTag('BoolTag', 'bool', false);
+    const numTag  = makeTag('NumTag',  'f32',  false, { eng_min: { field_type: 'Numeric', default: 0 } });
+    const mod = makeStruct('M', 'module', [
+      { template_name: 'BoolTag', asset_name: 'Enable', fields: {} },
+      { template_name: 'NumTag',  asset_name: 'Value',  fields: { eng_min: 5 } },
+    ], { unit: { field_type: 'String', default: 'mA' } });
+    const map = { M: wrap(mod), BoolTag: wrap(boolTag), NumTag: wrap(numTag) };
+
+    const result = resolveRegistry(map, 'M');
+    expect(result).toHaveLength(2);
+
+    const boolResult = result.find(r => r.tag_path === 'M.Enable');
+    expect(boolResult.eng_min).toBeNull();
+    expect(boolResult.eng_max).toBeNull();
+    expect(boolResult.unit).toBeNull();
+
+    const numResult = result.find(r => r.tag_path === 'M.Value');
+    expect(numResult.eng_min).toBe(5);
+    expect(numResult.unit).toBe('mA');
+  });
+
+  it('i16 tag inherits display fields normally', () => {
+    const tag = makeTag('T', 'i16', false, {
+      eng_min: { field_type: 'Numeric', default: -100 },
+      eng_max: { field_type: 'Numeric', default: 100 },
+      unit:   { field_type: 'String',  default: 'rpm' },
+    });
+    const mod = makeStruct('M', 'module', [
+      { template_name: 'T', asset_name: 'Speed', fields: {} },
+    ]);
+    const map = { M: wrap(mod), T: wrap(tag) };
+
+    const result = resolveRegistry(map, 'M');
+    expect(result).toHaveLength(1);
+    expect(result[0].data_type).toBe('i16');
+    expect(result[0].eng_min).toBe(-100);
+    expect(result[0].eng_max).toBe(100);
+    expect(result[0].unit).toBe('rpm');
+  });
+});
+
+// ── resolveDisplayField — path-aware resolution ──────────────────────────────
+
+describe('resolveDisplayField — path-aware resolution', () => {
+  it('meta at parameter level shows ChildRef override, not ancestor dotted value', () => {
+    // GP has I.unit: kA (dotted field). ChildRef for I has { unit: 'mA' }.
+    // I's meta should show unit: mA (ChildRef), NOT kA (no dotted propagation into meta).
+    const iParam = makeStruct('I_Param', 'parameter', [
+      { template_name: 'Tag_T', asset_name: 'val', fields: {} },
+    ], { unit: { field_type: 'String', default: 'default' } });
+    const tagT = makeTag('Tag_T');
+    const gp = makeStruct('GP', 'module', [
+      { template_name: 'I_Param', asset_name: 'I', fields: { unit: 'mA' } },
+    ], { 'I.unit': { field_type: 'String', default: 'kA' } });
+    const map = { GP: wrap(gp), I_Param: wrap(iParam), Tag_T: wrap(tagT) };
+
+    const result = resolveRegistry(map, 'GP');
+    expect(result).toHaveLength(1);
+    const iMeta = result[0].meta.find(m => m.name === 'I');
+    expect(iMeta.fields.unit).toBe('mA');   // ChildRef wins in meta
+    expect(iMeta.fields.unit).not.toBe('kA'); // dotted NOT propagated into meta
+  });
+
+  it('dotted field appears only at the defining level in meta, not at the target level', () => {
+    // GP has I.RSS.unit: kA/s. I's meta should NOT contain RSS.unit.
+    // GP's meta SHOULD contain I.RSS.unit: kA/s.
+    const rssTag = makeTag('RSS_Tag');
+    const iParam = makeStruct('I_Param', 'parameter', [
+      { template_name: 'RSS_Tag', asset_name: 'RSS', fields: {} },
+    ]);
+    const gp = makeStruct('GP', 'module', [
+      { template_name: 'I_Param', asset_name: 'I', fields: {} },
+    ], { 'I.RSS.unit': { field_type: 'String', default: 'kA/s' } });
+    const map = { GP: wrap(gp), I_Param: wrap(iParam), RSS_Tag: wrap(rssTag) };
+
+    const result = resolveRegistry(map, 'GP');
+    expect(result).toHaveLength(1);
+    // GP's meta contains the dotted field as-is
+    const gpMeta = result[0].meta.find(m => m.name === 'GP');
+    expect(gpMeta.fields['I.RSS.unit']).toBe('kA/s');
+    // I's meta does NOT contain RSS.unit (no propagation)
+    const iMeta = result[0].meta.find(m => m.name === 'I');
+    expect(iMeta.fields['RSS.unit']).toBeUndefined();
+  });
+
+  it('display column: ancestor dotted field beats descendant direct field (root wins)', () => {
+    // GP has I.unit: kA. ChildRef for I has { unit: 'mA' }.
+    // Tag Set (child of I) display column unit should be kA (GP is root, wins).
+    const iParam = makeStruct('I_Param', 'parameter', [
+      { template_name: 'Tag_T', asset_name: 'Set', fields: {} },
+    ]);
+    const tagT = makeTag('Tag_T');
+    const gp = makeStruct('GP', 'module', [
+      { template_name: 'I_Param', asset_name: 'I', fields: { unit: 'mA' } },
+    ], { 'I.unit': { field_type: 'String', default: 'kA' } });
+    const map = { GP: wrap(gp), I_Param: wrap(iParam), Tag_T: wrap(tagT) };
+
+    const result = resolveRegistry(map, 'GP');
+    expect(result).toHaveLength(1);
+    expect(result[0].unit).toBe('kA'); // GP's dotted field wins (root priority)
+  });
+
+  it('display column: more specific dotted field wins over less specific at same level', () => {
+    // GP has both I.unit: kA and I.RSS.unit: kA/s.
+    // Tag RSS display column: kA/s (specificity 2 wins).
+    // Tag Set display column: kA (only specificity 1 matches).
+    const rssTpl = makeTag('RSS_Tpl');
+    const setTpl = makeTag('Set_Tpl');
+    const iParam = makeStruct('I_Param', 'parameter', [
+      { template_name: 'RSS_Tpl', asset_name: 'RSS', fields: {} },
+      { template_name: 'Set_Tpl', asset_name: 'Set', fields: {} },
+    ]);
+    const gp = makeStruct('GP', 'module', [
+      { template_name: 'I_Param', asset_name: 'I', fields: {} },
+    ], {
+      'I.unit':     { field_type: 'String', default: 'kA' },
+      'I.RSS.unit': { field_type: 'String', default: 'kA/s' },
+    });
+    const map = { GP: wrap(gp), I_Param: wrap(iParam), RSS_Tpl: wrap(rssTpl), Set_Tpl: wrap(setTpl) };
+
+    const result = resolveRegistry(map, 'GP');
+    expect(result).toHaveLength(2);
+    const rssResult = result.find(r => r.tag_path === 'GP.I.RSS');
+    const setResult = result.find(r => r.tag_path === 'GP.I.Set');
+    expect(rssResult.unit).toBe('kA/s'); // more specific wins
+    expect(setResult.unit).toBe('kA');   // only less-specific match applies
+  });
+
+  it('display column falls through to parameter level when no ancestor dotted match exists', () => {
+    // M has no dotted unit fields. I has unit: mA from ChildRef (template default is V).
+    // Tag Set display column should be mA (inherited from I's meta via direct field).
+    const iParam = makeStruct('I_Param', 'parameter', [
+      { template_name: 'Tag_T', asset_name: 'Set', fields: {} },
+    ], { unit: { field_type: 'String', default: 'V' } });
+    const tagT = makeTag('Tag_T');
+    const mod = makeStruct('M', 'module', [
+      { template_name: 'I_Param', asset_name: 'I', fields: { unit: 'mA' } },
+    ]);
+    const map = { M: wrap(mod), I_Param: wrap(iParam), Tag_T: wrap(tagT) };
+
+    const result = resolveRegistry(map, 'M');
+    expect(result).toHaveLength(1);
+    expect(result[0].unit).toBe('mA'); // inherited from I's meta (ChildRef override)
+  });
+
+  it('display column: multi-level dotted key (A.B.unit) resolves without meta propagation', () => {
+    // GGP has A.B.unit: kA/s. No intermediate levels define unit.
+    // Tag under B should get kA/s from GGP's dotted field.
+    // Intermediate meta levels (A, B) should have no unit field.
+    const tagT = makeTag('Tag_T');
+    const bParam = makeStruct('B_Param', 'parameter', [
+      { template_name: 'Tag_T', asset_name: 'val', fields: {} },
+    ]);
+    const aMod = makeStruct('A_Mod', 'module', [
+      { template_name: 'B_Param', asset_name: 'B', fields: {} },
+    ]);
+    const ggp = makeStruct('GGP', 'system', [
+      { template_name: 'A_Mod', asset_name: 'A', fields: {} },
+    ], { 'A.B.unit': { field_type: 'String', default: 'kA/s' } });
+    const map = { GGP: wrap(ggp), A_Mod: wrap(aMod), B_Param: wrap(bParam), Tag_T: wrap(tagT) };
+
+    const result = resolveRegistry(map, 'GGP');
+    expect(result).toHaveLength(1);
+    expect(result[0].unit).toBe('kA/s');
+    // Intermediate meta levels have no unit (no propagation)
+    const aMeta = result[0].meta.find(m => m.name === 'A');
+    expect(aMeta.fields.unit).toBeUndefined();
+    const bMeta = result[0].meta.find(m => m.name === 'B');
+    expect(bMeta.fields.unit).toBeUndefined();
+  });
+
+  it('boolean tag still gets null for all display columns even with dotted fields in meta chain', () => {
+    // Module has I.eng_min and I.unit dotted fields. I is a boolean tag.
+    // All display columns should be null (isNumeric gate applies).
+    const boolTag = makeTag('Bool_Tag', 'bool');
+    const mod = makeStruct('M', 'module', [
+      { template_name: 'Bool_Tag', asset_name: 'I', fields: {} },
+    ], {
+      'I.eng_min': { field_type: 'Numeric', default: 0 },
+      'I.unit':    { field_type: 'String',  default: 'A' },
+    });
+    const map = { M: wrap(mod), Bool_Tag: wrap(boolTag) };
+
+    const result = resolveRegistry(map, 'M');
+    expect(result).toHaveLength(1);
+    expect(result[0].data_type).toBe('bool');
+    expect(result[0].eng_min).toBeNull();
+    expect(result[0].eng_max).toBeNull();
+    expect(result[0].unit).toBeNull();
+    expect(result[0].format).toBeNull();
+  });
+
+  it('ChildRef override at parameter level: tag children inherit resolved display value', () => {
+    // Analog_In has default unit: V. ChildRef for I overrides to unit: mA.
+    // Tag val's display column for unit should be mA (from parameter meta level).
+    const tagT = makeTag('Tag_T');
+    const analogIn = makeStruct('Analog_In', 'parameter', [
+      { template_name: 'Tag_T', asset_name: 'val', fields: {} },
+    ], { unit: { field_type: 'String', default: 'V' } });
+    const mod = makeStruct('M', 'module', [
+      { template_name: 'Analog_In', asset_name: 'I', fields: { unit: 'mA' } },
+    ]);
+    const map = { M: wrap(mod), Analog_In: wrap(analogIn), Tag_T: wrap(tagT) };
+
+    const result = resolveRegistry(map, 'M');
+    expect(result).toHaveLength(1);
+    expect(result[0].unit).toBe('mA'); // inherited from I's meta (ChildRef override)
+  });
+});
+
 // ── TAG_PATH_TOO_LONG ─────────────────────────────────────────────────────────
 
 describe('tag path too long', () => {

@@ -47,6 +47,14 @@ hmi_API_spec*
   1.4           2026-04-10   PM / Claude  Added module_types lookup table (§3.4).
                                           Added module and module_type columns to
                                           tag_registry (§3.1). Migrations 010, 011.
+
+  1.5           2026-04-16   PM / Claude  Added display columns to tag_registry
+                                          (§3.1): unit (VARCHAR 40), format
+                                          (VARCHAR 40), eng_min (DOUBLE PRECISION),
+                                          eng_max (DOUBLE PRECISION), all nullable.
+                                          Resolved by path-aware resolveDisplayField
+                                          in resolveRegistry.ts; gated to numeric
+                                          types (f32, i16). Migration 013.
   ------------- ------------ ------------ ------------------------------------------
 
 **1. Purpose**
@@ -113,6 +121,7 @@ Current migrations:
 -   010_create_module_types.sql
 -   011_add_module_columns.sql
 -   012_add_i16_tag_type.sql
+-   013_add_display_columns.sql
 
 > *NOTE: The schema_migrations table is created programmatically inside
 > migrations.js on every runMigrations() call — it is not created via a
@@ -178,6 +187,22 @@ false.
                                     meta[0] is the root level entry;
                                     meta[meta.length - 1] is the tag
                                     level entry.
+
+  unit             VARCHAR(40)      Engineering unit string (e.g. "kA",
+                   NULL             "kV"). NULL for non-numeric tags and
+                                    tags with no unit defined.
+
+  format           VARCHAR(40)      Display format string (e.g. "#",
+                   NULL             "#.##"). NULL for non-numeric tags
+                                    and tags with no format defined.
+
+  eng_min          DOUBLE PRECISION Engineering range minimum. NULL for
+                   NULL             non-numeric tags and tags with no
+                                    eng_min defined.
+
+  eng_max          DOUBLE PRECISION Engineering range maximum. NULL for
+                   NULL             non-numeric tags and tags with no
+                                    eng_max defined.
   ---------------- ---------------- -------------------------------------
 
 > *NOTE: Unique constraint on (tag_id, registry_rev). GIN index on meta.

@@ -1,0 +1,22 @@
+{
+  "template_name": "Module_Test",
+  "template_type": "module",
+  "fields": {
+    "Module_Type": {
+      "field_type": "ModuleType",
+      "default": "MQTT"
+    }
+  },
+  "children": [
+    {
+      "template_name": "Group_Test",
+      "asset_name": "Group",
+      "fields": {}
+    },
+    {
+      "template_name": "Group_Test",
+      "asset_name": "Group_Test_2",
+      "fields": {}
+    }
+  ]
+}
