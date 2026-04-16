@@ -20,12 +20,14 @@ export function CascadePreviewModal(): React.ReactElement | null {
     affectedParents = [],
     new_templates = [],
     children_changed = [],
+    children_reordered = [],
     pending_deletions = []
   } = modalProps as Record<string, unknown> & {
     diff?: Record<string, unknown>;
     affectedParents?: unknown[];
     new_templates?: unknown[];
     children_changed?: unknown[];
+    children_reordered?: unknown[];
     pending_deletions?: unknown[];
   };
 
@@ -41,6 +43,7 @@ export function CascadePreviewModal(): React.ReactElement | null {
           affectedParents={affectedParents as Parameters<typeof CascadeDiffContent>[0]['affectedParents']}
           newTemplates={new_templates as Parameters<typeof CascadeDiffContent>[0]['newTemplates']}
           childrenChanged={children_changed as Parameters<typeof CascadeDiffContent>[0]['childrenChanged']}
+          childrenReordered={children_reordered as Parameters<typeof CascadeDiffContent>[0]['childrenReordered']}
           pendingDeletions={pending_deletions as Parameters<typeof CascadeDiffContent>[0]['pendingDeletions']}
         />
 

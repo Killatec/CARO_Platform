@@ -28,5 +28,6 @@ cd apps/tag-registry/server && npx vitest run
 cd apps/tag-registry/client && npx vitest run
 cd apps/tag-registry/e2e && npm run test:chromium
 
-Current baseline: 330 unit + 207 E2E = 537 tests, 0 failures.
+Current baseline: 364 unit (shared 142, client 134, server 88) + 79 E2E (Chromium) = 443 tests, 0 failures.
+Note: Firefox and WebKit projects are not passing on this machine (pre-existing environment issue — browsers not installed). Chromium is the reliable baseline.
 If a run produces a different total, investigate before reporting done.

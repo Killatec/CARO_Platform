@@ -84,6 +84,7 @@ apps/tag-registry/
         resolveTree.ts
         diffRegistry.ts
         formatDate.ts
+        dragTypes.ts             drag payload types (TreeDragData, TemplateDragData) + module-level active-drag tracker for HTML5 DnD
       pages/
         EditorPage.tsx
         RegistryPage.tsx
@@ -251,6 +252,10 @@ Must NOT watch `../templates`. Adding `--watch ../templates` causes restarts on 
 
 **`removeTemplate(name)`** — removes from all five maps atomically. For new unsaved templates and post-save cleanup only. Do not call for saved templates awaiting deletion — use `markForDeletion`.
 
+**`reorderChild(parentTemplateName, fromIndex, toIndex)`** — splices child at `fromIndex` and inserts it at the adjusted position. No-op if the reorder would produce no change. Delegates to `updateTemplate` to mark dirty.
+
+**`insertChild(parentTemplateName, child, atIndex)`** — inserts a new `ChildRef` at `atIndex` (clamped). Delegates to `updateTemplate` to mark dirty.
+
 **`save(onRequiresConfirmation)`** — no-op if `isValid` false or nothing dirty. Builds `{ changes, deletions }`. On `STALE_TEMPLATE` or success: calls `loadRoot(rootTemplateName)` (rooted) or `_resetToIsolationMode()` (isolation).
 
 **`confirmSave(batch)`** — resubmits with `confirmed: true`. Same post-save reset.
@@ -297,12 +302,13 @@ Runs `validateTemplate`, `validateGraph`, `validateParentTypes` synchronously on
 - **Collapse toggle:** `prev[ownPath] !== false ? false : true` — not `!prev[ownPath]`. `undefined` (initial expanded) must transition to `false` (collapsed) on first click.
 - Non-`tag` nodes are valid drop targets. `handleDrop` is async — reads parent template via `getState()` after `await` to avoid stale closure.
 - Dirty nodes: `font-semibold text-orange-700`.
+- **Drag-and-drop reorder:** Each non-root row is draggable. Three drop zones: top 8 px = insert before (sibling), bottom 8 px = insert after (sibling), body = add child (existing). Root nodes are body-only; tag nodes are top/bottom only. Cross-parent drops are blocked (`computeDropZone` returns `'none'` when `data.parentTemplateName !== parentTemplateName`). `onDragOver` cannot read `dataTransfer` values (HTML5 DnD security restriction) — uses module-level `getActiveDragData()` from `dragTypes.ts` instead. `onDrop` reads via `parseDragData(e)` which does have transfer access.
 
 ### `TemplatesTree`
 - Leaf click: if template not in `templateMap`, fetches via `GET /api/v1/templates/root/:name` and injects via `injectTemplateGraph` before setting selection.
 - Re-fetch trigger: `useEffect` on `dirtySet` and `pendingDeletions` — re-fetches only when **both** are empty (`dirtySet.size === 0 && pendingDeletions.size === 0`).
 - Delete flow — `isNew` determined by `hashes.get(name) === null || undefined` (not by `originalTemplateMap`). New unsaved: `removeTemplate`. Saved: fetch hash first if missing, then `markForDeletion`.
-- Drag source: `onDragStart` sets `text/plain = template_name`.
+- Drag source: `onDragStart` sets `application/json = { source: 'template-panel', templateName }` plus `text/plain` fallback; calls `setActiveDragData` from `dragTypes.ts`; `onDragEnd` calls `clearActiveDragData`.
 
 ### `FieldsPanel`
 - Uses `selectionKey + setTimeout(0)` blank-tick pattern on every selection switch. Dependency array must be `[selectionKey]` — not the raw selection fields.
@@ -312,7 +318,7 @@ Runs `validateTemplate`, `validateGraph`, `validateParentTypes` synchronously on
 - `FieldTableRow` is a `<tr>`-based component local to `FieldsPanel.jsx`. Distinct from `FieldRow.jsx` (div/flex). `FieldRow` is not used inside `FieldsPanel`.
 
 ### `CascadeDiffContent`
-Shared by `CascadeModal` and `CascadePreviewModal`. Props: `newTemplates`, `childrenChanged`, `pendingDeletions`, `diff`, `affectedParents`. "No changes detected" shown only when all props empty.
+Shared by `CascadeModal` and `CascadePreviewModal`. Props: `newTemplates`, `childrenChanged`, `childrenReordered`, `pendingDeletions`, `diff`, `affectedParents`. "No changes detected" shown only when all props empty. `childrenReordered` renders as "Children Reordered" section showing `new_order` as `A → B → C` joined string.
 
 ### `RegistryPage`
 - Fetches DB registry via `GET /api/v1/registry`, compares with `resolveRegistry()` using `diffRegistry()`.
@@ -333,7 +339,7 @@ Shared by `CascadeModal` and `CascadePreviewModal`. Props: `newTemplates`, `chil
 - Fetches `GET /api/v1/config` on mount alongside template list. On failure: store retains `{ requiredParentTypes: [], uniqueParentTypes: false }` silently.
 - Fetches `GET /api/v1/tag-types` and `GET /api/v1/module-types` on mount, populating `useTagTypesStore` and `useModuleTypesStore` respectively.
 - `<main>` uses `overflow-hidden` (not `overflow-auto`) — individual pages manage their own scrolling.
-- `_buildDiffEnrichment()` computes `new_templates`, `pending_deletions`, `children_changed` from store state for both `handleSeeChanges` and `handleSave`.
+- `_buildDiffEnrichment()` computes `new_templates`, `pending_deletions`, `children_changed`, `children_reordered` from store state for both `handleSeeChanges` and `handleSave`. Reorder detection uses ordered intersection: compares only children present in both original and current arrays to avoid false positives on add/remove.
 
 ### `EditorPage`
 - Layout: `h-full flex flex-col` outer container. Tree panels row: `flex-1 min-h-0`. Each tree column (`AssetTree`, right panel) has `overflow-y-auto` for independent scrolling. `ValidationPanel` pinned to bottom via `flex-shrink-0` wrapper.

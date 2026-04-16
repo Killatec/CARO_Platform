@@ -19,6 +19,11 @@ interface ChildChanged {
   removed: Array<{ asset_name: string; template_name: string }>;
 }
 
+interface ChildrenReordered {
+  template_name: string;
+  new_order: string[]; // asset_names in current array order
+}
+
 interface AppShellProps {
   children: React.ReactNode;
 }
@@ -109,6 +114,8 @@ export function AppShell({ children }: AppShellProps): React.ReactElement {
       }));
 
     const childrenChanged: ChildChanged[] = [];
+    const childrenReordered: ChildrenReordered[] = [];
+
     for (const name of dirtySet) {
       const current = templateMap.get(name)?.template;
       const original = originalTemplateMap.get(name)?.template;
@@ -131,12 +138,35 @@ export function AppShell({ children }: AppShellProps): React.ReactElement {
           removed: removed.map(c => ({ asset_name: c.asset_name, template_name: c.template_name })),
         });
       }
+
+      // Reorder detection: compare the relative order of children present in
+      // both arrays (the ordered intersection). This fires independently of
+      // add/remove so both sections can coexist in the modal.
+      const currentSet = new Set(currentChildren.map(c => c.asset_name));
+      const originalSet = new Set(originalChildren.map(o => o.asset_name));
+      const originalShared = originalChildren
+        .filter(o => currentSet.has(o.asset_name))
+        .map(o => o.asset_name);
+      const currentShared = currentChildren
+        .filter(c => originalSet.has(c.asset_name))
+        .map(c => c.asset_name);
+
+      const reordered = originalShared.length > 1 &&
+        originalShared.some((name, i) => name !== currentShared[i]);
+
+      if (reordered) {
+        childrenReordered.push({
+          template_name: name,
+          new_order: currentChildren.map(c => c.asset_name),
+        });
+      }
     }
 
     return {
       new_templates: newTemplates,
       pending_deletions: pendingDeletionsList,
       children_changed: childrenChanged,
+      children_reordered: childrenReordered,
     };
   };
 

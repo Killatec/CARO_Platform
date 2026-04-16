@@ -217,6 +217,8 @@ Example: `Plant1_System_A.RFPowerModule.ForwardPower.setpoint`
 
 Dots are not permitted in any `asset_name` OR `template_name`. `template_name` must not contain a dot character. The maximum permitted length of a `tag_path` is configurable via `MAX_TAG_PATH_LENGTH`.
 
+**Child array order is registry-neutral.** Reordering children within a parent template does not change any `tag_path` value — paths are built from `asset_name` strings, not from array indices. A pure reorder therefore produces zero diff when compared against the current database registry. The template file hash does change (array order is part of the canonical JSON), so the batch save pipeline correctly detects and persists the reorder.
+
 ### 9.2 tag_id — Stable Numeric Registry Address
 
 `tag_id` is an INTEGER assigned to a tag at its first registry generation. Stored only in the database. Assigned using `MAX(tag_id) + 1` within the generation transaction at SERIALIZABLE isolation. `tag_id` values are never reused, even if tags are retired.
@@ -414,6 +416,20 @@ Node names are shown in orange bold (`text-orange-700 font-semibold`) when the n
 
 Non-root nodes have a trash icon (always visible). Clicking it removes the child entry from the parent template's `children` array via `updateTemplate()`, entering the normal pending/Save flow.
 
+Every non-root tree node is **draggable**. Drop targets use a three-zone model determined by cursor position within the target row:
+
+- **Top band (8 px):** Insert the dragged item before this sibling (relative to its parent template's `children` array).
+- **Body (middle area):** Add the dragged item as a new child of this node — non-`tag` nodes only (existing behaviour).
+- **Bottom band (8 px):** Insert the dragged item after this sibling.
+
+Root nodes expose only the body zone (they have no parent to insert into). Tag nodes expose only top and bottom zones (tags cannot have children).
+
+**Visual feedback:** top and bottom zones display a 2 px blue horizontal line at the corresponding edge of the row. The body zone displays a blue dashed border.
+
+**Drag-and-drop reordering** — A non-root node can be dragged to a different position within the same parent to reorder its siblings. The node is spliced out of its original position and inserted at the drop position. This modifies the parent template's `children` array and enters the normal pending-edit / Save flow.
+
+**Cross-parent reparenting is not supported.** Dropping a node onto a zone that belongs to a different parent is silently rejected — no visual indicator is shown and the tree is unchanged. This restriction is intentional: reparenting changes `tag_path` values, which retires existing `tag_id`s and creates new ones, breaking downstream references to those identifiers.
+
 ### 16.3 Right Panel Layout
 
 The right panel of the Editor page is divided vertically into two areas: the Templates Tree (top) and the Fields Panel (bottom). The two areas share a single selection state governed by the mutual-exclusion model described in section 16.6.
@@ -432,7 +448,10 @@ Template leaves are shown in orange bold when their current state differs from t
 
 A **"New"** button in the panel header opens `NewTemplateModal` to create a new template. A **trash icon** on each leaf queues the template for deletion (pending/Save flow for saved templates; instant for new unsaved templates).
 
-Template leaf nodes are **draggable**. Dragging a leaf onto a valid System Tree node (any non-`tag` node) creates a new child instance with `asset_name = template_name` (default).
+Template leaf nodes are **draggable**. The drop behaviour on System Tree nodes uses the three-zone model described in §16.2:
+
+- **Body zone** — appends a new child instance to the target node (any non-`tag` node) with `asset_name = template_name` (default).
+- **Top or bottom zone** — inserts the new child at that position rather than appending to the end. The parent for the insert is the target node's parent, and the insertion index is computed from the drop zone (before or after the target sibling).
 
 ### 16.5 Fields Panel
 
@@ -470,12 +489,15 @@ A "See what's changed" button is available in the AppShell header whenever the d
 The modal displays via `CascadeDiffContent`:
 - **New Templates** (purple) — templates in `dirtySet` absent from `originalTemplateMap`.
 - **Children Added / Removed** (indigo) — per parent template, green `+` and red `−` lines per child instance.
+- **Children Reordered** (indigo) — per parent template, the new child order displayed as asset names joined by `→`. Shown when the relative order of shared children has changed, independently of any add/remove changes.
 - **Pending Deletions** (red) — templates in `pendingDeletions`.
 - **Fields Added** — new field definitions in changed templates.
 - **Fields Removed** — removed field definitions.
 - **Fields Changed** — template default value diffs.
 - **Instance Overrides Changed** — instance-level field diffs.
 - **Affected Instances** — parent templates whose child instances reference a schema-changed template.
+
+**Reorder detection algorithm:** For each dirty template, the enrichment function computes the *ordered intersection* — the subsequence of children present in both the original and current arrays, in their respective orders. If these two subsequences differ at any index, a reorder is recorded for that parent. Requiring at least two shared children prevents a false positive when all but one child has been replaced. Reorder detection fires independently of add/remove detection — both sections can appear simultaneously for the same parent template.
 
 This modal is informational — it requires no action. Renders using the shared `CascadeDiffContent` component. Adds Close footer.
 

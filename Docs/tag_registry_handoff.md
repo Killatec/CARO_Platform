@@ -12,7 +12,8 @@
 - Revision history — every apply creates a `registry_revisions` row; History page shows full log
 - Client-side validation — circular references, invalid references, schema errors, tag path length, configurable parent type rules; blocks save on error
 - Module type support — `module_types` lookup table, `ModuleType` field type with dropdown UI, `Module_Type` required on module templates, `module` and `module_type` columns resolved and persisted to `tag_registry`; `GET /api/v1/module-types` endpoint
-- Test suite — 330 Vitest unit tests (server 82, shared 125, client 112, packages/db 11) + 207 Playwright E2E tests (Chromium, Firefox, WebKit); 537 total, 0 failures
+- Drag-and-drop child reordering — system tree children can be reordered within the same parent by dragging. Template panel drops are positional (top/bottom 8 px bands = insert before/after sibling; body = append as child). Cross-parent reparenting is intentionally blocked. Reordering appears in the "See what's changed" preview modal under "Children Reordered".
+- Test suite — 364 Vitest unit tests (server 88, shared 142, client 134) + 79 Playwright E2E tests (Chromium); 443 total, 0 failures
 
 ## What Is Not Built
 
@@ -55,6 +56,7 @@ All in `Docs/`. Read order for a new session: this file → deltas → task-spec
 - **Template deletions are pending operations** — queued client-side, committed on next batch save. `DELETE /api/v1/templates/:name` exists for tooling only.
 - **Registry apply is server-side** — `POST /api/v1/registry/apply` loads graph, resolves registry, diffs against DB, writes in SERIALIZABLE transaction. Client sends root name + comment only.
 - **`apps/tag-registry/shared/` is a local module**, not a workspace package. Pure functions only — no `fs`, no Express, no DOM.
+- **No reparenting in drag-and-drop.** Children can only be reordered within the same parent. Moving a child to a different parent is blocked because it would change `tag_path` and retire the existing `tag_id`, creating a new one — tag continuity would be silently broken. Will be revisited if rename tracking is implemented.
 - **Error handling** — route handlers throw errors with `err.status` (HTTP code), `err.code` (string), and optionally `err.details` set at the throw site. All errors flow through `@caro/server` `errorHandler` which formats them into the platform envelope `{ ok: false, error: { code, message, details } }`. Do not use direct `res.status().json()` calls for errors in route code. Both `templateService.js` and `registry.js` follow this pattern.
 
 ---

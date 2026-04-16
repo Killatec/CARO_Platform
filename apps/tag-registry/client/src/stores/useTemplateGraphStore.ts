@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import * as templatesApi from '../api/templates.js';
 import type { BatchChange, BatchDeletion, BatchSaveResult } from '../api/templates.js';
 import { applyFieldCascade, deepEqual } from '@caro/tag-registry-shared';
-import type { Template, TemplateEntry, ValidationMessage } from '@caro/tag-registry-shared';
+import type { Template, TemplateEntry, ValidationMessage, ChildRef } from '@caro/tag-registry-shared';
 import { useUIStore } from './useUIStore.js';
 
 export interface ValidationState {
@@ -35,6 +35,8 @@ export interface TemplateGraphState {
   save: (onRequiresConfirmation?: (result: BatchSaveResult, batch: BatchSpec) => void) => Promise<void>;
   confirmSave: (batch: BatchSpec) => Promise<void>;
   discard: () => Promise<void>;
+  reorderChild: (parentTemplateName: string, fromIndex: number, toIndex: number) => void;
+  insertChild: (parentTemplateName: string, child: ChildRef, atIndex: number) => void;
   setValidationState: (state: ValidationState) => void;
 }
 
@@ -336,6 +338,42 @@ export const useTemplateGraphStore = create<TemplateGraphState>((set, get) => ({
     } else {
       await _resetToIsolationMode(get, set);
     }
+  },
+
+  // ── Child ordering actions ────────────────────────────────────────────────
+
+  reorderChild: (parentTemplateName, fromIndex, toIndex) => {
+    const { templateMap, updateTemplate } = get();
+    const parent = templateMap.get(parentTemplateName)?.template;
+    if (!parent) return;
+
+    const children = [...(parent.children ?? [])];
+    if (fromIndex < 0 || fromIndex >= children.length) return;
+
+    const [moved] = children.splice(fromIndex, 1);
+    // After removing fromIndex every element to the right shifts left by one,
+    // so if toIndex was to the right of fromIndex we adjust it down by one.
+    const insertAt = Math.max(0, Math.min(
+      toIndex > fromIndex ? toIndex - 1 : toIndex,
+      children.length
+    ));
+    // Guard: after adjustment, same position → no-op.
+    if (insertAt === fromIndex) return;
+    children.splice(insertAt, 0, moved);
+
+    updateTemplate(parentTemplateName, { children });
+  },
+
+  insertChild: (parentTemplateName, child, atIndex) => {
+    const { templateMap, updateTemplate } = get();
+    const parent = templateMap.get(parentTemplateName)?.template;
+    if (!parent) return;
+
+    const children = [...(parent.children ?? [])];
+    const clampedIndex = Math.max(0, Math.min(atIndex, children.length));
+    children.splice(clampedIndex, 0, child);
+
+    updateTemplate(parentTemplateName, { children });
   },
 
   // ── Utility actions ───────────────────────────────────────────────────────

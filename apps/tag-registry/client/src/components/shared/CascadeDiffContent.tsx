@@ -16,6 +16,11 @@ interface ChildrenChanged {
   removed: ChildChange[];
 }
 
+interface ChildrenReordered {
+  template_name: string;
+  new_order: string[];
+}
+
 interface AffectedParent {
   parent_template_name: string;
   asset_name: string;
@@ -34,6 +39,7 @@ interface CascadeDiffContentProps {
   affectedParents?: AffectedParent[];
   newTemplates?: NewTemplate[];
   childrenChanged?: ChildrenChanged[];
+  childrenReordered?: ChildrenReordered[];
   pendingDeletions?: NewTemplate[];
 }
 
@@ -45,6 +51,7 @@ export function CascadeDiffContent({
   affectedParents = [],
   newTemplates = [],
   childrenChanged = [],
+  childrenReordered = [],
   pendingDeletions = []
 }: CascadeDiffContentProps): React.ReactElement {
   return (
@@ -75,6 +82,22 @@ export function CascadeDiffContent({
                     <li key={`r${j}`} className="text-red-700">− {c.asset_name} <span className="text-gray-500">({c.template_name})</span></li>
                   ))}
                 </ul>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {childrenReordered.length > 0 && (
+        <div>
+          <h4 className="font-semibold text-sm text-indigo-700">Children Reordered:</h4>
+          <div className="space-y-2 mt-1">
+            {childrenReordered.map((entry, i) => (
+              <div key={i}>
+                <p className="text-sm font-medium text-gray-700 ml-2">{entry.template_name}</p>
+                <p className="text-sm text-gray-600 ml-5">
+                  {entry.new_order.join(' → ')}
+                </p>
               </div>
             ))}
           </div>
@@ -155,7 +178,7 @@ export function CascadeDiffContent({
         </div>
       )}
 
-      {newTemplates.length === 0 && childrenChanged.length === 0 && pendingDeletions.length === 0 && diff.fields_added?.length === 0 && diff.fields_removed?.length === 0 && diff.fields_changed?.length === 0 && diff.instance_fields_changed?.length === 0 && (
+      {newTemplates.length === 0 && childrenChanged.length === 0 && childrenReordered.length === 0 && pendingDeletions.length === 0 && diff.fields_added?.length === 0 && diff.fields_removed?.length === 0 && diff.fields_changed?.length === 0 && diff.instance_fields_changed?.length === 0 && (
         <p className="text-sm text-gray-500">No changes detected.</p>
       )}
     </div>

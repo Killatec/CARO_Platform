@@ -6,6 +6,7 @@ import { NewTemplateModal } from '../shared/NewTemplateModal.jsx';
 import { TrashIcon } from '../shared/TrashIcon.jsx';
 import { deepNotEqual } from '@caro/tag-registry-shared';
 import type { TemplateEntry } from '@caro/tag-registry-shared';
+import { setActiveDragData, clearActiveDragData } from '../../utils/dragTypes.js';
 
 interface TemplateLeafProps {
   name: string;
@@ -41,9 +42,13 @@ function TemplateLeaf({
       }`}
       draggable
       onDragStart={e => {
+        const data = { source: 'template-panel' as const, templateName: name };
+        e.dataTransfer.setData('application/json', JSON.stringify(data));
         e.dataTransfer.setData('text/plain', name);
         e.dataTransfer.effectAllowed = 'copy';
+        setActiveDragData(data);
       }}
+      onDragEnd={() => clearActiveDragData()}
       onClick={() => onSelect(name)}
     >
       <span className={`flex-1 text-sm ${isDirty ? 'font-semibold text-orange-700' : isSelected ? 'font-normal text-blue-800' : 'font-normal text-gray-800'}`}>
