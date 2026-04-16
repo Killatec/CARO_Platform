@@ -34,3 +34,10 @@ export const ERROR_CODES = {
 
 export const MAX_TAG_PATH_LENGTH = 100;
 export const MAX_IDENTIFIER_LENGTH = 40;
+
+/**
+ * Ancestor types that must appear at most once in a tag's ancestor chain.
+ * Other types (e.g. "Group", "system") may repeat without triggering
+ * DUPLICATE_PARENT_TYPE.
+ */
+export const UNIQUE_ANCESTOR_TYPES = new Set(['module', 'parameter']);

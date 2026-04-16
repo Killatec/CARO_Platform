@@ -274,6 +274,9 @@ If any resolved `tag_path` exceeds the configured maximum path length, the save 
 
 Controlled by server environment variables `VALIDATE_REQUIRED_PARENT_TYPES` and `VALIDATE_UNIQUE_PARENT_TYPES`. Evaluated via `validateParentTypes`.
 
+- **`VALIDATE_REQUIRED_PARENT_TYPES`** — comma-separated list of `template_type` values that must appear in every tag's ancestor chain. Produces `PARENT_TYPE_MISSING` if absent. Example: `module`.
+- **`VALIDATE_UNIQUE_PARENT_TYPES`** — when `true`, enforces that certain ancestor types appear at most once in a tag's ancestor chain. Only types listed in `UNIQUE_ANCESTOR_TYPES` (defined in `shared/constants.ts`) are subject to this check — currently `module` and `parameter`. Other types (e.g. `Group`, `system`) may repeat in the hierarchy without error. Produces `DUPLICATE_PARENT_TYPE` on violation.
+
 ### 10.8 Tool Warnings (Non-Blocking)
 
 - `TYPE_FOLDER_MISMATCH` — template_type does not match subfolder.

@@ -1,4 +1,4 @@
-import { ERROR_CODES } from './constants.js';
+import { ERROR_CODES, UNIQUE_ANCESTOR_TYPES } from './constants.js';
 import type { Template, TemplateEntry, ValidationResult, ValidationMessage } from './types.js';
 import { extractTemplate } from './types.js';
 
@@ -84,7 +84,9 @@ export function validateParentTypes(
     if (uniqueParentTypes) {
       const typeCounts = new Map<string, number>();
       for (const type of ancestorTypes) {
-        typeCounts.set(type, (typeCounts.get(type) ?? 0) + 1);
+        if (UNIQUE_ANCESTOR_TYPES.has(type)) {
+          typeCounts.set(type, (typeCounts.get(type) ?? 0) + 1);
+        }
       }
 
       for (const [type, count] of typeCounts.entries()) {
