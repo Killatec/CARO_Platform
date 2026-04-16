@@ -21,6 +21,14 @@
     "unit": {
       "field_type": "String",
       "default": "#"
+    },
+    "eng_min": {
+      "field_type": "Numeric",
+      "default": 0
+    },
+    "eng_max": {
+      "field_type": "Numeric",
+      "default": 100
     }
   }
 }

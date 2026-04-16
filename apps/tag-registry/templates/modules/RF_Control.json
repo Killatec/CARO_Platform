@@ -1,0 +1,32 @@
+{
+  "template_name": "RF_Control",
+  "template_type": "module",
+  "fields": {
+    "Module_Type": {
+      "field_type": "ModuleType",
+      "default": "MQTT"
+    }
+  },
+  "children": [
+    {
+      "template_name": "Acc_RF",
+      "asset_name": "Acc_1",
+      "fields": {}
+    },
+    {
+      "template_name": "Acc_RF",
+      "asset_name": "Acc_2",
+      "fields": {}
+    },
+    {
+      "template_name": "Acc_RF",
+      "asset_name": "Acc_3",
+      "fields": {}
+    },
+    {
+      "template_name": "Acc_RF",
+      "asset_name": "Acc_4",
+      "fields": {}
+    }
+  ]
+}

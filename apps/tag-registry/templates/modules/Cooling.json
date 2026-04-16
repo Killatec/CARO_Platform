@@ -1,0 +1,11 @@
+{
+  "template_name": "Cooling",
+  "template_type": "module",
+  "fields": {
+    "Module_Type": {
+      "field_type": "ModuleType",
+      "default": "MQTT"
+    }
+  },
+  "children": []
+}

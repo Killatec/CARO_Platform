@@ -1,0 +1,46 @@
+{
+  "template_name": "Beam_Current",
+  "template_type": "Group",
+  "fields": {},
+  "children": [
+    {
+      "template_name": "Gun",
+      "asset_name": "Gun",
+      "fields": {}
+    },
+    {
+      "template_name": "Analog_In",
+      "asset_name": "Toroid_1",
+      "fields": {
+        "format": "#.#",
+        "unit": "mA",
+        "eng_max": 1000
+      }
+    },
+    {
+      "template_name": "Analog_In",
+      "asset_name": "Toroid_2",
+      "fields": {
+        "format": "#.#",
+        "unit": "mA",
+        "eng_max": 1000
+      }
+    },
+    {
+      "template_name": "Analog_In",
+      "asset_name": "Average_I",
+      "fields": {
+        "format": "#.###",
+        "unit": "mA",
+        "eng_max": 10
+      }
+    },
+    {
+      "template_name": "Analog_In",
+      "asset_name": "Energy",
+      "fields": {
+        "unit": "MeV"
+      }
+    }
+  ]
+}

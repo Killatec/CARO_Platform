@@ -9,6 +9,14 @@
     "unit": {
       "field_type": "String",
       "default": "V"
+    },
+    "eng_min": {
+      "field_type": "Numeric",
+      "default": 0
+    },
+    "eng_max": {
+      "field_type": "Numeric",
+      "default": 100
     }
   },
   "children": [
@@ -55,6 +63,11 @@
     {
       "template_name": "numeric_set",
       "asset_name": "In_B",
+      "fields": {}
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "numeric_set",
       "fields": {}
     }
   ]

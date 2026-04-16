@@ -1,0 +1,33 @@
+{
+  "template_name": "Timming",
+  "template_type": "Group",
+  "fields": {},
+  "children": [
+    {
+      "template_name": "Analog_In",
+      "asset_name": "Pulse_Rate",
+      "fields": {
+        "format": "#.#",
+        "unit": "Hz",
+        "eng_max": 1000
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Discharge_Delay",
+      "fields": {
+        "Trends": false,
+        "unit": "us",
+        "eng_max": 1000
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Sample_Delay",
+      "fields": {
+        "Trends": false,
+        "unit": "us"
+      }
+    }
+  ]
+}

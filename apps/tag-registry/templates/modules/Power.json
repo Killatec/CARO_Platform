@@ -1,0 +1,27 @@
+{
+  "template_name": "Power",
+  "template_type": "Group",
+  "fields": {},
+  "children": [
+    {
+      "template_name": "Power_Control",
+      "asset_name": "PS1",
+      "fields": {}
+    },
+    {
+      "template_name": "Power_Control",
+      "asset_name": "PS2",
+      "fields": {}
+    },
+    {
+      "template_name": "Power_Control",
+      "asset_name": "PS3",
+      "fields": {}
+    },
+    {
+      "template_name": "Power_Control",
+      "asset_name": "PS4",
+      "fields": {}
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "template_name": "Current_PS",
+  "template_type": "Group",
+  "fields": {},
+  "children": [
+    {
+      "template_name": "boolean_set",
+      "asset_name": "Enable",
+      "fields": {
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "Analog_In",
+      "asset_name": "I",
+      "fields": {
+        "format": "#.#",
+        "unit": "mA",
+        "eng_max": 10
+      }
+    },
+    {
+      "template_name": "Analog_In",
+      "asset_name": "V",
+      "fields": {}
+    }
+  ]
+}

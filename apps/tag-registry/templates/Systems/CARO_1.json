@@ -22,6 +22,11 @@
       "template_name": "HMI",
       "asset_name": "HMI",
       "fields": {}
+    },
+    {
+      "template_name": "Beam",
+      "asset_name": "Beam_1",
+      "fields": {}
     }
   ]
 }

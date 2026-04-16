@@ -1,0 +1,32 @@
+{
+  "template_name": "Beam_Control",
+  "template_type": "module",
+  "fields": {
+    "Module_Type": {
+      "field_type": "ModuleType",
+      "default": "MQTT"
+    }
+  },
+  "children": [
+    {
+      "template_name": "Timming",
+      "asset_name": "Timming",
+      "fields": {}
+    },
+    {
+      "template_name": "Beam_Current",
+      "asset_name": "Beam_Current",
+      "fields": {}
+    },
+    {
+      "template_name": "Optics",
+      "asset_name": "Optics",
+      "fields": {}
+    },
+    {
+      "template_name": "Scanning",
+      "asset_name": "Scanning",
+      "fields": {}
+    }
+  ]
+}

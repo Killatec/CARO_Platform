@@ -1,0 +1,27 @@
+{
+  "template_name": "Power_Control",
+  "template_type": "module",
+  "fields": {
+    "Module_Type": {
+      "field_type": "ModuleType",
+      "default": "MQTT"
+    }
+  },
+  "children": [
+    {
+      "template_name": "Main_TX",
+      "asset_name": "Main_TX",
+      "fields": {}
+    },
+    {
+      "template_name": "HV_Switch",
+      "asset_name": "HV_Switch",
+      "fields": {}
+    },
+    {
+      "template_name": "Pulser",
+      "asset_name": "Pulser",
+      "fields": {}
+    }
+  ]
+}

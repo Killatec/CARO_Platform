@@ -1,0 +1,27 @@
+{
+  "template_name": "Beam",
+  "template_type": "Group",
+  "fields": {},
+  "children": [
+    {
+      "template_name": "Beam_Control",
+      "asset_name": "Beam_Control",
+      "fields": {}
+    },
+    {
+      "template_name": "RF_Control",
+      "asset_name": "RF_control",
+      "fields": {}
+    },
+    {
+      "template_name": "Power",
+      "asset_name": "Power",
+      "fields": {}
+    },
+    {
+      "template_name": "Cooling",
+      "asset_name": "Cooling",
+      "fields": {}
+    }
+  ]
+}

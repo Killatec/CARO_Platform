@@ -1,0 +1,21 @@
+{
+  "template_name": "Gun",
+  "template_type": "Group",
+  "fields": {},
+  "children": [
+    {
+      "template_name": "Analog_In",
+      "asset_name": "Current",
+      "fields": {
+        "unit": "mA",
+        "format": "#.#",
+        "eng_max": 2000
+      }
+    },
+    {
+      "template_name": "Current_PS",
+      "asset_name": "Filament",
+      "fields": {}
+    }
+  ]
+}
