@@ -2,13 +2,14 @@ import { useLiveValue } from '@caro/hmi-context';
 import { useSingleTag } from './shared/useSingleTag.js';
 import { resolveFormat, resolveLabel } from './shared/utils.js';
 import { ROW_CONTAINER, LABEL_CLASS, VALUE_CLASS, VALUE_BAD_CLASS, UNIT_CLASS } from './shared/widgetStyles.js';
+import { withErrorBoundary } from './shared/withErrorBoundary.js';
 
 export interface NumericMonProps {
   assetPath: string;
   label?: string;
 }
 
-export function NumericMon({ assetPath, label }: NumericMonProps) {
+function NumericMonInner({ assetPath, label }: NumericMonProps) {
   const tag = useSingleTag(assetPath, 'NumericMon');
   const lv = useLiveValue(tag.tag_id);
   const fmt = resolveFormat(tag);
@@ -28,3 +29,5 @@ export function NumericMon({ assetPath, label }: NumericMonProps) {
     </div>
   );
 }
+
+export const NumericMon = withErrorBoundary(NumericMonInner);

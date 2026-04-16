@@ -3,6 +3,7 @@ import { useSingleTag } from './shared/useSingleTag.js';
 import { resolveLabel } from './shared/utils.js';
 import { ROW_CONTAINER, LABEL_CLASS, COL } from './shared/widgetStyles.js';
 import { getDotClass } from './shared/colorMap.js';
+import { withErrorBoundary } from './shared/withErrorBoundary.js';
 
 export interface BooleanMonProps {
   assetPath: string;
@@ -14,7 +15,7 @@ export interface BooleanMonProps {
 }
 
 
-export function BooleanMon({
+function BooleanMonInner({
   assetPath,
   label,
   trueLabel = 'ON',
@@ -47,3 +48,5 @@ export function BooleanMon({
     </div>
   );
 }
+
+export const BooleanMon = withErrorBoundary(BooleanMonInner);

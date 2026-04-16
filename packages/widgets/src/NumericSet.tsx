@@ -2,13 +2,14 @@ import { useSingleTag } from './shared/useSingleTag.js';
 import { resolveLabel } from './shared/utils.js';
 import { ROW_CONTAINER, LABEL_CLASS, UNIT_CLASS, COL } from './shared/widgetStyles.js';
 import { useNumericInput } from './shared/useNumericInput.js';
+import { withErrorBoundary } from './shared/withErrorBoundary.js';
 
 export interface NumericSetProps {
   assetPath: string;
   label?: string;
 }
 
-export function NumericSet({ assetPath, label }: NumericSetProps) {
+function NumericSetInner({ assetPath, label }: NumericSetProps) {
   const tag = useSingleTag(assetPath, 'NumericSet');
   const displayLabel = resolveLabel(assetPath, label);
   const {
@@ -67,3 +68,5 @@ export function NumericSet({ assetPath, label }: NumericSetProps) {
     </div>
   );
 }
+
+export const NumericSet = withErrorBoundary(NumericSetInner);

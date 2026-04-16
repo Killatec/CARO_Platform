@@ -7,6 +7,7 @@ import { useWriteGuard } from './shared/useWriteGuard.js';
 import { useNumericInput } from './shared/useNumericInput.js';
 import { ToggleSwitch } from './shared/ToggleSwitch.js';
 import { getDotClass } from './shared/colorMap.js';
+import { withErrorBoundary } from './shared/withErrorBoundary.js';
 
 // ── Column widths ──────────────────────────────────────────────────────────────
 
@@ -177,7 +178,7 @@ export interface AnalogInProps {
   showHeader?: boolean;
 }
 
-export function AnalogIn({ assetPath, label, showHeader = false }: AnalogInProps) {
+function AnalogInInner({ assetPath, label, showHeader = false }: AnalogInProps) {
   const tags = useTagGroup(assetPath, ANALOG_IN_CHILDREN as unknown as string[], 'AnalogIn');
   const displayLabel = resolveLabel(assetPath, label);
   const unit = tags['Set'].unit ?? '-';
@@ -241,3 +242,5 @@ export function AnalogIn({ assetPath, label, showHeader = false }: AnalogInProps
     </div>
   );
 }
+
+export const AnalogIn = withErrorBoundary(AnalogInInner);

@@ -142,6 +142,17 @@ Page components are standard React components. They receive the selected tree no
 
 > *NOTE: Pages may use useTagSubtree with any path prefix — the path is not required to match the node's position in the tree. A parent node page may aggregate data from multiple subtrees. A leaf node page may display tags from an unrelated part of the hierarchy. The tree is navigation structure only.*
 
+### 4.3 Client-Side Architecture
+
+The client is organized in four layers. Machine-specific code is confined to `hmi-definitions/`; everything above that layer is reusable across machine configurations.
+
+| Layer | Path | Description |
+|---|---|---|
+| Shell | `client/src/shell/` | App chrome — Header (global Reset button), sidebar nav, content area. Generic; no machine-specific knowledge. |
+| Widgets | `@caro/widgets` | Monitoring and setpoint widgets (NumericMon, NumericSet, BooleanMon, BooleanSet, AnalogIn). Each widget self-wraps with an error boundary via the `withErrorBoundary` HOC — page definitions require no explicit error boundary wrappers. |
+| Shared building blocks | `hmi-definitions/shared/` | Reusable layout constants (`styles.ts`) and composite components (RfModuleBox, HmiStatusBox, ModuleStatusBox) built from widgets and shared styles. |
+| Page definitions | `hmi-definitions/<config>/pages/` | Pure layout — compose shared building blocks. No business logic. `OverviewPage` is the current reference implementation. |
+
 ---
 
 ## 5. Authentication and Authorization

@@ -6,6 +6,7 @@ import { resolveLabel } from './shared/utils.js';
 import { ROW_CONTAINER, LABEL_CLASS, COL } from './shared/widgetStyles.js';
 import { useWriteGuard } from './shared/useWriteGuard.js';
 import { ToggleSwitch } from './shared/ToggleSwitch.js';
+import { withErrorBoundary } from './shared/withErrorBoundary.js';
 
 export interface BooleanSetProps {
   assetPath: string;
@@ -19,7 +20,7 @@ export interface BooleanSetProps {
 }
 
 
-export function BooleanSet({
+function BooleanSetInner({
   assetPath,
   label,
   trueLabel = 'ON',
@@ -105,3 +106,5 @@ export function BooleanSet({
     </div>
   );
 }
+
+export const BooleanSet = withErrorBoundary(BooleanSetInner);

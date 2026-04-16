@@ -1,5 +1,5 @@
 import { render, screen } from '@testing-library/react';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { MockHmiProvider } from '@caro/hmi-context/testing';
 import { NumericMon } from '../NumericMon.js';
 import { mockNumericTag, mockNumericTagRev } from './fixtures.js';
@@ -96,23 +96,32 @@ describe('NumericMon', () => {
     expect(screen.getByText('999.000')).toBeDefined();
   });
 
-  it('throws when assetPath matches zero tags', () => {
-    expect(() =>
+  it('renders error boundary when assetPath matches zero tags', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
       render(
         <MockHmiProvider>
           <NumericMon assetPath="DoesNotExist" />
         </MockHmiProvider>
-      )
-    ).toThrow('NumericMon: no tags found matching assetPath "DoesNotExist"');
+      );
+      expect(screen.getByText('Widget error')).toBeDefined();
+      expect(screen.getByText('DoesNotExist')).toBeDefined();
+    } finally {
+      spy.mockRestore();
+    }
   });
 
-  it('throws when assetPath is ambiguous (two tags with same leaf name under different parents)', () => {
-    expect(() =>
+  it('renders error boundary when assetPath is ambiguous', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
       render(
         <MockHmiProvider tagDefs={{ 1001: mockNumericTag, 1002: mockNumericTagRev }}>
           <NumericMon assetPath="monitor" />
         </MockHmiProvider>
-      )
-    ).toThrow(/NumericMon: ambiguous assetPath "monitor" matched 2 tags/);
+      );
+      expect(screen.getByText('Widget error')).toBeDefined();
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
