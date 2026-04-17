@@ -1,6 +1,7 @@
 import React from 'react';
 import { TreeNode } from './TreeNode.jsx';
 import { resolveTree } from '../../utils/resolveTree.js';
+import { exportTree } from '../../utils/exportTree.js';
 import { useTemplateGraphStore } from '../../stores/useTemplateGraphStore.js';
 
 /**
@@ -12,9 +13,31 @@ export function AssetTree(): React.ReactElement {
   const isLoading = useTemplateGraphStore(state => state.isLoading);
 
 
+  function handleExport() {
+    if (!rootTemplateName) return;
+    const result = exportTree(templateMap, rootTemplateName);
+    const json = JSON.stringify(result, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${rootTemplateName}_tree.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   const header = (
-    <div className="px-3 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide border-b border-gray-100">
-      System Tree
+    <div className="px-3 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide border-b border-gray-100 flex items-center justify-between">
+      <span>System Tree</span>
+      {rootTemplateName && (
+        <button
+          onClick={handleExport}
+          title="Export tree as JSON"
+          className="text-gray-400 hover:text-gray-600 transition-colors"
+        >
+          ↓
+        </button>
+      )}
     </div>
   );
 

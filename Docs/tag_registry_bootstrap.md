@@ -85,6 +85,8 @@ apps/tag-registry/
         diffRegistry.ts
         formatDate.ts
         dragTypes.ts             drag payload types (TreeDragData, TemplateDragData) + module-level active-drag tracker for HTML5 DnD
+        exportTree.ts            pure export utility — walks templateMap, returns { asset_name, template_type, children } at every level; root asset_name = rootTemplateName
+        exportTree.test.ts       11 unit tests (picked up via src/**/*.test.ts include in vitest.config.js)
       pages/
         EditorPage.tsx
         RegistryPage.tsx
@@ -303,6 +305,7 @@ Runs `validateTemplate`, `validateGraph`, `validateParentTypes` synchronously on
 ## 9. Component Notes
 
 ### `AssetTree` / `TreeNode`
+- System Tree header is `flex items-center justify-between`. A `↓` Export button sits on the right; it renders only when `rootTemplateName` is non-null. `onClick` calls `exportTree(templateMap, rootTemplateName)`, serializes to JSON, and triggers a browser download of `{rootTemplateName}_tree.json` via the anchor-click-revoke pattern (no external libs).
 - Expanded/collapsed state is **local** to each `TreeNode` via `useState`. Not lifted to `AssetTree` or any store.
 - Root node initialises `useState(true)` (expanded); all child nodes initialise `useState(false)` (collapsed). Determined by `parentTemplateName === null` at mount time.
 - Collapsing a parent unmounts its subtree (`{isExpanded && hasChildren && ...}`). Re-expanding remounts children fresh → always collapsed.
@@ -408,7 +411,7 @@ All seed templates live directly in `templates/` (flat — no subdirectories).
 **Date:** 2026-04-06 — 2026-04-07. All three layers are TypeScript (`strict: true`, zero `tsc` errors).
 
 - **Server:** 7 source files renamed `.js` → `.ts`; `tsconfig.json` added; `cors.d.ts` shim added; `dev` script uses `tsx` via nodemon; all 8 `__tests__/*.test.js` imports updated to `.ts`; `registryService.test.js` mock rewritten to target `getActiveTags`/`getRevisions`/`getRevisionTags` directly (old mock targeted `query()` which `registryService` no longer calls after `@caro/db` migration); **82 unit tests passing**
-- **Client:** 35 source files renamed `.js`/`.jsx` → `.ts`/`.tsx`; `tsconfig.json` added; `vite.config.js` → `vite.config.ts`; all stores, hooks, API calls, and components fully typed using `ApiResponse<T>` from `@caro/ui`; all 7 `__tests__/*.test.js` mock paths updated; **112 unit tests passing**
+- **Client:** 35 source files renamed `.js`/`.jsx` → `.ts`/`.tsx`; `tsconfig.json` added; `vite.config.js` → `vite.config.ts`; all stores, hooks, API calls, and components fully typed using `ApiResponse<T>` from `@caro/ui`; all 7 `__tests__/*.test.js` mock paths updated; `vitest.config.js` `include` extended to `['__tests__/**/*.test.js', 'src/**/*.test.ts']` to support co-located TypeScript tests; **145 unit tests passing**
 - **Shared:** 10 source files renamed `.js` → `.ts`; `types.ts` added as centralized interface file; declaration shims (`index.d.ts`, `utils.d.ts`) deleted — replaced by compiled `dist/`; `resolve-js-to-ts` Vitest plugin added to server `vitest.config.js` — Vite does not follow NodeNext `.js`→`.ts` fallback, plugin redirects relative `.js` imports to `.ts` source when file exists; **125 unit tests passing**
 
 ---

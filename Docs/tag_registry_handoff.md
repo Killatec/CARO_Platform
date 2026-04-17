@@ -1,5 +1,5 @@
 # Tag Registry Admin Tool — Handoff
-**Updated:** 2026-04-07 | **Root:** `apps/tag-registry/` | **API:** 3001 | **UI:** 5173
+**Updated:** 2026-04-16 | **Root:** `apps/tag-registry/` | **API:** 3001 | **UI:** 5173
 
 ---
 
@@ -17,7 +17,8 @@
 - Drag-and-drop child reordering — system tree children can be reordered within the same parent by dragging. Template panel drops are positional (top/bottom 8 px bands = insert before/after sibling; body = append as child). Cross-parent reparenting is intentionally blocked. Reordering appears in the "See what's changed" preview modal under "Children Reordered".
 - Display columns — `unit`, `format`, `eng_min`, `eng_max` stored as flat columns on the `tag_registry` table (migration 013). Resolved via path-aware `resolveDisplayField` algorithm that walks the meta chain root-to-leaf. Non-numeric tags (boolean) get null display values. RegistryTable shows all 4 as sortable columns.
 - Dotted override fields — template fields like `I.eng_min` target descendants by asset_name prefix. Resolution uses relative-path matching at each meta level with specificity ranking: more prefix segments = higher priority; lower level (closer to root) wins over deeper levels. Meta holds only template defaults + direct ChildRef overrides — no propagated values.
-- Test suite — 381 Vitest unit tests (server 88, shared 159, client 134) + 79 Playwright E2E tests (Chromium); 460 total, 0 failures
+- System Tree export — Export button (`↓`) in the System Tree header downloads `{rootTemplateName}_tree.json`; payload is `{ asset_name, template_type, children }` at every level with root `asset_name` set to `rootTemplateName`; button visible only when a root is loaded. Pure utility `client/src/utils/exportTree.ts`; 11 unit tests in `client/src/utils/exportTree.test.ts`.
+- Test suite — 392 Vitest unit tests (server 88, shared 159, client 145) + 79 Playwright E2E tests (Chromium); 471 total, 0 failures
 
 ## What Is Not Built
 
