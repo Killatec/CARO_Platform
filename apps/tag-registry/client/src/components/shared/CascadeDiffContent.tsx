@@ -32,6 +32,7 @@ interface CascadeDiff {
   fields_removed?: Array<{ template_name: string; field: string }>;
   fields_changed?: Array<{ template_name: string; field: string; old_value: unknown; new_value: unknown }>;
   instance_fields_changed?: Array<{ template_name: string; asset_name: string; field: string; old_value: unknown; new_value: unknown }>;
+  template_type_changed?: Array<{ template_name: string; old_value: string; new_value: string }>;
 }
 
 interface CascadeDiffContentProps {
@@ -148,6 +149,17 @@ export function CascadeDiffContent({
         </div>
       )}
 
+      {diff.template_type_changed && diff.template_type_changed.length > 0 && (
+        <div>
+          <h4 className="font-semibold text-sm text-yellow-700">Template Type Changed:</h4>
+          <ul className="text-sm list-disc ml-5">
+            {diff.template_type_changed.map((t, i) => (
+              <li key={i}>{t.template_name}: {t.old_value} → {t.new_value}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {diff.instance_fields_changed && diff.instance_fields_changed.length > 0 && (
         <div>
           <h4 className="font-semibold text-sm text-blue-700">Instance Overrides Changed:</h4>
@@ -178,7 +190,7 @@ export function CascadeDiffContent({
         </div>
       )}
 
-      {newTemplates.length === 0 && childrenChanged.length === 0 && childrenReordered.length === 0 && pendingDeletions.length === 0 && diff.fields_added?.length === 0 && diff.fields_removed?.length === 0 && diff.fields_changed?.length === 0 && diff.instance_fields_changed?.length === 0 && (
+      {newTemplates.length === 0 && childrenChanged.length === 0 && childrenReordered.length === 0 && pendingDeletions.length === 0 && diff.fields_added?.length === 0 && diff.fields_removed?.length === 0 && diff.fields_changed?.length === 0 && diff.instance_fields_changed?.length === 0 && diff.template_type_changed?.length === 0 && (
         <p className="text-sm text-gray-500">No changes detected.</p>
       )}
     </div>

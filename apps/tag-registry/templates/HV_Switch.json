@@ -1,0 +1,37 @@
+{
+  "template_name": "HV_Switch",
+  "template_type": "Power",
+  "fields": {},
+  "children": [
+    {
+      "template_name": "boolean_set",
+      "asset_name": "Enable",
+      "fields": {}
+    },
+    {
+      "template_name": "Voltage_PS",
+      "asset_name": "Heater",
+      "fields": {}
+    },
+    {
+      "template_name": "Voltage_PS",
+      "asset_name": "Res",
+      "fields": {}
+    },
+    {
+      "template_name": "Warm_Up",
+      "asset_name": "Warm_Up",
+      "fields": {}
+    },
+    {
+      "template_name": "Analog_In",
+      "asset_name": "Voltage",
+      "fields": {}
+    },
+    {
+      "template_name": "Analog_In",
+      "asset_name": "Current",
+      "fields": {}
+    }
+  ]
+}

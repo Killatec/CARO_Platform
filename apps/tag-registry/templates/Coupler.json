@@ -1,0 +1,21 @@
+{
+  "template_name": "Coupler",
+  "template_type": "RF",
+  "fields": {},
+  "children": [
+    {
+      "template_name": "Analog_In",
+      "asset_name": "Fwd",
+      "fields": {
+        "unit": "dBm"
+      }
+    },
+    {
+      "template_name": "Analog_In",
+      "asset_name": "Ref",
+      "fields": {
+        "unit": "dBm"
+      }
+    }
+  ]
+}

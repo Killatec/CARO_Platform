@@ -1,6 +1,6 @@
 {
   "template_name": "Current_PS",
-  "template_type": "Group",
+  "template_type": "Power_Supply",
   "fields": {
     "I.format": {
       "field_type": "String",

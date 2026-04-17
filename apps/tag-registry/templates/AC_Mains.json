@@ -1,0 +1,43 @@
+{
+  "template_name": "AC_Mains",
+  "template_type": "Power",
+  "fields": {},
+  "children": [
+    {
+      "template_name": "Analog_In",
+      "asset_name": "Phase_1_V",
+      "fields": {}
+    },
+    {
+      "template_name": "Analog_In",
+      "asset_name": "Phase_2_V",
+      "fields": {}
+    },
+    {
+      "template_name": "Analog_In",
+      "asset_name": "Phase_3_V",
+      "fields": {}
+    },
+    {
+      "template_name": "Analog_In",
+      "asset_name": "Phase_1_I",
+      "fields": {
+        "unit": "A"
+      }
+    },
+    {
+      "template_name": "Analog_In",
+      "asset_name": "Phase_2_I",
+      "fields": {
+        "unit": "A"
+      }
+    },
+    {
+      "template_name": "Analog_In",
+      "asset_name": "Phase_3_I",
+      "fields": {
+        "unit": "A"
+      }
+    }
+  ]
+}

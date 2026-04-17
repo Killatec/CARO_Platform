@@ -14,6 +14,7 @@ const EMPTY_DIFF = {
   fields_removed: [],
   fields_changed: [],
   instance_fields_changed: [],
+  template_type_changed: [],
 };
 
 // ── Null / empty ─────────────────────────────────────────────────────────────

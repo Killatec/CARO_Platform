@@ -70,6 +70,7 @@ export interface CascadeDiff {
   fields_removed: FieldDiff[];
   fields_changed: FieldChanged[];
   instance_fields_changed: InstanceFieldChanged[];
+  template_type_changed: Array<{ template_name: string; old_value: string; new_value: string }>;
 }
 
 export interface DroppedInstanceValue {

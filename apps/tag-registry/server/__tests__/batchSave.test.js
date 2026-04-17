@@ -107,7 +107,7 @@ describe('batchSave — hash checking', () => {
 // ── New template ──────────────────────────────────────────────────────────────
 
 describe('batchSave — new template (original_hash: null)', () => {
-  it('creates file in tags/ for a new tag template', async () => {
+  it('creates file at flat path for a new tag template', async () => {
     const newTag = {
       template_type: 'tag', template_name: 'brand_new',
       fields: {
@@ -119,29 +119,27 @@ describe('batchSave — new template (original_hash: null)', () => {
     const result = await batchSave([{ template_name: 'brand_new', original_hash: null, template: newTag }]);
     expect(result.requires_confirmation).toBe(false);
 
-    const expectedPath = join(tmpDir, 'tags', 'brand_new.json');
+    const expectedPath = join(tmpDir, 'brand_new.json');
     expect(await fileExists(expectedPath)).toBe(true);
   });
 
-  it('creates file in parameters/ for a new parameter template', async () => {
-    await mkdir(join(tmpDir, 'parameters'), { recursive: true });
+  it('creates file at flat path for a new parameter template', async () => {
     const newParam = {
       template_type: 'parameter', template_name: 'new_param', fields: {}, children: [],
     };
     await batchSave([{ template_name: 'new_param', original_hash: null, template: newParam }]);
 
-    const expectedPath = join(tmpDir, 'parameters', 'new_param.json');
+    const expectedPath = join(tmpDir, 'new_param.json');
     expect(await fileExists(expectedPath)).toBe(true);
   });
 
-  it('creates file in modules/ for a new module template', async () => {
-    await mkdir(join(tmpDir, 'modules'), { recursive: true });
+  it('creates file at flat path for a new module template', async () => {
     const newMod = {
       template_type: 'module', template_name: 'new_mod', fields: {}, children: [],
     };
     await batchSave([{ template_name: 'new_mod', original_hash: null, template: newMod }]);
 
-    const expectedPath = join(tmpDir, 'modules', 'new_mod.json');
+    const expectedPath = join(tmpDir, 'new_mod.json');
     expect(await fileExists(expectedPath)).toBe(true);
   });
 });

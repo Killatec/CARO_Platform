@@ -1,0 +1,31 @@
+{
+  "template_name": "Coupler_w_Phase",
+  "template_type": "RF",
+  "fields": {},
+  "children": [
+    {
+      "template_name": "boolean_set",
+      "asset_name": "Auto",
+      "fields": {}
+    },
+    {
+      "template_name": "Analog_In",
+      "asset_name": "Fwd",
+      "fields": {
+        "unit": "dBm"
+      }
+    },
+    {
+      "template_name": "Analog_In",
+      "asset_name": "Ref",
+      "fields": {
+        "unit": "dBm"
+      }
+    },
+    {
+      "template_name": "Analog_In",
+      "asset_name": "Phase",
+      "fields": {}
+    }
+  ]
+}

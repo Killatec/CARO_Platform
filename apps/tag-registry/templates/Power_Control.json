@@ -9,6 +9,11 @@
   },
   "children": [
     {
+      "template_name": "boolean_set",
+      "asset_name": "Enable",
+      "fields": {}
+    },
+    {
       "template_name": "Main_TX",
       "asset_name": "Main_TX",
       "fields": {}

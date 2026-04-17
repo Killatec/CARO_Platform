@@ -95,10 +95,7 @@ apps/tag-registry/
       api.js
       pageObjects.js
     playwright.config.js
-  templates/
-    tags/
-    parameters/
-    modules/
+  templates/                     flat directory — all template JSON files, no subdirectories
 ```
 
 ---
@@ -141,9 +138,10 @@ Returns `{ valid: bool, errors: [], warnings: [] }`.
 Runs on the entire `templateMap`, not just the current root's subgraph.
 
 **`simulateCascade(currentTemplateMap, proposedChanges, originalTemplateMap?)`**
-Returns `{ requiresConfirmation: bool, diff: { fields_added, fields_removed, fields_changed, instance_fields_changed }, affectedParents: [{ parent_template_name, asset_name, dropped_instance_values }] }`.
+Returns `{ requiresConfirmation: bool, diff: { fields_added, fields_removed, fields_changed, instance_fields_changed, template_type_changed }, affectedParents: [{ parent_template_name, asset_name, dropped_instance_values }] }`.
 - `affectedParents` is per-instance, not per-template.
 - `fields_changed` reports `.default` scalar values, not full definition objects.
+- `template_type_changed` is an array of `{ template_name, old_value, new_value }` entries for any template whose `template_type` was changed.
 
 **`applyFieldCascade(templateMap, changedTemplate)`**
 Returns updated `templateMap`. Pure — does not mutate input.
@@ -193,9 +191,9 @@ JSON.stringify-based deep equality.
 ### Template File I/O
 - All writes atomic: write to `.tmp` then rename over target.
 - `templateService.js` maintains in-memory index `template_name → { file_path, hash }`, rebuilt on startup, updated on every write/delete.
-- `template_type` field in each JSON file is the source of truth. Subfolders are browsing convenience only.
+- `template_type` field in each JSON file is the source of truth.
 - Batch writes are all-or-nothing: validate all hashes first, then write all changed files, then unlink deleted files, then update index.
-- `batchSave` does not call `mkdir({ recursive: true })`. Subdirectories (`tags/`, `parameters/`, `modules/`) must already exist.
+- New templates are written to `{TEMPLATES_DIR}/{template_name}.json` — flat, no subdirectory routing. No `mkdir` required.
 
 ### `POST /api/v1/templates/batch` Processing Order
 Accepts `{ changes, deletions, confirmed }`.
@@ -305,8 +303,10 @@ Runs `validateTemplate`, `validateGraph`, `validateParentTypes` synchronously on
 ## 9. Component Notes
 
 ### `AssetTree` / `TreeNode`
-- Collapse state lifted to `AssetTree` as `expandedNodes: Map<ownPath, bool>`. Resets to `{}` on `rootTemplateName` change.
-- **Collapse toggle:** `prev[ownPath] !== false ? false : true` — not `!prev[ownPath]`. `undefined` (initial expanded) must transition to `false` (collapsed) on first click.
+- Expanded/collapsed state is **local** to each `TreeNode` via `useState`. Not lifted to `AssetTree` or any store.
+- Root node initialises `useState(true)` (expanded); all child nodes initialise `useState(false)` (collapsed). Determined by `parentTemplateName === null` at mount time.
+- Collapsing a parent unmounts its subtree (`{isExpanded && hasChildren && ...}`). Re-expanding remounts children fresh → always collapsed.
+- `AssetTree` passes `key={rootTemplateName}` to the root `TreeNode`, ensuring a full remount (and state reset) whenever the selected root changes.
 - Non-`tag` nodes are valid drop targets. `handleDrop` is async — reads parent template via `getState()` after `await` to avoid stale closure.
 - Dirty nodes: `font-semibold text-orange-700`.
 - **Drag-and-drop reorder:** Each non-root row is draggable. Three drop zones: top 8 px = insert before (sibling), bottom 8 px = insert after (sibling), body = add child (existing). Root nodes are body-only; tag nodes are top/bottom only. Cross-parent drops are blocked (`computeDropZone` returns `'none'` when `data.parentTemplateName !== parentTemplateName`). `onDragOver` cannot read `dataTransfer` values (HTML5 DnD security restriction) — uses module-level `getActiveDragData()` from `dragTypes.ts` instead. `onDrop` reads via `parseDragData(e)` which does have transfer access.
@@ -319,13 +319,14 @@ Runs `validateTemplate`, `validateGraph`, `validateParentTypes` synchronously on
 
 ### `FieldsPanel`
 - Uses `selectionKey + setTimeout(0)` blank-tick pattern on every selection switch. Dependency array must be `[selectionKey]` — not the raw selection fields.
+- **Template mode:** `template_type` is editable — rendered as `<input type="text" list="template-type-options">` with a `<datalist>` providing suggestions (`system`, `module`, `Group`, `parameter`, `tag`). Custom values are allowed. Changes call `updateTemplate(name, { template_type: newValue })` and participate in dirty tracking. The cell is highlighted orange bold when dirty. `template_type` in instance/system-tree mode remains read-only.
 - **Template mode:** `data_type` (field_type `TagType`) and `is_setpoint` (field_type `Boolean`) are entries inside `fields{}`, rendered via the tag-types dropdown and boolean toggle respectively. `Module_Type` (field_type `ModuleType`) renders as a dropdown populated from `useModuleTypesStore`. Same pattern as `TagType` / `useTagTypesStore`.
 - **Instance mode:** child lookup uses `children[selectedSystemTreeNodeChildIndex]` (index-based, not asset_name match).
 - `isDirtyField` color: dirty → `font-semibold text-orange-700`; non-dirty override → `text-blue-600`; default → `text-gray-700`.
 - `FieldTableRow` is a `<tr>`-based component local to `FieldsPanel.jsx`. Distinct from `FieldRow.jsx` (div/flex). `FieldRow` is not used inside `FieldsPanel`.
 
 ### `CascadeDiffContent`
-Shared by `CascadeModal` and `CascadePreviewModal`. Props: `newTemplates`, `childrenChanged`, `childrenReordered`, `pendingDeletions`, `diff`, `affectedParents`. "No changes detected" shown only when all props empty. `childrenReordered` renders as "Children Reordered" section showing `new_order` as `A → B → C` joined string.
+Shared by `CascadeModal` and `CascadePreviewModal`. Props: `newTemplates`, `childrenChanged`, `childrenReordered`, `pendingDeletions`, `diff`, `affectedParents`. "No changes detected" shown only when all props empty. `childrenReordered` renders as "Children Reordered" section showing `new_order` as `A → B → C` joined string. `diff.template_type_changed` renders as "Template Type Changed" (yellow header) with `name: old → new` per entry.
 
 ### `RegistryPage`
 - Fetches DB registry via `GET /api/v1/registry`, compares with `resolveRegistry()` using `diffRegistry()`.
@@ -376,7 +377,9 @@ server: { proxy: { '/api': 'http://localhost:3001' } }
 
 ## 12. Seed Templates
 
-### Tags (`templates/tags/`)
+All seed templates live directly in `templates/` (flat — no subdirectories).
+
+### Tags
 | File | Fields |
 |---|---|
 | `numeric_set.json` | `unit: { String, "" }`, `eng_min: { Numeric, 0.0 }`, `eng_max: { Numeric, 100.0 }` |
@@ -384,10 +387,10 @@ server: { proxy: { '/api': 'http://localhost:3001' } }
 | `boolean_set.json` | (none) |
 | `boolean_mon.json` | (none) |
 
-### Parameters (`templates/parameters/`)
+### Parameters
 `analog_control.json` — fields: `description: { String, "" }`, `eng_min: { Numeric, 0.0 }`, `eng_max: { Numeric, 100.0 }`. Children: `numeric_set → "setpoint"`, `numeric_mon → "monitor"`, `boolean_set → "interlock_enable"`.
 
-### Modules (`templates/modules/`)
+### Modules / Systems
 `rf_power_module.json` — fields: `description: { String, "" }`. Children: two `analog_control` instances — `"RF_Fwd"` (`eng_max: 25`) and `"RF_Ref"` (defaults).
 
 `Plant1_System_A.json` — `template_type: "module"`. Children: `rf_power_module → "RFPowerModule"` (`description: "Main RF power stage"`). This is the root template — select it from the root dropdown.

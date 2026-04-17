@@ -1,6 +1,6 @@
 {
   "template_name": "Voltage_PS",
-  "template_type": "Group",
+  "template_type": "Power_Supply",
   "fields": {},
   "children": [
     {

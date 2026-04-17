@@ -1,29 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React from 'react';
 import { TreeNode } from './TreeNode.jsx';
 import { resolveTree } from '../../utils/resolveTree.js';
 import { useTemplateGraphStore } from '../../stores/useTemplateGraphStore.js';
-
-const LS_KEY = 'caro_tree_expanded';
-
-function lsGet(): Record<string, boolean> | null {
-  if (typeof localStorage === 'undefined') return null;
-  try {
-    const raw = localStorage.getItem(LS_KEY);
-    return raw ? JSON.parse(raw) as Record<string, boolean> : null;
-  } catch {
-    return null;
-  }
-}
-
-function lsSet(nodes: Record<string, boolean>): void {
-  if (typeof localStorage === 'undefined') return;
-  localStorage.setItem(LS_KEY, JSON.stringify(nodes));
-}
-
-function lsClear(): void {
-  if (typeof localStorage === 'undefined') return;
-  localStorage.removeItem(LS_KEY);
-}
 
 /**
  * AssetTree - displays template hierarchy as collapsible tree
@@ -33,24 +11,6 @@ export function AssetTree(): React.ReactElement {
   const rootTemplateName = useTemplateGraphStore(state => state.rootTemplateName);
   const isLoading = useTemplateGraphStore(state => state.isLoading);
 
-  const [expandedNodes, setExpandedNodes] = useState<Record<string, boolean>>(() => {
-    const stored = lsGet();
-    return (stored && typeof stored === 'object' && !Array.isArray(stored))
-      ? stored
-      : {};
-  });
-
-  const prevRootRef = useRef<string | null>(rootTemplateName);
-
-  useEffect(() => {
-    if (!rootTemplateName) return;
-
-    if (prevRootRef.current !== null && prevRootRef.current !== rootTemplateName) {
-      lsClear();
-      setExpandedNodes({});
-    }
-    prevRootRef.current = rootTemplateName;
-  }, [rootTemplateName]);
 
   const header = (
     <div className="px-3 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide border-b border-gray-100">
@@ -99,14 +59,9 @@ export function AssetTree(): React.ReactElement {
       {header}
       <div className="p-4">
         <TreeNode
+          key={rootTemplateName}
           node={tree}
           ownPath={tree.template_name}
-          expandedNodes={expandedNodes}
-          onToggleExpand={(path) => setExpandedNodes(prev => {
-            const next = { ...prev, [path]: prev[path] === false };
-            lsSet(next);
-            return next;
-          })}
         />
       </div>
     </div>

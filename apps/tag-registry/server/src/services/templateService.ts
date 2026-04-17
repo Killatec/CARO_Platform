@@ -391,10 +391,8 @@ export async function batchSave(
     if (existingEntry) {
       filePath = existingEntry.file_path;
     } else {
-      // New template — determine file path based on template_type
-      const subdir = template.template_type === 'tag'       ? 'tags'       :
-                     template.template_type === 'parameter' ? 'parameters' : 'modules';
-      filePath = join(subdir, `${template_name}.json`);
+      // New template — flat structure, all templates live directly in TEMPLATES_DIR
+      filePath = `${template_name}.json`;
     }
 
     const fullPath = join(getTemplatesDir(), filePath);

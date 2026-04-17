@@ -32,8 +32,6 @@ interface TreeNodeProps {
   parentPath?: string | null;
   parentTemplateName?: string | null;
   childIndex?: number | null;
-  expandedNodes?: Record<string, boolean>;
-  onToggleExpand?: (path: string) => void;
 }
 
 /**
@@ -41,12 +39,11 @@ interface TreeNodeProps {
  */
 export function TreeNode({
   node, ownPath, parentPath = null, parentTemplateName = null,
-  childIndex = null, expandedNodes = {}, onToggleExpand
+  childIndex = null,
 }: TreeNodeProps): React.ReactElement | null {
   const [dropZone, setDropZone] = useState<DropZone>('none');
+  const [isExpanded, setIsExpanded] = useState(parentTemplateName === null); // root starts open, children start collapsed
   const rowRef = useRef<HTMLDivElement>(null);
-
-  const isExpanded = expandedNodes[ownPath] !== false;
 
   const selectedSystemTreeNode    = useUIStore(state => state.selectedSystemTreeNode);
   const setSelectedSystemTreeNode = useUIStore(state => state.setSelectedSystemTreeNode);
@@ -239,7 +236,7 @@ export function TreeNode({
 
         {hasChildren && (
           <button
-            onClick={e => { e.stopPropagation(); onToggleExpand?.(ownPath); }}
+            onClick={e => { e.stopPropagation(); setIsExpanded(v => !v); }}
             className="w-4 h-4 flex items-center justify-center hover:bg-gray-200 rounded"
           >
             {isExpanded ? '▼' : '▶'}
@@ -286,8 +283,6 @@ export function TreeNode({
               parentPath={ownPath}
               parentTemplateName={template_name}
               childIndex={idx}
-              expandedNodes={expandedNodes}
-              onToggleExpand={onToggleExpand}
             />
           ))}
         </div>

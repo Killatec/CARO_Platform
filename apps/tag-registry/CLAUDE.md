@@ -15,7 +15,7 @@ Read these only if the session requires them:
 ## App Hard Constraints
 
 - **No URL router:** Never use `page.goto('/registry')` in tests or navigation logic. Use sidebar button clicks only.
-- **No mkdir -p in batchSave:** Subdirectories under `templates/` must exist before saving a new template of that type.
+- **Flat templates folder:** All templates live directly in `templates/` — no subdirectories. `batchSave` writes `{template_name}.json` at the root of `TEMPLATES_DIR`. Do not create or reference subdirectories.
 - **Shared module:** `apps/tag-registry/shared/` is environment-agnostic — no `fs`, no Express, no DOM. Pure functions only.
 - **Env file:** `apps/tag-registry/server/.env` is the authoritative env file. The monorepo root `.env` is never loaded by the server process.
 

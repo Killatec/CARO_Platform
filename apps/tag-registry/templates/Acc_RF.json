@@ -1,0 +1,22 @@
+{
+  "template_name": "Acc_RF",
+  "template_type": "RF",
+  "fields": {},
+  "children": [
+    {
+      "template_name": "Coupler",
+      "asset_name": "Driver",
+      "fields": {}
+    },
+    {
+      "template_name": "Coupler",
+      "asset_name": "Kly",
+      "fields": {}
+    },
+    {
+      "template_name": "Coupler_w_Phase",
+      "asset_name": "Acc",
+      "fields": {}
+    }
+  ]
+}

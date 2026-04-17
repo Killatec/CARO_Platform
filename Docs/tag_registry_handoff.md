@@ -12,6 +12,8 @@
 - Revision history — every apply creates a `registry_revisions` row; History page shows full log
 - Client-side validation — circular references, invalid references, schema errors, tag path length, configurable parent type rules; blocks save on error
 - Module type support — `module_types` lookup table, `ModuleType` field type with dropdown UI, `Module_Type` required on module templates, `module` and `module_type` columns resolved and persisted to `tag_registry`; `GET /api/v1/module-types` endpoint
+- Editable template_type — `template_type` is editable in the Properties panel (template-tree selection mode) via a text input with datalist suggestions. Changes use the same dirty-tracking as other template properties; validation rules (tag/module field requirements) are enforced on save.
+- Flat template folder — all templates stored directly in `templates/` with no subdirectory routing. `batchSave` writes `{template_name}.json` at the root of `TEMPLATES_DIR`. The old type-to-subdirectory mapping is removed.
 - Drag-and-drop child reordering — system tree children can be reordered within the same parent by dragging. Template panel drops are positional (top/bottom 8 px bands = insert before/after sibling; body = append as child). Cross-parent reparenting is intentionally blocked. Reordering appears in the "See what's changed" preview modal under "Children Reordered".
 - Display columns — `unit`, `format`, `eng_min`, `eng_max` stored as flat columns on the `tag_registry` table (migration 013). Resolved via path-aware `resolveDisplayField` algorithm that walks the meta chain root-to-leaf. Non-numeric tags (boolean) get null display values. RegistryTable shows all 4 as sortable columns.
 - Dotted override fields — template fields like `I.eng_min` target descendants by asset_name prefix. Resolution uses relative-path matching at each meta level with specificity ranking: more prefix segments = higher priority; lower level (closer to root) wins over deeper levels. Meta holds only template defaults + direct ChildRef overrides — no propagated values.
@@ -69,7 +71,7 @@ All in `Docs/`. Read order for a new session: this file → deltas → task-spec
 - **`apps/tag-registry/server/.env` is the only env file the server reads.** Root `.env` changes are never seen.
 - **`PGPASSWORD` must be set.** `DATABASE_URL` is not used.
 - **`AppShell` fetches template list once on mount.** Templates created via API after mount won't appear in the root dropdown until page remounts.
-- **Tag templates do not appear in the root dropdown.** Only non-tag structural templates are selectable as roots.
+- **Only `system` templates appear in the root dropdown.** The dropdown filters `template_type === 'system'`. Other types (module, parameter, tag, Group, custom) are not selectable as roots. The label reads "System:" not "Root Template:".
 - **`validateGraph` runs on all templates in the store.** Always begin an edit session with `loadRoot()` to ensure a complete subgraph.
 - **Modal has no `role="dialog"`.** Locate with `.locator('.shadow-xl').filter({ hasText: '...' })`.
 

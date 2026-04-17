@@ -93,10 +93,10 @@ export function AppShell({ children }: AppShellProps): React.ReactElement {
   }, []);
 
   const rootOptions = templates
-    .filter(t => t.template_type !== 'tag')
+    .filter(t => t.template_type === 'system')
     .map(t => ({
       value: t.template_name,
-      label: `${t.template_name} (${t.template_type})`
+      label: t.template_name
     }));
 
   const _buildDiffEnrichment = () => {
@@ -192,7 +192,7 @@ export function AppShell({ children }: AppShellProps): React.ReactElement {
         <h1 className="text-xl font-bold flex-shrink-0">Tag Registry</h1>
 
         <div className="flex items-center gap-2 flex-shrink-0">
-          <label className="text-sm">Root Template:</label>
+          <label className="text-sm">System:</label>
           {isDirty ? (
             <div title="Save or discard changes before switching root" className="cursor-not-allowed">
               <Dropdown

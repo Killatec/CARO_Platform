@@ -1,11 +1,11 @@
 {
   "template_name": "Optics",
-  "template_type": "Group",
+  "template_type": "Beam",
   "fields": {},
   "children": [
     {
       "template_name": "Current_PS",
-      "asset_name": "Lense_1",
+      "asset_name": "Lens_1",
       "fields": {
         "I.format": "#",
         "I.unit": "kA",
@@ -21,7 +21,7 @@
     },
     {
       "template_name": "Current_PS",
-      "asset_name": "Lense_2",
+      "asset_name": "Lens_2",
       "fields": {
         "I.eng_max": 500,
         "V.eng_max": 500
@@ -45,6 +45,26 @@
     {
       "template_name": "Current_PS",
       "asset_name": "Bend_4",
+      "fields": {}
+    },
+    {
+      "template_name": "Current_PS",
+      "asset_name": "Sol_1",
+      "fields": {}
+    },
+    {
+      "template_name": "Current_PS",
+      "asset_name": "Sol_2",
+      "fields": {}
+    },
+    {
+      "template_name": "Current_PS",
+      "asset_name": "Sol_3",
+      "fields": {}
+    },
+    {
+      "template_name": "Current_PS",
+      "asset_name": "Sol_4",
       "fields": {}
     }
   ]

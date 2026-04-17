@@ -1,5 +1,5 @@
 {
-  "template_name": "Module_Test",
+  "template_name": "Cooling",
   "template_type": "module",
   "fields": {
     "Module_Type": {
@@ -9,13 +9,13 @@
   },
   "children": [
     {
-      "template_name": "Group_Test",
-      "asset_name": "Group",
+      "template_name": "Water_Loop",
+      "asset_name": "Facility_Loop",
       "fields": {}
     },
     {
-      "template_name": "Group_Test",
-      "asset_name": "Group_Test_2",
+      "template_name": "Water_Loop",
+      "asset_name": "Acc_Loop",
       "fields": {}
     }
   ]

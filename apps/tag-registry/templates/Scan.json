@@ -1,0 +1,37 @@
+{
+  "template_name": "Scan",
+  "template_type": "Scan",
+  "fields": {},
+  "children": [
+    {
+      "template_name": "boolean_set",
+      "asset_name": "Enable",
+      "fields": {}
+    },
+    {
+      "template_name": "Current_PS",
+      "asset_name": "Min",
+      "fields": {}
+    },
+    {
+      "template_name": "Current_PS",
+      "asset_name": "Max",
+      "fields": {}
+    },
+    {
+      "template_name": "Analog_In",
+      "asset_name": "Speed",
+      "fields": {}
+    },
+    {
+      "template_name": "Analog_In",
+      "asset_name": "I_Dev",
+      "fields": {}
+    },
+    {
+      "template_name": "Analog_In",
+      "asset_name": "V_Dev",
+      "fields": {}
+    }
+  ]
+}

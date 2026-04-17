@@ -1,0 +1,24 @@
+{
+  "template_name": "Main_TX",
+  "template_type": "Power",
+  "fields": {},
+  "children": [
+    {
+      "template_name": "AC_Mains",
+      "asset_name": "AC_Mains",
+      "fields": {}
+    },
+    {
+      "template_name": "Analog_In",
+      "asset_name": "DC_Main",
+      "fields": {}
+    },
+    {
+      "template_name": "Analog_In",
+      "asset_name": "TX_Temp",
+      "fields": {
+        "unit": "C"
+      }
+    }
+  ]
+}

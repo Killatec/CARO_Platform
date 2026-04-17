@@ -9,6 +9,21 @@
   },
   "children": [
     {
+      "template_name": "Analog_In",
+      "asset_name": "Freq",
+      "fields": {
+        "unit": "GHz",
+        "format": "#.###",
+        "eng_min": 2,
+        "eng_max": 3
+      }
+    },
+    {
+      "template_name": "boolean_set",
+      "asset_name": "Auto",
+      "fields": {}
+    },
+    {
       "template_name": "Acc_RF",
       "asset_name": "Acc_1",
       "fields": {}

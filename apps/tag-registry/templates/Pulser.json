@@ -1,0 +1,39 @@
+{
+  "template_name": "Pulser",
+  "template_type": "Power",
+  "fields": {},
+  "children": [
+    {
+      "template_name": "Analog_In",
+      "asset_name": "HV",
+      "fields": {
+        "unit": "kV"
+      }
+    },
+    {
+      "template_name": "Analog_In",
+      "asset_name": "Primary_I",
+      "fields": {}
+    },
+    {
+      "template_name": "Analog_In",
+      "asset_name": "Secondary_I",
+      "fields": {}
+    },
+    {
+      "template_name": "Analog_In",
+      "asset_name": "Kly_I",
+      "fields": {}
+    },
+    {
+      "template_name": "Analog_In",
+      "asset_name": "Kly_V",
+      "fields": {}
+    },
+    {
+      "template_name": "Analog_In",
+      "asset_name": "Oil_Temp",
+      "fields": {}
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "template_name": "Scanning",
+  "template_type": "Scan",
+  "fields": {},
+  "children": [
+    {
+      "template_name": "Scan",
+      "asset_name": "X",
+      "fields": {}
+    },
+    {
+      "template_name": "Scan",
+      "asset_name": "Y",
+      "fields": {}
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 {
   "template_name": "Gun",
-  "template_type": "Group",
+  "template_type": "Beam",
   "fields": {},
   "children": [
     {

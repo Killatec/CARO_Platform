@@ -1,0 +1,22 @@
+{
+  "template_name": "Pump",
+  "template_type": "Cooling",
+  "fields": {},
+  "children": [
+    {
+      "template_name": "boolean_set",
+      "asset_name": "Enable",
+      "fields": {}
+    },
+    {
+      "template_name": "Analog_In",
+      "asset_name": "Pressure",
+      "fields": {}
+    },
+    {
+      "template_name": "Analog_In",
+      "asset_name": "Flow",
+      "fields": {}
+    }
+  ]
+}

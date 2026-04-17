@@ -1,6 +1,6 @@
 {
   "template_name": "Beam",
-  "template_type": "Group",
+  "template_type": "Beam",
   "fields": {},
   "children": [
     {

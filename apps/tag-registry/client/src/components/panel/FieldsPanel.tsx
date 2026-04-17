@@ -271,7 +271,33 @@ export function FieldsPanel(): React.ReactElement {
         <table className="w-full border-collapse">
           <tbody>
             <FieldTableRow fieldName="Template Name" value={template.template_name} readOnly />
-            <FieldTableRow fieldName="Template Type" value={template.template_type} readOnly />
+            {(() => {
+              const origType = originalTemplateMap.get(selectedTemplateTree)?.template?.template_type;
+              const isTypeDirty = origType !== undefined && template.template_type !== origType;
+              const colorClass = isTypeDirty ? 'text-orange-700 font-semibold' : 'text-gray-700 font-normal';
+              return (
+                <tr>
+                  <td className={`py-1.5 pr-4 text-sm whitespace-nowrap pl-2 ${colorClass}`}>Template Type</td>
+                  <td className="py-1.5">
+                    <input
+                      type="text"
+                      list="template-type-options"
+                      value={template.template_type}
+                      onChange={(e) => updateTemplate(template.template_name, { template_type: e.target.value })}
+                      className={`w-[20ch] text-sm border border-gray-300 rounded px-1 py-0.5 ${colorClass}`}
+                    />
+                    <datalist id="template-type-options">
+                      <option value="system" />
+                      <option value="module" />
+                      <option value="Group" />
+                      <option value="parameter" />
+                      <option value="tag" />
+                    </datalist>
+                  </td>
+                  <td className="py-1.5 pl-1 w-6" />
+                </tr>
+              );
+            })()}
             {Object.entries(fields).map(([key, fieldDef]) => {
               const isDirtyField = !(key in originalFields) ||
                 originalFields[key]?.default !== fieldDef.default;

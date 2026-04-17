@@ -1,0 +1,17 @@
+{
+  "template_name": "Water_Point",
+  "template_type": "Cooling",
+  "fields": {},
+  "children": [
+    {
+      "template_name": "Analog_In",
+      "asset_name": "Pressure",
+      "fields": {}
+    },
+    {
+      "template_name": "Analog_In",
+      "asset_name": "Temp",
+      "fields": {}
+    }
+  ]
+}

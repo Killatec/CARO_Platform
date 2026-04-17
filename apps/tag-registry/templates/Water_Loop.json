@@ -1,0 +1,22 @@
+{
+  "template_name": "Water_Loop",
+  "template_type": "Cooling",
+  "fields": {},
+  "children": [
+    {
+      "template_name": "Pump",
+      "asset_name": "Pump",
+      "fields": {}
+    },
+    {
+      "template_name": "Water_Point",
+      "asset_name": "Supply",
+      "fields": {}
+    },
+    {
+      "template_name": "Water_Point",
+      "asset_name": "Return",
+      "fields": {}
+    }
+  ]
+}

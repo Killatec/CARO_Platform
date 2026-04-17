@@ -17,7 +17,7 @@ export function simulateCascade(
 ): CascadeResult {
   const empty: CascadeResult = {
     requiresConfirmation: false,
-    diff: { fields_added: [], fields_removed: [], fields_changed: [], instance_fields_changed: [] },
+    diff: { fields_added: [], fields_removed: [], fields_changed: [], instance_fields_changed: [], template_type_changed: [] },
     affectedParents: [],
   };
 
@@ -182,6 +182,22 @@ export function simulateCascade(
     }
   }
 
+  const templateTypeChanges: Array<{ template_name: string; old_value: string; new_value: string }> = [];
+
+  for (const change of proposedChanges) {
+    const currentTemplate = currentTemplates.get(change.template_name);
+    const proposedTemplate = change.template;
+    if (!currentTemplate || !proposedTemplate) continue;
+
+    if (currentTemplate.template_type !== proposedTemplate.template_type) {
+      templateTypeChanges.push({
+        template_name: change.template_name,
+        old_value: currentTemplate.template_type,
+        new_value: proposedTemplate.template_type,
+      });
+    }
+  }
+
   const schemaChangedNames = new Set([
     ...allFieldsAdded.map(f => f.template_name),
     ...allFieldsRemoved.map(f => f.template_name),
@@ -231,6 +247,7 @@ export function simulateCascade(
     fields_removed: allFieldsRemoved,
     fields_changed: allFieldsChanged,
     instance_fields_changed: allInstanceFieldsChanged,
+    template_type_changed: templateTypeChanges,
   };
 
   return { requiresConfirmation, diff, affectedParents };

@@ -47,7 +47,7 @@ The tool enables engineers to build hierarchical tag structures with instant loc
 | Frontend | React (web application) |
 | Backend | Node.js / Express |
 | Database | PostgreSQL |
-| Template storage | JSON files on disk, optionally organised into subfolders by template_type |
+| Template storage | JSON files on disk, flat `templates/` directory — no subdirectory routing |
 | Shared validation | `apps/tag-registry/shared/` — environment-agnostic module consumed by both server and client |
 | Source control | Git (recommended for template JSON files) |
 
@@ -57,7 +57,7 @@ The tool enables engineers to build hierarchical tag structures with instant loc
 
 The system is organised around two artifacts:
 
-- A `templates/` folder containing one JSON file per template. The `template_type` field is the source of truth; subfolders are optional and for navigation only.
+- A `templates/` folder containing one JSON file per template. All templates live directly in this flat directory — no subdirectory routing. The `template_type` field in each JSON file is the sole source of truth for the template's type.
 - A PostgreSQL database storing the generated tag registry and revision history.
 
 The HMI and backend runtime services read only the tag registry from the database.
@@ -264,27 +264,22 @@ Failures block the operation and display a detailed error report in the Validati
 - Tags may not declare children.
 - Identifier string fields (`template_name`, `asset_name`) must not exceed 40 characters.
 
-### 10.5 Template Type Consistency
-
-If a template is stored in a subfolder, the tool checks that the subfolder name matches the `template_type` field and flags mismatches as warnings. Non-blocking.
-
-### 10.6 Tag Path Length
+### 10.5 Tag Path Length
 
 If any resolved `tag_path` exceeds the configured maximum path length, the save operation is blocked and the affected paths are listed.
 
-### 10.7 Optional Parent Type Validation
+### 10.6 Optional Parent Type Validation
 
 Controlled by server environment variables `VALIDATE_REQUIRED_PARENT_TYPES` and `VALIDATE_UNIQUE_PARENT_TYPES`. Evaluated via `validateParentTypes`.
 
 - **`VALIDATE_REQUIRED_PARENT_TYPES`** — comma-separated list of `template_type` values that must appear in every tag's ancestor chain. Produces `PARENT_TYPE_MISSING` if absent. Example: `module`.
 - **`VALIDATE_UNIQUE_PARENT_TYPES`** — when `true`, enforces that certain ancestor types appear at most once in a tag's ancestor chain. Only types listed in `UNIQUE_ANCESTOR_TYPES` (defined in `shared/constants.ts`) are subject to this check — currently `module` and `parameter`. Other types (e.g. `Group`, `system`) may repeat in the hierarchy without error. Produces `DUPLICATE_PARENT_TYPE` on violation.
 
-### 10.8 Tool Warnings (Non-Blocking)
+### 10.7 Tool Warnings (Non-Blocking)
 
-- `TYPE_FOLDER_MISMATCH` — template_type does not match subfolder.
 - `EMPTY_BRANCH` — structural template in the root hierarchy contains no tag descendants. **Note:** `EMPTY_BRANCH` is declared in `shared/constants.js` but is not emitted by `validateGraph`, `validateTemplate`, or `useValidation`.
 
-### 10.9 Template Change Propagation
+### 10.8 Template Change Propagation
 
 Any structural change to a template triggers `applyFieldCascade` immediately on the client-side `templateMap`. The cascade propagates the effect to all child instances in the loaded graph. All affected templates are added to the dirty set. The server applies the same logic authoritatively on batch save.
 
@@ -402,7 +397,7 @@ Both errors and warnings set `isValid` to `false`. The Save button is disabled w
 
 ### 15.5 Client-Side Checks
 
-`INVALID_ASSET_NAME`, `DUPLICATE_SIBLING_NAME`, `CIRCULAR_REFERENCE`, `INVALID_REFERENCE`, `TAG_PATH_TOO_LONG`, `SCHEMA_VALIDATION_ERROR`, `UNKNOWN_FIELD`, `PARENT_TYPE_MISSING`, `DUPLICATE_PARENT_TYPE`, `EMPTY_BRANCH` (warning — declared but not yet emitted in Phase 1).
+`INVALID_ASSET_NAME`, `DUPLICATE_SIBLING_NAME`, `CIRCULAR_REFERENCE`, `INVALID_REFERENCE`, `TAG_PATH_TOO_LONG`, `SCHEMA_VALIDATION_ERROR`, `UNKNOWN_FIELD`, `PARENT_TYPE_MISSING`, `DUPLICATE_PARENT_TYPE`, `EMPTY_BRANCH` (warning — declared but not yet emitted).
 
 ### 15.6 Registry Page Behaviour
 
@@ -424,7 +419,7 @@ The **Update DB** button on the Registry page is disabled when `isDirty` is true
 
 The full resolved hierarchy is displayed as a collapsible tree built from the local template graph. Clicking any node populates the Fields Panel with that node's instance data. All edits are applied locally. No server call is made until Save.
 
-Node collapse state is preserved across save/discard re-renders within the session. Selecting a new root resets all nodes to expanded.
+Each node's expanded/collapsed state is local — stored in `useState` per `TreeNode` instance, not lifted to a shared store. The root node starts expanded; all other nodes start collapsed. Collapsing a node unmounts its subtree, so re-expanding always shows children collapsed. Selecting a new root remounts the entire tree (`key={rootTemplateName}`), resetting all expand states.
 
 Node names are shown in orange bold (`text-orange-700 font-semibold`) when the node represents a changed or new child instance (detected by comparing `children[childIndex]` against `originalTemplateMap` baseline). Clean nodes use regular weight.
 
@@ -478,7 +473,7 @@ Occupies the bottom portion of the right panel. Displays the name and editable f
 - A `+` button in the panel header opens `AddFieldModal` — not shown in instance mode (fields are defined at the template level).
 
 **Template selected via Templates Tree:**
-- Read-only metadata: Template Name, Template Type.
+- Read-only: Template Name. Editable: Template Type — rendered as a text input with datalist suggestions (`system`, `module`, `Group`, `parameter`, `tag`). Custom values are permitted. Changing `template_type` uses the same dirty-tracking as other template properties; existing validation rules are enforced on save (e.g., changing to `tag` requires `data_type`, `is_setpoint`, and `Trends` fields and no children; changing to `module` requires `Module_Type`). When dirty, the Template Type cell is highlighted orange bold.
 - All template default fields shown, all editable. Fields that are new or changed from the `originalTemplateMap` baseline shown in orange bold.
 - A `+` button in the panel header opens `AddFieldModal` to add a new field.
 - A trash icon on each field row deletes the field from `template.fields` via `updateTemplate()`.
@@ -508,6 +503,7 @@ The modal displays via `CascadeDiffContent`:
 - **Fields Added** — new field definitions in changed templates.
 - **Fields Removed** — removed field definitions.
 - **Fields Changed** — template default value diffs.
+- **Template Type Changed** (yellow) — templates whose `template_type` was changed, showing old → new values.
 - **Instance Overrides Changed** — instance-level field diffs.
 - **Affected Instances** — parent templates whose child instances reference a schema-changed template.
 
