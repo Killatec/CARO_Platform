@@ -12,3 +12,6 @@ export type { BooleanSetProps } from './BooleanSet.js';
 
 export { AnalogIn } from './AnalogIn.js';
 export type { AnalogInProps } from './AnalogIn.js';
+
+export { Timer } from './Timer.js';
+export type { TimerProps } from './Timer.js';

@@ -33,7 +33,9 @@
     {
       "template_name": "numeric_set",
       "asset_name": "Tol",
-      "fields": {}
+      "fields": {
+        "Trends": false
+      }
     },
     {
       "template_name": "boolean_set",
@@ -43,32 +45,37 @@
     {
       "template_name": "boolean_mon",
       "asset_name": "Intk",
-      "fields": {}
+      "fields": {
+        "Trends": false
+      }
     },
     {
       "template_name": "numeric_set",
       "asset_name": "RSS",
-      "fields": {}
+      "fields": {
+        "Trends": false
+      }
     },
     {
       "template_name": "numeric_set",
       "asset_name": "Per",
-      "fields": {}
+      "fields": {
+        "Trends": false
+      }
     },
     {
       "template_name": "numeric_set",
       "asset_name": "In_A",
-      "fields": {}
+      "fields": {
+        "Trends": false
+      }
     },
     {
       "template_name": "numeric_set",
       "asset_name": "In_B",
-      "fields": {}
-    },
-    {
-      "template_name": "numeric_set",
-      "asset_name": "numeric_set",
-      "fields": {}
+      "fields": {
+        "Trends": false
+      }
     }
   ]
 }

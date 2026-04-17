@@ -114,11 +114,19 @@ function initSimState(): void {
       simValue = 0;
     } else if (tag.is_setpoint) {
       simValue = tag.data_type === 'bool' ? false : 0;
+    } else if (tag.data_type === 'f32') {
+      const simT = Math.random() * SINE_PERIOD_MS;
+      simValue = 50 + 25 * Math.sin((2 * Math.PI * simT) / SINE_PERIOD_MS);
+      simState.set(tag.tag_id, { simValue, simT, lastPublishedValue: undefined, previousValue: undefined });
+      continue;
+    } else if (tag.data_type === 'i16') {
+      const simT = Math.random() * SINE_PERIOD_MS;
+      const raw = 50 + 25 * Math.sin((2 * Math.PI * simT) / SINE_PERIOD_MS);
+      simValue = Math.max(-32768, Math.min(32767, Math.round(raw)));
+      simState.set(tag.tag_id, { simValue, simT, lastPublishedValue: undefined, previousValue: undefined });
+      continue;
     } else {
-      simValue = tag.data_type === 'f32'  ? 50.0
-               : tag.data_type === 'i16'  ? 50
-               : tag.data_type === 'bool' ? false
-               : 50.0;
+      simValue = tag.data_type === 'bool' ? false : 50.0;
     }
     simState.set(tag.tag_id, { simValue, simT: 0, lastPublishedValue: undefined, previousValue: undefined });
   }
@@ -143,7 +151,7 @@ function advanceTag(tag: SimTag, state: SimTagState, deltaMs: number): void {
       break;
     }
     case 'bool':
-      if (Math.random() < 0.005) state.simValue = !state.simValue; // ~0.5% per tick
+      if (Math.random() < 0.025) state.simValue = !state.simValue; // ~2.5% per tick (~4s avg toggle)
       break;
   }
 }

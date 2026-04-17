@@ -72,7 +72,10 @@
       "Bash(node -e \"const p=JSON.parse\\(require\\('fs'\\).readFileSync\\('c:/KillaTec/CARO_Platform/package.json','utf-8'\\)\\); console.log\\('dev:fresh:', p.scripts['dev:fresh']\\)\")",
       "Bash(node scripts/wait-for-port.js 99999 2000)",
       "Bash(node -e \"console.log\\(Math.fround\\(62.34\\), typeof Math.fround\\(62.34\\)\\)\")",
-      "Bash(cat /c/KillaTec/CARO_Platform/apps/tag-registry/templates/tags/*.json)"
+      "Bash(cat /c/KillaTec/CARO_Platform/apps/tag-registry/templates/tags/*.json)",
+      "Bash(powershell -Command \"Move-Item Systems/*.json . ; Move-Item modules/*.json . ; Move-Item parameters/*.json . ; Move-Item tags/*.json .\")",
+      "Bash(powershell -Command \"Remove-Item Systems, modules, parameters, tags\")",
+      "Bash(powershell -Command \"Remove-Item -Path 'Systems','modules','parameters','tags' -Recurse -Force -ErrorAction SilentlyContinue\")"
     ]
   }
 }

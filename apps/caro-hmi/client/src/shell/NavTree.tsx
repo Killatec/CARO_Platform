@@ -39,12 +39,14 @@ function NavItem({ node, selectedId, onSelect, depth }: NavItemProps) {
     padding: `6px 12px 6px ${12 + depth * 16}px`,
     textAlign: 'left',
     background: isSelected ? '#dce8f8' : 'transparent',
+    borderTop: 'none',
+    borderRight: 'none',
+    borderBottom: 'none',
     borderLeft: isSelected ? '3px solid #3b82f6' : '3px solid transparent',
     color: isSelected ? '#1d4ed8' : '#333',
     fontWeight: isSelected ? 600 : 400,
     fontSize: 13,
     cursor: 'pointer',
-    border: 'none',
     boxSizing: 'border-box',
   };
 

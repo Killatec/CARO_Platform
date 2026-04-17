@@ -9,7 +9,7 @@
 |---|---|---|---|
 | Tag Registry | 3001 | 5173 | Complete |
 | MQTT Simulator | 3002 | 5174 | Active development |
-| CARO HMI | 3003 | 5175 | Phase 3 complete — server core + client shell + demo page, E2E pipeline working. MqttBridge scoped to MQTT-only modules. CmdController routes writes/resets by module_type. ResetBus fans out system reset to registered subsystems. |
+| CARO HMI | 3003 | 5175 | Phase 3 complete — server core + client shell + 6 demo pages (Overview, Beam-1, RF Control, Power, Cooling, Summary). Hash-based page persistence. 15 shared box components. E2E pipeline working. MqttBridge scoped to MQTT-only modules. CmdController routes writes/resets by module_type. ResetBus fans out system reset to registered subsystems. |
 
 ---
 
@@ -22,7 +22,7 @@
 | `@caro/server` | `packages/server/` | Shared Express middleware — asyncWrap, errorHandler |
 | `@caro/proto` | `packages/proto/` | Shared Protobuf schemas (`tag.proto`) |
 | `@caro/hmi-context` | `packages/hmi-context/` | HMI React context, hooks (useLiveValue, useTagWriter, useTagMap, useTagSubtree, useResolveAssetPath), MockHmiProvider |
-| `@caro/widgets` | `packages/widgets/` | HMI widget components (NumericMon, NumericSet, BooleanMon, BooleanSet, AnalogIn). AnalogIn is the first composite multi-tag widget. |
+| `@caro/widgets` | `packages/widgets/` | HMI widget components (NumericMon, NumericSet, BooleanMon, BooleanSet, AnalogIn, Timer). Timer is a Set/Mon/Done composite widget. |
 | `@caro/tag-registry-shared` | `apps/tag-registry/shared/` | Tag Registry shared validation, types, and utilities |
 
 ---
