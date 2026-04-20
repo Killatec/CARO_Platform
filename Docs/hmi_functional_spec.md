@@ -13,6 +13,7 @@ Tag Registry Functional Spec | CARO_MQTT_Spec | CARO_DB_Spec | hmi_widget_spec
 | 2.4 | 2026-03-28 | PM / Claude | Pending setpoint architecture redesigned: audit_log table added (Section 8.6); pending_setpoint_values simplified to (tag_id, value, set_by, set_at) — cmd_status, command_id, rejection_code removed; changeset flow updated (Section 5.2) — backend logs request before MQTT publish, 1-second ACK timeout, pending updated only on accepted ACK via epsilon comparison against active mode revision; mode activation clears pending table entirely; out-of-sync latch redesigned — first good→bad transition logged only, any logged-in user resets, telemetry never writes to pending; OI-09 resolved. |
 | 2.5 | 2026-04-19 | PM / Claude | §10.0: HmiDataContext extended with `tagPathIndex`; tagPathIndex lifecycle paragraph added. useLiveValue mount-effect optimization documented. Matches perf commits be308f5 and cceb114. |
 | 2.6 | 2026-04-20 | PM / Claude | §10.1, §10.2: WS subscription model updated to reflect level-triggered reconciler (`desiredRef`/`serverRef`, microtask-batched flush, same-tick cancel). Matches perf commit 4977f4f. |
+| 2.7 | 2026-04-20 | PM / Claude | §2, §4, §10.2, §10.3: pre-refactor frontend-state sections rewritten to match `@caro/hmi-context` / `useLiveValue` implementation. Global-store and context-registry concepts removed. Per-tag value shape corrected to `{ value }` only — no quality, timestamp, or module_id. |
 
 ---
 
@@ -41,7 +42,7 @@ The following technology decisions are locked based on proof-of-concept validati
 | Database (tag registry) | PostgreSQL | Authoritative tag definitions — read at startup and on change |
 | Database (telemetry) | TimescaleDB | Time-series storage keyed by tag_id |
 | Frontend framework | React 18 | Component-based UI. Shares the @caro/ui package (design tokens and primitives) with the Tag Registry Admin Tool — consistent look and feel across all CARO_Platform tools. |
-| State management | Zustand 4.5+ | Lightweight selective global state — prevents unnecessary re-renders |
+| State management | React Context (`@caro/hmi-context`) | Tag map and live-value subscriptions via `HmiContextProvider`. Selective re-renders via per-tag callback dispatch in `useLiveValue`. |
 | Build tool | Vite 5+ | Dev server with HMR and production bundler |
 | Package manager | npm | Dependency management |
 | Language | TypeScript | All HMI app and shared package code. |
@@ -64,7 +65,7 @@ CARO_HMI provides real-time tag monitoring, supervised setpoint delivery to embe
 | Backend Server | Node.js / Express. Subscribes to device telemetry via MQTT. Maintains last-known-value cache keyed by tag_id. Bridges MQTT telemetry to WebSocket clients. Reads tag definitions from PostgreSQL Tag Registry at startup. Writes telemetry to TimescaleDB. Authenticates users and enforces RBAC. |
 | PostgreSQL (Tag Registry) | Authoritative source of all tag definitions. Read by backend at startup and on registry change notification. Schema defined in Tag Registry Functional Spec. |
 | TimescaleDB | Stores time-series telemetry keyed by tag_id. Supports high-resolution, aggregated, and archived tiers. |
-| Web Frontend | React 18 web application. Connects via HTTPS REST + WSS. Displays real-time tag values, trends, and audit logs. Uses Zustand for global state and auto-subscription context for tag management. |
+| Web Frontend | React 18 / Vite web application. Connects via HTTPS REST + WSS. `HmiContextProvider` from `@caro/hmi-context` provides the tag map and live-value subscriptions to all components. Widgets from `@caro/widgets` read live tag values via `useLiveValue(tagId)`. No global store. |
 | Cloud Monitoring (optional) | Read-only forwarding of telemetry to cloud. No write-back or remote control permitted. |
 
 > *NOTE: Network zone separation is required: embedded device network, backend LAN, and optional cloud DMZ must be logically or physically separated.*
@@ -686,38 +687,21 @@ The client wraps the application in `HmiContextProvider` from `@caro/hmi-context
 
 ### 10.2 Frontend Auto-Subscription Model
 
-The frontend uses a `TagSubscriptionContext` provider that wraps the entire application. This context:
+The app wraps its component tree in `HmiContextProvider` from `@caro/hmi-context`. One WebSocket connection is shared across all widgets.
 
-- Tracks which tag_ids each mounted widget has registered as a dependency.
-- Maintains a single unified WebSocket subscription for all widgets — one connection shared across all components.
-- Batches subscription changes via a microtask-scheduled reconciler. All subscribe/unsubscribe calls within a single tick collapse to at most one SUBSCRIBE and one UNSUBSCRIBE message on the wire, with same-tick sub/unsub of the same tag_id cancelling out.
-- On each flush, emits a batched SUBSCRIBE containing only newly-desired tag_ids and a batched UNSUBSCRIBE containing only newly-unwanted tag_ids — computed by diffing `desiredRef` against `serverRef`.
-- Auto-unsubscribes when widgets unmount — no manual lifecycle management required in widget code.
+Widgets subscribe by calling `useLiveValue(tagId)`. The hook seeds initial state via the `useState` initializer (`getLiveValue(tagId)`) and registers a per-tag callback via `subscribeLiveValue`. The subscriber refcount for each `tagId` is the size of the callback Set maintained by the provider — no explicit register/unregister API. A widget that calls `useLiveValue` is unsubscribed automatically when it unmounts.
 
-Widget implementation pattern:
+Subscription changes are batched by the level-triggered reconciler described in §10.1: `desiredRef` contains every `tagId` for which at least one hook is currently mounted; `serverRef` contains every `tagId` the client has told the server about. A microtask-batched `flush()` diffs the two sets and emits at most one `SUBSCRIBE` and one `UNSUBSCRIBE` per tick. Same-tick subscribe and unsubscribe of the same `tagId` cancel out — no wire messages.
 
-```js
-// Inside any widget component:
-const tagValue = useTagStore(state => state.tags[tagId]);
-useRegisterTags([tagId1, tagId2], 'MyWidget');
-// Subscription is automatic — no useEffect or subscribe() call needed
-```
+### 10.3 Frontend State
 
-### 10.3 Frontend State — Zustand Store
+The frontend does not have a global store. State lives in two places.
 
-The global Zustand store shape:
+**Server-side LKV (`apps/caro-hmi/server/src/lkv.ts`):** `Map<tag_id, { value, generation }>`. Generation is a monotonic counter bumped only when `value` changes (strict equality, element-wise for arrays). The WS server uses per-client generation tracking to send snapshots and deltas without re-transmitting unchanged values.
 
-```js
-{
-  tags: { [tag_id: uint32]: { value, quality, timestamp, module_id } },
-  connected: boolean,
-  updateCount: number,
-  latency: number | null,
-  subscribedCount: number
-}
-```
+**Client-side live-value map (`HmiContextProvider.valuesRef`):** `Map<tag_id, { value }>`. Populated on every SNAPSHOT and DELTA message. No generation tracking, no per-tag quality field, no per-tag timestamp. `value === null` is the only bad-quality sentinel. Quality is evaluated backend-side (watchdog writes `null` on telemetry loss); the frontend performs no stale detection.
 
-Components subscribe to specific tag slices using Zustand selectors. Only the components displaying a changed tag_id re-render on each delta update. This selective re-render pattern is what enables 60 FPS rendering with hundreds of simultaneously active tags.
+Per-tag subscribers live in `HmiContextProvider.subscribersRef` (`Map<tag_id, Set<callback>>`). Each `useLiveValue` call registers one callback; it is removed on unmount. When a SNAPSHOT or DELTA arrives, the provider invokes every callback registered for the affected `tag_id`. Only components whose subscribed tag changed receive a state update — this is what enables selective re-renders across dense pages.
 
 ### 10.4 Tag Write Flow
 
