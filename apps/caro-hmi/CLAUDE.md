@@ -54,6 +54,8 @@ Client is a standard Vite React app. `vite.config.ts` proxies `/api` and `/ws` t
 - **No quality enum.** Null value = bad quality. Watchdog writes null on telemetry loss.
 - **No per-tag timestamp in LKV.** Generation counters drive WS change detection. DB uses module-level timestamp from MQTT.
 - **Widgets use `assetPath` string prop**, not pre-resolved TagDef. `useResolveAssetPath(assetPath)` does contiguous segment matching on dot-separated tag_path. Abbreviated paths supported.
+- **Tag path resolution uses a prebuilt index.** `TagPathIndex` is built once when the tag map loads; `useResolveAssetPath` and `useTagGroup` both delegate to `tagPathIndex.resolve(path)` for O(1) contiguous-segment matches. Error semantics (no match / ambiguous match) enforced by the consuming hooks, not the index.
+- **`useLiveValue` seeds state via `useState` initializer only.** The `subscribeLiveValue` callback fires synchronously on subscribe with the current LKV value, so no mount-time `setLiveValue` is needed. Avoids N redundant state updates per page mount on dense pages.
 - **Meta field resolution:** `eng_min`, `eng_max`, `unit`, `format` resolved root-to-leaf from meta array, first match wins.
 - **Numeric formatting:** `resolveFormat(tag)` calls `compileFormat(pattern)` once at widget mount. Supports `"#.##"` (fixed-point) and `"#.##E+0"` (exponential) patterns. Numeric `format` values are backward-compatible (treated as decimal count). Default: `"#.##"`.
 - **WS pipeline is pull-based** (generation comparison per client per tick). DB pipeline is push-based (TelemetryIntake enqueues directly on every ingest call).

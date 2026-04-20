@@ -11,6 +11,7 @@ Tag Registry Functional Spec | CARO_MQTT_Spec | CARO_DB_Spec | hmi_widget_spec
 | Version | Date | Author | Summary |
 |---|---|---|---|
 | 2.4 | 2026-03-28 | PM / Claude | Pending setpoint architecture redesigned: audit_log table added (Section 8.6); pending_setpoint_values simplified to (tag_id, value, set_by, set_at) — cmd_status, command_id, rejection_code removed; changeset flow updated (Section 5.2) — backend logs request before MQTT publish, 1-second ACK timeout, pending updated only on accepted ACK via epsilon comparison against active mode revision; mode activation clears pending table entirely; out-of-sync latch redesigned — first good→bad transition logged only, any logged-in user resets, telemetry never writes to pending; OI-09 resolved. |
+| 2.5 | 2026-04-19 | PM / Claude | §10.0: HmiDataContext extended with `tagPathIndex`; tagPathIndex lifecycle paragraph added. useLiveValue mount-effect optimization documented. Matches perf commits be308f5 and cceb114. |
 
 ---
 
@@ -664,10 +665,12 @@ The client wraps the application in `HmiContextProvider` from `@caro/hmi-context
 
 | Context | Contents | Update Rate |
 |---|---|---|
-| `HmiDataContext` | `tagMap`, `getLiveValue`, `subscribeLiveValue`, `writeTag` | Stable — only changes when the tag map is reloaded |
+| `HmiDataContext` | `tagMap`, `tagPathIndex`, `getLiveValue`, `subscribeLiveValue`, `writeTag` | Stable — only changes when the tag map is reloaded |
 | `HmiStatsContext` | `wsStats` (connected, latency, subscribed count) | 1 Hz |
 
-`useLiveValue` depends only on `HmiDataContext`. Stats ticks updating `HmiStatsContext` do not cause `useLiveValue`'s effect to re-run, eliminating WS subscription churn during normal operation.
+`tagPathIndex` is built once when the tag map loads (same lifecycle as `tagMap`); consumers should always resolve asset paths through it rather than scanning `tagMap` directly.
+
+`useLiveValue` depends only on `HmiDataContext`. Stats ticks updating `HmiStatsContext` do not cause `useLiveValue`'s effect to re-run, eliminating WS subscription churn during normal operation. `useLiveValue`'s mount effect does not call `setLiveValue` — the `useState` initializer seeds the first value, and `subscribeLiveValue` delivers the current value synchronously so any post-render drift is reconciled without an extra state update.
 
 ### 10.1 Connection Lifecycle
 

@@ -21,6 +21,7 @@ hmi_functional_spec | hmi_API_spec | CARO_DB_Spec
 | 1.8 | 2026-04-14 | PM / Claude | NumericSet refactored: two-mode toggle replaced with inline click-to-edit input. `requireConfirm` and `confirmMessage` props removed — safety gate is at mode save time. Client-side eng_min/eng_max validation removed — server is sole authority. Write error shown regardless of focus state. `isWriting` uses readOnly instead of disabled to retain focus. |
 | 1.9 | 2026-04-14 | PM / Claude | Spec text fixes: removed erroneous useTagWriter reference from NumericMon NOTE; corrected BooleanSet pending-state reference from useTagWriter.isPending to useWriteGuard; clarified disabled vs readOnly in Section 4.2; fixed BooleanMon bad-quality description (label always shown); clarified write() is single-tag for widgets, batch at server level; documented Boolean 2-column layout in Section 4.4. |
 | 2.0 | 2026-04-14 | PM / Claude | Added useTagGroup utility (Section 3.6). Added Analog_In composite widget (Section 5). First multi-tag widget in the catalog. |
+| 2.1 | 2026-04-19 | PM / Claude | §3.5: TagPathIndex-backed resolution noted (O(1) per call). §3.6: useTagGroup complexity noted as O(children). Matches perf commits be308f5 and cceb114. |
 
 ---
 
@@ -145,7 +146,7 @@ export function useTagWriter() {
 
 ### 3.5 Asset Path Resolution and Tag Definition
 
-All widgets accept an `assetPath` prop — a dot-separated path string that identifies the tag in the Tag Registry hierarchy. Widgets no longer receive a pre-resolved TagDef object. Instead, `@caro/hmi-context` provides `useResolveAssetPath(assetPath): TagDef[]` which finds all tags whose `tag_path` contains the `assetPath` as a contiguous segment match. Abbreviated paths are supported (e.g. `"RF_Fwd.setpoint"` instead of `"Plant1.Module.RF_Fwd.setpoint"`) as long as the match is unambiguous.
+All widgets accept an `assetPath` prop — a dot-separated path string that identifies the tag in the Tag Registry hierarchy. Widgets no longer receive a pre-resolved TagDef object. Instead, `@caro/hmi-context` provides `useResolveAssetPath(assetPath): TagDef[]` which finds all tags whose `tag_path` contains the `assetPath` as a contiguous segment match. Abbreviated paths are supported (e.g. `"RF_Fwd.setpoint"` instead of `"Plant1.Module.RF_Fwd.setpoint"`) as long as the match is unambiguous. Resolution is backed by a prebuilt `TagPathIndex` on `HmiDataContext`; each call is O(1) regardless of tag-map size.
 
 Error evaluation (wrong number of matches, missing expected children) is the widget's responsibility, not hmi-context's. Widgets that expect exactly one tag use a `useSingleTag(assetPath, widgetName)` helper that throws descriptive errors on zero or multiple matches.
 
@@ -181,7 +182,7 @@ For composite widgets that display multiple related tags under a common path pre
 useTagGroup(basePath: string, children: string[], widgetName: string): Record<string, TagDef>
 ```
 
-Resolves each child as `${basePath}.${child}` via useResolveAssetPath. Validates exactly one match per child — throws on zero or multiple matches. The `children` array must be a static constant (React hooks rule). Single-tag widgets continue to use `useSingleTag` directly.
+Resolves each child as `${basePath}.${child}` via useResolveAssetPath. Validates exactly one match per child — throws on zero or multiple matches. The `children` array must be a static constant (React hooks rule). Single-tag widgets continue to use `useSingleTag` directly. Each child lookup delegates to the same `TagPathIndex`, so `useTagGroup` is O(children) in the common case, independent of tag-map size.
 
 ---
 
