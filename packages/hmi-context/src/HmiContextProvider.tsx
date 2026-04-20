@@ -23,17 +23,16 @@ export function HmiContextProvider({ children, apiUrl, wsUrl }: HmiContextProvid
   // Subscriber callbacks by tag_id
   const subscribersRef = useRef<Map<number, Set<(lv: LiveValue) => void>>>(new Map());
 
-  // Tag IDs for which SUBSCRIBE has been sent to the server
-  const subscribedOnServerRef = useRef<Set<number>>(new Set());
+  // Reconciler: desiredRef is what the client wants; serverRef is what the server knows.
+  // flush() is the only function that computes and sends the diff.
+  const desiredRef = useRef<Set<number>>(new Set());
+  const serverRef  = useRef<Set<number>>(new Set());
+  const flushScheduledRef = useRef(false);
 
   // WebSocket
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectDelayRef = useRef(1000);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Pending-subscribe batching via queueMicrotask
-  const pendingSubscribeRef = useRef<Set<number>>(new Set());
-  const flushScheduledRef = useRef(false);
 
   // ─── WS Statistics ───────────────────────────────────────────────────────────
   const wsStatsRef = useRef({ messageCount: 0, byteCount: 0 });
@@ -76,6 +75,42 @@ export function HmiContextProvider({ children, apiUrl, wsUrl }: HmiContextProvid
     return () => { cancelled = true; };
   }, [apiUrl]);
 
+  // ─── Reconciler flush ────────────────────────────────────────────────────────
+  //
+  // Single function that owns all wire traffic. Computes desired-vs-server diff
+  // and sends one SUBSCRIBE and/or one UNSUBSCRIBE per microtask tick.
+  // SUBSCRIBE is sent before UNSUBSCRIBE for test determinism (sets are disjoint).
+
+  const flush = useCallback(() => {
+    flushScheduledRef.current = false;
+    const ws = wsRef.current;
+    if (ws === null || ws.readyState !== WebSocket.OPEN) return;
+
+    const toSub: number[] = [];
+    for (const tagId of desiredRef.current) {
+      if (!serverRef.current.has(tagId)) toSub.push(tagId);
+    }
+    const toUnsub: number[] = [];
+    for (const tagId of serverRef.current) {
+      if (!desiredRef.current.has(tagId)) toUnsub.push(tagId);
+    }
+
+    if (toSub.length > 0) {
+      ws.send(JSON.stringify({ type: 'SUBSCRIBE', tagIds: toSub }));
+      for (const t of toSub) serverRef.current.add(t);
+    }
+    if (toUnsub.length > 0) {
+      ws.send(JSON.stringify({ type: 'UNSUBSCRIBE', tagIds: toUnsub }));
+      for (const t of toUnsub) serverRef.current.delete(t);
+    }
+  }, []);
+
+  const scheduleFlush = useCallback(() => {
+    if (flushScheduledRef.current) return;
+    flushScheduledRef.current = true;
+    queueMicrotask(flush);
+  }, [flush]);
+
   // ─── B. WebSocket connection (starts once tag map is loaded) ─────────────────
 
   useEffect(() => {
@@ -100,19 +135,9 @@ export function HmiContextProvider({ children, apiUrl, wsUrl }: HmiContextProvid
           }
         }, 5000);
 
-        // Clear optimistic state — onopen is the authoritative subscription point
-        subscribedOnServerRef.current.clear();
-        pendingSubscribeRef.current.clear();
-
-        // Re-subscribe everything currently in the subscriber map in one message
-        const allTagIds: number[] = [];
-        for (const [tagId, subs] of subscribersRef.current) {
-          if (subs.size > 0) allTagIds.push(tagId);
-        }
-        if (allTagIds.length > 0) {
-          ws.send(JSON.stringify({ type: 'SUBSCRIBE', tagIds: allTagIds }));
-          for (const id of allTagIds) subscribedOnServerRef.current.add(id);
-        }
+        // Fresh connection — server knows nothing. Reconciler will re-subscribe everything.
+        serverRef.current.clear();
+        scheduleFlush();
       };
 
       ws.onmessage = (event: MessageEvent) => {
@@ -148,7 +173,9 @@ export function HmiContextProvider({ children, apiUrl, wsUrl }: HmiContextProvid
       };
 
       const onDisconnect = () => {
-        subscribedOnServerRef.current.clear();
+        // Server connection lost — it forgets all subscriptions.
+        // Leave desiredRef intact; next onopen reconciles from it.
+        serverRef.current.clear();
         if (pingIntervalRef.current !== null) {
           clearInterval(pingIntervalRef.current);
           pingIntervalRef.current = null;
@@ -180,7 +207,7 @@ export function HmiContextProvider({ children, apiUrl, wsUrl }: HmiContextProvid
         latencyMs: latencyRef.current,
         messagesPerSec,
         bytesPerSec,
-        subscribedCount: subscribedOnServerRef.current.size,
+        subscribedCount: serverRef.current.size,
       });
     }, 1000);
 
@@ -201,7 +228,7 @@ export function HmiContextProvider({ children, apiUrl, wsUrl }: HmiContextProvid
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [tagMapLoaded, wsUrl]);
+  }, [tagMapLoaded, wsUrl, scheduleFlush]);
 
   // ─── C. Context value construction with stable method references ─────────────
 
@@ -211,48 +238,33 @@ export function HmiContextProvider({ children, apiUrl, wsUrl }: HmiContextProvid
 
   const subscribeLiveValue = useCallback(
     (tagId: number, callback: (lv: LiveValue) => void): (() => void) => {
-      if (!subscribersRef.current.has(tagId)) {
-        subscribersRef.current.set(tagId, new Set());
+      // Register the callback.
+      let subs = subscribersRef.current.get(tagId);
+      if (!subs) {
+        subs = new Set();
+        subscribersRef.current.set(tagId, subs);
       }
-      subscribersRef.current.get(tagId)!.add(callback);
+      subs.add(callback);
 
-      // If not yet subscribed on the server, add to a pending-subscribe batch.
-      // Mark immediately so parallel hook mounts for the same tagId don't duplicate.
-      if (!subscribedOnServerRef.current.has(tagId)) {
-        subscribedOnServerRef.current.add(tagId);
-        pendingSubscribeRef.current.add(tagId);
+      // Mark this tagId as desired and let the reconciler handle the wire.
+      desiredRef.current.add(tagId);
+      scheduleFlush();
 
-        if (!flushScheduledRef.current) {
-          flushScheduledRef.current = true;
-          queueMicrotask(() => {
-            flushScheduledRef.current = false;
-            const batch = Array.from(pendingSubscribeRef.current);
-            pendingSubscribeRef.current.clear();
-            const ws = wsRef.current;
-            if (batch.length > 0 && ws !== null && ws.readyState === WebSocket.OPEN) {
-              ws.send(JSON.stringify({ type: 'SUBSCRIBE', tagIds: batch }));
-            }
-          });
-        }
-      }
-
-      // Immediately deliver current value so the hook has initial state
+      // Deliver current LKV synchronously so the hook has initial state.
       callback(valuesRef.current.get(tagId) ?? { value: null });
 
       return () => {
-        const subs = subscribersRef.current.get(tagId);
-        subs?.delete(callback);
-        if (subs !== undefined && subs.size === 0) {
+        const s = subscribersRef.current.get(tagId);
+        if (!s) return;
+        s.delete(callback);
+        if (s.size === 0) {
           subscribersRef.current.delete(tagId);
-          subscribedOnServerRef.current.delete(tagId);
-          const ws = wsRef.current;
-          if (ws !== null && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: 'UNSUBSCRIBE', tagIds: [tagId] }));
-          }
+          desiredRef.current.delete(tagId);
+          scheduleFlush();
         }
       };
     },
-    []
+    [scheduleFlush]
   );
 
   const writeTag = useCallback(
@@ -292,7 +304,7 @@ export function HmiContextProvider({ children, apiUrl, wsUrl }: HmiContextProvid
   );
 
   // tagMapLoaded in deps triggers a re-memo once tags are loaded, surfacing the populated tagMap.
-  // getLiveValue/subscribeLiveValue/writeTag are stable refs (useCallback with []).
+  // getLiveValue/subscribeLiveValue/writeTag are stable refs (useCallback with stable deps).
   // wsStats is intentionally NOT here — it lives in its own context to avoid churn.
   const dataValue = useMemo<HmiDataContextValue>(
     () => ({ tagMap: tagMapRef.current, tagPathIndex: tagPathIndexRef.current, getLiveValue, subscribeLiveValue, writeTag }),

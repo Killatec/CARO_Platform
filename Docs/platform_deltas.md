@@ -14,3 +14,11 @@ Read once at session start alongside `Docs/platform_handoff.md`.
 
 ---
 
+## Delta P-002 — @caro/hmi-context WS reconciler
+
+**Spec:** hmi_functional_spec.md §WS subscription management
+**Status:** Implemented
+**Detail:** `@caro/hmi-context`: WS subscribe/unsubscribe replaced with level-triggered reconciler (`desiredRef` vs `serverRef`, single microtask flush, batched UNSUBSCRIBE). Eliminates ~720 individual UNSUBSCRIBE frames on Power-page navigation.
+
+---
+
