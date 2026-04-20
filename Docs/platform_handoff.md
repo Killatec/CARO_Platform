@@ -31,7 +31,7 @@
 
 | Layer | Technology |
 |---|---|
-| Frontend | React + Vite, Tailwind CSS v4, Zustand |
+| Frontend | React + Vite, Tailwind CSS v4, React Context (@caro/hmi-context) |
 | Backend | Node.js + Express |
 | Database | PostgreSQL via `@caro/db` |
 | Messaging | Mosquitto v5 — TCP 1883, WS 8080 |

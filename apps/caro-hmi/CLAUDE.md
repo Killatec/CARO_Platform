@@ -75,7 +75,7 @@ Client is a standard Vite React app. `vite.config.ts` proxies `/api` and `/ws` t
 | MQTT bridge / device telemetry | 1. This file 2. `server/src/mqtt-bridge.ts` 3. `server/src/telemetry-intake.ts` 4. `Docs/CARO_MQTT_Spec.md` |
 | Widget rendering / formatting | 1. `Docs/hmi_widget_spec.md` 2. `packages/widgets/src/shared/utils.ts` (compileFormat, resolveFormat) |
 | Setpoint write pipeline | 1. This file 2. `server/src/command-publisher.ts` 3. `server/src/routes/tags.ts` 4. `packages/hmi-context/src/HmiContextProvider.tsx` (writeTag) 5. `packages/widgets/src/shared/useWriteGuard.ts` |
-| LKV / WebSocket pipeline | 1. This file 2. `server/src/lkv.ts` 3. `server/src/ws-server.ts` 4. `Docs/CARO_Telemetry_Path_Reference.docx` |
+| LKV / WebSocket pipeline | 1. This file 2. `server/src/lkv.ts` 3. `server/src/ws-server.ts` 4. `Docs/CARO_Telemetry_Path_Reference.md` |
 
 ## Environment (.env)
 
