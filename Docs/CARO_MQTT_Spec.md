@@ -355,7 +355,10 @@ The schema is hardcoded in module firmware. It is not delivered over the wire du
 - `TagValue.float_value` (field 1) is encoded as `float` (IEEE 754 single-precision, 4 bytes) — not `double`. This matches the `f32` data type in the tag registry.
 - `TagValue.bool_value` (field 3) is encoded as `bool` (1 byte). This matches the `bool` data type in the tag registry.
 - `TagValue.int_value` (field 4) is encoded as `int32`. This matches the `i16` data type in the tag registry. Protobuf has no int16 wire type; int32 is used and values are clamped to the i16 range (−32768 to 32767) by the simulator.
-- Field 2 is unused (reserved). `string_value` has been removed entirely. Only `float_value`, `bool_value`, and `int_value` are valid.
+- Field 2 is unused (reserved).
+- `TagValue.string_value` (field 5) is encoded as `string`. Used for `string` data type tags.
+- `TagValue.float_array_value` (field 6) is encoded as `FloatArray` — a wrapper message `{ repeated float values = 1; }`. Used for `f32[]` data type tags.
+- `TagValue.int_array_value` (field 7) is encoded as `Int32Array` — a wrapper message `{ repeated int32 values = 1; }`. Used for `i16[]` data type tags; values are clamped to the i16 range by the simulator.
 
 ## Open Questions
 

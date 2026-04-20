@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from 'react';
-import { validateTemplate, validateGraph, validateParentTypes } from '@caro/tag-registry-shared';
+import { validateTemplate, validateGraph, validateParentTypes, resolveRegistry, validateResolvedTags } from '@caro/tag-registry-shared';
 import type { Template, TemplateEntry, ValidationMessage } from '@caro/tag-registry-shared';
 import { useTemplateGraphStore } from '../stores/useTemplateGraphStore.js';
 import { useUIStore } from '../stores/useUIStore.js';
@@ -51,6 +51,19 @@ export function useValidation(
       });
       messages.push(...parentTypesResult.errors);
       messages.push(...parentTypesResult.warnings);
+    }
+
+    if (rootName) {
+      try {
+        const resolved = resolveRegistry(templates, rootName);
+        const resolvedResult = validateResolvedTags(resolved);
+        messages.push(...resolvedResult.errors);
+        messages.push(...resolvedResult.warnings);
+      } catch {
+        // Structural errors from the three preceding validators would have
+        // already been pushed into `messages`. If resolveRegistry throws,
+        // those errors already surface the root cause; skip silently.
+      }
     }
 
     const isValid = messages.length === 0;

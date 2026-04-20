@@ -150,7 +150,7 @@ The client is organized in four layers. Machine-specific code is confined to `hm
 |---|---|---|
 | Shell | `client/src/shell/` | App chrome — Header (global Reset button), sidebar nav, content area. Generic; no machine-specific knowledge. |
 | Widgets | `@caro/widgets` | Monitoring and setpoint widgets (NumericMon, NumericSet, BooleanMon, BooleanSet, AnalogIn). Each widget self-wraps with an error boundary via the `withErrorBoundary` HOC — page definitions require no explicit error boundary wrappers. |
-| Shared building blocks | `hmi-definitions/shared/` | Reusable layout constants (`styles.ts`) and composite components (RfModuleBox, HmiStatusBox, ModuleStatusBox) built from widgets and shared styles. |
+| Shared building blocks | `hmi-definitions/shared/` | Reusable layout constants (`styles.ts`) and composite components (RfModuleBox, HmiStatusBox, ModuleStatusBox) built from widgets and shared styles. `ModuleStatusBox` renders `ModuleInfoTable` (WS-driven, §8.8). |
 | Page definitions | `hmi-definitions/<config>/pages/` | Pure layout — compose shared building blocks. No business logic. `OverviewPage` is the current reference implementation. |
 
 ---
@@ -251,7 +251,7 @@ CARO_HMI operates exclusively against tags identified by tag_id. The Tag Registr
 |---|---|---|
 | tag_id | UINT32 | Primary identifier for all HMI operations: telemetry subscription, setpoint commands, trending queries, alarm binding, audit records. Transmitted as uint32 in all WebSocket messages. |
 | tag_path | VARCHAR | Human-readable label displayed in dashboards and trend views. Fetched at startup; used for display only — never as an identifier on the wire. |
-| data_type | VARCHAR | Determines input validation and display formatting (f32, bool). |
+| data_type | VARCHAR | Determines input validation and display formatting. Scalar types: `f32`, `i16`, `bool`, `string`. Array types: `f32[]`, `i16[]`. Only scalar numeric types (`f32`, `i16`, `bool`) are trendable; array types are read-only non-trendable. |
 | is_setpoint | BOOLEAN | If true, tag accepts write commands from Supervisor role. If false, tag is monitor-only. |
 | meta | JSONB | Provenance chain (leaf-to-root). Used to group tags in the UI by hierarchy, display context, and resolve fields (eng_min, eng_max, unit, format) via root-to-leaf resolution (see Section 6.5). |
 | trends | BOOLEAN | If true, the tag's values are written to TimescaleDB by the telemetry loop. Used to filter time-series persistence — only tagged trends are stored. |
@@ -431,7 +431,7 @@ Startup sequence:
 | Cache Entry Field | Type | Description |
 |---|---|---|
 | tag_id | uint32 | Stable tag identifier from the Tag Registry. |
-| value | typed or null | Latest confirmed value from device (f32, bool), or null if not yet received or device disconnected. Null = bad quality. |
+| value | typed or null | Latest confirmed value from device (`number`, `boolean`, `string`, or `number[]` for array types), or null if not yet received or device disconnected. Null = bad quality. |
 | generation | uint32 | Monotonic counter bumped only when value changes (strict equality). Used by the WebSocket pipeline for per-client change detection. |
 
 > *NOTE: There is no separate quality enum — null value means bad quality. There is no per-tag timestamp in the LKV cache. The WebSocket pipeline uses generation counters (not timestamps) to detect which tags have changed since a client's last update.*
@@ -550,8 +550,8 @@ The HMI server is both a telemetry consumer (via MQTT bridge) and a telemetry pr
 
 **Architecture:** At startup, the HMI server creates an `HmiTagSource` instance that:
 1. Filters the tag registry for `module_type = 'HMI'`
-2. Derives typed property names from `tag_path` (strips the module segment, joins remaining segments with `_`; e.g., `CARO_1.HMI.Module_Count` → `Module_Count`)
-3. Exposes a Proxy-based interface so server code writes values as direct property assignments (e.g., `hmiTags.Module_Count = 11`)
+2. Derives typed property names from `tag_path` (strips the module segment, joins remaining segments with `_`; e.g., `CARO_1.HMI.Module_Info.Data_Rate` → `Module_Info_Data_Rate`)
+3. Exposes a Proxy-based interface so server code writes values as direct property assignments (e.g., `hmiTags.Module_Info_Module_Count = 11`)
 4. Publishes a `TelemetryMessage` to `TelemetryIntake` on a configurable timer (default 250ms, env: `HMI_PUBLISH_INTERVAL_MS`)
 
 **Data path:** HmiTagSource values flow through the same `TelemetryIntake` pipeline as MQTT telemetry — LKV write, generation bump, DB pipeline enqueue, WebSocket delta broadcast. Widgets subscribed to HMI tags receive updates identically to device tags.
@@ -572,6 +572,19 @@ Each wrapped call accumulates busy-time in milliseconds. Once per second, `DutyT
 
 The snapshot call itself runs outside `track()` so it does not inflate the window it is closing.
 
+**Module_Info tags:** On every publish tick, `HmiTagSource.updateModuleInfoTags()` is called before the telemetry message is assembled. It reads `TelemetryIntake.getModuleStats()` and writes six array/scalar tags under `CARO_1.HMI.Module_Info.*`:
+
+| Tag | Type | Content |
+|---|---|---|
+| `Module_Info.Module_Count` | `i16` | Number of active non-HMI modules. Used by `ModuleInfoTable` for mismatch detection. |
+| `Module_Info.Status` | `i16[]` | Per-module `ModuleStatus` enum value (UNKNOWN=0, OK=1, WARNING=2, FAULT=3, STALLED=4). |
+| `Module_Info.Data_Rate` | `f32[]` | Per-module bytes/s in the last measurement window. |
+| `Module_Info.Pkg_Rate` | `f32[]` | Per-module packets/s in the last measurement window. |
+| `Module_Info.Tags_Per_Pkg` | `i16[]` | Per-module tag count from the most recent telemetry packet. |
+| `Module_Info.Watchdog` | `i16[]` | Per-module packed-bit watchdog flags. Bit `i` (LSB-first) = 1 if module `i` has a latched watchdog timeout. 16 flags per `i16` word. |
+
+Module ordering in all arrays is determined once at startup by `getModuleNames(tagMap)` — sorted by each module's minimum `tag_id`. The same ordering is used by the `ModuleInfoTable` widget.
+
 ### 8.9 Watchdog
 
 The backend watchdog monitors telemetry continuity per module. When a module stops publishing telemetry for longer than the watchdog timeout (default 1 second, env: `WATCHDOG_TIMEOUT_MS`), it is considered stalled.
@@ -581,7 +594,7 @@ The backend watchdog monitors telemetry continuity per module. When a module sto
 | Set | Behaviour | Drives |
 |---|---|---|
 | `timedOutModules` | Non-latching — added when timeout is detected, removed automatically when fresh telemetry arrives. | LKV null-write for all module tags; `moduleStatus = 'STALLED'` |
-| `watchdogLatched` | Latching — added on first timeout, cleared only by explicit manual reset with a fresh `lastSeen`. | Red/green stall indicator in Module Status Table |
+| `watchdogLatched` | Latching — added on first timeout, cleared only by explicit manual reset with a fresh `lastSeen`. | Red/green stall indicator in `ModuleInfoTable` (packed-bit watchdog column) |
 
 **Tick:** The watchdog runs on a timer with interval `min(watchdogTimeoutMs, 500ms)` — independent of the configured timeout so sub-second detection is always possible regardless of the timeout value.
 
@@ -614,7 +627,7 @@ The `CmdController` is the single dispatch point for all outbound commands. It r
 
 Response: `{ ok: true, data: { reset: ["watchdog", "module-reset"] } }`
 
-The client dispatches a `'system-reset'` CustomEvent on `window` after the response, which causes the Module Status Table to immediately re-fetch module stats.
+The client dispatches a `'system-reset'` CustomEvent on `window` after the response. No HTTP polling is required — module status is reflected in the next `Module_Info.*` tag update via the WebSocket pipeline.
 
 ---
 
@@ -644,6 +657,17 @@ The backend maintains a `commissioned_modules` table in PostgreSQL — one row p
 ## 10. WebSocket Real-Time API
 
 The frontend establishes a WSS connection after authentication. The backend bridges MQTT device telemetry to WebSocket clients using the Protobuf message format defined in CARO_MQTT_Spec Appendix A.
+
+### 10.0 Context Provider Architecture
+
+The client wraps the application in `HmiContextProvider` from `@caro/hmi-context`. The provider is split into two contexts to prevent WS stats ticks from triggering unnecessary re-subscriptions:
+
+| Context | Contents | Update Rate |
+|---|---|---|
+| `HmiDataContext` | `tagMap`, `getLiveValue`, `subscribeLiveValue`, `writeTag` | Stable — only changes when the tag map is reloaded |
+| `HmiStatsContext` | `wsStats` (connected, latency, subscribed count) | 1 Hz |
+
+`useLiveValue` depends only on `HmiDataContext`. Stats ticks updating `HmiStatsContext` do not cause `useLiveValue`'s effect to re-run, eliminating WS subscription churn during normal operation.
 
 ### 10.1 Connection Lifecycle
 

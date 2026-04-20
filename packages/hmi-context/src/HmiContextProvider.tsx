@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { HmiContext } from './HmiContext.js';
-import type { HmiContextValue, LiveValue, TagDef, WsStats } from './types.js';
+import { HmiDataContext, HmiStatsContext } from './HmiContext.js';
+import type { HmiDataContextValue, LiveValue, TagDef, WsStats } from './types.js';
 
 interface HmiContextProviderProps {
   children: ReactNode;
@@ -289,13 +289,19 @@ export function HmiContextProvider({ children, apiUrl, wsUrl }: HmiContextProvid
 
   // tagMapLoaded in deps triggers a re-memo once tags are loaded, surfacing the populated tagMap.
   // getLiveValue/subscribeLiveValue/writeTag are stable refs (useCallback with []).
-  // wsStats is state, so it triggers re-memo on each stats tick.
-  const contextValue = useMemo<HmiContextValue>(
-    () => ({ tagMap: tagMapRef.current, getLiveValue, subscribeLiveValue, writeTag, wsStats }),
-    [tagMapLoaded, getLiveValue, subscribeLiveValue, writeTag, wsStats] // eslint-disable-line react-hooks/exhaustive-deps
+  // wsStats is intentionally NOT here — it lives in its own context to avoid churn.
+  const dataValue = useMemo<HmiDataContextValue>(
+    () => ({ tagMap: tagMapRef.current, getLiveValue, subscribeLiveValue, writeTag }),
+    [tagMapLoaded, getLiveValue, subscribeLiveValue, writeTag] // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   if (!tagMapLoaded) return null;
 
-  return <HmiContext.Provider value={contextValue}>{children}</HmiContext.Provider>;
+  return (
+    <HmiDataContext.Provider value={dataValue}>
+      <HmiStatsContext.Provider value={wsStats}>
+        {children}
+      </HmiStatsContext.Provider>
+    </HmiDataContext.Provider>
+  );
 }

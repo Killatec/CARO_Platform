@@ -17,7 +17,7 @@ export interface TagDef {
 
 /** Live value pushed via WebSocket. null value = bad quality (device offline / telemetry lost). */
 export interface LiveValue {
-  value: number | boolean | string | null;
+  value: number | boolean | string | number[] | boolean[] | string[] | null;
 }
 
 /** Node in the subtree returned by useTagSubtree. */
@@ -37,11 +37,15 @@ export interface WsStats {
   subscribedCount: number;        // number of unique tags currently subscribed on server
 }
 
-/** Shape of the context value shared between provider and hooks. */
-export interface HmiContextValue {
+/** Stable data portion of the context — identity only changes when tagMapLoaded flips. */
+export interface HmiDataContextValue {
   tagMap: Map<number, TagDef>;
   getLiveValue: (tagId: number) => LiveValue;
   subscribeLiveValue: (tagId: number, callback: (lv: LiveValue) => void) => () => void;
   writeTag: (tagId: number, value: number | boolean | string) => Promise<void>;
+}
+
+/** Shape of the context value shared between provider and hooks. */
+export interface HmiContextValue extends HmiDataContextValue {
   wsStats: WsStats;
 }

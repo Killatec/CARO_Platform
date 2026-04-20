@@ -3,6 +3,7 @@ import { Badge } from '@caro/ui/primitives';
 import { loadRoot } from '../../api/templates.js';
 import { useUIStore } from '../../stores/useUIStore.js';
 import { useTemplateGraphStore } from '../../stores/useTemplateGraphStore.js';
+import { useTreeExpandStore } from '../../stores/useTreeExpandStore.js';
 import { TrashIcon } from '../shared/TrashIcon.jsx';
 import { deepNotEqual } from '@caro/tag-registry-shared';
 import type { ChildRef } from '@caro/tag-registry-shared';
@@ -42,7 +43,10 @@ export function TreeNode({
   childIndex = null,
 }: TreeNodeProps): React.ReactElement | null {
   const [dropZone, setDropZone] = useState<DropZone>('none');
-  const [isExpanded, setIsExpanded] = useState(parentTemplateName === null); // root starts open, children start collapsed
+  const stored       = useTreeExpandStore(s => s.expandedPaths[ownPath]);
+  const setExpanded  = useTreeExpandStore(s => s.setExpanded);
+  const clearExpanded = useTreeExpandStore(s => s.clearExpanded);
+  const isExpanded   = stored ?? (parentTemplateName === null); // root default open, others default closed
   const rowRef = useRef<HTMLDivElement>(null);
 
   const selectedSystemTreeNode    = useUIStore(state => state.selectedSystemTreeNode);
@@ -126,6 +130,7 @@ export function TreeNode({
     if (!parent) return;
     const updatedChildren = parent.children.filter((_, i) => i !== childIndex);
     updateTemplate(parentTemplateName!, { children: updatedChildren });
+    clearExpanded(ownPath);
     if (selectedSystemTreeNode === ownPath) {
       setSelectedSystemTreeNode(null);
     }
@@ -236,7 +241,7 @@ export function TreeNode({
 
         {hasChildren && (
           <button
-            onClick={e => { e.stopPropagation(); setIsExpanded(v => !v); }}
+            onClick={e => { e.stopPropagation(); setExpanded(ownPath, !isExpanded); }}
             className="w-4 h-4 flex items-center justify-center hover:bg-gray-200 rounded"
           >
             {isExpanded ? '▼' : '▶'}

@@ -78,6 +78,10 @@ The shared module exports:
 - `applyFieldCascade(templateMap, changedTemplate)` — given a template that has changed, propagates the effect to all child instances in the map. Returns an updated `templateMap`. Pure function — does not mutate its input.
 - `validateParentTypes(templateMap, rootName, options)` — evaluates `VALIDATE_REQUIRED_PARENT_TYPES` and `VALIDATE_UNIQUE_PARENT_TYPES` rules. Returns `{ errors: [], warnings: [] }`.
 - `resolveRegistry(templateMap, rootName)` — resolves the full hierarchy into a flat tag list with `tag_path`, `module`, `module_type`, `data_type`, `is_setpoint`, `trends`, `unit`, `format`, `eng_min`, `eng_max`, and `meta`. Pure function. Extracts `.default` from each field definition before merging with instance overrides. `module` is the name of the nearest ancestor with `template_type: "module"` (null if none). `module_type` is the `Module_Type` field value from that module template (null if none). The `trends` field is `true` if any level in the resolved hierarchy has a field key matching `"trends"` (case-insensitive) with value `true` after instance override resolution, `false` otherwise. The display columns `unit`, `format`, `eng_min`, `eng_max` are resolved via `resolveDisplayField` and are `null` for non-numeric tags (see §11.3). The `meta` array is ordered root-to-tag: `meta[0]` is the root level entry, `meta[meta.length - 1]` is the tag-level entry.
+- `validateResolvedTags(resolvedTags)` — post-resolution cross-field validator. Enforces: `trends` only on `f32`, `i16`, or `bool`; `is_setpoint` only on non-array types. Returns `{ errors: string[] }`. Called by both client (live validation panel) and server (authoritative re-run on batch save) after `resolveRegistry`. See §10.9.
+- `getModuleNames(tagMap)` — returns a sorted `string[]` of distinct module_id values from the resolved tag map, ordered by each module's minimum tag_id. Used by `HmiTagSource` (producer) and `ModuleInfoTable` (widget) for consistent module index assignment.
+- `packedBit(words, bitIndex)` / `setPackedBit(words, bitIndex, value)` — LSB-first read/write of a single bit within a `number[]` word array (16 bits per word). Used for the `Module_Info.Watchdog` packed-bit array.
+- `ModuleStatus` / `ModuleStatusLabels` — const enum (`UNKNOWN=0`, `OK=1`, `WARNING=2`, `FAULT=3`, `STALLED=4`) and display-label map. Shared between producer and widget.
 - `constants` — error codes, `DEFAULT_DATA_TYPE`, `MAX_TAG_PATH_LENGTH` default.
 - `deepEqual(a, b)` / `deepNotEqual(a, b)` — JSON-serialization-based deep equality utilities (`utils.js`).
 
@@ -126,12 +130,20 @@ New unsaved templates (null hash) are deleted instantly client-side via `removeT
 
 ## 6. Data Types
 
-| Value | Display Name | Description |
-|-------|-------------|-------------|
-| `f32` | Float 32 | 32-bit IEEE 754 floating-point |
-| `bool` | Boolean | Boolean |
+| Value | Display Name | Scalar/Array | Trendable | Setpoint-capable |
+|-------|-------------|-------------|-----------|-----------------|
+| `f32` | Float 32 | Scalar | Yes | Yes |
+| `bool` | Boolean | Scalar | Yes | Yes |
+| `i16` | Int 16 | Scalar | Yes | Yes |
+| `string` | String | Scalar | No | No |
+| `f32[]` | Float 32 Array | Array | No | No |
+| `i16[]` | Int 16 Array | Array | No | No |
 
-Data types are stored in the `tag_types` database table (see DB Spec §3.3). The hardcoded `DATA_TYPES` enum has been removed; `DEFAULT_DATA_TYPE = 'f32'` is the only constant. The server validates `TagType` field values against `tag_types.type_name` on template save. Fields with `field_type: "ModuleType"` must have a `default` value matching a row in `module_types.type_name`. The server validates both TagType and ModuleType fields on template save using `Promise.all` to fetch both lookup tables concurrently. New types can be added by inserting rows into `tag_types` or `module_types`.
+Data types are stored in the `tag_types` database table (see DB Spec §3.3). `DEFAULT_DATA_TYPE = 'f32'` is the only hardcoded constant. The server validates `TagType` field values against `tag_types.type_name` on template save using `Promise.all` alongside `ModuleType` validation. New types can be added by inserting rows into `tag_types`.
+
+**Constraints enforced at resolved-tag level (see §10.9):**
+- Only `f32`, `i16`, and `bool` may have `trends = true`. Setting `trends: true` on a `string` or array tag is a validation error.
+- Array types (`f32[]`, `i16[]`) may not be setpoints. Setting `is_setpoint: true` on an array tag is a validation error.
 
 ---
 
@@ -283,6 +295,15 @@ Controlled by server environment variables `VALIDATE_REQUIRED_PARENT_TYPES` and 
 
 Any structural change to a template triggers `applyFieldCascade` immediately on the client-side `templateMap`. The cascade propagates the effect to all child instances in the loaded graph. All affected templates are added to the dirty set. The server applies the same logic authoritatively on batch save.
 
+### 10.9 Post-Resolution Cross-Field Validation
+
+After `resolveRegistry` produces the flat tag list, `validateResolvedTags(resolvedTags)` enforces rules that span multiple resolved fields:
+
+- **Trendable types:** `trends: true` is only valid when `data_type` is `f32`, `i16`, or `bool`. Setting `trends: true` on a `string` or array tag (`f32[]`, `i16[]`) is a validation error.
+- **Array setpoints:** `is_setpoint: true` is only valid on scalar types. Array tags (`f32[]`, `i16[]`) may not be setpoints.
+
+Both rules return errors (blocking). `validateResolvedTags` is the sole enforcement point for these constraints — `validateTemplate` does not check them because the relevant fields live on different template levels. The function is exported from `apps/tag-registry/shared/` and runs in both client (live validation panel, called after each `resolveRegistry`) and server (authoritative re-run on batch save).
+
 ---
 
 ## 11. Registry Generation
@@ -308,7 +329,7 @@ Registry generation uses `resolveRegistry(templateMap, rootName)`. It runs clien
 
 ### 11.3 Display Column Resolution
 
-Four flat display columns — `unit`, `format`, `eng_min`, `eng_max` — are resolved per tag and stored as nullable columns on `tag_registry` (added by migration 013). They are populated only for **numeric tags**: those whose resolved `data_type` is in `NUMERIC_DATA_TYPES` (`shared/constants.ts`, currently `{ 'f32', 'i16' }`). Boolean and all other non-numeric tags receive `null` for all four columns.
+Four flat display columns — `unit`, `format`, `eng_min`, `eng_max` — are resolved per tag and stored as nullable columns on `tag_registry` (added by migration 013). They are populated only for **numeric tags**: those whose resolved `data_type` is in `TYPES_WITH_UNIT` (`shared/constants.ts`, currently `{ 'f32', 'i16', 'f32[]', 'i16[]' }`). Boolean, string, and other non-numeric tags receive `null` for all four columns.
 
 Resolution is performed by `resolveDisplayField(fieldName, meta, assetPath)` in `resolveRegistry.ts`. The algorithm walks the meta chain from root (index 0) to tag (index last) and applies these rules:
 
@@ -419,7 +440,7 @@ The **Update DB** button on the Registry page is disabled when `isDirty` is true
 
 The full resolved hierarchy is displayed as a collapsible tree built from the local template graph. Clicking any node populates the Fields Panel with that node's instance data. All edits are applied locally. No server call is made until Save.
 
-Each node's expanded/collapsed state is local — stored in `useState` per `TreeNode` instance, not lifted to a shared store. The root node starts expanded; all other nodes start collapsed. Collapsing a node unmounts its subtree, so re-expanding always shows children collapsed. Selecting a new root remounts the entire tree (`key={rootTemplateName}`), resetting all expand states.
+Each node's expanded/collapsed state is persisted via `useTreeExpandStore` (Zustand + `persist` middleware, storage key `caro.tag-registry.tree-expand`). On first visit (no stored state), the root node starts expanded and all children start collapsed. On subsequent visits, the store restores the previous expand/collapse state. Selecting a new root remounts the entire tree (`key={rootTemplateName}`), but the store retains per-node state so a previously visited root reopens at its last state.
 
 Node names are shown in orange bold (`text-orange-700 font-semibold`) when the node represents a changed or new child instance (detected by comparing `children[childIndex]` against `originalTemplateMap` baseline). Clean nodes use regular weight.
 

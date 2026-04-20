@@ -42,5 +42,26 @@ export const MAX_IDENTIFIER_LENGTH = 40;
  */
 export const UNIQUE_ANCESTOR_TYPES = new Set(['module', 'parameter']);
 
-/** Data types that resolve display columns (unit, format, eng_min, eng_max). */
-export const NUMERIC_DATA_TYPES = new Set(['f32', 'i16']);
+/**
+ * All supported data_type values.
+ *
+ * Convention: when used as a packed status word, `i16` is interpreted bitwise
+ * as an unsigned 16-bit value (LSB = bit 0). `i16[]` follows the same
+ * convention, with module index i stored in word (i >> 4), bit (i & 0x0F).
+ */
+export type DataType = 'f32' | 'bool' | 'i16' | 'string' | 'f32[]' | 'i16[]';
+
+/** Scalar (single-value) data types. Arrays are read-only; is_setpoint requires a scalar type. */
+export const SCALAR_TYPES: Set<DataType> = new Set(['f32', 'bool', 'i16', 'string']);
+
+/** Array data types. */
+export const ARRAY_TYPES: Set<DataType> = new Set(['f32[]', 'i16[]']);
+
+/** Numeric scalar types (excludes bool and string). */
+export const NUMERIC_SCALAR_TYPES: Set<DataType> = new Set(['f32', 'i16']);
+
+/** Types that may have trends: true. Arrays never trend. */
+export const TRENDABLE_TYPES: Set<DataType> = new Set(['f32', 'i16', 'bool']);
+
+/** Types that resolve unit and format display columns. */
+export const TYPES_WITH_UNIT: Set<DataType> = new Set(['f32', 'i16', 'f32[]', 'i16[]']);

@@ -10,15 +10,6 @@
   "children": [
     {
       "template_name": "numeric_mon",
-      "asset_name": "Module_Count",
-      "fields": {
-        "Trends": false,
-        "data_type": "i16",
-        "format": "#"
-      }
-    },
-    {
-      "template_name": "numeric_mon",
       "asset_name": "Tag_Count",
       "fields": {
         "Trends": false,
@@ -43,6 +34,11 @@
         "Trends": false,
         "format": "#"
       }
+    },
+    {
+      "template_name": "Module_Info",
+      "asset_name": "Module_Info",
+      "fields": {}
     }
   ]
 }

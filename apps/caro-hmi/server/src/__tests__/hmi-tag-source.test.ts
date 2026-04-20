@@ -4,8 +4,10 @@ import { TelemetryIntake } from '../telemetry-intake.js';
 import { LkvCache } from '../lkv.js';
 import { DbPipeline } from '../db-pipeline.js';
 import { DutyTracker } from '../duty-tracker.js';
+import { ModuleStatus } from '@caro/tag-registry-shared';
 import type { ActiveTag } from '@caro/db';
 import type { TagDef } from '@caro/hmi-context';
+import type { ModuleStats } from '../telemetry-intake.js';
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -26,10 +28,14 @@ function makeActiveTag(
     data_type:   'i16',
     is_setpoint: false,
     trends:      false,
+    unit:        null,
+    format:      null,
+    eng_min:     null,
+    eng_max:     null,
     retired:     false,
     meta:        {},
     ...overrides,
-  };
+  } as ActiveTag;
 }
 
 function makeTagDef(tag_id: number, module_id = 'HMI'): TagDef {
@@ -196,5 +202,272 @@ describe('HmiTagSource', () => {
 
     expect(typeof hmiTags.startPublishing).toBe('function');
     expect(typeof hmiTags.stopPublishing).toBe('function');
+  });
+});
+
+// ── Module_Info array emission tests ─────────────────────────────────────────
+
+// Tag IDs: 200–204 = the five Module_Info array tags (HMI module_type).
+// Tags 1–N = non-HMI module tags used only for module ordering.
+
+const MI_TAG_IDS = {
+  DATA_RATE:    200,
+  PKG_RATE:     201,
+  STATUS:       202,
+  TAGS_PER_PKG: 203,
+  WATCHDOG:     204,
+};
+
+function makeModuleInfoTags(): ActiveTag[] {
+  return [
+    makeActiveTag(MI_TAG_IDS.DATA_RATE,    'CARO_1.HMI.Module_Info.Data_Rate',    'HMI', { data_type: 'f32[]' }),
+    makeActiveTag(MI_TAG_IDS.PKG_RATE,     'CARO_1.HMI.Module_Info.Pkg_Rate',     'HMI', { data_type: 'f32[]' }),
+    makeActiveTag(MI_TAG_IDS.STATUS,       'CARO_1.HMI.Module_Info.Status',       'HMI', { data_type: 'i16[]' }),
+    makeActiveTag(MI_TAG_IDS.TAGS_PER_PKG, 'CARO_1.HMI.Module_Info.Tags_Per_Pkg', 'HMI', { data_type: 'i16[]' }),
+    makeActiveTag(MI_TAG_IDS.WATCHDOG,     'CARO_1.HMI.Module_Info.Watchdog',     'HMI', { data_type: 'i16[]' }),
+  ];
+}
+
+/** Make a non-HMI active tag for module ordering purposes. */
+function makeModuleTag(tag_id: number, moduleId: string): ActiveTag {
+  return makeActiveTag(tag_id, `CARO_1.${moduleId}.SomeTag`, moduleId, { module_type: 'MQTT' });
+}
+
+function makeModuleStats(module_id: string, overrides: Partial<ModuleStats> = {}): ModuleStats {
+  return {
+    module_id,
+    status: 'OK',
+    packets_per_sec: 0,
+    bytes_per_sec: 0,
+    tags_in_last_packet: 0,
+    stalled: false,
+    last_seen_ms: Date.now(),
+    ...overrides,
+  };
+}
+
+/** Build HmiTagSource with Module_Info tags + N MQTT modules for ordering. */
+function makeModuleInfoSource(
+  moduleIds: string[],
+  statsReturnValue: ModuleStats[],
+): { hmiTags: HmiTagSource & Record<string, number | boolean | string | number[]>; lkv: LkvCache } {
+  const lkv = new LkvCache();
+  const hmiTagIds = Object.values(MI_TAG_IDS);
+
+  // Module tags are non-HMI — only used for ordering by getModuleNames.
+  // Assign tag_ids 1..N so ordering is deterministic (same as moduleIds array order).
+  const moduleTags = moduleIds.map((id, i) => makeModuleTag(i + 1, id));
+  const allTags    = [...moduleTags, ...makeModuleInfoTags()];
+
+  const intake = {
+    getModuleStats: vi.fn().mockReturnValue(statsReturnValue),
+    ingest: vi.fn().mockImplementation((moduleId: string, message: { tags: { tag_id: number; value: unknown }[] }) => {
+      for (const { tag_id, value } of message.tags) {
+        if (hmiTagIds.includes(tag_id)) {
+          lkv.set(tag_id, value as number | number[] | null);
+        }
+      }
+    }),
+  } as unknown as TelemetryIntake;
+
+  const hmiTags = HmiTagSource.create(allTags, {
+    intake,
+    hmiPublishIntervalMs: HMI_PUBLISH_INTERVAL_MS,
+    dutyTracker: new DutyTracker(),
+  });
+
+  return { hmiTags, lkv };
+}
+
+describe('HmiTagSource — Module_Info array emission', () => {
+  it('arrays have correct length matching the number of modules (MQTT + HMI)', () => {
+    // 3 MQTT modules + 1 HMI module (from makeModuleInfoTags) = 4 total
+    const moduleIds = ['M1', 'M2', 'M3'];
+    const stats = moduleIds.map(id => makeModuleStats(id));
+    const { hmiTags, lkv } = makeModuleInfoSource(moduleIds, stats);
+
+    hmiTags.publishNow();
+
+    expect((lkv.getValue(MI_TAG_IDS.DATA_RATE)    as number[]).length).toBe(4);
+    expect((lkv.getValue(MI_TAG_IDS.PKG_RATE)     as number[]).length).toBe(4);
+    expect((lkv.getValue(MI_TAG_IDS.STATUS)       as number[]).length).toBe(4);
+    expect((lkv.getValue(MI_TAG_IDS.TAGS_PER_PKG) as number[]).length).toBe(4);
+  });
+
+  it('per-module values are correct for a known stats input', () => {
+    const moduleIds = ['A', 'B', 'C'];
+    const stats = [
+      makeModuleStats('A', { bytes_per_sec: 2048, packets_per_sec: 10, tags_in_last_packet: 5, status: 'OK' }),
+      makeModuleStats('B', { bytes_per_sec: 512,  packets_per_sec: 3,  tags_in_last_packet: 2, status: 'WARNING' }),
+      makeModuleStats('C', { bytes_per_sec: 0,    packets_per_sec: 0,  tags_in_last_packet: 0, status: 'FAULT' }),
+    ];
+    const { hmiTags, lkv } = makeModuleInfoSource(moduleIds, stats);
+
+    hmiTags.publishNow();
+
+    const dataRate   = lkv.getValue(MI_TAG_IDS.DATA_RATE)    as number[];
+    const pkgRate    = lkv.getValue(MI_TAG_IDS.PKG_RATE)     as number[];
+    const status     = lkv.getValue(MI_TAG_IDS.STATUS)       as number[];
+    const tagsPerPkg = lkv.getValue(MI_TAG_IDS.TAGS_PER_PKG) as number[];
+
+    // Module A (index 0)
+    expect(dataRate[0]).toBeCloseTo(2.0);       // 2048 bytes / 1024 = 2 KB/s
+    expect(pkgRate[0]).toBe(10);
+    expect(tagsPerPkg[0]).toBe(5);
+    expect(status[0]).toBe(ModuleStatus.OK);
+
+    // Module B (index 1)
+    expect(dataRate[1]).toBeCloseTo(0.5);       // 512 / 1024
+    expect(pkgRate[1]).toBe(3);
+    expect(tagsPerPkg[1]).toBe(2);
+    expect(status[1]).toBe(ModuleStatus.WARNING);
+
+    // Module C (index 2)
+    expect(dataRate[2]).toBe(0);
+    expect(status[2]).toBe(ModuleStatus.FAULT);
+  });
+
+  it('missing module (not in stats) produces zeros and UNKNOWN status', () => {
+    const moduleIds = ['A', 'B'];
+    // Only A is in stats — B is missing
+    const stats = [makeModuleStats('A', { bytes_per_sec: 1024, packets_per_sec: 2, tags_in_last_packet: 3 })];
+    const { hmiTags, lkv } = makeModuleInfoSource(moduleIds, stats);
+
+    hmiTags.publishNow();
+
+    const dataRate = lkv.getValue(MI_TAG_IDS.DATA_RATE)    as number[];
+    const status   = lkv.getValue(MI_TAG_IDS.STATUS)       as number[];
+
+    expect(dataRate[1]).toBe(0);
+    expect(status[1]).toBe(ModuleStatus.UNKNOWN);
+  });
+
+  it('zero MQTT modules → 1 HMI module in arrays (watchdog length 1)', () => {
+    // No MQTT modules, but HMI itself is always included via makeModuleInfoTags
+    const { hmiTags, lkv } = makeModuleInfoSource([], []);
+
+    hmiTags.publishNow();
+
+    // HMI module is included, so arrays have length 1
+    expect((lkv.getValue(MI_TAG_IDS.DATA_RATE) as number[]).length).toBe(1);
+    expect((lkv.getValue(MI_TAG_IDS.WATCHDOG)  as number[]).length).toBe(1);
+  });
+});
+
+describe('HmiTagSource — watchdog bit packing', () => {
+  it('stalled module at index 0 sets bit 0 in word 0', () => {
+    const moduleIds = ['M0', 'M1', 'M2'];
+    const stats = [
+      makeModuleStats('M0', { stalled: true }),
+      makeModuleStats('M1'),
+      makeModuleStats('M2'),
+    ];
+    const { hmiTags, lkv } = makeModuleInfoSource(moduleIds, stats);
+
+    hmiTags.publishNow();
+
+    const watchdog = lkv.getValue(MI_TAG_IDS.WATCHDOG) as number[];
+    expect(watchdog[0] & 1).toBe(1); // bit 0
+  });
+
+  it('stalled at index 7 → bit 7 set in word 0', () => {
+    const moduleIds = Array.from({ length: 8 }, (_, i) => `M${i}`);
+    const stats = moduleIds.map((id, i) => makeModuleStats(id, { stalled: i === 7 }));
+    const { hmiTags, lkv } = makeModuleInfoSource(moduleIds, stats);
+
+    hmiTags.publishNow();
+
+    const watchdog = lkv.getValue(MI_TAG_IDS.WATCHDOG) as number[];
+    expect(watchdog[0] & (1 << 7)).toBe(1 << 7);
+  });
+
+  it('stalled at index 15 → bit 15 set in word 0', () => {
+    const moduleIds = Array.from({ length: 16 }, (_, i) => `M${i}`);
+    const stats = moduleIds.map((id, i) => makeModuleStats(id, { stalled: i === 15 }));
+    const { hmiTags, lkv } = makeModuleInfoSource(moduleIds, stats);
+
+    hmiTags.publishNow();
+
+    const watchdog = lkv.getValue(MI_TAG_IDS.WATCHDOG) as number[];
+    expect(watchdog[0] & (1 << 15)).toBe(1 << 15);
+  });
+
+  it('stalled at index 16 → bit 0 set in word 1 (rolls to second word)', () => {
+    const moduleIds = Array.from({ length: 17 }, (_, i) => `M${i}`);
+    const stats = moduleIds.map((id, i) => makeModuleStats(id, { stalled: i === 16 }));
+    const { hmiTags, lkv } = makeModuleInfoSource(moduleIds, stats);
+
+    hmiTags.publishNow();
+
+    const watchdog = lkv.getValue(MI_TAG_IDS.WATCHDOG) as number[];
+    expect(watchdog.length).toBe(2);
+    expect(watchdog[1] & 1).toBe(1); // bit 0 of word 1
+    expect(watchdog[0]).toBe(0);     // word 0 unset
+  });
+
+  it('stalled at index 31 → bit 15 set in word 1 (32 MQTT + HMI = 33 modules, 3 words)', () => {
+    const moduleIds = Array.from({ length: 32 }, (_, i) => `M${i}`);
+    const stats = moduleIds.map((id, i) => makeModuleStats(id, { stalled: i === 31 }));
+    const { hmiTags, lkv } = makeModuleInfoSource(moduleIds, stats);
+
+    hmiTags.publishNow();
+
+    const watchdog = lkv.getValue(MI_TAG_IDS.WATCHDOG) as number[];
+    // 32 MQTT + 1 HMI = 33 modules → ceil(33/16) = 3 words
+    expect(watchdog.length).toBe(3);
+    expect(watchdog[1] & (1 << 15)).toBe(1 << 15);
+  });
+
+  it('20 modules → watchdog.length === 2', () => {
+    const moduleIds = Array.from({ length: 20 }, (_, i) => `M${i}`);
+    const stats = moduleIds.map(id => makeModuleStats(id));
+    const { hmiTags, lkv } = makeModuleInfoSource(moduleIds, stats);
+
+    hmiTags.publishNow();
+
+    const watchdog = lkv.getValue(MI_TAG_IDS.WATCHDOG) as number[];
+    expect(watchdog.length).toBe(2);
+  });
+
+  it('indices 0, 7, 15, 16, 31 stalled → correct bits in both words', () => {
+    const moduleIds = Array.from({ length: 32 }, (_, i) => `M${i}`);
+    const stalledIdx = new Set([0, 7, 15, 16, 31]);
+    const stats = moduleIds.map((id, i) => makeModuleStats(id, { stalled: stalledIdx.has(i) }));
+    const { hmiTags, lkv } = makeModuleInfoSource(moduleIds, stats);
+
+    hmiTags.publishNow();
+
+    const watchdog = lkv.getValue(MI_TAG_IDS.WATCHDOG) as number[];
+    const expectedWord0 = (1 << 0) | (1 << 7) | (1 << 15);
+    const expectedWord1 = (1 << 0) | (1 << 15); // indices 16 and 31 → bits 0 and 15 in word 1
+    expect(watchdog[0]).toBe(expectedWord0);
+    expect(watchdog[1]).toBe(expectedWord1);
+  });
+});
+
+describe('HmiTagSource — status string mapping', () => {
+  function statusFor(statusStr: string | undefined): number {
+    const moduleIds = ['M1'];
+    const stats = statusStr !== undefined
+      ? [makeModuleStats('M1', { status: statusStr })]
+      : [];
+    const { hmiTags, lkv } = makeModuleInfoSource(moduleIds, stats);
+    hmiTags.publishNow();
+    return (lkv.getValue(MI_TAG_IDS.STATUS) as number[])[0];
+  }
+
+  it('"OK" → ModuleStatus.OK',      () => expect(statusFor('OK')).toBe(ModuleStatus.OK));
+  it('"ONLINE" → ModuleStatus.OK',  () => expect(statusFor('ONLINE')).toBe(ModuleStatus.OK));
+  it('"WARNING" → ModuleStatus.WARNING', () => expect(statusFor('WARNING')).toBe(ModuleStatus.WARNING));
+  it('"FAULT" → ModuleStatus.FAULT',     () => expect(statusFor('FAULT')).toBe(ModuleStatus.FAULT));
+  it('"STALLED" → ModuleStatus.STALLED', () => expect(statusFor('STALLED')).toBe(ModuleStatus.STALLED));
+  it('unknown string → UNKNOWN',         () => expect(statusFor('GARBAGE')).toBe(ModuleStatus.UNKNOWN));
+  it('undefined (missing module) → UNKNOWN', () => {
+    // Module is in moduleIds but NOT in stats, so s is undefined in the loop
+    const moduleIds = ['M1'];
+    const { hmiTags, lkv } = makeModuleInfoSource(moduleIds, []); // empty stats
+    hmiTags.publishNow();
+    const status = lkv.getValue(MI_TAG_IDS.STATUS) as number[];
+    expect(status[0]).toBe(ModuleStatus.UNKNOWN);
   });
 });

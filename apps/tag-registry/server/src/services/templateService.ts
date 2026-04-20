@@ -10,6 +10,8 @@ import {
   hashTemplate,
   validateTemplate,
   validateGraph,
+  validateResolvedTags,
+  resolveRegistry,
   simulateCascade,
   applyFieldCascade,
   ERROR_CODES,
@@ -549,6 +551,22 @@ export async function validateAll(): Promise<ValidateAllResult> {
   const graphResult = validateGraph(templates);
   errors.push(...graphResult.errors);
   warnings.push(...graphResult.warnings);
+
+  // Find root templates (not referenced as a child by any other template) and
+  // validate resolved tags against semantic rules that only apply post-resolution.
+  const allChildNames = new Set<string>();
+  for (const [, entry] of templateIndex.entries()) {
+    for (const child of (entry.template.children ?? [])) {
+      if (child.template_name) allChildNames.add(child.template_name);
+    }
+  }
+  const rootNames = [...templateIndex.keys()].filter(n => !allChildNames.has(n));
+  for (const rootName of rootNames) {
+    const resolvedTags = resolveRegistry(templates, rootName);
+    const resolvedResult = validateResolvedTags(resolvedTags);
+    errors.push(...resolvedResult.errors);
+    warnings.push(...resolvedResult.warnings);
+  }
 
   const valid = errors.length === 0 && warnings.length === 0;
 

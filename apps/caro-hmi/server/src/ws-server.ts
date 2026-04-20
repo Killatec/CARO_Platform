@@ -1,6 +1,6 @@
 import http from 'http';
 import { WebSocket, WebSocketServer } from 'ws';
-import type { LkvCache } from './lkv.js';
+import type { LkvCache, LkvValue } from './lkv.js';
 import type { DutyTracker } from './duty-tracker.js';
 
 interface WsClient {
@@ -81,7 +81,7 @@ export class WsServer {
         for (const id of msg.tagIds) client.subscriptions.add(id);
 
         // Snapshot only the newly subscribed tags
-        const values: Record<string, number | boolean | string | null> = {};
+        const values: Record<string, LkvValue> = {};
         for (const id of newTagIds) {
           values[String(id)] = this.lkv.getValue(id);
           client.lastSentGen.set(id, this.lkv.getGeneration(id));
@@ -110,7 +110,7 @@ export class WsServer {
       for (const client of this.clients) {
         if (client.ws.readyState !== WebSocket.OPEN) continue;
 
-        const delta: Record<string, number | boolean | string | null> = {};
+        const delta: Record<string, LkvValue> = {};
 
         for (const tagId of client.subscriptions) {
           const currentGen = this.lkv.getGeneration(tagId);

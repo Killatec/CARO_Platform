@@ -1,4 +1,4 @@
-import { MAX_TAG_PATH_LENGTH, DEFAULT_DATA_TYPE, NUMERIC_DATA_TYPES } from './constants.js';
+import { MAX_TAG_PATH_LENGTH, DEFAULT_DATA_TYPE, TYPES_WITH_UNIT, type DataType } from './constants.js';
 import type { Template, TemplateEntry, MetaLevel, ResolvedTag } from './types.js';
 import { extractTemplate } from './types.js';
 
@@ -132,12 +132,12 @@ export function resolveRegistry(
       const moduleTypeRaw = moduleLevel?.fields?.Module_Type;
 
       const resolvedDataType = typeof resolvedFields.data_type === 'string' ? resolvedFields.data_type : DEFAULT_DATA_TYPE;
-      const isNumeric = NUMERIC_DATA_TYPES.has(resolvedDataType);
+      const hasUnit = TYPES_WITH_UNIT.has(resolvedDataType as DataType);
 
-      const rawUnit   = isNumeric ? resolveDisplayField('unit',    meta, assetPath) : null;
-      const rawFormat = isNumeric ? resolveDisplayField('format',  meta, assetPath) : null;
-      const rawMin    = isNumeric ? resolveDisplayField('eng_min', meta, assetPath) : null;
-      const rawMax    = isNumeric ? resolveDisplayField('eng_max', meta, assetPath) : null;
+      const rawUnit   = hasUnit ? resolveDisplayField('unit',    meta, assetPath) : null;
+      const rawFormat = hasUnit ? resolveDisplayField('format',  meta, assetPath) : null;
+      const rawMin    = hasUnit ? resolveDisplayField('eng_min', meta, assetPath) : null;
+      const rawMax    = hasUnit ? resolveDisplayField('eng_max', meta, assetPath) : null;
 
       tags.push({
         tag_path,

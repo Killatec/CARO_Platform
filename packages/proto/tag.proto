@@ -1,10 +1,16 @@
 syntax = "proto3";
 
+message FloatArray { repeated float values = 1; }
+message Int32Array { repeated int32 values = 1; }
+
 message TagValue {
   oneof value {
-    float  float_value = 1;
-    bool   bool_value  = 3;
-    int32  int_value   = 4;
+    float      float_value       = 1;
+    bool       bool_value        = 3;
+    int32      int_value         = 4;
+    string     string_value      = 5;
+    FloatArray float_array_value = 6;
+    Int32Array int_array_value   = 7;
   }
 }
 

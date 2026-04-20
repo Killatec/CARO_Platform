@@ -1,5 +1,52 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { LkvCache } from '../lkv.js';
+import { LkvCache, valuesEqual } from '../lkv.js';
+
+describe('valuesEqual', () => {
+  it('equal scalars return true', () => {
+    expect(valuesEqual(42, 42)).toBe(true);
+    expect(valuesEqual(true, true)).toBe(true);
+    expect(valuesEqual('hello', 'hello')).toBe(true);
+  });
+
+  it('unequal scalars return false', () => {
+    expect(valuesEqual(1, 2)).toBe(false);
+    expect(valuesEqual(true, false)).toBe(false);
+    expect(valuesEqual('a', 'b')).toBe(false);
+  });
+
+  it('both null returns true', () => {
+    expect(valuesEqual(null, null)).toBe(true);
+  });
+
+  it('null on left returns false', () => {
+    expect(valuesEqual(null, 5)).toBe(false);
+    expect(valuesEqual(null, [1, 2])).toBe(false);
+  });
+
+  it('null on right returns false', () => {
+    expect(valuesEqual(5, null)).toBe(false);
+    expect(valuesEqual([1, 2], null)).toBe(false);
+  });
+
+  it('equal arrays return true', () => {
+    expect(valuesEqual([1, 2, 3], [1, 2, 3])).toBe(true);
+    expect(valuesEqual([], [])).toBe(true);
+  });
+
+  it('length mismatch returns false (early exit)', () => {
+    expect(valuesEqual([1, 2], [1, 2, 3])).toBe(false);
+    expect(valuesEqual([1, 2, 3], [1, 2])).toBe(false);
+  });
+
+  it('element mismatch returns false (first-mismatch early exit)', () => {
+    expect(valuesEqual([1, 99, 3], [1, 2, 3])).toBe(false);
+  });
+
+  it('scalar vs array returns false', () => {
+    expect(valuesEqual(1, [1])).toBe(false);
+    expect(valuesEqual([1], 1)).toBe(false);
+  });
+});
 
 describe('LkvCache', () => {
   let cache: LkvCache;
@@ -89,5 +136,25 @@ describe('LkvCache', () => {
     cache.set(1, 9.9);
     expect(cache.getGeneration(2)).toBe(1);
     expect(cache.getGeneration(1)).toBe(2);
+  });
+
+  it('set() with equal array (new allocation) returns false and generation unchanged', () => {
+    cache.set(1, [1, 2, 3]);
+    const changed = cache.set(1, [1, 2, 3]);
+    expect(changed).toBe(false);
+    expect(cache.getGeneration(1)).toBe(1);
+  });
+
+  it('set() with different array element bumps generation', () => {
+    cache.set(1, [1, 2, 3]);
+    const changed = cache.set(1, [1, 99, 3]);
+    expect(changed).toBe(true);
+    expect(cache.getGeneration(1)).toBe(2);
+  });
+
+  it('set() with longer array bumps generation', () => {
+    cache.set(1, [1, 2]);
+    const changed = cache.set(1, [1, 2, 3]);
+    expect(changed).toBe(true);
   });
 });

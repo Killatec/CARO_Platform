@@ -1,5 +1,5 @@
 # CARO_Platform — Platform Handoff
-**Updated:** 2026-04-15 | **Root:** `C:\KillaTec\CARO_Platform` | **GitHub:** `Killatec/CARO_Platform` | **Branch:** `dev`
+**Updated:** 2026-04-19 | **Root:** `C:\KillaTec\CARO_Platform` | **GitHub:** `Killatec/CARO_Platform` | **Branch:** `dev`
 
 ---
 
@@ -9,7 +9,7 @@
 |---|---|---|---|
 | Tag Registry | 3001 | 5173 | Complete |
 | MQTT Simulator | 3002 | 5174 | Active development |
-| CARO HMI | 3003 | 5175 | Phase 3 complete — server core + client shell + 6 demo pages (Overview, Beam-1, RF Control, Power, Cooling, Summary). Hash-based page persistence. 15 shared box components. E2E pipeline working. MqttBridge scoped to MQTT-only modules. CmdController routes writes/resets by module_type. ResetBus fans out system reset to registered subsystems. |
+| CARO HMI | 3003 | 5175 | Phase 3 complete + Module_Info arc complete — server core + client shell + 6 demo pages. HmiTagSource publishes Module_Info arrays (Status, Data_Rate, Pkg_Rate, Tags_Per_Pkg, Watchdog, Module_Count) every tick. ModuleInfoTable WS-driven widget replaces HTTP-polled ModuleStatusTable. HmiContextProvider split into HmiDataContext (stable) + HmiStatsContext (1 Hz) to eliminate subscription churn. MqttBridge scoped to MQTT-only modules. CmdController routes writes/resets by module_type. ResetBus fans out system reset. |
 
 ---
 
@@ -23,7 +23,7 @@
 | `@caro/proto` | `packages/proto/` | Shared Protobuf schemas (`tag.proto`) |
 | `@caro/hmi-context` | `packages/hmi-context/` | HMI React context, hooks (useLiveValue, useTagWriter, useTagMap, useTagSubtree, useResolveAssetPath), MockHmiProvider |
 | `@caro/widgets` | `packages/widgets/` | HMI widget components (NumericMon, NumericSet, BooleanMon, BooleanSet, AnalogIn, Timer). Timer is a Set/Mon/Done composite widget. |
-| `@caro/tag-registry-shared` | `apps/tag-registry/shared/` | Tag Registry shared validation, types, and utilities |
+| `@caro/tag-registry-shared` | `apps/tag-registry/shared/` | Tag Registry shared validation, types, and utilities. Exports: `validateTemplate`, `validateGraph`, `validateResolvedTags`, `resolveRegistry`, `simulateCascade`, `applyFieldCascade`, `validateParentTypes`, `getModuleNames`, `packedBit`/`setPackedBit`, `ModuleStatus`/`ModuleStatusLabels`. |
 
 ---
 
@@ -64,7 +64,7 @@
 
 Schema spec: `docs/CARO_DB_Spec.md`
 Migrations: `db/postgres/migrations/` — never edit existing files, add new ones only.
-Applied: `001` `002` `003` `004` `006` `007` `008` `009` `010` `011` `012`
+Applied: `001` `002` `003` `004` `006` `007` `008` `009` `010` `011` `012` `013` `014`
 
 HMI tables (`users`, `sessions`, `commissioned_modules`, `operation_modes`, `mode_revisions`, `setpoint_values`, `pending_setpoint_values`, `system_settings`, `audit_log`) specified in DB Spec, not yet migrated. Create when HMI development starts.
 

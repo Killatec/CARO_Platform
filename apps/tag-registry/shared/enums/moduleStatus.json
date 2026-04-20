@@ -1,0 +1,7 @@
+{
+  "UNKNOWN": 0,
+  "OK":      1,
+  "WARNING": 2,
+  "FAULT":   3,
+  "STALLED": 4
+}

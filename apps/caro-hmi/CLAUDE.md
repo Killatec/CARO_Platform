@@ -45,7 +45,7 @@ Prerequisites: PostgreSQL running with tag registry populated, Mosquitto on 1883
 | Shell | `client/src/shell/` | Header, NavTree, ContentArea. Generic HMI chrome. |
 | HMI Definitions | `client/src/hmi-definitions/` | Machine-specific nav trees and page components. Currently `demo/` only. |
 | Demo Page | `client/src/hmi-definitions/demo/pages/OverviewPage.tsx` | NumericMon × 4, BooleanMon × 3, NumericSet × 2 with WidgetErrorBoundary wrappers. |
-| Module Status Table | `client/src/components/ModuleStatusTable.tsx` | Fetches `GET /api/v1/modules/status` on a polling interval (default 1s). Renders per-module stats: status, packets/s, KB/s, tag count, stalled indicator. |
+| Module Info Table | `client/src/components/ModuleInfoTable.tsx` | WS-driven. Subscribes to six `CARO_1.HMI.Module_Info.*` tags via `useLiveValue`. Renders per-module: name, status, packets/s, KB/s, tags/pkt, packed-bit watchdog indicator. |
 
 Client is a standard Vite React app. `vite.config.ts` proxies `/api` and `/ws` to the server on port 3003.
 
@@ -58,7 +58,7 @@ Client is a standard Vite React app. `vite.config.ts` proxies `/api` and `/ws` t
 - **Numeric formatting:** `resolveFormat(tag)` calls `compileFormat(pattern)` once at widget mount. Supports `"#.##"` (fixed-point) and `"#.##E+0"` (exponential) patterns. Numeric `format` values are backward-compatible (treated as decimal count). Default: `"#.##"`.
 - **WS pipeline is pull-based** (generation comparison per client per tick). DB pipeline is push-based (TelemetryIntake enqueues directly on every ingest call).
 - **TelemetryIntake is the universal ingest entry point.** MqttBridge and HmiTagSource are both adapters. `ingest(moduleId, message)` handles LKV writes, watchdog updates, and DB pipeline enqueue.
-- **HmiTagSource uses Proxy for typed property access** (e.g., `hmiTags.Module_Count = 11`). Property names derived from tag_path by stripping the module segment and joining remaining segments with `_`. Publishes to TelemetryIntake every 250ms (env: `HMI_PUBLISH_INTERVAL_MS`).
+- **HmiTagSource uses Proxy for typed property access** (e.g., `hmiTags.Module_Info_Module_Count = 11`). Property names derived from tag_path by stripping the module segment and joining remaining segments with `_`. Publishes to TelemetryIntake every 250ms (env: `HMI_PUBLISH_INTERVAL_MS`).
 - **Auth is stubbed** — all connections accepted in dev mode.
 - **Setpoint write flow:** Widget → `useTagWriter.write()` → `HmiContextProvider.writeTag()` → `POST /api/v1/tags/write` → `CommandPublisher.publish()` → MQTT SET_VALUES → CMD_ACK → resolve/reject. On `accepted: false`, `writeTag()` throws so the error surfaces in the widget's error display.
 - **No visual pending state on write widgets.** `BooleanSet` and `NumericSet` look identical during writes — no spinner, no opacity change. Double-click prevention only: button/input disabled while `isWriting` (via `useWriteGuard`).

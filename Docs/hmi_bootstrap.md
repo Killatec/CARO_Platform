@@ -82,9 +82,12 @@ LKV cache
   → WS server (8 Hz tick, per-client generation diff)
     → Browser WebSocket
       → HmiContextProvider (batched SUBSCRIBE)
-        → useLiveValue(tagId) → widget re-render
+          → HmiDataContext (tagMap, getLiveValue, subscribeLiveValue, writeTag — stable)
+          → HmiStatsContext (wsStats — updates every 1 s)
+        → useLiveValue(tagId) → widget re-render  [depends on HmiDataContext only]
 
 > **Note:** `HmiContextProvider` returns `null` (renders nothing) until the REST tag map fetch completes (`tagMapLoaded = true`). Children do not mount until tags are available, preventing widgets from throwing "no tags found" before the map is populated.
+> **Note:** `HmiContextProvider` is split into `HmiDataContext` (stable) and `HmiStatsContext` (1 Hz). `useLiveValue`'s `useEffect` depends only on `HmiDataContext`, so stats ticks do not trigger unsubscribe/re-subscribe churn.
 > **Note:** `TelemetryIntake.ingest()` is the universal entry point for all telemetry regardless of source. MqttBridge and HmiTagSource are both adapters that call it. Future adapters (OPC-UA, Modbus, REST pollers) follow the same pattern.
 ```
 
@@ -115,8 +118,7 @@ apps/caro-hmi/
 │       ├── tag-map.ts           # Tag registry loader, meta field resolution
 │       ├── command-publisher.ts  # SET_VALUES command lifecycle: publish, ACK tracking, timeout
 │       ├── routes/
-│       │   ├── tags.ts          # GET /api/v1/tags + POST /api/v1/tags/write
-│       │   └── modules.ts       # GET /api/v1/modules/status
+│       │   └── tags.ts          # GET /api/v1/tags + POST /api/v1/tags/write
 │       └── middleware/
 │           └── auth-stub.ts     # Placeholder auth — accepts all
 ├── client/
@@ -128,7 +130,7 @@ apps/caro-hmi/
 │       ├── main.tsx             # Entry — HmiContextProvider wraps App
 │       ├── App.tsx              # Routes to Shell
 │       ├── components/
-│       │   └── ModuleStatusTable.tsx  # Per-module telemetry stats (polls /api/v1/modules/status)
+│       │   └── ModuleInfoTable.tsx    # WS-driven. Subscribes to six CARO_1.HMI.Module_Info.* tags via useLiveValue
 │       ├── shell/
 │       │   ├── Shell.tsx        # Layout: Header + NavTree + ContentArea
 │       │   ├── Header.tsx

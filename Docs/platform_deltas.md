@@ -13,4 +13,3 @@ Read once at session start alongside `Docs/platform_handoff.md`.
 **Detail:** Migrations for `users`, `sessions`, `commissioned_modules`, `operation_modes`, `mode_revisions`, `setpoint_values`, `pending_setpoint_values`, `system_settings`, `audit_log` not yet created. Will be added when HMI development begins.
 
 ---
-

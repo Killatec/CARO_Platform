@@ -1,0 +1,50 @@
+{
+  "template_name": "Module_Info",
+  "template_type": "HMI",
+  "fields": {},
+  "children": [
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Module_Count",
+      "fields": {
+        "data_type": "i16",
+        "Trends": false,
+        "format": "#"
+      }
+    },
+    {
+      "template_name": "Int16_Array",
+      "asset_name": "Status",
+      "fields": {
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "Float_Array",
+      "asset_name": "Data_Rate",
+      "fields": {
+        "Trends": false,
+        "unit": "kB/s"
+      }
+    },
+    {
+      "template_name": "Int16_Array",
+      "asset_name": "Watchdog",
+      "fields": {}
+    },
+    {
+      "template_name": "Int16_Array",
+      "asset_name": "Tags_Per_Pkg",
+      "fields": {
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "Float_Array",
+      "asset_name": "Pkg_Rate",
+      "fields": {
+        "unit": "Hz"
+      }
+    }
+  ]
+}

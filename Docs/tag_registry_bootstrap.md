@@ -157,7 +157,7 @@ Returns `[{ tag_path, module, module_type, data_type, is_setpoint, trends, unit,
 - First segment of every `tag_path` is `rootName` (not the literal string `'root'`).
 - Extracts `.default` from field definitions before merging with instance overrides.
 - `module` is the `asset_name` of the nearest ancestor with `template_type: "module"` (null if none). `module_type` is the `Module_Type` field value from that ancestor (null if none).
-- Display columns `unit`, `format`, `eng_min`, `eng_max` are resolved by `resolveDisplayField` (see below). They are `null` for tags whose `data_type` is not in `NUMERIC_DATA_TYPES` (`shared/constants.ts`: `new Set(['f32', 'i16'])`).
+- Display columns `unit`, `format`, `eng_min`, `eng_max` are resolved by `resolveDisplayField` (see below). They are `null` for tags whose `data_type` is not in `TYPES_WITH_UNIT` (`shared/constants.ts`: `new Set(['f32', 'i16', 'f32[]', 'i16[]'])`).
 
 **`resolveDisplayField(fieldName, meta, assetPath)`** — path-aware display column resolver. Replaces the removed helpers `extractDottedFields` and `firstMatch`.
 - Walks `meta[0]` → `meta[last]` (root-to-tag). At each level `i`, computes `relPath = assetPath.slice(i)` — the path segments from that level's node down to the tag.
@@ -167,6 +167,18 @@ Returns `[{ tag_path, module, module_type, data_type, is_setpoint, trends, unit,
 
 **`hashTemplate(template)`**
 Returns 6-character hex SHA-1 string.
+
+**`validateResolvedTags(resolvedTags)`**
+Returns `{ errors: string[] }`. Post-resolution cross-field rules: `trends: true` only on `f32`, `i16`, `bool`; `is_setpoint: true` only on scalar types. Called by `useValidation` after each `resolveRegistry` and by the server on batch save.
+
+**`getModuleNames(tagMap)`**
+Returns `string[]` — distinct `module_id` values from the tag map, sorted by each module's minimum `tag_id`. Used by `HmiTagSource` and `ModuleInfoTable` for consistent module index assignment.
+
+**`packedBit(words, bitIndex)` / `setPackedBit(words, bitIndex, value)`**
+LSB-first read/write of a single bit in a `number[]` word array (16 bits per word). Used for the `Module_Info.Watchdog` packed-bit indicator array.
+
+**`ModuleStatus` / `ModuleStatusLabels`**
+Const enum (`UNKNOWN=0`, `OK=1`, `WARNING=2`, `FAULT=3`, `STALLED=4`) and display-label map. Shared between `HmiTagSource` producer and `ModuleInfoTable` widget.
 
 **`deepEqual(a, b)` / `deepNotEqual(a, b)`**
 JSON.stringify-based deep equality.
@@ -298,7 +310,7 @@ Called by `save()`, `confirmSave()`, `discard()` when `rootTemplateName` is null
 
 ## 8. `useValidation` Hook
 
-Runs `validateTemplate`, `validateGraph`, `validateParentTypes` synchronously on every `templateMap` change. No server call. No debounce. `EMPTY_BRANCH` declared in `constants.js` but not yet emitted by any validation function.
+Runs `validateTemplate`, `validateGraph`, `validateParentTypes`, and `validateResolvedTags` synchronously on every `templateMap` change. `validateResolvedTags` is called after `resolveRegistry` to enforce cross-field constraints (trendable types, array setpoints). No server call. No debounce. `EMPTY_BRANCH` declared in `constants.js` but not yet emitted by any validation function.
 
 ---
 
@@ -306,10 +318,9 @@ Runs `validateTemplate`, `validateGraph`, `validateParentTypes` synchronously on
 
 ### `AssetTree` / `TreeNode`
 - System Tree header is `flex items-center justify-between`. A `↓` Export button sits on the right; it renders only when `rootTemplateName` is non-null. `onClick` calls `exportTree(templateMap, rootTemplateName)`, serializes to JSON, and triggers a browser download of `{rootTemplateName}_tree.json` via the anchor-click-revoke pattern (no external libs).
-- Expanded/collapsed state is **local** to each `TreeNode` via `useState`. Not lifted to `AssetTree` or any store.
-- Root node initialises `useState(true)` (expanded); all child nodes initialise `useState(false)` (collapsed). Determined by `parentTemplateName === null` at mount time.
-- Collapsing a parent unmounts its subtree (`{isExpanded && hasChildren && ...}`). Re-expanding remounts children fresh → always collapsed.
-- `AssetTree` passes `key={rootTemplateName}` to the root `TreeNode`, ensuring a full remount (and state reset) whenever the selected root changes.
+- Expanded/collapsed state is persisted via `useTreeExpandStore` (Zustand + `persist` middleware, key `caro.tag-registry.tree-expand`). On first visit (no stored state), the root node starts expanded and all children start collapsed. On subsequent visits, the store restores the previous expand/collapse state per node.
+- Collapsing a parent unmounts its subtree (`{isExpanded && hasChildren && ...}`). Re-expanding remounts children with their stored state.
+- `AssetTree` passes `key={rootTemplateName}` to the root `TreeNode`. Switching roots remounts the tree, but the store retains state for each root independently so a previously visited root reopens at its last state.
 - Non-`tag` nodes are valid drop targets. `handleDrop` is async — reads parent template via `getState()` after `await` to avoid stale closure.
 - Dirty nodes: `font-semibold text-orange-700`.
 - **Drag-and-drop reorder:** Each non-root row is draggable. Three drop zones: top 8 px = insert before (sibling), bottom 8 px = insert after (sibling), body = add child (existing). Root nodes are body-only; tag nodes are top/bottom only. Cross-parent drops are blocked (`computeDropZone` returns `'none'` when `data.parentTemplateName !== parentTemplateName`). `onDragOver` cannot read `dataTransfer` values (HTML5 DnD security restriction) — uses module-level `getActiveDragData()` from `dragTypes.ts` instead. `onDrop` reads via `parseDragData(e)` which does have transfer access.

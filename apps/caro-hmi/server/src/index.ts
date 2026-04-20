@@ -76,7 +76,7 @@ async function start(): Promise<void> {
     },
   });
   hmiTags.startPublishing();
-  hmiTags.Module_Count = moduleTagIds.size;
+  hmiTags.Module_Info_Module_Count = moduleTagIds.size;
   hmiTags.Tag_Count    = tagMap.size;
   const hmiTagCount = rows.filter(r => r.module_type === 'HMI').length;
   console.log(`[HMI] HMI tag source: ${hmiTagCount} tags, publishing every ${config.hmiPublishIntervalMs}ms`);
@@ -107,7 +107,7 @@ async function start(): Promise<void> {
   resetBus.register('module-reset', () => cmdController.sendResetAll());
 
   // 6. Express app + HTTP server
-  const app = createApp(tagMap, intake, cmdController, resetBus);
+  const app = createApp(tagMap, cmdController, resetBus);
   const httpServer = http.createServer(app);
 
   // 7. WS server

@@ -5,8 +5,9 @@ import {
   applyRegistryRevision,
 } from '@caro/db';
 import type { ActiveTag, RevisionRow, RevisionTag, NewTagInput, ExistingTagInput, ApplyResult } from '@caro/db';
-import { resolveRegistry, deepEqual } from '@caro/tag-registry-shared';
-import type { Template } from '@caro/tag-registry-shared';
+import { resolveRegistry, validateResolvedTags, deepEqual, ERROR_CODES } from '@caro/tag-registry-shared';
+import type { Template, ResolvedTag } from '@caro/tag-registry-shared';
+import type { CaroError } from '@caro/server/errorHandler';
 
 // ── Return types ──────────────────────────────────────────────────────────────
 
@@ -35,7 +36,21 @@ export async function applyRegistry(
   comment: string
 ): Promise<ApplyRegistryResult> {
   // 1. Resolve proposed registry server-side — do not trust client-supplied data
-  const proposed: NewTagInput[] = resolveRegistry(templateMap, rootName) as NewTagInput[];
+  const resolved: ResolvedTag[] = resolveRegistry(templateMap, rootName);
+
+  // 1a. Validate resolved tags before any DB access
+  const resolvedValidation = validateResolvedTags(resolved);
+  if (resolvedValidation.errors.length > 0) {
+    const err = new Error(
+      resolvedValidation.errors.map(e => e.message).join('; ')
+    ) as CaroError;
+    err.code = ERROR_CODES.SCHEMA_VALIDATION_ERROR;
+    err.status = 422;
+    err.details = resolvedValidation.errors;
+    throw err;
+  }
+
+  const proposed: NewTagInput[] = resolved as unknown as NewTagInput[];
 
   // 2. Get current DB tags
   const dbTags = await getActiveTags();

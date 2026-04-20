@@ -6,7 +6,7 @@ import type { DutyTracker } from './duty-tracker.js';
 export interface TelemetryMessage {
   timestamp: number;
   status: string;
-  tags: { tag_id: number; value: number | boolean | string | null }[];
+  tags: { tag_id: number; value: number | boolean | string | number[] | null }[];
 }
 
 export interface TelemetryIntakeDeps {
@@ -83,7 +83,10 @@ export class TelemetryIntake {
     for (const { tag_id, value } of message.tags) {
       if (!this.tagMap.has(tag_id)) continue;
       const changed = this.lkv.set(tag_id, value);
-      if (changed && this.trendableTagIds.has(tag_id)) {
+      // Defense in depth: the resolved-tag validator already excludes array types
+      // from trendable tags, but this guard ensures that if validation is ever bypassed
+      // (e.g. direct DB writes), an array value still cannot reach the db-pipeline queue.
+      if (changed && this.trendableTagIds.has(tag_id) && !Array.isArray(value)) {
         changedTrendable.push({ tagId: tag_id, value });
       }
     }

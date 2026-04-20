@@ -5,6 +5,6 @@
     "rootDir": ".",
     "types": ["node"]
   },
-  "include": ["*.ts"],
+  "include": ["*.ts", "__tests__/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }
