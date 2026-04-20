@@ -81,7 +81,7 @@ HmiTagSource (250ms timer, module_type='HMI' tags)
 LKV cache
   → WS server (8 Hz tick, per-client generation diff)
     → Browser WebSocket
-      → HmiContextProvider (batched SUBSCRIBE)
+      → HmiContextProvider (reconciled SUBSCRIBE / UNSUBSCRIBE)
           → HmiDataContext (tagMap, getLiveValue, subscribeLiveValue, writeTag — stable)
           → HmiStatsContext (wsStats — updates every 1 s)
         → useLiveValue(tagId) → widget re-render  [depends on HmiDataContext only]

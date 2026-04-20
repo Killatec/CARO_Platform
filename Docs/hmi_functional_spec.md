@@ -12,6 +12,7 @@ Tag Registry Functional Spec | CARO_MQTT_Spec | CARO_DB_Spec | hmi_widget_spec
 |---|---|---|---|
 | 2.4 | 2026-03-28 | PM / Claude | Pending setpoint architecture redesigned: audit_log table added (Section 8.6); pending_setpoint_values simplified to (tag_id, value, set_by, set_at) — cmd_status, command_id, rejection_code removed; changeset flow updated (Section 5.2) — backend logs request before MQTT publish, 1-second ACK timeout, pending updated only on accepted ACK via epsilon comparison against active mode revision; mode activation clears pending table entirely; out-of-sync latch redesigned — first good→bad transition logged only, any logged-in user resets, telemetry never writes to pending; OI-09 resolved. |
 | 2.5 | 2026-04-19 | PM / Claude | §10.0: HmiDataContext extended with `tagPathIndex`; tagPathIndex lifecycle paragraph added. useLiveValue mount-effect optimization documented. Matches perf commits be308f5 and cceb114. |
+| 2.6 | 2026-04-20 | PM / Claude | §10.1, §10.2: WS subscription model updated to reflect level-triggered reconciler (`desiredRef`/`serverRef`, microtask-batched flush, same-tick cancel). Matches perf commit 4977f4f. |
 
 ---
 
@@ -678,8 +679,8 @@ The client wraps the application in `HmiContextProvider` from `@caro/hmi-context
 |---|---|
 | Client connects | Backend authenticates session token. Connection accepted or rejected. |
 | Client sends SUBSCRIBE | Backend sends SnapshotMessage for requested tag_ids, then begins streaming DeltaMessages for changed tags at up to 10 Hz. |
-| Widget mounts | Auto-subscription context adds its tag_ids to the unified subscription set and sends an updated SUBSCRIBE message. |
-| Widget unmounts | Auto-subscription context removes its tag_ids and sends an updated SUBSCRIBE message (or UNSUBSCRIBE if set is now empty). |
+| Widget mounts | Reconciler adds the tag_id to `desiredRef` and schedules a microtask flush. If the tag_id is not yet in `serverRef`, the next flush emits a batched `SUBSCRIBE` containing this and any other newly-desired tag_ids. |
+| Widget unmounts | Reconciler decrements the subscriber refcount for the tag_id. When it hits zero, the tag_id is removed from `desiredRef` and a flush is scheduled; the next flush emits a batched `UNSUBSCRIBE` containing this and any other newly-unwanted tag_ids. |
 | Client sends PING | Backend responds with PONG carrying the original timestamp for latency measurement. Ping interval: 5 seconds. |
 | Connection drops | Backend marks all subscribed tags as quality=bad in the client's view. Client auto-reconnects after 3 seconds. On reconnect, a fresh SnapshotMessage is sent before deltas resume. |
 
@@ -689,8 +690,8 @@ The frontend uses a `TagSubscriptionContext` provider that wraps the entire appl
 
 - Tracks which tag_ids each mounted widget has registered as a dependency.
 - Maintains a single unified WebSocket subscription for all widgets — one connection shared across all components.
-- Debounces subscription updates by 100 ms to avoid subscription churn during rapid mounts and unmounts.
-- Sends a single SUBSCRIBE message containing all currently needed tag_ids whenever the set changes.
+- Batches subscription changes via a microtask-scheduled reconciler. All subscribe/unsubscribe calls within a single tick collapse to at most one SUBSCRIBE and one UNSUBSCRIBE message on the wire, with same-tick sub/unsub of the same tag_id cancelling out.
+- On each flush, emits a batched SUBSCRIBE containing only newly-desired tag_ids and a batched UNSUBSCRIBE containing only newly-unwanted tag_ids — computed by diffing `desiredRef` against `serverRef`.
 - Auto-unsubscribes when widgets unmount — no manual lifecycle management required in widget code.
 
 Widget implementation pattern:
