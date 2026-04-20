@@ -8,6 +8,7 @@ import { useLiveValue } from '../hooks/useLiveValue.js';
 import { useTagMap } from '../hooks/useTagMap.js';
 import { useTagWriter } from '../hooks/useTagWriter.js';
 import { useWsStats } from '../hooks/useWsStats.js';
+import { buildTagPathIndex } from '../tagPathIndex.js';
 import type { HmiDataContextValue, WsStats } from '../types.js';
 import { mockTag, mockReadbackTag } from './fixtures.js';
 
@@ -309,6 +310,7 @@ function makeStableDataValue(
 ): HmiDataContextValue {
   return {
     tagMap: new Map(),
+    tagPathIndex: buildTagPathIndex([]),
     getLiveValue: () => ({ value: null }),
     subscribeLiveValue: subscribeSpy as HmiDataContextValue['subscribeLiveValue'],
     writeTag: async () => {},

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { HmiDataContext, HmiStatsContext } from './HmiContext.js';
+import { buildTagPathIndex } from './tagPathIndex.js';
+import type { TagPathIndex } from './tagPathIndex.js';
 import type { HmiDataContextValue, LiveValue, TagDef, WsStats } from './types.js';
 
 interface HmiContextProviderProps {
@@ -12,6 +14,7 @@ interface HmiContextProviderProps {
 export function HmiContextProvider({ children, apiUrl, wsUrl }: HmiContextProviderProps) {
   // Tag map loaded from REST once on mount
   const tagMapRef = useRef<Map<number, TagDef>>(new Map());
+  const tagPathIndexRef = useRef<TagPathIndex>(buildTagPathIndex([]));
   const [tagMapLoaded, setTagMapLoaded] = useState(false);
 
   // Live values by tag_id
@@ -61,6 +64,7 @@ export function HmiContextProvider({ children, apiUrl, wsUrl }: HmiContextProvid
             map.set(tag.tag_id, tag);
           }
           tagMapRef.current = map;
+          tagPathIndexRef.current = buildTagPathIndex(map.values());
         }
         setTagMapLoaded(true);
       })
@@ -291,7 +295,7 @@ export function HmiContextProvider({ children, apiUrl, wsUrl }: HmiContextProvid
   // getLiveValue/subscribeLiveValue/writeTag are stable refs (useCallback with []).
   // wsStats is intentionally NOT here — it lives in its own context to avoid churn.
   const dataValue = useMemo<HmiDataContextValue>(
-    () => ({ tagMap: tagMapRef.current, getLiveValue, subscribeLiveValue, writeTag }),
+    () => ({ tagMap: tagMapRef.current, tagPathIndex: tagPathIndexRef.current, getLiveValue, subscribeLiveValue, writeTag }),
     [tagMapLoaded, getLiveValue, subscribeLiveValue, writeTag] // eslint-disable-line react-hooks/exhaustive-deps
   );
 

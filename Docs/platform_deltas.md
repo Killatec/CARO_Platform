@@ -13,3 +13,9 @@ Read once at session start alongside `Docs/platform_handoff.md`.
 **Detail:** Migrations for `users`, `sessions`, `commissioned_modules`, `operation_modes`, `mode_revisions`, `setpoint_values`, `pending_setpoint_values`, `system_settings`, `audit_log` not yet created. Will be added when HMI development begins.
 
 ---
+
+## Delta P-002 — tagPathIndex added to HmiDataContextValue
+
+`@caro/hmi-context: HmiDataContextValue gained \`tagPathIndex: TagPathIndex\`. Replaces linear tag-map scans in useResolveAssetPath / useTagGroup.`
+
+---

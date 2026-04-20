@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { HmiDataContext, HmiStatsContext } from './HmiContext.js';
+import { buildTagPathIndex } from './tagPathIndex.js';
 import type { HmiDataContextValue, LiveValue, TagDef, WsStats } from './types.js';
 
 interface MockHmiProviderProps {
@@ -53,6 +54,11 @@ export function MockHmiProvider({
     [tagDefs]
   );
 
+  const tagPathIndex = useMemo(
+    () => buildTagPathIndex(tagMap.values()),
+    [tagMap]
+  );
+
   const getLiveValue = useCallback(
     (tagId: number): LiveValue => valuesRef.current[tagId] ?? { value: null },
     []
@@ -64,6 +70,8 @@ export function MockHmiProvider({
         subscribersRef.current.set(tagId, new Set());
       }
       subscribersRef.current.get(tagId)!.add(callback);
+      // Synchronously deliver current value — mirrors HmiContextProvider behavior.
+      callback(valuesRef.current[tagId] ?? { value: null });
       return () => {
         subscribersRef.current.get(tagId)?.delete(callback);
       };
@@ -85,8 +93,8 @@ export function MockHmiProvider({
   );
 
   const dataValue = useMemo<HmiDataContextValue>(
-    () => ({ tagMap, getLiveValue, subscribeLiveValue, writeTag }),
-    [tagMap, getLiveValue, subscribeLiveValue, writeTag]
+    () => ({ tagMap, tagPathIndex, getLiveValue, subscribeLiveValue, writeTag }),
+    [tagMap, tagPathIndex, getLiveValue, subscribeLiveValue, writeTag]
   );
 
   return (
