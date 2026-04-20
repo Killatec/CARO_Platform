@@ -19,3 +19,9 @@ Read once at session start alongside `Docs/platform_handoff.md`.
 `@caro/hmi-context: HmiDataContextValue gained \`tagPathIndex: TagPathIndex\`. Replaces linear tag-map scans in useResolveAssetPath / useTagGroup.`
 
 ---
+
+## Delta P-003 — useLiveValue no longer writes state on mount
+
+`@caro/hmi-context: useLiveValue no longer writes state on mount; relies on synchronous initial callback from subscribeLiveValue.`
+
+---

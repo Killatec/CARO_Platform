@@ -7,8 +7,8 @@ export function useLiveValue(tagId: number): LiveValue {
   const [liveValue, setLiveValue] = useState<LiveValue>(() => ctx.getLiveValue(tagId));
 
   useEffect(() => {
-    // Sync to current value when tagId changes (may have updated since mount)
-    setLiveValue(ctx.getLiveValue(tagId));
+    // subscribeLiveValue calls back synchronously with the current value, reconciling
+    // any value that changed between the useState initializer and this effect firing.
     const unsubscribe = ctx.subscribeLiveValue(tagId, setLiveValue);
     return unsubscribe;
   }, [tagId, ctx]);
