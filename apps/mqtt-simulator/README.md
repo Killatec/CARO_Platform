@@ -9,7 +9,7 @@ Simulates one or more field modules publishing telemetry and responding to SET_V
 ```bash
 # Prerequisites: PostgreSQL running with populated tag_registry, MQTT broker on localhost:1883
 cd apps/mqtt-simulator
-cp .env.example .env   # edit PGPASSWORD
+cp .env.example .env   # edit POSTGRES_PASSWORD
 npm install
 npm run dev
 ```

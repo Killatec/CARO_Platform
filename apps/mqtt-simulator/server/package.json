@@ -6,7 +6,9 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "nodemon --ext ts,json --watch . --exec \"npx tsx index.ts\""
+    "dev": "nodemon --ext ts,json --watch . --exec \"npx tsx index.ts\"",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@caro/db": "*",

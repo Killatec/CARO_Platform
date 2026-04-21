@@ -5,8 +5,7 @@
 import { connect, getClient } from './mqttClient.js';
 import { loadTagRegistry, SimTag } from './registry.js';
 import { loadProto, encodeProto, ProtoTag } from './protobuf.js';
-
-const SINE_PERIOD_MS = 30_000; // §7: periodMs = SINE_PERIOD_S * 1000
+import { initBoolValue, advanceBoolValue, advanceF32Value, advanceI16Value } from './simGenerators.js';
 
 // ---------------------------------------------------------------------------
 // Log buffer
@@ -33,7 +32,7 @@ export function log(level: string, msg: string): void {
 // ---------------------------------------------------------------------------
 // Runtime state — populated by start()
 // ---------------------------------------------------------------------------
-interface SimTagState {
+export interface SimTagState {
   simValue: number | boolean;
   simT: number;
   lastPublishedValue: number | boolean | undefined;
@@ -115,18 +114,17 @@ function initSimState(): void {
     } else if (tag.is_setpoint) {
       simValue = tag.data_type === 'bool' ? false : 0;
     } else if (tag.data_type === 'f32') {
-      const simT = Math.random() * SINE_PERIOD_MS;
-      simValue = 50 + 25 * Math.sin((2 * Math.PI * simT) / SINE_PERIOD_MS);
-      simState.set(tag.tag_id, { simValue, simT, lastPublishedValue: undefined, previousValue: undefined });
+      const simT = Math.random() * 30_000;
+      const { value } = advanceF32Value(simT, 0);
+      simState.set(tag.tag_id, { simValue: value, simT, lastPublishedValue: undefined, previousValue: undefined });
       continue;
     } else if (tag.data_type === 'i16') {
-      const simT = Math.random() * SINE_PERIOD_MS;
-      const raw = 50 + 25 * Math.sin((2 * Math.PI * simT) / SINE_PERIOD_MS);
-      simValue = Math.max(-32768, Math.min(32767, Math.round(raw)));
-      simState.set(tag.tag_id, { simValue, simT, lastPublishedValue: undefined, previousValue: undefined });
+      const simT = Math.random() * 30_000;
+      const { value } = advanceI16Value(simT, 0);
+      simState.set(tag.tag_id, { simValue: value, simT, lastPublishedValue: undefined, previousValue: undefined });
       continue;
     } else {
-      simValue = tag.data_type === 'bool' ? false : 50.0;
+      simValue = tag.data_type === 'bool' ? initBoolValue() : 50.0;
     }
     simState.set(tag.tag_id, { simValue, simT: 0, lastPublishedValue: undefined, previousValue: undefined });
   }
@@ -135,23 +133,25 @@ function initSimState(): void {
 // ---------------------------------------------------------------------------
 // Per-tick value update (monitor tags only — setpoints change via SET_VALUES)
 // ---------------------------------------------------------------------------
-function advanceTag(tag: SimTag, state: SimTagState, deltaMs: number): void {
+export function advanceTag(tag: SimTag, state: SimTagState, deltaMs: number): void {
   if (tag.is_setpoint) return;
   if (tag.tag_path.endsWith('.Reset_Count')) return;
 
   switch (tag.data_type) {
-    case 'f32':
-      state.simT += deltaMs;
-      state.simValue = 50 + 25 * Math.sin((2 * Math.PI * state.simT) / SINE_PERIOD_MS);
+    case 'f32': {
+      const result = advanceF32Value(state.simT, deltaMs);
+      state.simT    = result.simT;
+      state.simValue = result.value;
       break;
+    }
     case 'i16': {
-      state.simT += deltaMs;
-      const raw = 50 + 25 * Math.sin((2 * Math.PI * state.simT) / SINE_PERIOD_MS);
-      state.simValue = Math.max(-32768, Math.min(32767, Math.round(raw)));
+      const result = advanceI16Value(state.simT, deltaMs);
+      state.simT    = result.simT;
+      state.simValue = result.value;
       break;
     }
     case 'bool':
-      if (Math.random() < 0.025) state.simValue = !state.simValue; // ~2.5% per tick (~4s avg toggle)
+      state.simValue = advanceBoolValue(state.simValue as boolean);
       break;
   }
 }
