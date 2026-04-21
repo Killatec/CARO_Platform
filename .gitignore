@@ -48,3 +48,6 @@ test-results/
 *.local
 
 apps/tag-registry/e2e/*.txt
+
+# TimescaleDB dev data (default TIMESCALE_DATA_DIR)
+timescale-data/
