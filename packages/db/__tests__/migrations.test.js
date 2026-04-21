@@ -33,8 +33,9 @@ describe('runMigrations — schema_migrations guard', () => {
     vi.spyOn(fs, 'readdirSync').mockReturnValue(['001_init.sql', '002_add_table.sql']);
     vi.spyOn(fs, 'readFileSync').mockReturnValue('SELECT 1;');
 
-    // query call order: CREATE TABLE, SELECT for 001, SELECT for 002
+    // query call order: advisory lock, CREATE TABLE, SELECT for 001, SELECT for 002
     query
+      .mockResolvedValueOnce({ rows: [] }) // pg_advisory_lock(1)
       .mockResolvedValueOnce({ rows: [] }) // CREATE TABLE IF NOT EXISTS
       .mockResolvedValueOnce({ rows: [] }) // SELECT check: 001 not applied
       .mockResolvedValueOnce({ rows: [] }); // SELECT check: 002 not applied
@@ -46,8 +47,8 @@ describe('runMigrations — schema_migrations guard', () => {
       { file: '001_init.sql', status: 'ok' },
       { file: '002_add_table.sql', status: 'ok' },
     ]);
-    // CREATE TABLE was the first query call
-    expect(query.mock.calls[0][0]).toMatch(/CREATE TABLE IF NOT EXISTS schema_migrations/);
+    // CREATE TABLE is the second query call (after advisory lock)
+    expect(query.mock.calls[1][0]).toMatch(/CREATE TABLE IF NOT EXISTS schema_migrations/);
     // withTransaction called once per migration
     expect(withTransaction).toHaveBeenCalledTimes(2);
   });
@@ -57,9 +58,10 @@ describe('runMigrations — schema_migrations guard', () => {
     vi.spyOn(fs, 'readFileSync').mockReturnValue('SELECT 1;');
 
     query
-      .mockResolvedValueOnce({ rows: [] })        // CREATE TABLE
+      .mockResolvedValueOnce({ rows: [] })                   // pg_advisory_lock(1)
+      .mockResolvedValueOnce({ rows: [] })                   // CREATE TABLE
       .mockResolvedValueOnce({ rows: [{ '?column?': 1 }] }) // 001 already applied
-      .mockResolvedValueOnce({ rows: [] });          // 002 not applied
+      .mockResolvedValueOnce({ rows: [] });                  // 002 not applied
     makeSuccessfulTransaction();
 
     const results = await runMigrations();
@@ -78,6 +80,7 @@ describe('runMigrations — schema_migrations guard', () => {
 
     const migrationError = new Error('syntax error at or near "SELEKT"');
     query
+      .mockResolvedValueOnce({ rows: [] })  // pg_advisory_lock(1)
       .mockResolvedValueOnce({ rows: [] })  // CREATE TABLE
       .mockResolvedValueOnce({ rows: [] }); // SELECT check: not applied
 
@@ -103,6 +106,7 @@ describe('runMigrations — Delta 004 fail-fast preserved', () => {
 
     const migrationError = new Error('syntax error at or near "SELEKT"');
     query
+      .mockResolvedValueOnce({ rows: [] }) // pg_advisory_lock(1)
       .mockResolvedValueOnce({ rows: [] }) // CREATE TABLE
       .mockResolvedValueOnce({ rows: [] }) // SELECT check: 001 not applied
       .mockResolvedValueOnce({ rows: [] }); // SELECT check: 002 not applied
@@ -136,6 +140,7 @@ describe('runMigrations — filesystem edge cases', () => {
     vi.spyOn(fs, 'readFileSync').mockReturnValue('SELECT 1;');
 
     query
+      .mockResolvedValueOnce({ rows: [] }) // pg_advisory_lock(1)
       .mockResolvedValueOnce({ rows: [] }) // CREATE TABLE
       .mockResolvedValueOnce({ rows: [] }); // SELECT check: 001 not applied
     makeSuccessfulTransaction();

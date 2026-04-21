@@ -46,7 +46,7 @@
       "template_name": "boolean_mon",
       "asset_name": "Intk",
       "fields": {
-        "Trends": false
+        "Trends": true
       }
     },
     {

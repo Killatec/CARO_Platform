@@ -1,27 +1,18 @@
-# db/timescale
+# db/timescale/migrations
 
-Reserved for TimescaleDB migrations and seed data.
+SQL migration files for the TimescaleDB database.
 
-## What this folder is for
+Files are run in filename order by `runTimescaleMigrations()` in `packages/db/timescaleMigrations.ts`. Each file is applied exactly once; applied filenames are recorded in the `schema_migrations` table inside the TimescaleDB database.
 
-TimescaleDB is the time-series storage layer planned for Phase 2 of the CARO
-Platform. It will store live tag values, historian data, and alarm records
-produced by connected SCADA/HMI systems.
+## Naming convention
 
-## How TimescaleDB relates to PostgreSQL
-
-TimescaleDB runs as a **PostgreSQL extension** — it is not a separate database
-server. The same `caro_dev` PostgreSQL instance used for the tag registry will
-host TimescaleDB hypertables once the extension is enabled:
-
-```sql
-CREATE EXTENSION IF NOT EXISTS timescaledb;
+```
+T001_<description>.sql
+T002_<description>.sql
 ```
 
-Hypertable migrations will live in `timescale/migrations/` and follow the same
-numbered SQL file convention as `db/postgres/migrations/`.
+Use the `T` prefix and zero-padded three-digit sequence numbers to distinguish these migrations from the operational DB migrations in `db/postgres/migrations/`.
 
-## Current status
+## First migration
 
-No migrations have been written yet. This folder is a placeholder.
-Migrations will be added when Phase 2 time-series work begins.
+`T001_create_tag_samples.sql` — creates the `tag_samples` hypertable.

@@ -7,3 +7,9 @@ export { getActiveTags, getRevisionTags, applyRegistryRevision, getTagTypes, get
 export type { ActiveTag, RevisionTag, NewTagInput, ExistingTagInput, ApplyResult, TagType, ModuleType } from './registry.js';
 export { getRevisions } from './revisions.js';
 export type { RevisionRow } from './revisions.js';
+export { default as timescalePool } from './timescalePool.js';
+export { runTimescaleMigrations } from './timescaleMigrations.js';
+export type { TimescaleMigrationResult } from './timescaleMigrations.js';
+export { pingTimescale, writeTagSamples } from './samples.js';
+export type { TagSampleRow } from './samples.js';
+export { getTimescaleDatabaseSizeBytes } from './stats.js';

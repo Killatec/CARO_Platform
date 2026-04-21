@@ -69,10 +69,10 @@ export default async function globalSetup() {
   // the clone step and run against the live development database.
   const targetDb = process.env.TARGET_DB ?? 'caro_test';
 
-  // Env for pg cli tools — inherit everything, override PGPASSWORD
+  // Env for pg cli tools — PGPASSWORD is the native PostgreSQL CLI convention
   const pgEnv = {
     ...process.env,
-    PGPASSWORD: testEnv.PGPASSWORD ?? process.env.PGPASSWORD ?? '',
+    PGPASSWORD: testEnv.POSTGRES_PASSWORD ?? process.env.POSTGRES_PASSWORD ?? '',
   };
 
   // ── Step 1: Clone caro_dev → targetDb (skipped when targeting caro_dev) ─────
@@ -110,9 +110,9 @@ export default async function globalSetup() {
   await assertPortFree(3099, 'Express test server');
   console.log(`[globalSetup] Starting Express test server on port 3099 (db: ${targetDb})...`);
 
-  // PGDATABASE in serverEnv is overridden by targetDb, taking precedence over
+  // POSTGRES_DATABASE in serverEnv is overridden by targetDb, taking precedence over
   // whatever is set in .env.test.
-  const serverEnv = { ...process.env, ...testEnv, NODE_ENV: 'test', PGDATABASE: targetDb };
+  const serverEnv = { ...process.env, ...testEnv, NODE_ENV: 'test', POSTGRES_DATABASE: targetDb };
 
   const serverProc = spawn('npx', ['tsx', 'src/index.ts'], {
     cwd: serverDir,

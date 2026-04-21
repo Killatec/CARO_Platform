@@ -26,16 +26,16 @@ Never add DB logic to app-level code.
 
 | Variable     | Default      | Required |
 |---|---|---|
-| `PGHOST`     | `localhost`  | no  |
-| `PGPORT`     | `5432`       | no  |
-| `PGDATABASE` | `caro_dev`   | no  |
-| `PGUSER`     | `postgres`   | no  |
-| `PGPASSWORD` | _(none)_     | yes |
+| `POSTGRES_HOST`     | `localhost`  | no  |
+| `POSTGRES_PORT`     | `5432`       | no  |
+| `POSTGRES_DATABASE` | `caro_dev`   | no  |
+| `POSTGRES_USER`     | `postgres`   | no  |
+| `POSTGRES_PASSWORD` | _(none)_     | yes |
 
 All variables are read at the time of the first database call (not at import
 time), so `dotenv.config()` in the app entry point will be in effect.
 
-`PGPASSWORD` must be set in the app's local `.env` file. It is never committed
+`POSTGRES_PASSWORD` must be set in the app's local `.env` file. It is never committed
 to source control (`.env` is in `.gitignore`).
 
 ## Adding @caro/db to a new app
@@ -47,7 +47,7 @@ to source control (`.env` is in `.gitignore`).
 
 2. Run `npm install` from the monorepo root to link the workspace package.
 
-3. Set `PGPASSWORD` (and any other overrides) in the app's `.env` file.
+3. Set `POSTGRES_PASSWORD` (and any other overrides) in the app's `.env` file.
 
 4. Import named functions only — never import `pool` or `query` directly:
    ```js

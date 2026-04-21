@@ -17,18 +17,18 @@ function getPool(): Pool {
     return _pool;
   }
 
-  if (!process.env.PGPASSWORD) {
+  if (!process.env.POSTGRES_PASSWORD) {
     console.error(
-      '[db] WARNING: PGPASSWORD is not set. Database connections will fail.'
+      '[db] WARNING: POSTGRES_PASSWORD is not set. Database connections will fail.'
     );
   }
 
   _pool = new Pool({
-    host:                    process.env.PGHOST     || 'localhost',
-    port:                    parseInt(process.env.PGPORT || '5432', 10),
-    database:                process.env.PGDATABASE || 'caro_dev',
-    user:                    process.env.PGUSER     || 'postgres',
-    password:                process.env.PGPASSWORD,
+    host:                    process.env.POSTGRES_HOST     || 'localhost',
+    port:                    parseInt(process.env.POSTGRES_PORT || '5432', 10),
+    database:                process.env.POSTGRES_DATABASE || 'caro_dev',
+    user:                    process.env.POSTGRES_USER     || 'postgres',
+    password:                process.env.POSTGRES_PASSWORD,
     max:                     10,
     idleTimeoutMillis:       30000,
     connectionTimeoutMillis: 5000,

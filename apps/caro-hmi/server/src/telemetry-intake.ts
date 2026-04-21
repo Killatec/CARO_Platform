@@ -75,7 +75,8 @@ export class TelemetryIntake {
       for (const tagId of this.moduleTagIds.get(moduleId) ?? []) {
         this.lkv.set(tagId, null);
       }
-      return;
+      // No early return: tag values carried in a FAULT frame are real telemetry
+      // and must flow to the historian via the COV loop below.
     }
 
     const changedTrendable: { tagId: number; value: number | boolean | string | null }[] = [];
@@ -105,12 +106,13 @@ export class TelemetryIntake {
 
         if (timedOut) {
           if (!this.timedOutModules.has(moduleId)) {
-            // Transition into stalled — null LKV and set status
+            // Transition into stalled — null LKV, set status, enqueue sentinel
             this.timedOutModules.add(moduleId);
             for (const tagId of tagIds) {
               this.lkv.set(tagId, null);
             }
             this.moduleStatus.set(moduleId, 'STALLED');
+            this.enqueueWatchdogStallSentinel(moduleId);
           }
           // Latch the watchdog indicator (survives comms resumption until manual reset)
           this.watchdogLatched.add(moduleId);
@@ -119,6 +121,20 @@ export class TelemetryIntake {
           this.timedOutModules.delete(moduleId);
         }
       }
+    });
+  }
+
+  private enqueueWatchdogStallSentinel(moduleKey: string): void {
+    if (!this.moduleTagIds.has(moduleKey)) {
+      console.warn(`[TelemetryIntake] watchdog stall: module '${moduleKey}' not in registry, skipping sentinel`);
+      return;
+    }
+    const allTagIds = this.moduleTagIds.get(moduleKey)!;
+    const trendingTagIds = allTagIds.filter(id => this.trendableTagIds.has(id));
+    if (trendingTagIds.length === 0) return;
+    this.dbPipeline.enqueue({
+      moduleTs: Date.now(),
+      tags: trendingTagIds.map(tagId => ({ tagId, value: null })),
     });
   }
 

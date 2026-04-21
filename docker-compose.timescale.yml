@@ -1,0 +1,25 @@
+# CARO_Platform — TimescaleDB service for HMI historian.
+# Data directory default is ./timescale-data (repo-local) for dev convenience;
+# production / testing-machine users override TIMESCALE_DATA_DIR in a local .env
+# to point at a roomy drive (e.g. F:\TimescaleDB on the testing machine).
+#
+# See Docs/hmi_timescale_setup.md for Windows install steps.
+
+services:
+  timescale:
+    image: timescale/timescaledb:latest-pg16
+    container_name: caro-timescale
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     ${TIMESCALE_USER:-caro}
+      POSTGRES_PASSWORD: ${TIMESCALE_PASSWORD:-caro}
+      POSTGRES_DB:       ${TIMESCALE_DATABASE:-caro_historian}
+    ports:
+      - "${TIMESCALE_HOST_PORT:-5433}:5432"
+    volumes:
+      - ${TIMESCALE_DATA_DIR:-./timescale-data}:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${TIMESCALE_USER:-caro} -d ${TIMESCALE_DATABASE:-caro_historian}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10

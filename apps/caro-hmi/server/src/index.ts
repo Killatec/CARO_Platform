@@ -1,9 +1,12 @@
 import http from 'http';
-import { ping, runMigrations, getActiveTags } from '@caro/db';
+import { ping, runMigrations, getActiveTags, pingTimescale, runTimescaleMigrations } from '@caro/db';
 import { config } from './config.js';
 import { loadTagMap } from './tag-map.js';
 import { LkvCache } from './lkv.js';
-import { DbPipeline } from './db-pipeline.js';
+import { DbPipeline, NullDbWriter } from './db-pipeline.js';
+import type { DbWriter } from './db-pipeline.js';
+import { TimescaleDbWriter } from './timescale-writer.js';
+import { TimescaleSizeMonitor } from './timescale-size-monitor.js';
 import { TelemetryIntake } from './telemetry-intake.js';
 import { HmiTagSource } from './hmi-tag-source.js';
 import { MqttBridge } from './mqtt-bridge.js';
@@ -51,8 +54,28 @@ async function start(): Promise<void> {
 
   // 2. Core data structures
   const lkv = new LkvCache();
-  const dbPipeline = new DbPipeline();
   const dutyTracker = new DutyTracker();
+
+  // 2b. Timescale historian writer (soft-fail — HMI stays up without historian)
+  let dbWriter: DbWriter = new NullDbWriter();
+  let sizeMonitor: TimescaleSizeMonitor | undefined;
+  try {
+    await pingTimescale();
+    console.log('[hmi] timescale reachable');
+    try {
+      await runTimescaleMigrations();
+      dbWriter = new TimescaleDbWriter();
+      sizeMonitor = new TimescaleSizeMonitor();
+      sizeMonitor.start();
+      console.log(`[TimescaleSizeMonitor] started: pollMs=${sizeMonitor.pollMs}`);
+    } catch (err) {
+      console.error('[hmi] timescale migration failed, falling back to null writer:', (err as Error).message);
+    }
+  } catch (err) {
+    // TODO: periodic reconnect from NullDbWriter → TimescaleDbWriter — restart required for now
+    console.warn(`[hmi] timescale unreachable, starting with null historian writer; reason=${(err as Error).message}`);
+  }
+  const dbPipeline = new DbPipeline(dbWriter);
 
   // 3. Telemetry intake (LKV writes, watchdog, DB pipeline enqueue)
   const intake = new TelemetryIntake({
@@ -71,6 +94,8 @@ async function start(): Promise<void> {
     intake,
     hmiPublishIntervalMs: config.hmiPublishIntervalMs,
     dutyTracker,
+    dbPipeline,
+    sizeMonitor,
     onBeforePublish: () => {
       hmiTags.Telemetry_CPU = Math.round(intake.getDutyCycle() * 100) / 100;
     },
@@ -114,8 +139,8 @@ async function start(): Promise<void> {
   const wsServer = new WsServer({ lkv, tickMs: config.wsTickMs, dutyTracker });
   wsServer.attach(httpServer);
 
-  // 7b. DB pipeline flush timer (placeholder — just drains the queue)
-  const dbFlushTimer = setInterval(() => dutyTracker.track(() => dbPipeline.flush()), config.dbTickMs);
+  // 7b. Start the async DB pipeline flush tick
+  dbPipeline.start();
 
   // 8. Start MQTT (soft-fail — broker may be absent in dev)
   try {
@@ -136,9 +161,10 @@ async function start(): Promise<void> {
   // 10. Graceful shutdown
   const shutdown = async (signal: string): Promise<void> => {
     console.log(`[HMI] ${signal} — shutting down`);
-    clearInterval(dbFlushTimer);
     hmiTags.stopPublishing();
     intake.stopWatchdog();
+    if (sizeMonitor) await sizeMonitor.stop();
+    await dbPipeline.stop();
     await mqttBridge.stop().catch(() => {});
     wsServer.stop();
     httpServer.close(() => process.exit(0));

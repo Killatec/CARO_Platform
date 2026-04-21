@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { TelemetryIntake } from '../telemetry-intake.js';
 import type { TelemetryMessage } from '../telemetry-intake.js';
 import { LkvCache } from '../lkv.js';
@@ -439,5 +439,159 @@ describe('TelemetryIntake', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// ── Watchdog stall sentinel ───────────────────────────────────────────────────
+
+describe('TelemetryIntake — watchdog stall sentinel', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('enqueues null sentinel on watchdog stall transition — 3 trending tags', () => {
+    const TAG_T1 = 10, TAG_T2 = 11, TAG_T3 = 12;
+    const localTagMap = new Map<number, TagDef>([
+      [TAG_T1, makeTagDef(TAG_T1)],
+      [TAG_T2, makeTagDef(TAG_T2)],
+      [TAG_T3, makeTagDef(TAG_T3)],
+    ]);
+    const localModuleTagIds = new Map<string, number[]>([[MODULE_ID, [TAG_T1, TAG_T2, TAG_T3]]]);
+    const localTrendable    = new Set<number>([TAG_T1, TAG_T2, TAG_T3]);
+    const dbPipeline        = new DbPipeline();
+    const enqueueSpy        = vi.spyOn(dbPipeline, 'enqueue');
+
+    const intake = new TelemetryIntake({
+      lkv: new LkvCache(),
+      tagMap: localTagMap,
+      moduleTagIds: localModuleTagIds,
+      trendableTagIds: localTrendable,
+      dbPipeline,
+      watchdogTimeoutMs: 0,
+      dutyTracker: new DutyTracker(),
+    });
+
+    intake.watchdogTick();
+
+    expect(enqueueSpy).toHaveBeenCalledTimes(1);
+    const entry = enqueueSpy.mock.calls[0][0];
+    expect(entry.tags).toHaveLength(3);
+    expect(entry.tags.every((t: { value: unknown }) => t.value === null)).toBe(true);
+    expect(entry.tags.map((t: { tagId: number }) => t.tagId).sort((a: number, b: number) => a - b))
+      .toEqual([TAG_T1, TAG_T2, TAG_T3].sort((a, b) => a - b));
+  });
+
+  it('does not re-enqueue sentinel on subsequent watchdog ticks while stalled', () => {
+    const dbPipeline = new DbPipeline();
+    const enqueueSpy = vi.spyOn(dbPipeline, 'enqueue');
+    const intake     = makeIntake(new LkvCache(), dbPipeline, 0);
+
+    intake.watchdogTick();
+    intake.watchdogTick();
+
+    expect(enqueueSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not enqueue sentinel on recovery — only the real frame value', () => {
+    const dbPipeline = new DbPipeline();
+    const enqueueSpy = vi.spyOn(dbPipeline, 'enqueue');
+    const intake     = makeIntake(new LkvCache(), dbPipeline, 0);
+
+    // First tick: stall transition → sentinel enqueued
+    intake.watchdogTick();
+    expect(enqueueSpy).toHaveBeenCalledTimes(1);
+
+    // Recovery: real telemetry frame — COV enqueues the real value
+    intake.ingest(MODULE_ID, telemetryMsg([{ tag_id: TAG_TREND, value: 55 }]));
+    // Subsequent watchdog tick: comms fresh or still stale but already in timedOutModules
+    // — either way, no new sentinel is emitted
+    intake.watchdogTick();
+
+    // 1 sentinel + 1 real value, nothing more
+    expect(enqueueSpy).toHaveBeenCalledTimes(2);
+    const secondCall = enqueueSpy.mock.calls[1][0];
+    expect(secondCall.tags[0].value).not.toBeNull();
+  });
+
+  it('skips null sentinel and logs warn when module is not in registry', () => {
+    const dbPipeline = new DbPipeline();
+    const enqueueSpy = vi.spyOn(dbPipeline, 'enqueue');
+    const warnSpy    = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const intake     = makeIntake(new LkvCache(), dbPipeline, 0);
+
+    // Call the private method directly with a key absent from moduleTagIds
+    (intake as unknown as { enqueueWatchdogStallSentinel(k: string): void })
+      .enqueueWatchdogStallSentinel('unknown_module');
+
+    expect(enqueueSpy).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('filters non-trending tags from sentinel — 3 trending out of 5', () => {
+    const TAG_T1 = 20, TAG_T2 = 21, TAG_T3 = 22, TAG_NT1 = 23, TAG_NT2 = 24;
+    const localTagMap = new Map<number, TagDef>([
+      [TAG_T1,  makeTagDef(TAG_T1)],
+      [TAG_T2,  makeTagDef(TAG_T2)],
+      [TAG_T3,  makeTagDef(TAG_T3)],
+      [TAG_NT1, makeTagDef(TAG_NT1)],
+      [TAG_NT2, makeTagDef(TAG_NT2)],
+    ]);
+    const localModuleTagIds = new Map<string, number[]>([
+      [MODULE_ID, [TAG_T1, TAG_T2, TAG_T3, TAG_NT1, TAG_NT2]],
+    ]);
+    const localTrendable = new Set<number>([TAG_T1, TAG_T2, TAG_T3]);
+    const dbPipeline     = new DbPipeline();
+    const enqueueSpy     = vi.spyOn(dbPipeline, 'enqueue');
+
+    const intake = new TelemetryIntake({
+      lkv: new LkvCache(),
+      tagMap: localTagMap,
+      moduleTagIds: localModuleTagIds,
+      trendableTagIds: localTrendable,
+      dbPipeline,
+      watchdogTimeoutMs: 0,
+      dutyTracker: new DutyTracker(),
+    });
+
+    intake.watchdogTick();
+
+    expect(enqueueSpy).toHaveBeenCalledTimes(1);
+    const entry = enqueueSpy.mock.calls[0][0];
+    expect(entry.tags).toHaveLength(3);
+    const sentinelIds = entry.tags
+      .map((t: { tagId: number }) => t.tagId)
+      .sort((a: number, b: number) => a - b);
+    expect(sentinelIds).toEqual([TAG_T1, TAG_T2, TAG_T3].sort((a, b) => a - b));
+  });
+});
+
+// ── FAULT message with tag data ───────────────────────────────────────────────
+
+describe('TelemetryIntake — FAULT message with tag data', () => {
+  it('FAULT message with tag data enqueues the real values, not null', () => {
+    const lkv        = new LkvCache();
+    lkv.set(TAG_TREND, 99);
+    const dbPipeline = new DbPipeline();
+    const enqueueSpy = vi.spyOn(dbPipeline, 'enqueue');
+    const intake     = makeIntake(lkv, dbPipeline);
+
+    intake.ingest(MODULE_ID, telemetryMsg([{ tag_id: TAG_TREND, value: 42 }], 'FAULT', 1000));
+
+    expect(enqueueSpy).toHaveBeenCalledTimes(1);
+    const entry = enqueueSpy.mock.calls[0][0];
+    expect(entry.tags).toHaveLength(1);
+    expect(entry.tags[0].tagId).toBe(TAG_TREND);
+    expect(entry.tags[0].value).toBe(42);
+    expect(intake.getModuleStats().find(s => s.module_id === MODULE_ID)!.status).toBe('FAULT');
+  });
+
+  it('FAULT message without tag data does not enqueue', () => {
+    const dbPipeline = new DbPipeline();
+    const enqueueSpy = vi.spyOn(dbPipeline, 'enqueue');
+    const intake     = makeIntake(new LkvCache(), dbPipeline);
+
+    intake.ingest(MODULE_ID, telemetryMsg([], 'FAULT'));
+
+    expect(enqueueSpy).not.toHaveBeenCalled();
   });
 });
