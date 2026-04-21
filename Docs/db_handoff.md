@@ -60,11 +60,11 @@ Read from each app's `server/.env`. Never use `DATABASE_URL`.
 
 | Variable | Default | Required |
 |---|---|---|
-| `PGHOST` | `localhost` | No |
-| `PGPORT` | `5432` | No |
-| `PGDATABASE` | `caro_dev` | No |
-| `PGUSER` | `postgres` | No |
-| `PGPASSWORD` | — | **Yes** |
+| `POSTGRES_HOST` | `localhost` | No |
+| `POSTGRES_PORT` | `5432` | No |
+| `POSTGRES_DATABASE` | `caro_dev` | No |
+| `POSTGRES_USER` | `postgres` | No |
+| `POSTGRES_PASSWORD` | — | **Yes** |
 
 ---
 

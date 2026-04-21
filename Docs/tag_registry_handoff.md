@@ -70,7 +70,7 @@ All in `Docs/`. Read order for a new session: this file → deltas → task-spec
 
 - **nodemon must not watch `templates/`.** Dev script watches `src/` only. If `--watch ../templates` is re-added, nodemon restarts on every template write and breaks tests.
 - **`apps/tag-registry/server/.env` is the only env file the server reads.** Root `.env` changes are never seen.
-- **`PGPASSWORD` must be set.** `DATABASE_URL` is not used.
+- **`POSTGRES_PASSWORD` must be set.** `DATABASE_URL` is not used.
 - **`AppShell` fetches template list once on mount.** Templates created via API after mount won't appear in the root dropdown until page remounts.
 - **Only `system` templates appear in the root dropdown.** The dropdown filters `template_type === 'system'`. Other types (module, parameter, tag, Group, custom) are not selectable as roots. The label reads "System:" not "Root Template:".
 - **`validateGraph` runs on all templates in the store.** Always begin an edit session with `loadRoot()` to ensure a complete subgraph.

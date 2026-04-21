@@ -23,8 +23,8 @@ npm install
 
 # 2. Verify HMI server .env exists
 cat apps/caro-hmi/server/.env
-# Should contain: PGHOST, PGPORT, PGUSER=postgres, PGPASSWORD=KillaDB,
-# PGDATABASE=caro_dev, MQTT_URL=mqtt://localhost:1883, PORT=3003
+# Should contain: POSTGRES_HOST, POSTGRES_PORT, POSTGRES_USER=postgres, POSTGRES_PASSWORD=KillaDB,
+# POSTGRES_DATABASE=caro_dev, MQTT_URL=mqtt://localhost:1883, PORT=3003
 
 # 3. Start everything (all 6 dev servers)
 npm run dev

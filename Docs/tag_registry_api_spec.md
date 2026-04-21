@@ -63,13 +63,13 @@ Every template returned by the server carries a `hash` field: a 6-character hex 
 | MAX_TAG_PATH_LENGTH | Maximum permitted tag_path character length | 100 | 1+2 |
 | VALIDATE_REQUIRED_PARENT_TYPES | Comma-separated template_type values each tag must have as an ancestor. Empty = disabled. | (unset) | 1+2 |
 | VALIDATE_UNIQUE_PARENT_TYPES | If true, no tag may have more than one ancestor of the same template_type. | false | 1+2 |
-| PGHOST | PostgreSQL host | localhost | 2 only |
-| PGPORT | PostgreSQL port | 5432 | 2 only |
-| PGDATABASE | PostgreSQL database name | caro_dev | 2 only |
-| PGUSER | PostgreSQL user | postgres | 2 only |
-| PGPASSWORD | PostgreSQL password | (required) | 2 only |
+| POSTGRES_HOST | PostgreSQL host | localhost | 2 only |
+| POSTGRES_PORT | PostgreSQL port | 5432 | 2 only |
+| POSTGRES_DATABASE | PostgreSQL database name | caro_dev | 2 only |
+| POSTGRES_USER | PostgreSQL user | postgres | 2 only |
+| POSTGRES_PASSWORD | PostgreSQL password | (required) | 2 only |
 
-> **Note:** `DATABASE_URL` must not be referenced anywhere in app code. Use the five `PG*` variables instead, consumed by `@caro/db` pool.js.
+> **Note:** `DATABASE_URL` must not be referenced anywhere in app code. Use the five `POSTGRES_*` variables instead, consumed by `@caro/db` pool.js.
 
 ### 2.7 GET /api/v1/config
 

@@ -111,11 +111,11 @@ Server reads from `apps/tag-registry/server/.env` only. Root `.env` is never see
 | `TEMPLATES_DIR` | — | **Yes** — exit with clear error if missing |
 | `PORT` | `3001` | No |
 | `MAX_TAG_PATH_LENGTH` | `100` | No |
-| `PGHOST` | `localhost` | No |
-| `PGPORT` | `5432` | No |
-| `PGDATABASE` | `caro_dev` | No |
-| `PGUSER` | `postgres` | No |
-| `PGPASSWORD` | — | **Yes** |
+| `POSTGRES_HOST` | `localhost` | No |
+| `POSTGRES_PORT` | `5432` | No |
+| `POSTGRES_DATABASE` | `caro_dev` | No |
+| `POSTGRES_USER` | `postgres` | No |
+| `POSTGRES_PASSWORD` | — | **Yes** |
 | `VALIDATE_REQUIRED_PARENT_TYPES` | — | No — comma-separated list |
 | `VALIDATE_UNIQUE_PARENT_TYPES` | — | No — `true`/`false` |
 

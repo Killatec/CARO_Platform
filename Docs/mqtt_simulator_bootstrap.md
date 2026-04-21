@@ -44,11 +44,11 @@ Server reads from `apps/mqtt-simulator/server/.env`.
 |---|---|---|
 | `MQTT_BROKER_URL` | `mqtt://localhost:1883` | |
 | `MQTT_CLIENT_ID` | `caro-simulator` | Must be unique on broker |
-| `PGHOST` | `localhost` | |
-| `PGPORT` | `5432` | |
-| `PGDATABASE` | `caro_dev` | |
-| `PGUSER` | `postgres` | |
-| `PGPASSWORD` | — | **Required** |
+| `POSTGRES_HOST` | `localhost` | |
+| `POSTGRES_PORT` | `5432` | |
+| `POSTGRES_DATABASE` | `caro_dev` | |
+| `POSTGRES_USER` | `postgres` | |
+| `POSTGRES_PASSWORD` | — | **Required** |
 | `TICK_INTERVAL_MS` | `100` | 10 Hz default |
 | `SINE_PERIOD_S` | `30` | Sine wave period for f32 monitor tags |
 | `LOG_BUFFER_SIZE` | `200` | Rolling in-memory log entries |
@@ -57,7 +57,7 @@ Server reads from `apps/mqtt-simulator/server/.env`.
 
 ## 3. Startup Sequence
 
-1. Validate `PGPASSWORD`. Exit with clear error if missing.
+1. Validate `POSTGRES_PASSWORD`. Exit with clear error if missing.
 2. Connect to PostgreSQL via `@caro/db`. Call `getActiveTags()`.
 3. Filter rows to `module_type = 'MQTT'` only. If zero MQTT tags returned: log warning and exit.
 4. Build in-memory tag map: `Map<tag_id, SimTag>`. Derive `module_id` from `tag_registry.module` column (fallback `'unknown'` if null). Coerce `tag_id` to `Number`.

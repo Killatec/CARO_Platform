@@ -12,7 +12,17 @@ Read this only if the session requires it:
 ## App Hard Constraints
 
 - **TypeScript:** Both server and client are fully migrated. `tsc --noEmit` must stay clean in both `server/` and `client/` at all times.
-- **No automated tests** by intentional design. Do not add a test framework without explicit instruction.
+
+## Simulator Behavior
+
+- **Boolean tags:** Initial value is randomized per tag (`Math.random() < 0.5`). On every 10 Hz publish tick the value flips deterministically (`!prev`). Tags do not move in sync because initial values are independently randomized at sim start.
+- **Float/integer tags:** Sine wave: `50 + 25 * sin(2π * simT / 30000)`. Each tag accumulates its own `simT` from `deltaMs` per tick.
+
+## Test Suite
+
+`cd apps/mqtt-simulator/server && npm test`
+
+Baseline: 6 tests, 0 failures. Covers `simGenerators.ts`: `initBoolValue`, `advanceBoolValue`, `advanceF32Value` — injectable RNG for deterministic phase tests.
 
 ## Ports
 

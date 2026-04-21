@@ -297,7 +297,7 @@ export interface DbWriteEntry {
 }
 ```
 
-`moduleTs` is the **source-message** timestamp, not the HMI server's receipt time. Every tag in a single enqueue shares the same `moduleTs`. The flush timer runs at `DB_TICK_MS` (default 100 ms) in `index.ts`:
+`moduleTs` is the **source-message** timestamp, not the HMI server's receipt time. Every tag in a single enqueue shares the same `moduleTs`. The flush timer runs at `TIMESCALE_DB_TICK_MS` (default 500 ms) in `db-pipeline.ts`:
 
 ```ts
 const dbFlushTimer = setInterval(
@@ -574,11 +574,11 @@ The only async operations are `ws.send()` / `mqtt.publish()` (both buffer intern
 |---------------------------|------------------------|-----------------------|--------|
 | `MQTT_URL`                | `mqtt://localhost:1883`| `mqtt-bridge.ts`      | Mosquitto address. Absent broker → server runs degraded (REST + WS serve LKV without live telemetry). |
 | `WS_TICK_MS`              | `125`                  | `ws-server.ts`        | Delta tick interval. Lower = more responsive, higher CPU. |
-| `DB_TICK_MS`              | `100`                  | `index.ts`            | DB-pipeline flush interval. Placeholder today. |
+| `TIMESCALE_DB_TICK_MS`    | `500`                  | `db-pipeline.ts`      | DB-pipeline flush interval. |
 | `WATCHDOG_TIMEOUT_MS`     | `1000`                 | `telemetry-intake.ts` | Time without telemetry before nulling the module's LKV entries. |
 | `HEARTBEAT_INTERVAL_MS`   | `1000`                 | `mqtt-bridge.ts`      | Heartbeat publish frequency on `caro/{module_id}/beat`. |
 | `HMI_PUBLISH_INTERVAL_MS` | `250`                  | `hmi-tag-source.ts`   | HmiTagSource emit interval; also the cadence at which `Telemetry_CPU` is refreshed. |
-| `PGHOST` / `PGPORT` / `PGUSER` / `PGPASSWORD` / `PGDATABASE` | — | `@caro/db` | PostgreSQL connection for `runMigrations()` and tag-map load. |
+| `POSTGRES_HOST` / `POSTGRES_PORT` / `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DATABASE` | — | `@caro/db` | PostgreSQL connection for `runMigrations()` and tag-map load. |
 
 ---
 

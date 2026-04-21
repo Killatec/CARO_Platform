@@ -127,6 +127,8 @@ Current migrations:
 > migrations.js on every runMigrations() call — it is not created via a
 > migration file.*
 
+**TimescaleDB migrations** live in `db/timescale/migrations/` and are named with a `T00N_` prefix (e.g. `T001_create_tag_samples.sql`). They are applied by `runTimescaleMigrations()` from `@caro/db` and tracked in a `schema_migrations` table on the Timescale instance. Never edit existing Timescale migration files; add new ones only.
+
 **2.5 Database Names**
 
 Development: caro_dev.
@@ -549,12 +551,34 @@ Single-row table holding system-wide runtime state.
 
 **9. TimescaleDB --- Telemetry**
 
-The TimescaleDB telemetry schema stores tag value history as a hypertable partitioned by time. Continuous aggregates and retention policies are configured per deployment requirements.
+TimescaleDB runs as a separate PostgreSQL instance from the operational database. Connection is configured via five `TIMESCALE_*` env vars (`TIMESCALE_HOST`, `TIMESCALE_PORT`, `TIMESCALE_DATABASE`, `TIMESCALE_USER`, `TIMESCALE_PASSWORD`). The development instance runs on port 5433 via `docker-compose.timescale.yml` at the repo root.
 
-> *NOTE: TimescaleDB runs as a PostgreSQL extension on a separate
-> instance from the operational PostgreSQL database. Connection is
-> configured via separate PG\* environment variables (TIMESCALE_HOST,
-> TIMESCALE_PORT, etc.).*
+**9.1 tag_samples**
+
+Hypertable storing all trending tag value history.
+
+  ---------------- -------------------------------- -------------------------------------
+  **Column**       **Type**                         **Description**
+
+  ts               TIMESTAMPTZ NOT NULL             Sample timestamp. Hypertable
+                                                    partition key.
+
+  tag_id           INTEGER NOT NULL                 tag_id from tag_registry. No FK —
+                                                    validated at application layer.
+
+  value            DOUBLE PRECISION NULL            Sample value. NULL = bad quality /
+                                                    watchdog stall sentinel.
+  ---------------- -------------------------------- -------------------------------------
+
+Hypertable configuration:
+
+- `chunk_time_interval = 12 hours`
+- Compression: `timescaledb.compress`, `timescaledb.compress_segmentby = 'tag_id'`; compression policy: compress chunks older than 12 hours
+- Retention policy: drop chunks older than 14 days
+
+Migrations live in `db/timescale/migrations/` (prefix `T00N_*`). Applied by `runTimescaleMigrations()` from `@caro/db` at HMI server startup. Tracked in a `schema_migrations` table on the Timescale instance (same convention as the main Postgres runner). Current migration: `T001_create_tag_samples.sql`.
+
+> *NOTE: `docker-compose.timescale.yml` at the repo root starts the TimescaleDB container. Development database: `caro_timescale` on port 5433. The HMI server writes via `TimescaleDbWriter`; falls back silently to `NullDbWriter` if Timescale is unreachable at boot. Restart required to promote from `NullDbWriter` to `TimescaleDbWriter` (periodic reconnect is on the backlog).*
 
 **10. Audit Log**
 
@@ -824,6 +848,5 @@ deployment.
 ## Open Questions
 
 - What is the production database naming convention and multi-environment strategy (development, staging, production)?
-- What is the TimescaleDB hypertable configuration, aggregation strategy, and retention policy for telemetry data?
 - What index strategy is needed for the `setpoint_values` reconstruction query at scale?
 

@@ -6,7 +6,7 @@
 2. Read the relevant app anchor file next:
    - Tag Registry → `apps/tag-registry/CLAUDE.md`
    - MQTT Simulator → `apps/mqtt-simulator/CLAUDE.md`
-   - HMI → `apps/hmi/CLAUDE.md` (when it exists)
+   - HMI → `apps/caro-hmi/CLAUDE.md`
 3. Read platform specs only if the session requires them:
    - DB schema or queries → `Docs/CARO_DB_Spec.md`
    - MQTT message handling → `Docs/CARO_MQTT_Spec.md`
@@ -43,7 +43,7 @@ These apply to every app and package in the monorepo:
 
 - **TypeScript:** All code is TypeScript. `tsc --noEmit` must stay clean in every package and app. No JavaScript source files remain.
 - **No raw SQL in apps:** All PostgreSQL access via named functions from `@caro/db` only. No direct `pg` imports in any app.
-- **No DATABASE_URL:** Use the five `PG*` env vars consumed by `@caro/db`. Never reference `DATABASE_URL`.
+- **No DATABASE_URL:** Use the five `POSTGRES_*` env vars for the main Postgres and the five `TIMESCALE_*` env vars for the historian Postgres, both consumed by `@caro/db`. Never reference `DATABASE_URL`.
 - **API envelope:** `{ ok: true, data }` / `{ ok: false, error: { code, message } }`. Services throw `Error` with `.code`; never set HTTP status directly.
 - **Shared packages first:** Check `packages/ui/` before writing new UI components. Check `packages/server/` before writing new middleware. Do not duplicate what already exists.
 - **Style reference:** `apps/tag-registry/` is the convention baseline for all apps — folder structure, component style, error shapes, API patterns.
