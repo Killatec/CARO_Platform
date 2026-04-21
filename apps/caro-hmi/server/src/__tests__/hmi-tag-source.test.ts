@@ -1,5 +1,6 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { HmiTagSource } from '../hmi-tag-source.js';
+import type { TimescaleSizeMonitor } from '../timescale-size-monitor.js';
 import { TelemetryIntake } from '../telemetry-intake.js';
 import { LkvCache } from '../lkv.js';
 import { DbPipeline } from '../db-pipeline.js';
@@ -469,5 +470,206 @@ describe('HmiTagSource — status string mapping', () => {
     hmiTags.publishNow();
     const status = lkv.getValue(MI_TAG_IDS.STATUS) as number[];
     expect(status[0]).toBe(ModuleStatus.UNKNOWN);
+  });
+});
+
+// ── Trend_Info observability tests ───────────────────────────────────────────
+
+const TREND_TAG_IDS = {
+  TRENDING:     300,
+  QUEUE_DEPTH:  301,
+  ROWS_PER_SEC: 302,
+  FLUSH_MS:     303,
+  DROPPED_PKGS: 304,
+  ERROR_COUNT:  305,
+};
+
+function makeTrendInfoTags(omit?: string): ActiveTag[] {
+  const all: ActiveTag[] = [
+    makeActiveTag(TREND_TAG_IDS.TRENDING,     'CARO_1.HMI.Trend_Info.Trending'),
+    makeActiveTag(TREND_TAG_IDS.QUEUE_DEPTH,  'CARO_1.HMI.Trend_Info.Queue_Depth'),
+    makeActiveTag(TREND_TAG_IDS.ROWS_PER_SEC, 'CARO_1.HMI.Trend_Info.Rows_Per_Sec'),
+    makeActiveTag(TREND_TAG_IDS.FLUSH_MS,     'CARO_1.HMI.Trend_Info.Flush_ms'),
+    makeActiveTag(TREND_TAG_IDS.DROPPED_PKGS, 'CARO_1.HMI.Trend_Info.Dropped_Pkgs'),
+    makeActiveTag(TREND_TAG_IDS.ERROR_COUNT,  'CARO_1.HMI.Trend_Info.Error_Count'),
+  ];
+  return omit ? all.filter(t => !t.tag_path.endsWith(omit)) : all;
+}
+
+interface PipelineState {
+  trending: boolean;
+  rowsPerSec: number;
+  queueDepth: number;
+  lastFlushMs: number;
+  droppedPkgsTotal: number;
+  errorCountTotal: number;
+}
+
+function makeTrendInfoSource(
+  pipelineState: PipelineState,
+  tags = makeTrendInfoTags(),
+): { hmiTags: HmiTagSource & Record<string, number | boolean | string | number[]>; lkv: LkvCache } {
+  const lkv = new LkvCache();
+  const tagIds = tags.map(t => t.tag_id);
+
+  const intake = {
+    getModuleStats: vi.fn().mockReturnValue([]),
+    ingest: vi.fn().mockImplementation((_moduleId: string, msg: { tags: { tag_id: number; value: unknown }[] }) => {
+      for (const { tag_id, value } of msg.tags) {
+        if (tagIds.includes(tag_id)) {
+          lkv.set(tag_id, value as number | boolean | null);
+        }
+      }
+    }),
+  } as unknown as TelemetryIntake;
+
+  const hmiTags = HmiTagSource.create(tags, {
+    intake,
+    hmiPublishIntervalMs: 250,
+    dutyTracker: new DutyTracker(),
+    dbPipeline: pipelineState as unknown as DbPipeline,
+  });
+
+  return { hmiTags, lkv };
+}
+
+describe('HmiTagSource — Trend_Info observability', () => {
+  it('Trending tag value mirrors dbPipeline.trending', () => {
+    const ps: PipelineState = { trending: true, rowsPerSec: 0, queueDepth: 0, lastFlushMs: 0, droppedPkgsTotal: 0, errorCountTotal: 0 };
+    const { hmiTags, lkv } = makeTrendInfoSource(ps);
+
+    hmiTags.publishNow();
+    expect(lkv.getValue(TREND_TAG_IDS.TRENDING)).toBe(true);
+
+    ps.trending = false;
+    hmiTags.publishNow();
+    expect(lkv.getValue(TREND_TAG_IDS.TRENDING)).toBe(false);
+  });
+
+  it('Rows_Per_Sec tag value mirrors dbPipeline.rowsPerSec', () => {
+    const ps: PipelineState = { trending: false, rowsPerSec: 42.5, queueDepth: 0, lastFlushMs: 0, droppedPkgsTotal: 0, errorCountTotal: 0 };
+    const { hmiTags, lkv } = makeTrendInfoSource(ps);
+    hmiTags.publishNow();
+    expect(lkv.getValue(TREND_TAG_IDS.ROWS_PER_SEC)).toBe(42.5);
+  });
+
+  it('other observability tags are published correctly', () => {
+    const ps: PipelineState = { trending: false, rowsPerSec: 0, queueDepth: 7, lastFlushMs: 12.5, droppedPkgsTotal: 3, errorCountTotal: 1 };
+    const { hmiTags, lkv } = makeTrendInfoSource(ps);
+    hmiTags.publishNow();
+    expect(lkv.getValue(TREND_TAG_IDS.QUEUE_DEPTH)).toBe(7);
+    expect(lkv.getValue(TREND_TAG_IDS.FLUSH_MS)).toBe(12.5);
+    expect(lkv.getValue(TREND_TAG_IDS.DROPPED_PKGS)).toBe(3);
+    expect(lkv.getValue(TREND_TAG_IDS.ERROR_COUNT)).toBe(1);
+  });
+
+  it('skips missing tag and logs warn once — other five still publish', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const ps: PipelineState = { trending: true, rowsPerSec: 0, queueDepth: 2, lastFlushMs: 8, droppedPkgsTotal: 0, errorCountTotal: 0 };
+      const { hmiTags, lkv } = makeTrendInfoSource(ps, makeTrendInfoTags('Flush_ms'));
+
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy.mock.calls[0][0]).toContain('Trend_Info_Flush_ms');
+
+      hmiTags.publishNow();
+
+      expect(lkv.getValue(TREND_TAG_IDS.TRENDING)).toBe(true);
+      expect(lkv.getValue(TREND_TAG_IDS.QUEUE_DEPTH)).toBe(2);
+      expect(lkv.getValue(TREND_TAG_IDS.DROPPED_PKGS)).toBe(0);
+      expect(lkv.getValue(TREND_TAG_IDS.ERROR_COUNT)).toBe(0);
+      expect(lkv.getValue(TREND_TAG_IDS.FLUSH_MS)).toBeNull();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('no Trend_Info warnings when dbPipeline is not provided', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const lkv = new LkvCache();
+      const { intake } = makeIntake([1001], lkv);
+      HmiTagSource.create(
+        [makeActiveTag(1001, 'CARO_1.HMI.Some_Tag')],
+        { intake, hmiPublishIntervalMs: 250, dutyTracker: new DutyTracker() },
+      );
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+});
+
+// ── Trend_Info.DB_Size observability tests ────────────────────────────────────
+
+const DB_SIZE_TAG_ID = 306;
+
+function makeDbSizeSource(
+  pipelineState: PipelineState,
+  sizeMonitor: TimescaleSizeMonitor | undefined,
+  includeSizeTag: boolean,
+): { hmiTags: HmiTagSource & Record<string, number | boolean | string | number[]>; lkv: LkvCache } {
+  const lkv = new LkvCache();
+  const baseTags = makeTrendInfoTags();
+  const allTags = includeSizeTag
+    ? [...baseTags, makeActiveTag(DB_SIZE_TAG_ID, 'CARO_1.HMI.Trend_Info.DB_Size', 'HMI', { data_type: 'f32' })]
+    : baseTags;
+  const tagIds = allTags.map(t => t.tag_id);
+
+  const intake = {
+    getModuleStats: vi.fn().mockReturnValue([]),
+    ingest: vi.fn().mockImplementation((_moduleId: string, msg: { tags: { tag_id: number; value: unknown }[] }) => {
+      for (const { tag_id, value } of msg.tags) {
+        if (tagIds.includes(tag_id)) {
+          lkv.set(tag_id, value as number | boolean | null);
+        }
+      }
+    }),
+  } as unknown as TelemetryIntake;
+
+  const hmiTags = HmiTagSource.create(allTags, {
+    intake,
+    hmiPublishIntervalMs: 250,
+    dutyTracker: new DutyTracker(),
+    dbPipeline: pipelineState as unknown as DbPipeline,
+    sizeMonitor,
+  });
+
+  return { hmiTags, lkv };
+}
+
+describe('HmiTagSource — Trend_Info.DB_Size', () => {
+  const basePs: PipelineState = { trending: false, rowsPerSec: 0, queueDepth: 0, lastFlushMs: 0, droppedPkgsTotal: 0, errorCountTotal: 0 };
+
+  it('DB_Size tag mirrors sizeMonitor.sizeGB', () => {
+    const mockMonitor = { sizeGB: 2.5 } as unknown as TimescaleSizeMonitor;
+    const { hmiTags, lkv } = makeDbSizeSource(basePs, mockMonitor, true);
+
+    hmiTags.publishNow();
+
+    expect(lkv.getValue(DB_SIZE_TAG_ID)).toBe(2.5);
+  });
+
+  it('DB_Size tag is not published when sizeMonitor is undefined', () => {
+    const { hmiTags, lkv } = makeDbSizeSource(basePs, undefined, true);
+
+    hmiTags.publishNow();
+
+    // sizeMonitor absent → value never updated from null
+    expect(lkv.getValue(DB_SIZE_TAG_ID)).toBeNull();
+  });
+
+  it('warns once when DB_Size tag id is missing from registry', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const mockMonitor = { sizeGB: 1.0 } as unknown as TimescaleSizeMonitor;
+      // includeSizeTag=false → DB_Size absent from registry
+      makeDbSizeSource(basePs, mockMonitor, false);
+
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy.mock.calls[0][0]).toContain('Trend_Info_DB_Size');
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });

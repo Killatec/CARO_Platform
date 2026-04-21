@@ -1,0 +1,66 @@
+{
+  "template_name": "Trend_Info",
+  "template_type": "HMI",
+  "fields": {},
+  "children": [
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "Trending",
+      "fields": {
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Queue_Depth",
+      "fields": {
+        "Trends": false,
+        "format": "#",
+        "data_type": "i16"
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Rows_Per_Sec",
+      "fields": {
+        "Trends": false,
+        "format": "#",
+        "unit": "#/s"
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Flush_ms",
+      "fields": {
+        "Trends": false,
+        "unit": "ms"
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Dropped_Pkgs",
+      "fields": {
+        "data_type": "i16",
+        "Trends": false,
+        "format": "#"
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Error_Count",
+      "fields": {
+        "data_type": "i16",
+        "Trends": false,
+        "format": "#"
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "DB_Size",
+      "fields": {
+        "Trends": false,
+        "unit": "GB"
+      }
+    }
+  ]
+}

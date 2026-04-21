@@ -39,6 +39,11 @@
       "template_name": "Module_Info",
       "asset_name": "Module_Info",
       "fields": {}
+    },
+    {
+      "template_name": "Trend_Info",
+      "asset_name": "Trend_Info",
+      "fields": {}
     }
   ]
 }

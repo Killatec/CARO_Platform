@@ -5,6 +5,7 @@
  */
 import {
   HmiStatusBox,
+  TrendStatusBox,
   ModuleStatusBox,
   PAGE_STYLE,
   HEADING_STYLE,
@@ -18,6 +19,9 @@ export function OverviewPage() {
       <div style={MODULES_CONTAINER}>
         <div style={{ flexBasis: '100%', display: 'flex' }}>
           <HmiStatusBox />
+        </div>
+        <div style={{ flexBasis: '100%', display: 'flex' }}>
+          <TrendStatusBox />
         </div>
         <div style={{ flexBasis: '100%', display: 'flex' }}>
           <ModuleStatusBox />

@@ -11,13 +11,26 @@
 import type { ActiveTag } from '@caro/db';
 import type { TelemetryIntake, TelemetryMessage } from './telemetry-intake.js';
 import type { DutyTracker } from './duty-tracker.js';
+import type { DbPipeline } from './db-pipeline.js';
+import type { TimescaleSizeMonitor } from './timescale-size-monitor.js';
 import { getModuleNames, setPackedBit, ModuleStatus } from '@caro/tag-registry-shared';
 
 export interface HmiTagSourceDeps {
   intake: TelemetryIntake;
   hmiPublishIntervalMs: number;
   dutyTracker: DutyTracker;
+  dbPipeline?: DbPipeline;
+  sizeMonitor?: TimescaleSizeMonitor;
   onBeforePublish?: () => void;
+}
+
+interface TrendInfoTagIds {
+  trending?: number;
+  queueDepth?: number;
+  rowsPerSec?: number;
+  flushMs?: number;
+  droppedPkgs?: number;
+  errorCount?: number;
 }
 
 function derivePropertyName(tagPath: string, module: string): string | null {
@@ -50,6 +63,10 @@ export class HmiTagSource {
   private readonly moduleId: string;
   private readonly moduleNames: string[];
   private publishTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly dbPipeline: DbPipeline | undefined;
+  private readonly sizeMonitor: TimescaleSizeMonitor | undefined;
+  private readonly dbSizeTagId: number | undefined;
+  private readonly trendTagIds: TrendInfoTagIds;
 
   private constructor(
     deps: HmiTagSourceDeps,
@@ -58,6 +75,7 @@ export class HmiTagSource {
     tagIdToProperty: Map<number, string>,
     moduleId: string,
     moduleNames: string[],
+    dbPipeline: DbPipeline | undefined,
   ) {
     this.intake = deps.intake;
     this.hmiPublishIntervalMs = deps.hmiPublishIntervalMs;
@@ -68,6 +86,10 @@ export class HmiTagSource {
     this.tagIdToProperty = tagIdToProperty;
     this.moduleId = moduleId;
     this.moduleNames = moduleNames;
+    this.dbPipeline = dbPipeline;
+    this.sizeMonitor = deps.sizeMonitor;
+    this.trendTagIds = dbPipeline !== undefined ? this.resolveTrendInfoTagIds() : {};
+    this.dbSizeTagId = deps.sizeMonitor !== undefined ? this.resolveDbSizeTagId() : undefined;
   }
 
   /**
@@ -133,7 +155,7 @@ export class HmiTagSource {
     );
     const moduleNames = getModuleNames(tagEntryMap);
 
-    const instance = new HmiTagSource(deps, values, propertyToTagId, tagIdToProperty, moduleId, moduleNames);
+    const instance = new HmiTagSource(deps, values, propertyToTagId, tagIdToProperty, moduleId, moduleNames, deps.dbPipeline);
 
     return new Proxy(instance, {
       get(target, prop: string | symbol) {
@@ -233,6 +255,7 @@ export class HmiTagSource {
     this.onBeforePublish?.();
     this.dutyTracker.track(() => {
       this.updateModuleInfoTags();
+      this.updateTrendInfoTags();
       const message: TelemetryMessage = {
         timestamp: Date.now(),
         status: 'ONLINE',
@@ -240,5 +263,54 @@ export class HmiTagSource {
       };
       this.intake.ingest(this.moduleId, message);
     });
+  }
+
+  private updateTrendInfoTags(): void {
+    if (this.dbPipeline) {
+      const trending   = this.dbPipeline.trending;
+      const rowsPerSec = this.dbPipeline.rowsPerSec;
+      const queueDepth = this.dbPipeline.queueDepth; // pre-peek tick snapshot: entries faced that tick
+
+      const ids = this.trendTagIds;
+      if (ids.trending    !== undefined) this.values.set(ids.trending,    trending);
+      if (ids.queueDepth  !== undefined) this.values.set(ids.queueDepth,  queueDepth);
+      if (ids.rowsPerSec  !== undefined) this.values.set(ids.rowsPerSec,  rowsPerSec);
+      if (ids.flushMs     !== undefined) this.values.set(ids.flushMs,     this.dbPipeline.lastFlushMs);
+      if (ids.droppedPkgs !== undefined) this.values.set(ids.droppedPkgs, this.dbPipeline.droppedPkgsTotal);
+      if (ids.errorCount  !== undefined) this.values.set(ids.errorCount,  this.dbPipeline.errorCountTotal);
+    }
+
+    if (this.dbSizeTagId !== undefined && this.sizeMonitor) {
+      this.values.set(this.dbSizeTagId, this.sizeMonitor.sizeGB);
+    }
+  }
+
+  private resolveTrendInfoTagIds(): TrendInfoTagIds {
+    const mapping: [keyof TrendInfoTagIds, string][] = [
+      ['trending',    'Trend_Info_Trending'],
+      ['queueDepth',  'Trend_Info_Queue_Depth'],
+      ['rowsPerSec',  'Trend_Info_Rows_Per_Sec'],
+      ['flushMs',     'Trend_Info_Flush_ms'],
+      ['droppedPkgs', 'Trend_Info_Dropped_Pkgs'],
+      ['errorCount',  'Trend_Info_Error_Count'],
+    ];
+    const ids: TrendInfoTagIds = {};
+    for (const [key, prop] of mapping) {
+      const id = this.propertyToTagId.get(prop);
+      if (id !== undefined) {
+        ids[key] = id;
+      } else {
+        console.warn(`[HmiTagSource] Trend_Info tag "${prop}" not found in registry — skipping`);
+      }
+    }
+    return ids;
+  }
+
+  private resolveDbSizeTagId(): number | undefined {
+    const id = this.propertyToTagId.get('Trend_Info_DB_Size');
+    if (id === undefined) {
+      console.warn('[HmiTagSource] Trend_Info tag "Trend_Info_DB_Size" not found in registry — skipping');
+    }
+    return id;
   }
 }
