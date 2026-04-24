@@ -34,11 +34,13 @@ Prerequisites: PostgreSQL running with tag registry populated, Mosquitto on 1883
 | TimescaleDbWriter | `server/src/timescale-writer.ts` | Wraps `writeTagSamples()` from `@caro/db`. Coerces bool→float, drops NaN/Infinity to null, drops strings to null (logs once per instance). |
 | TimescaleSizeMonitor | `server/src/timescale-size-monitor.ts` | Background poll of `pg_database_size()` every `TIMESCALE_SIZE_POLL_MS` (default 30s). Exposes `sizeGB`; started only on the `TimescaleDbWriter` path. Errors held silently (previous value retained); warn logged at most once per hour. |
 | Tag Map | `server/src/tag-map.ts` | Loads tag registry from DB. Builds `Map<tag_id, TagDef>`. Meta field resolution: root-to-leaf, first match wins (`getMetaField`). Accepts pre-fetched `ActiveTag[]` to avoid a second DB call. |
+| Trend Snapshot Scheduler | `server/src/trend-snapshot-scheduler.ts` | Ensures every trendable tag gets ≥1 DB row per `TREND_SNAPSHOT_INTERVAL_MS` (default 60s). Piggyback path: arms a per-module flag; consumed at the top of `TelemetryIntake.ingest()` to write a full trendable-tag LKV snapshot (using `message.timestamp` as `moduleTs`) instead of the COV delta. Force-write path: if flag still set at next tick (silent module), calls `forceTrendSnapshot()` directly with `moduleTs = Date.now()`. Runs inside `DutyTracker.track()`. |
+| Trends REST Endpoint | `server/src/routes/trends.ts` | `GET /api/v1/trends/tile?tag_ids&bucket_s&tile_index`. Query params snake_case (§6.1); response body camelCase (§6.2) matching `TrendTile` from `@caro/db` — no remapping at route layer. Enforces 20-tag cap. Delegates to `getTrendTile()` from `@caro/db`. Optional response gzip via `HMI_TRENDS_GZIP` (scoped to this mount only). |
 | Config | `server/src/config.ts` | All env vars with defaults. |
 | Command Publisher | `server/src/command-publisher.ts` | Publishes SET_VALUES to MQTT, tracks in-flight commands by command_id, resolves/rejects on CMD_ACK or 1s timeout. |
 | Write Route | `server/src/routes/tags.ts` | GET /tags (tag list) and POST /tags/write (setpoint writes). Validates is_setpoint, module_type='MQTT', type coercion. Delegates to CommandPublisher. |
 | Express | `server/src/app.ts` | Express shell with GET + POST `/api/v1/tags` routes. Auth stubbed. |
-| Entry | `server/src/index.ts` | Startup sequence: tag rows → tag map → LKV → DutyTracker → TelemetryIntake → HmiTagSource (with DbPipeline + optional TimescaleSizeMonitor) → MQTT bridge → WS attach → DbPipeline.start(). `DbPipeline` owns its own tick; `config.dbTickMs` is not used. |
+| Entry | `server/src/index.ts` | Startup sequence: tag rows → tag map → LKV → DutyTracker → TelemetryIntake → HmiTagSource (with DbPipeline + optional TimescaleSizeMonitor) → MQTT bridge → WS attach → DbPipeline.start() → TrendSnapshotScheduler.start() (if `TREND_SNAPSHOT_ENABLED`). Graceful shutdown stops scheduler before DbPipeline. `DbPipeline` owns its own tick; `config.dbTickMs` is not used. |
 
 ## Client Architecture
 
@@ -72,6 +74,11 @@ Client is a standard Vite React app. `vite.config.ts` proxies `/api` and `/ws` t
 - **TelemetryIntake null-sentinel on watchdog stall.** When a trendable module transitions from healthy to stalled, TelemetryIntake enqueues a null value for each trendable tag (bad-quality sentinel). The FAULT status branch falls through to the COV enqueue (no early return) so stall transitions are always recorded.
 - **TimescaleDbWriter string-drop log guard is per-instance.** `_strDropLogged` is an instance field, not module-level. In practice there is one writer per process, so the behaviour is equivalent; per-instance makes it unit-testable.
 - **HmiTagSource never-sampled sentinel is `0`.** The DutyTracker / HmiTagSource "last-sampled" sentinel uses `0`, not `-1`. `performance.now()` is never exactly `0` at runtime, so this is unambiguous in practice.
+- **Trends REST params are snake_case; response body is camelCase.** Query params: `tag_ids`, `bucket_s`, `tile_index` (§6.1 convention). Response body: `bucketS`, `tileIndex`, `tileSpanMs`, `tagId` — these match the TypeScript `TrendTile` type from `@caro/db`; the route passes the tile through the envelope without field remapping.
+- **Trends API enforces a 20-tag-per-request cap.** Backed by spec §6.1 ("up to 20 tags") and §6.6. Route returns 400 on violation.
+- **`HMI_TRENDS_GZIP` (default unset/off) gates Express `compression` middleware scoped to the `/api/v1/trends` mount only.** Does not affect other routes. Added for Phase A gzip A/B perf measurement against dense aggregate tile payloads.
+- **TrendSnapshotScheduler uses `private` keyword (not `#`) and `dutyTracker.track(fn)` (not `track(label, fn)`).** Follows existing codebase convention. `DutyTracker.track` takes `fn: () => T` only — no label parameter.
+- **TrendSnapshotScheduler piggyback flag is consumed at the top of `ingest()`, before the COV loop.** This ensures the snapshot row uses `message.timestamp` as `moduleTs` rather than `Date.now()`, anchoring the row to the module's own clock. The flag is set by the scheduler tick and consumed at most once per ingest call per module.
 
 ## Reading Order by Topic
 
@@ -113,6 +120,14 @@ TIMESCALE_DB_MAX_ENTRIES_PER_FLUSH=500
 
 # TimescaleSizeMonitor
 TIMESCALE_SIZE_POLL_MS=30000
+
+# TrendSnapshotScheduler
+TREND_SNAPSHOT_ENABLED=true
+TREND_SNAPSHOT_INTERVAL_MS=60000
+
+# Trends REST endpoint
+HMI_TRENDS_GZIP=                  # unset/off by default — any value enables gzip on /api/v1/trends
+TIMESCALE_LOG_TILE_QUERIES=        # unset/off by default — set to 1 to log tile query durations
 ```
 
 ## Phase Status
@@ -124,7 +139,7 @@ TIMESCALE_SIZE_POLL_MS=30000
 | 3 — Client Shell | ✅ Complete | Vite React app, shell components, demo page, E2E pipeline working |
 | 4 — Auth | Not started | express-session, Argon2id, TOTP MFA |
 | 4.5 — DB Migrations | Not started | HMI tables (users, sessions, audit_log, etc.) |
-| 5 — REST Endpoints | In progress | Tag list + setpoint write route implemented; remaining CRUD per hmi_API_spec not started |
+| 5 — REST Endpoints | In progress | Tag list + setpoint write route implemented; trends tile endpoint live (`GET /api/v1/trends/tile`); remaining CRUD per hmi_API_spec not started |
 | 6 — Protobuf | Not started | Replace JSON WS messages with Protobuf encoding |
 
 ## Related Docs

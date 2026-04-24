@@ -9,7 +9,7 @@
 |---|---|---|---|
 | Tag Registry | 3001 | 5173 | Complete |
 | MQTT Simulator | 3002 | 5174 | Active development |
-| CARO HMI | 3003 | 5175 | Phase 3 complete + historian write pipeline live. Server core + client shell + demo pages. HmiTagSource publishes Module_Info arrays and 7 Trend_Info observability tags (Trending, Queue_Depth, Rows_Per_Sec, Flush_ms, Dropped_Pkgs, Error_Count, DB_Size) every 250ms. TimescaleDbWriter writes trendable tags to TimescaleDB via DbPipeline (peek-then-consume, 500ms tick); NullDbWriter fallback if Timescale unreachable at boot. TimescaleSizeMonitor polls DB size every 30s. TrendStatusBox shows all 7 Trend_Info tags on System Overview. Trends READ endpoint (`GET /api/v1/trends/{tag_id}`) not yet built. |
+| CARO HMI | 3003 | 5175 | Phase 3 complete + historian write pipeline live. Server core + client shell + demo pages. HmiTagSource publishes Module_Info arrays and 7 Trend_Info observability tags (Trending, Queue_Depth, Rows_Per_Sec, Flush_ms, Dropped_Pkgs, Error_Count, DB_Size) every 250ms. TimescaleDbWriter writes trendable tags to TimescaleDB via DbPipeline (peek-then-consume, 500ms tick); NullDbWriter fallback if Timescale unreachable at boot. TimescaleSizeMonitor polls DB size every 30s. TrendStatusBox shows all 7 Trend_Info tags on System Overview. Trends tile endpoint live: `GET /api/v1/trends/tile?tag_ids&bucket_s&tile_index` (snake_case params, camelCase body, 20-tag cap, optional gzip via HMI_TRENDS_GZIP). TrendSnapshotScheduler ensures every trendable tag gets ≥1 DB row per minute via piggyback (on next MQTT ingest) or force-write (silent modules). |
 
 ---
 
@@ -17,7 +17,7 @@
 
 | Package | Path | Purpose |
 |---|---|---|
-| `@caro/db` | `packages/db/` | All PostgreSQL and TimescaleDB access. Exports: `pool`, `query`, `withTransaction`, `ping`, `runMigrations`, `getActiveTags`, `applyRegistryRevision`, `getTagTypes`, `getModuleTypes`, `getRevisions` (main Postgres); `timescalePool`, `pingTimescale`, `runTimescaleMigrations`, `writeTagSamples`, `getTimescaleDatabaseSizeBytes` (TimescaleDB). |
+| `@caro/db` | `packages/db/` | All PostgreSQL and TimescaleDB access. Exports: `pool`, `query`, `withTransaction`, `ping`, `runMigrations`, `getActiveTags`, `applyRegistryRevision`, `getTagTypes`, `getModuleTypes`, `getRevisions` (main Postgres); `timescalePool`, `pingTimescale`, `runTimescaleMigrations`, `writeTagSamples`, `getTimescaleDatabaseSizeBytes`, `getTrendTile`, `tileSpanFor` (TimescaleDB). `getTrendTile(tagIds, bucketS, tileIndex)` is the single trend read entry point — dispatches on `bucketS` (0 = raw, >0 = on-the-fly aggregate); tile span derived internally via `tileSpanFor(bucketS)`. Returns a discriminated-union `TrendTile` type; the REST route passes it through as the envelope `data` field without remapping. Integration test helpers live at `packages/db/__tests__/helpers/trends-test-range.ts`. Tests in this package use `.ts` extensions; `vitest.config.js` include pattern is `*.test.{js,ts}` to cover both legacy `.js` and new `.ts` tests. |
 | `@caro/ui` | `packages/ui/` | Shared React primitives, tokens, and `apiClient` (`@caro/ui/api/client`) |
 | `@caro/server` | `packages/server/` | Shared Express middleware — asyncWrap, errorHandler |
 | `@caro/proto` | `packages/proto/` | Shared Protobuf schemas (`tag.proto`) |
@@ -69,7 +69,7 @@ Schema spec: `Docs/CARO_DB_Spec.md`
 
 HMI tables (`users`, `sessions`, `commissioned_modules`, `operation_modes`, `mode_revisions`, `setpoint_values`, `pending_setpoint_values`, `system_settings`, `audit_log`) specified in DB Spec §4–§10, not yet migrated.
 
-**TimescaleDB (port 5433, separate container):** Started via `docker-compose.timescale.yml` at the repo root. Development database: `caro_timescale`. Migrations in `db/timescale/migrations/` (`T00N_` prefix). HMI server calls `pingTimescale()` → `runTimescaleMigrations()` at startup (soft-fail — falls back to `NullDbWriter` if unreachable). Current migration: `T001_create_tag_samples.sql` (tag_samples hypertable: DOUBLE PRECISION value, 12h chunks, compress after 12h, retain 14 days).
+**TimescaleDB (port 5433, separate container):** Started via `docker-compose.timescale.yml` at the repo root. Development database: `caro_timescale`. Migrations in `db/timescale/migrations/` (`T00N_` prefix). HMI server calls `pingTimescale()` → `runTimescaleMigrations()` at startup (soft-fail — falls back to `NullDbWriter` if unreachable). Applied migrations: `T001_create_tag_samples.sql` (tag_samples hypertable: DOUBLE PRECISION value, `compress_segmentby = tag_id`, `compress_orderby = ts DESC`, retain 14 days); `T004_tighten_compression_policy.sql` (1h chunks, `compress_after = 10 min`, `schedule_interval = 5 min` — see `Docs/TimescaleDB_Perf_Decisions.md` for justification). Note: T004 is incompatible with existing 12h chunks — a `TRUNCATE tag_samples` data wipe is required before first startup on any environment that previously ran under T001 settings.
 
 ---
 
@@ -132,4 +132,6 @@ All platform and app documentation consolidated to `C:\KillaTec\CARO_Platform\Do
 | HMI Functional Spec | `hmi_functional_spec.md` |
 | HMI API Spec | `hmi_API_spec.md` |
 | HMI Widget Spec | `hmi_widget_spec.md` |
+| HMI Trend Viewer Spec | `hmi_trend_viewer_spec.md` |
+| HMI Trend Viewer Spec Delta | `hmi_trends_deltas.md` |
 | HMI Bootstrap | `hmi_bootstrap.md` |
