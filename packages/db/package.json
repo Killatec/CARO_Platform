@@ -7,12 +7,15 @@
   "private": true,
   "scripts": {
     "build": "tsc",
-    "test": "vitest run"
+    "test": "vitest run",
+    "perf:single-tag": "tsx scripts/perf-single-tag.ts",
+    "perf:tag-scaling": "tsx scripts/perf-tag-scaling.ts"
   },
   "dependencies": {
     "pg": "^8.13.0"
   },
   "devDependencies": {
-    "@types/pg": "^8.20.0"
+    "@types/pg": "^8.20.0",
+    "dotenv": "^16.6.1"
   }
 }
