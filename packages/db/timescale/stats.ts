@@ -1,4 +1,4 @@
-import timescalePool from './timescalePool.js';
+import timescalePool from './pool.js';
 
 /**
  * Returns the current Timescale database size in bytes.

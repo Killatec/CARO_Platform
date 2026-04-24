@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
-import timescalePool from '../timescalePool.ts';
-import { pingTimescale, writeTagSamples } from '../samples.ts';
+import timescalePool from '../timescale/pool.ts';
+import { pingTimescale, writeTagSamples } from '../timescale/samples.ts';
 
 // Spy on pool methods so unit tests can control responses without a top-level
 // vi.mock that would also clobber the integration describe block.

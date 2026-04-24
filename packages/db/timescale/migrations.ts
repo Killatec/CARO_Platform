@@ -2,7 +2,7 @@ import fs from 'fs';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { PoolClient } from 'pg';
-import timescalePool from './timescalePool.js';
+import timescalePool from './pool.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -50,7 +50,7 @@ export async function runTimescaleMigrations(): Promise<TimescaleMigrationResult
       )
     `);
 
-    const migrationsDir = resolve(__dirname, '../../../db/timescale/migrations');
+    const migrationsDir = resolve(__dirname, '../../../../db/timescale/migrations');
 
     let files: string[];
     try {

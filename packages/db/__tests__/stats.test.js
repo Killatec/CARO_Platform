@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
-import timescalePool from '../timescalePool.ts';
-import { getTimescaleDatabaseSizeBytes } from '../stats.ts';
+import timescalePool from '../timescale/pool.ts';
+import { getTimescaleDatabaseSizeBytes } from '../timescale/stats.ts';
 
 beforeEach(() => {
   vi.spyOn(timescalePool, 'query');

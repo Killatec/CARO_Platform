@@ -4,6 +4,6 @@
     "outDir": "dist",
     "rootDir": "."
   },
-  "include": ["*.ts"],
-  "exclude": ["node_modules", "dist", "__tests__"]
+  "include": ["*.ts", "timescale/*.ts", "__tests__/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
 }

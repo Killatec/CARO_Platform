@@ -1,4 +1,4 @@
-import timescalePool from './timescalePool.js';
+import timescalePool from './pool.js';
 
 export async function pingTimescale(): Promise<void> {
   await timescalePool.query('SELECT 1');
