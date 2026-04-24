@@ -58,7 +58,7 @@
       "template_name": "numeric_mon",
       "asset_name": "DB_Size",
       "fields": {
-        "Trends": false,
+        "Trends": true,
         "unit": "GB"
       }
     }
