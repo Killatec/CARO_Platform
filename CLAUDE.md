@@ -20,7 +20,12 @@ Do not read specs you do not need. The handoff and delta files are always suffic
 
 Delta files are quick-note trackers for spec divergences that occur during implementation.
 
-- **During a task:** If you implement something that diverges from a spec, add a one-line entry to the relevant delta file immediately (`Docs/platform_deltas.md` for cross-app changes, `Docs/{app}_deltas.md` for app-level changes). Do not update handoff, bootstrap, or spec docs mid-task.
+- **During a task:** If you implement something that diverges from a spec, add a one-line entry to the relevant delta file immediately. Use the narrowest scope that applies:
+  - `Docs/platform_deltas.md` — cross-app changes.
+  - `Docs/{app}_deltas.md` — app-level changes (e.g. `hmi_deltas.md`, `tag_registry_deltas.md`, `mqtt_simulator_deltas.md`).
+  - `Docs/hmi_trends_deltas.md` — HMI trend viewer changes (REST endpoint, SnapshotEmitter, CAG migrations, `packages/trend-chart/`). Keeps trend churn out of the general HMI delta file.
+
+  Do not update handoff, bootstrap, or spec docs mid-task.
 - **At session end (when explicitly prompted):** Propagate each delta entry to its target doc (spec, handoff, or bootstrap), then delete the entry. The delta file should be empty or near-empty after propagation.
 - Delta files are NOT changelogs, NOT TODO lists, NOT implementation notes. One line per divergence, nothing more.
 

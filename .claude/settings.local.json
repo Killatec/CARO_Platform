@@ -75,7 +75,15 @@
       "Bash(cat /c/KillaTec/CARO_Platform/apps/tag-registry/templates/tags/*.json)",
       "Bash(powershell -Command \"Move-Item Systems/*.json . ; Move-Item modules/*.json . ; Move-Item parameters/*.json . ; Move-Item tags/*.json .\")",
       "Bash(powershell -Command \"Remove-Item Systems, modules, parameters, tags\")",
-      "Bash(powershell -Command \"Remove-Item -Path 'Systems','modules','parameters','tags' -Recurse -Force -ErrorAction SilentlyContinue\")"
+      "Bash(powershell -Command \"Remove-Item -Path 'Systems','modules','parameters','tags' -Recurse -Force -ErrorAction SilentlyContinue\")",
+      "Bash(xargs cat *)",
+      "Bash(mkdir -p packages/db/timescale)",
+      "Bash(git mv *)",
+      "Bash(TIMESCALE_LOG_TILE_QUERIES=1 npx vitest run __tests__/trends.test.ts)",
+      "Bash(TIMESCALE_LOG_TILE_QUERIES=1 npx tsx src/index.ts)",
+      "Bash(node -e \"console.log\\(Math.floor\\(Date.now\\(\\)/3600000\\)\\)\")",
+      "Bash(node -e \"console.log\\(Math.floor\\(Date.now\\(\\)/600000\\)\\)\")",
+      "Bash(node --input-type=module)"
     ]
   }
 }
