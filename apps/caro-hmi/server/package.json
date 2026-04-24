@@ -12,18 +12,22 @@
     "@caro/db": "*",
     "@caro/hmi-context": "*",
     "@caro/server": "*",
-    "dotenv": "^16.0.0",
+    "compression": "^1.8.1",
     "cors": "^2.8.5",
+    "dotenv": "^16.0.0",
     "express": "^5.2.1",
     "mqtt": "^5.0.0",
     "ws": "^8.0.0"
   },
   "devDependencies": {
+    "@types/compression": "^1.8.1",
     "@types/cors": "^2.8.0",
     "@types/express": "^5.0.6",
+    "@types/supertest": "^7.2.0",
     "@types/ws": "^8.0.0",
+    "supertest": "^7.2.2",
+    "tsx": "^4.0.0",
     "typescript": "^5.4.0",
-    "vitest": "^1.6.0",
-    "tsx": "^4.0.0"
+    "vitest": "^1.6.0"
   }
 }

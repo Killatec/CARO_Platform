@@ -1,10 +1,12 @@
 import express from 'express';
 import type { Application, ErrorRequestHandler } from 'express';
 import cors from 'cors';
+import compression from 'compression';
 import type { TagDef } from '@caro/hmi-context';
 import { errorHandler } from '@caro/server';
 import { createTagsRouter } from './routes/tags.js';
 import { createResetRouter } from './routes/reset.js';
+import trendsRouter from './routes/trends.js';
 import { authStub } from './middleware/auth-stub.js';
 import type { CmdController } from './cmd-controller.js';
 import type { ResetBus } from './reset-bus.js';
@@ -29,6 +31,11 @@ export function createApp(
 
   app.use('/api/v1/tags', createTagsRouter(tagMap, cmdController));
   app.use('/api/v1/reset', createResetRouter(resetBus));
+
+  if (process.env.HMI_TRENDS_GZIP === '1') {
+    app.use('/api/v1/trends', compression());
+  }
+  app.use('/api/v1/trends', trendsRouter);
 
   app.use(errorHandler as ErrorRequestHandler);
 
