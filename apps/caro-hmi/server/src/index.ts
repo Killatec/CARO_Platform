@@ -15,6 +15,7 @@ import { ResetBus } from './reset-bus.js';
 import { WsServer } from './ws-server.js';
 import { createApp } from './app.js';
 import { DutyTracker } from './duty-tracker.js';
+import { TrendSnapshotScheduler } from './trend-snapshot-scheduler.js';
 
 async function start(): Promise<void> {
   // 0. Verify DB connectivity and run migrations
@@ -142,6 +143,17 @@ async function start(): Promise<void> {
   // 7b. Start the async DB pipeline flush tick
   dbPipeline.start();
 
+  // 7c. Trend snapshot scheduler (ensures every trendable tag has ≥1 DB row per minute)
+  const trendSnapshotScheduler = new TrendSnapshotScheduler(
+    intake,
+    moduleTagIds,
+    dutyTracker,
+    config.trendSnapshotIntervalMs,
+  );
+  if (config.trendSnapshotEnabled) {
+    trendSnapshotScheduler.start();
+  }
+
   // 8. Start MQTT (soft-fail — broker may be absent in dev)
   try {
     await mqttBridge.start();
@@ -163,6 +175,7 @@ async function start(): Promise<void> {
     console.log(`[HMI] ${signal} — shutting down`);
     hmiTags.stopPublishing();
     intake.stopWatchdog();
+    trendSnapshotScheduler.stop();
     if (sizeMonitor) await sizeMonitor.stop();
     await dbPipeline.stop();
     await mqttBridge.stop().catch(() => {});

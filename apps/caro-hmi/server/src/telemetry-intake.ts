@@ -38,6 +38,8 @@ export class TelemetryIntake {
   private readonly watchdogTimeoutMs: number;
   private readonly dutyTracker: DutyTracker;
 
+  private trendSnapshotPending = new Set<string>();
+
   private lastSeen = new Map<string, number>();
   private timedOutModules = new Set<string>();   // non-latching: auto-clears when comms resume
   private watchdogLatched = new Set<string>();   // latching: cleared only by manual reset
@@ -63,6 +65,8 @@ export class TelemetryIntake {
   }
 
   ingest(moduleId: string, message: TelemetryMessage): void {
+    const isSnapshot = this.consumeTrendSnapshotPending(moduleId);
+
     this.lastSeen.set(moduleId, Date.now());
 
     this.packetCount.set(moduleId, (this.packetCount.get(moduleId) ?? 0) + 1);
@@ -92,9 +96,39 @@ export class TelemetryIntake {
       }
     }
 
-    if (changedTrendable.length > 0) {
+    if (isSnapshot) {
+      const snapshot = this.buildModuleSnapshot(moduleId);
+      if (snapshot.length > 0) {
+        this.dbPipeline.enqueue({ moduleTs: message.timestamp, tags: snapshot });
+      }
+    } else if (changedTrendable.length > 0) {
       this.dbPipeline.enqueue({ moduleTs: message.timestamp, tags: changedTrendable });
     }
+  }
+
+  markTrendSnapshotPending(moduleId: string): void {
+    this.trendSnapshotPending.add(moduleId);
+  }
+
+  consumeTrendSnapshotPending(moduleId: string): boolean {
+    return this.trendSnapshotPending.delete(moduleId);
+  }
+
+  forceTrendSnapshot(moduleId: string): void {
+    const snapshot = this.buildModuleSnapshot(moduleId);
+    if (snapshot.length === 0) return;
+    this.dbPipeline.enqueue({ moduleTs: Date.now(), tags: snapshot });
+  }
+
+  private buildModuleSnapshot(moduleId: string): { tagId: number; value: number | boolean | string | null }[] {
+    const tagIds = this.moduleTagIds.get(moduleId) ?? [];
+    return tagIds
+      .filter(tagId => this.trendableTagIds.has(tagId))
+      .map(tagId => {
+        const v = this.lkv.getValue(tagId);
+        const value = Array.isArray(v) ? null : (v as number | boolean | string | null);
+        return { tagId, value };
+      });
   }
 
   watchdogTick(): void {
