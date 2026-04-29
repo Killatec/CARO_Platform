@@ -2,13 +2,13 @@
 
 **Purpose:** Implementation backlog only — features fully specified but not yet built. Design questions that are unresolved live in the relevant spec's Open Questions section. Remove items when complete.
 
-**Updated:** 2026-04-27
+**Updated:** 2026-04-29
 
 ---
 
 ## HMI
 
-- [ ] **Step 7 — `packages/trend-chart/` scaffold (active next build):** cache (`tileCache.ts`, `level.ts` with window→bucketS math), `useTrendData` hook, `TrendChart.tsx` wrapping uPlot, tag picker drawer, time-range bar. Build order in `Docs/hmi_trend_viewer_spec.md` §17.1.1 steps 7–12.
+- [ ] **Step 10 — Mode state machine + time-range UI (active next build):** Tailing/fixed mode transitions (§9.3), preset strip 15m/1h/4h/24h/7d/14d (§12.1), custom range picker (§12.2), Live button (§12.3), pan/zoom interactions (§9.1–9.2). First production wiring of `useTrendData`. Still no WS. Build order in `Docs/hmi_trend_viewer_spec.md` §17.1.1 steps 10–12.
 - [ ] Add NULL `prev` rate monitoring per `DB_Config_Usage_And_Perf.md` §8.1 — daily sample at 1-min bound; non-zero rate signals writer-cadence drift
 
 ### Trend Viewer — Deferred / Possible Future Improvements

@@ -11,6 +11,8 @@ CARO_Trending_Reference | hmi_functional_spec | hmi_API_spec | hmi_widget_spec |
 
 | Version | Date | Author | Summary |
 |---|---|---|---|
+| 0.9.1 | 2026-04-29 | PM / Claude | Editorial: align Tag Registry field references to actual `TagDef` type — `engineering_min`/`engineering_max`/`units` → `eng_min`/`eng_max`/`unit` in §8.1.1 and §8.1.3. No contract change. |
+| 0.9 | 2026-04-29 | PM / Claude | Tile geometry pivot. Visible tiles per window 4→2, bucket_count per tile 250→500, plus 1 prefetch tile each side fired async (not render-blocking). Empirically driven by perf-page sweep showing "4×250 vs 1×1000" perf gap was ~0–10% with high variance, not the 51% the spec previously claimed. New justification is time-to-first-render (slowest-of-2 vs slowest-of-4) plus halved DB concurrency pressure plus decoupled prefetch. Trend viewer client locks to bucketCount=500, visibleTilesPerWindow=2, overfetchPerSide=1; server still accepts 1..2500. Cache reuse during pan/zoom unchanged. `packages/trend-chart/` scaffold (Step 7) ships with these defaults. Section §10 rewritten to match. |
 | 0.8 | 2026-04-29 | PM / Claude | Phase A scope tightened. Per-tile perf log polish (§14.7), connection-pool sizing (§15), and EXPLAIN-plan validation (§5.5) deferred from Phase A to Phase B. API functional work and test coverage are complete; deferred items are observability/operational/perf-gate, not contract-level. Existing v0.3-era LOG_TILE_QUERIES gate remains in place; will be polished when revisited. |
 | 0.7 | 2026-04-29 | PM / Claude | Watermark-aware fall-through implemented (§4.3). Recursive descent through 10min_cagg → 1min_cagg → 10s_cagg → 1s_cagg → raw. Split point rounded DOWN to the nearest requested-`bucketSMs` boundary at-or-below each level's watermark (not at watermark_ts exactly) — ensures clean bucket alignment across the stitch. `source: 'mixed'` set when any fall-through occurred. Raw dispatch (`bucketS < 1.0`) bypasses watermark logic entirely. Watermark read via `_timescaledb_internal.cagg_watermark(mat_hypertable_id)` joining `_timescaledb_catalog.continuous_agg` by view name. `__test_watermarkOverride` seam added for integration test isolation. v0.6 bucket-grid contract (`n = bucketCount` or `bucketCount + 1`) preserved across the merged result. |
 | 0.6 | 2026-04-29 | PM / Claude | Server contract clarification: aggregate response returns whatever natural epoch-aligned buckets overlap the requested range; `n` may be `bucket_count` (aligned request) or `bucket_count + 1` (unaligned). Response `startTime`/`endTime` reflect the served bucket grid, not the requested range. Removes the "exact bucketCount" pretence — server is honest about its bucket alignment. Trend viewer client unchanged (aligns by policy). `bucket_count` becomes a bucket-width knob rather than a strict count contract. SQL template and dispatch table unchanged. |
@@ -65,7 +67,7 @@ All other layers (Node/Express, WebSocket, `@caro/db`, `@caro/hmi-context`, `@ca
 | Trends REST endpoint | `apps/caro-hmi/server/src/routes/trends.ts` | Serves `GET /api/v1/trends/tile`. Validates `tag_ids`, `start_time`, `end_time`, `bucket_count`. Derives `bucketS = Number(endTime - startTime) / (bucketCount * 1000)` server-side and validates it falls within (0, 14746]. Delegates to `getTrendTile()` from `@caro/db`. Returns the standard platform envelope. Stateless — no resolution selection, no window math. |
 | TrendSnapshotScheduler | `apps/caro-hmi/server/src/trend-snapshot-scheduler.ts` | Already in production. Ensures every trendable tag gets ≥1 DB row per minute via piggyback (on next MQTT ingest) or force-write (silent modules). The 1-minute cadence is a hard contract — the trends query's bounded `prev` subquery (§5.5) depends on it. |
 | `getTrendTile()` | `packages/db/src/timescale/trends.ts` (new file) | Single named function: `getTrendTile(tagIds, startTime, endTime, bucketCount)`. Derives `bucketS = Number(endTime - startTime) / (bucketCount * 1000)` internally, then dispatches on `bucketS` per §6.3: `bucketS < 1.0` → raw `tag_samples`; `1.0 ≤ bucketS < 16` → `1s_cagg`; `16 ≤ bucketS < 160` → `10s_cagg`; `160 ≤ bucketS < 1600` → `1min_cagg`; `≥ 1600` → `10min_cagg`. Returns the actual natural epoch-aligned bucket grid: for aligned requests this matches `(startTime, endTime)` with exactly `bucketCount` rows; for unaligned requests `startTime` and `endTime` in the response reflect the served grid boundary and `n` is `bucketCount + 1` (§6.2). **Watermark-aware fall-through (§4.3):** any query whose `endTime > source.watermark_ts` is split — materialized portion served from the chosen source, trailing portion from the next-finer source (CAG or raw). **Multi-tag batching:** one DB round-trip across all requested tag IDs using `WHERE tag_id = ANY($tagIds)`; results split by `tag_id` into the `series` array. **Per-query tag cap N ≤ 8** (§6.6) — the server rejects requests above this; charts with more tags fan out at the client. Platform rule forbids raw SQL in apps — all queries live here. |
-| `packages/trend-chart/` | New workspace package | Full client-side feature: chart component, data hooks, cache, tag picker, time range bar, legend, saved-views dropdown (Phase B). Owns all window/level math, tile fan-out across the 4-tile parallel pattern (§10.2), and the N≤8 tag fan-out (§10.4). |
+| `packages/trend-chart/` | New workspace package | Full client-side feature: chart component, data hooks, cache, tag picker, time range bar, legend, saved-views dropdown (Phase B). Owns all window/level math, tile fan-out across the 2-tile parallel pattern (§10.2), and the N≤8 tag fan-out (§10.4). |
 
 **Phase A migrations:** `T001_create_tag_samples.sql` (raw hypertable, already applied), plus four CAG migrations — `T005_create_cag_1s.sql` (already applied but **must be re-migrated**, see Open Questions §18 and `Docs/platform_todo.md`), `T00X_create_cag_10s.sql`, `T00X_create_cag_1min.sql`, `T00X_create_cag_10min.sql` (numbering TBD). Each CAG materializes `last(value ORDER BY ts)`, `null_count`, `min(value)`, `max(value)` (§3.2 of `DB_Config_Usage_And_Perf.md`). The `null_count` column is non-negotiable — it carries the null-as-gap signal through aggregation (§5.4). The `min`/`max` columns are pre-shipped so Phase B bands don't require re-migrating populated CAGs.
 
@@ -98,7 +100,7 @@ Client                                           Server                         
   │◀─────────────────────────────────────────────────┤                              │
 ```
 
-For each visible window the client fires **4 range-fetches in parallel** via `Promise.all` (§10.2), each spanning `windowSec / 4` with `bucketCount=250`, plus ±1 overfetch range on each side, plus tag-group fan-out for charts with > 8 plotted tags (§10.4). Ranges are epoch-aligned — `startTime` is always an integer multiple of `tileSpanMs` from epoch — so identical logical ranges produce identical wire requests across clients and share the cache.
+For each visible window the client fires **2 tile-fetches in parallel** via `Promise.all` (§10.2), each spanning `windowSec / 2` with `bucketCount=500`, plus ±1 async prefetch tile on each side (not render-blocking), plus tag-group fan-out for charts with > 8 plotted tags (§10.4). Ranges are epoch-aligned — `startTime` is always an integer multiple of `tileSpanMs` from epoch — so identical logical ranges produce identical wire requests across clients and share the cache.
 
 ### 4.3 Watermark-Aware Dispatch and Fallthrough
 
@@ -434,7 +436,7 @@ When a tag is first added to the chart, its Y-scale initializes as follows:
 
 | Tag type | Default Y-scale |
 |---|---|
-| Numeric, `engineering_min` and `engineering_max` both present in Tag Registry | `[engineering_min, engineering_max]` |
+| Numeric, `eng_min` and `eng_max` both present in Tag Registry | `[eng_min, eng_max]` |
 | Numeric, engineering range missing | Autoscale over visible data (initial fetch fills in min/max) |
 | Boolean | `[-0.5, 1.5]` |
 
@@ -448,7 +450,7 @@ Rationale: industrial trend viewers (Rockwell, Ignition, Wonderware) typically i
 
 ### 8.1.3 Units on the Y Axis and Legend
 
-The Y axis label shows the units of the selected trace, sourced from the Tag Registry's `units` field (e.g., `°C`, `bar`, `%`). Boolean traces display no unit (blank Y-axis label). The legend shows each trace's current value with its units appended (`78.3 °C`, `1` for booleans). If a tag's `units` field is empty, the axis and legend show the bare number.
+The Y axis label shows the units of the selected trace, sourced from the Tag Registry's `unit` field (e.g., `°C`, `bar`, `%`). Boolean traces display no unit (blank Y-axis label). The legend shows each trace's current value with its unit appended (`78.3 °C`, `1` for booleans). If a tag's `unit` field is null or empty, the axis and legend show the bare number.
 
 ### 8.2 Trace Colors
 
@@ -537,31 +539,27 @@ The Y axis on the left of the plot area displays the selected trace's scale and 
 
 ### 10.1 Model
 
-The client cache is keyed by `(tagId, startTime, endTime, bucketCount)` — keyed on the **request** values, not the served grid. The trend viewer client policy is to align `startTime` to integer multiples of `tileSpanMs = bucketCount * bucketS * 1000` from epoch (§10.4). This ensures that `n === bucketCount`, the response's `startTime`/`endTime` match the request's exactly (§6.2, aligned case), and two requests for the same logical tile from different clients produce identical wire values and share the cache key without a separate coordination layer.
+The client cache is keyed by `(tagId, startTime, endTime, bucketCount)` — keyed on the **request** values, not the served grid. The trend viewer client policy is to align `startTime` to integer multiples of `tileSpanMs` from epoch and to use `bucketCount=500` with 2 visible + 2 prefetch tiles per viewport (§10.4). This ensures that `n === bucketCount`, the response's `startTime`/`endTime` match the request's exactly (§6.2, aligned case), and two requests for the same logical tile from different clients produce identical wire values and share the cache key without a separate coordination layer.
 
 Cache entries form disjoint namespaces per `bucketCount` value per tag. Raw entries (`bucketS < 1.0`) never collide with aggregate entries, and entries at different `bucketS` values never collide with each other. Bucket-size transitions (zoom across a §6.3 dispatch threshold) discard nothing — the new level's ranges are fetched while the old level's ranges remain cached until evicted by LRU.
 
-### 10.2 Tile Geometry — 250 Buckets, 4 Ranges in Parallel
+### 10.2 Tile Geometry — 500 Buckets, 2 Visible + 2 Prefetch
 
-**Trend viewer client policy: `bucketCount=250` fixed.** This number is justified by three independent measurements (`DB_Config_Usage_And_Perf.md` §6.1):
+**Trend viewer client policy: `bucketCount=500`, `visibleTilesPerWindow=2`, `overfetchPerSide=1`.**
 
-1. The perf battery's BC=250 cell is the highest-confidence operating point in the gate-tested grid.
-2. Direct measurement: 4 × 250-bucket ranges beat 1 × 1000-bucket range by 51% on uncompressed (61 ms → 30 ms wall-clock).
-3. Cliff avoidance: per-range working set stays below the heap-scatter cliff across the operating range.
+Each tile is one rendered unit: 500 buckets at the viewport's bucket width. The two visible tiles together cover the full viewport and are the only tiles that gate chart render. One prefetch tile on each side fires concurrently with the visible fetches but does NOT block render — it populates the LRU cache asynchronously so that the next pan in that direction hits the cache instantly.
 
-The interactive trend viewer locks `bucketCount` to 250 by policy. The server accepts `bucketCount` in 1..2500 for future consumers (analytics dashboards, CSV exporters, headless reports), but values other than 250 operate outside the gate-tested zone. Consumers choosing other values are responsible for their own performance characterization.
+**Justification (empirical).** A perf-page sweep across `pointsPerTile ∈ {1000, 500, 250}` showed per-fetch latency is comparable across configs — 0–10% delta with high variance and no consistent direction across dispatch rows. The "4×250 beats 1×1000 by 51%" claim from v0.4 gate testing did not reproduce in the full dispatch sweep. The 2-visible design's advantages are:
 
-**Trend viewer client policy: range alignment.** The client computes `bucketS = windowSec / (4 × 250)`, derives `tileSpanMs = 250 × bucketS × 1000`, and aligns each range's `startTime` to an integer multiple of `tileSpanMs` from epoch. This epoch-alignment ensures that two clients requesting the same logical tile produce identical `(startTime, endTime)` wire values and share the cache key (§10.1).
+- **Time-to-first-render**: the chart awaits the slowest-of-2 tiles rather than slowest-of-4, statistically improving first-paint latency.
+- **DB concurrency pressure**: 2 simultaneous viewport queries vs 4, halving pool demand during render.
+- **Decoupled prefetch**: prefetch tiles no longer contribute to render-blocking latency; they fill in cache ahead of user navigation.
 
-**4 ranges in parallel per visible window.** The client fans the visible window into 4 epoch-aligned `(startTime, endTime)` pairs and fires them via `Promise.all`. Measured parallelism factor is 2.79× — short of the theoretical 4× ceiling because of connection-pool contention and last-range straggler effects, but the four-range pattern still wins decisively over a single 1000-bucket range (51% wall-clock improvement).
+The server accepts `bucketCount` in 1..2500 for non-viewer consumers (analytics, exports, headless reports). Those operate outside the viewer's gate-tested point and are responsible for their own perf characterization.
 
-For pan/scroll, ±1 overfetch range is added on each side, so 6 ranges are cached per active window but only 4 are rendered. Overfetch ranges are pre-fired as soon as the visible window stabilizes.
+**Per-tag-group fan-out.** Charts with > 8 plotted tags split the tag list into ⌈N/8⌉ tag-groups. Each tile fires once per tag-group. A 16-tag chart during a viewport change becomes 2 visible-tiles × 2 tag-groups = 4 render-blocking queries (plus 2 prefetch tiles × 2 groups = 4 background queries).
 
-**Per-tag-group fan-out.** Charts with > 8 plotted tags additionally split the tag list into ⌈N/8⌉ tag-groups. Each range is then fired once per tag-group. A 16-tag chart over a single window becomes 4 time-ranges × 2 tag-groups = 8 parallel queries (§10.4, §6.6).
-
-**Payload sizing.** 8 tags × 250 buckets × 8 bytes = 16 KB per aggregate response. A typical 4-range window with 8 tags is ~64 KB. A 16-tag chart's full window is ~128 KB across 8 parallel responses. All comfortably within HTTP/JSON budgets.
-
-**Raw range span.** When `bucketS < 1.0`, the server produces 250 "buckets" of irregular COV samples per range — but COV semantics mean the per-sample payload depends on tag activity. For very bursty tags an upper bound is enforced server-side via `LIMIT` on the raw query; for quiet tags raw ranges return fewer samples. Raw ranges are bounded by range span × expected COV rate; with the typical 480 ms – 4 s range span at `bucketS < 1.0` and observed COV rates, raw payloads stay comparable to or smaller than aggregate ranges.
+**Payload sizing.** 8 tags × 500 buckets × 8 bytes = 32 KB per aggregate response. A 2-tile viewport with 8 tags is ~64 KB — identical to the prior geometry's total, distributed across 2 responses instead of 4.
 
 ### 10.3 LRU Eviction
 
@@ -575,28 +573,30 @@ Rationale for range-tile caching over alternatives:
 
 ### 10.4 Tile-Aligned Fetches
 
-Given the visible window `[from, to]` and the trend viewer's fixed `bucketCount=250`, the client computes:
+Given visible viewport `[viewportStart, viewportEnd)` and policy values `bucketCount=500`, `visibleTilesPerWindow=2`:
 
 ```
-bucketS    = (to - from) / (1000 * 4 * 250)          // window divided into 4 ranges of 250 buckets
-tileSpanMs = 250 * bucketS * 1000
+tileSpanMs        = (viewportEnd - viewportStart) / visibleTilesPerWindow   // bigint floor division
+firstVisibleStart = floor(viewportStart / tileSpanMs) * tileSpanMs          // epoch-aligned
 
-// epoch-aligned startTime for the tile covering timestamp t:
-startTime(t) = floor(t / tileSpanMs) * tileSpanMs
-endTime(t)   = startTime(t) + tileSpanMs
+visible[k].startTime = firstVisibleStart + k * tileSpanMs    for k in [0, visibleTilesPerWindow)
+visible[k].endTime   = visible[k].startTime + tileSpanMs
+
+prefetch[before] = tile immediately before visible[0]         // startTime = firstVisibleStart - tileSpanMs
+prefetch[after]  = tile immediately after visible[visibleTilesPerWindow - 1]
 ```
 
-Then fires the 4 epoch-aligned `(startTime, endTime)` pairs covering `[from, to]` (plus ±1 overfetch ranges) in parallel via `Promise.all`, fanned out across ⌈N/8⌉ tag-groups for charts > 8 tags. Ranges already in the cache are skipped. This ensures:
+All timestamp arithmetic is bigint to avoid float drift. Visible tiles are fired via `Promise.all` and awaited before chart render. Prefetch tiles fire concurrently but their resolution does NOT gate render.
 
-- Ranges are uniform and cacheable.
-- Adjacent viewport pans hit the cache when they land within already-fetched ranges.
+Tiles already in the cache are skipped. This ensures:
+
+- All tiles are uniform and cacheable across clients.
+- Adjacent pans hit the cache: the prefetch tile for the direction of travel is already populated.
 - The server always sees epoch-aligned windows; the response's `n === bucketCount` and `startTime`/`endTime` match the request exactly.
 
-The alignment math here is the trend viewer client's discipline. The server accepts unaligned requests and returns an honest response (`n = bucketCount + 1`, response `startTime`/`endTime` slightly outside the requested range), but non-aligned requests are never produced by the trend viewer.
+**Multi-tag batching with N ≤ 8 fan-out.** Each tile request carries up to 8 tag IDs batched via `WHERE tag_id = ANY($tagIds)` server-side (§4.1). Charts with > 8 plotted tags fan out into ⌈N/8⌉ tag-groups. Total render-blocking requests for a fresh viewport: `visibleTilesPerWindow × ⌈N/8⌉` (e.g., 4 for a 16-tag chart). Prefetch tiles add `2 × ⌈N/8⌉` background requests.
 
-**Multi-tag batching with N ≤ 8 fan-out.** Each range request carries up to 8 tag IDs that share a cache miss for that range, batched via `WHERE tag_id = ANY($tagIds)` server-side (§4.1). A chart with > 8 plotted tags fans out into ⌈N/8⌉ tag-groups; for each missed range, one request fires per tag-group. Total parallel requests for a fresh window: `4 time-ranges × ⌈N/8⌉ tag-groups` (e.g., 8 for a 16-tag chart, 12 for a 24-tag chart — though the chart UX cap is 20).
-
-The N ≤ 8 cap derives from the heap-scatter cliff (§6.6) and is enforced server-side. Per-query latency is roughly linear in N up to the cap (~3.5 ms/tag wall-clock at the gate-tested operating point); past N = 8 the planner flips scan strategy and latency degrades non-linearly.
+The N ≤ 8 cap derives from the heap-scatter cliff (§6.6) and is enforced server-side. Per-query latency is roughly linear in N up to the cap; past N = 8 the planner flips scan strategy and latency degrades non-linearly.
 
 **Single-tag exception.** When the operator adds one new tag to a chart whose already-plotted tags have the required range(s) cached, the client issues a single-tag range request for just the new tag — refetching the existing tags would be wasted bandwidth. This is the only case in which a range request carries fewer than the chart's currently-plotted tag count modulo 8.
 
@@ -604,10 +604,12 @@ The N ≤ 8 cap derives from the heap-scatter cliff (§6.6) and is enforced serv
 
 ### 10.5 Overfetch and Prefetch
 
-- **Overfetch.** Beyond the visible window, the client fetches 1 additional range on each side, never extending past `now`. Smooths out small pans and prevents flash-of-empty at edges.
-- **Prefetch.** When the visible window crosses 50% of the outermost cached range (a hysteresis threshold), prefetch the next range in the direction of travel.
+- **Visible tiles** are render-blocking: the chart's first paint awaits `Promise.all(visibleFetches)`. There are always `visibleTilesPerWindow` (2) visible tiles per viewport.
+- **Prefetch tiles** (one each side of the viewport, `overfetchPerSide=1`) fire in parallel with the visible fetches but their resolution does **not** gate render. They populate the LRU cache asynchronously.
+- **Pan transition**: the prefetch tile covering the direction of travel is already in the cache, so the pan transitions without a blank frame. The new outer-edge prefetch tile fires async at that point.
+- **Zoom across §6.3 dispatch threshold**: `bucketCount` changes (effectively — the tile span changes), so the new tiles have distinct cache keys from the old ones. The old tiles remain cached until evicted by LRU. Bridge render: display the old level's data scaled into the new pixel space until the new visible tiles resolve.
 - **Debounce.** Pan events debounce at ~100 ms to avoid issuing a new fetch on every frame of a drag.
-- **Bridge render.** When `bucketS` changes (e.g., user zooms from a 24h view into a 30min view, crossing a §6.3 dispatch threshold), render the old level's data scaled into the new pixels until the new range fetches resolve. Avoids blank chart during zoom. Bridge data may also span a watermark fall-through transition (§4.3) silently — the client does not need to inspect the `source` field of a cached response to render it.
+- **Bridge render.** When `bucketS` changes, render the old level's data scaled into the new pixels until the new visible fetches resolve. Bridge data may span a watermark fall-through transition (§4.3) silently — the client does not need to inspect the `source` field of a cached response to render it.
 
 ### 10.6 Live Tail Stitching
 
@@ -954,9 +956,9 @@ Non-binding, but each step is landable independently and its tests pass in isola
 | 4 | **Watermark-aware fall-through** in `getTrendTile()`: split-and-stitch logic when `range_end > watermark_ts`. Integration test: write samples past the 1s CAG's watermark; tile request spanning watermark returns continuous data. | 3 | Live-edge correctness; mandatory before API exposes live tailing |
 | 5 | **REST endpoint `/api/v1/trends/tile`**: thin handler, validation (`INVALID_TAG_IDS` count 1–8, `INVALID_RANGE`, `INVALID_BUCKET_COUNT`, `INVALID_BUCKET_S`), envelope, perf log (§14.7). Unit tests for validation; integration test for end-to-end round-trip. | 4 | API surface, validation, perf observability |
 | 6 | **Remaining CAG migrations** (10s, 1min, 10min) and dispatch branches in `getTrendTile()`. Integration tests for each. | 5 | Full §6.3 dispatch coverage |
-| 7 | **`packages/trend-chart/` scaffold**: workspace package, `level.ts` (trend viewer client policy: `windowSec → bucketS → tileSpanMs → epoch-aligned startTime/endTime`), `tileCache.ts` (LRU keyed by `(tagId, startTime, endTime, bucketCount)`, 50 MB cap), `colorAssign.ts`. Pure unit tests, no React. | 5 (types only) | client-side range math, cache eviction, palette determinism |
-| 8 | **`useTrendData` hook**: range-aligned fetch orchestration, 4-range parallelism, ⌈N/8⌉ tag-group fan-out, single-tag exception for tag-add (§10.4), overfetch (+1 range each side). Mocked server for tests. | 7 | fetch coordination, cache population, fan-out correctness |
-| 9 | **`TrendChart` static rendering**: uPlot wrapper, `spanGaps: false`, stepped interpolation, per-trace Y-scale defaults (§8.1.1), legend with units (§8.1.3), hover tooltip with site timezone (§8.5), resolution indicator (§8.6). Hardcoded test data or storybook — no live tail yet. | 8 | render path, null-as-gap, color/legend/tooltip |
+| 7 | **`packages/trend-chart/` scaffold**: workspace package, `level.ts` (`alignedTilesInRange` primitive; `tilesForViewport` composite returning `{visible, prefetch}` with `bucketCount=500` / `visibleTilesPerWindow=2` / `overfetchPerSide=1` defaults; `deriveBucketSMs` helper), `tileCache.ts` (LRU keyed by `(tagId, startTime, endTime, bucketCount)`, 50 MB cap, generic byte-size accounting), `colorAssign.ts` (`schemeTableau10` cycled to 20 entries). Pure unit tests (41 passing), no React. | 5 (types only) | client-side range math, cache eviction, palette determinism |
+| 8 | **`useTrendData` hook**: range-aligned fetch orchestration, 2-tile parallelism (visible) + 2 async prefetch tiles, ⌈N/8⌉ tag-group fan-out, single-tag exception for tag-add (§10.4), stale-generation guard. ✓ Done — 62 total passing at step completion. | 7 | fetch coordination, cache population, fan-out correctness |
+| 9 | **`TrendChart` static rendering**: uPlot wrapper, `spanGaps: false`, stepped interpolation, per-trace Y-scale defaults (§8.1.1), legend with `unit` (§8.1.3), hover tooltip with site timezone (§8.5), resolution indicator (§8.6). Dev test page at `/dev/trend-chart-test`. ✓ Done — 106 total passing in @caro/trend-chart. Pan/zoom and time-range controls deferred to Step 10. | 8 | render path, null-as-gap, color/legend/tooltip |
 | 10 | **Mode state machine + time range UI**: tailing / fixed transitions (§9.3), preset strip (§12.1), custom range picker (§12.2), Live button (§12.3), pan/zoom interactions (§9.1–9.2). Still no WS. | 9 | interaction model, mode correctness |
 | 11 | **Live tail**: WS subscription wiring via `@caro/hmi-context`, client-side bucket accumulator (§10.6), per-tag subscription lifecycle (§10.7), reconnect/backoff (§14.4). | 10 | live stitching, subscription correctness |
 | 12 | **Tag picker drawer**: tree + search (§11.2), multi-select commit (§11.3), trendable filter (§11.4). | 11 | picker UX, trendable filtering |
@@ -1029,7 +1031,8 @@ Questions resolved during v0.1–v0.4 design:
 | T005 1s CAG reconciliation — drop/recreate or alter? | **Drop and recreate** (option a). T006 migration (2026-04-28) drops `caro_samples_1s` and creates `tag_samples_1s_cagg` with `null_count`, 24h chunks, 1-min refresh, 1h compression-after. No operational data was lost — raw `tag_samples` is the source of truth. |
 | CAG view naming convention — `tag_samples_*_cagg` or `caro_*`? | **`tag_samples_*_cagg`** — consistent with the raw `tag_samples` hypertable name. Standardized in T006–T009 (2026-04-28). |
 | Tile-index-keyed wire vs range-keyed wire? | **Range-keyed (v0.5).** API takes `(start_time, end_time, bucket_count)`. Tile-aligned caching preserved by client-side discipline — epoch-aligned `startTime` values at fixed `bucketCount`. Trend viewer locks `bucketCount=250`; server accepts 1..2500 for non-viewer consumers. |
-| `bucketCount` fixed at 250 in the API or a client knob? | **Client knob in the API** (1..2500). Trend viewer's policy is fixed at 250 to stay in the gate-tested zone. Other consumers can pick their own operating point but own the perf consequences. |
+| `bucketCount` fixed at 250 in the API or a client knob? | **Client knob in the API** (1..2500). Trend viewer's policy is fixed at 500 (updated v0.9) to stay in the gate-tested zone. Other consumers can pick their own operating point but own the perf consequences. |
+| 4×250 vs 2×500 vs 1×1000 tile geometry? | **2 visible × 500 + 2 prefetch (1 per side)**. Perf-page sweep showed 4×250 vs 1×1000 delta was 0–10% with high variance (not the 51% v0.4 claimed). Deciding factors: time-to-first-render (slowest-of-2 statistics), halved DB concurrency pressure, decoupled prefetch. (v0.9) |
 | What does `bucket_count` actually guarantee on the wire? | It specifies the **bucket width** (via `(endTime - startTime) / bucket_count`), not a strict row-count contract. Aligned requests get exactly `bucket_count` rows; unaligned get `bucket_count + 1`. Response carries the actual served `startTime`/`endTime`/`n`. Trend viewer client aligns by policy so it always sees `n === bucket_count`. (v0.6) |
 
 **Open (Phase A):**

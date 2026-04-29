@@ -6,6 +6,7 @@ import { RfControlPage } from './pages/RfControlPage.js';
 import { PowerPage } from './pages/PowerPage.js';
 import { CoolingPage } from './pages/CoolingPage.js';
 import { TrendsPerfTestPage } from './pages/TrendsPerfTestPage.js';
+import { TrendChartTestPage } from './pages/TrendChartTestPage.js';
 
 export const tree: TreeNode[] = [
   {
@@ -42,5 +43,10 @@ export const tree: TreeNode[] = [
     id: 'dev-trends-perf',
     label: 'Dev: Trends Perf',
     page: TrendsPerfTestPage,
+  },
+  {
+    id: 'dev-trend-chart',
+    label: 'Dev: Trend Chart',
+    page: TrendChartTestPage,
   },
 ];

@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@caro/hmi-context": "*",
+    "@caro/trend-chart": "*",
     "@caro/widgets": "*",
     "@caro/ui": "*",
     "react": "^18.3.0",
