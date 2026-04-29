@@ -47,6 +47,22 @@ export async function resetTestRange(): Promise<void> {
   );
 }
 
+/**
+ * Returns a tag_id that has at least one sample in the last 5 minutes.
+ * Returns null if no such tag exists (test should skip rather than fail).
+ * Used by live-edge integration tests to avoid hardcoded tag IDs.
+ */
+export async function pickRecentlyActiveTagId(): Promise<number | null> {
+  const res = await timescalePool.query(
+    `SELECT tag_id
+     FROM tag_samples
+     WHERE ts > now() - INTERVAL '5 minutes'
+     GROUP BY tag_id
+     LIMIT 1`,
+  );
+  return (res.rows[0] as { tag_id: number } | undefined)?.tag_id ?? null;
+}
+
 // Materialises (or clears) the sandbox window for the given CAG.
 // Must be called after writeTestSamples (to materialise) or after resetTestRange
 // (to clear the CAG of previously materialised test rows).

@@ -80,15 +80,28 @@ function sourceDisplayName(s: AggregateSource): '1s_cagg' | '10s_cagg' | '1min_c
   return s.replace('tag_samples_', '') as '1s_cagg' | '10s_cagg' | '1min_cagg' | '10min_cagg';
 }
 
-// ── Watermark override (test seam) ─────────────────────────────────────────────
+// ── Test seams ─────────────────────────────────────────────────────────────────
 //
-// Production leaves this null. Tests set current to a Map<AggregateSource, number>
-// (ms since epoch) before each test to deterministically control fall-through.
-// Reset to null in afterEach to restore production watermark queries.
+// __test_watermarkOverride: production leaves null. Tests set current to a
+// Map<string, number> (ms since epoch) keyed by source name to deterministically
+// control fall-through. Reset to null in afterEach.
+//
+// __test_lastUsedSources: populated by getTrendTile after each aggregate call so
+// integration tests can assert which sources the recursion reached. Set<string>
+// so cross-package imports don't need the private AggregateSource type.
+//
+// __test_getWatermarkMs: direct access to the watermark catalog query so tests
+// can assert the live path without going through getTrendTile.
 
-export const __test_watermarkOverride: { current: Map<AggregateSource, number> | null } = {
+export const __test_watermarkOverride: { current: Map<string, number> | null } = {
   current: null,
 };
+
+export const __test_lastUsedSources: { current: Set<string> } = { current: new Set() };
+
+export async function __test_getWatermarkMs(source: string): Promise<number> {
+  return getWatermarkMs(source as AggregateSource);
+}
 
 // ── Watermark lookup ──────────────────────────────────────────────────────────
 //
@@ -359,6 +372,7 @@ async function queryRecursive(
 
   if (source === 'tag_samples' || endTimeMs <= watermarkMs) {
     // Full range is covered by this source — no fall-through.
+    __test_lastUsedSources.current.add(source);
     const seg = await querySegment(source, tagIds, startTime, endTime, bucketS, bucketSMs);
     return { segments: [seg], usedSources: new Set([source]) };
   }
@@ -369,12 +383,14 @@ async function queryRecursive(
 
   if (splitBoundaryMs <= Number(startTime)) {
     // Nothing in this source covers the requested range — fall through entirely.
+    // This source contributed no data; do NOT add it to __test_lastUsedSources.
     const finer = nextFinerSource(source);
     return queryRecursive(finer, tagIds, startTime, endTime, bucketS, bucketSMs);
   }
 
   // Split: CAG covers [startTime, splitBoundary); finer source covers [splitBoundary, endTime).
   // Run both in parallel — independent DB round-trips.
+  __test_lastUsedSources.current.add(source);
   const splitBoundary = BigInt(splitBoundaryMs);
   const finer         = nextFinerSource(source);
 
@@ -446,6 +462,7 @@ export async function getTrendTile(
 
   const bucketSMs = Math.round(bucketS * 1000);
 
+  __test_lastUsedSources.current = new Set();
   const { segments, usedSources } = await queryRecursive(
     dispatchSource, tagIds, startTime, endTime, bucketS, bucketSMs,
   );

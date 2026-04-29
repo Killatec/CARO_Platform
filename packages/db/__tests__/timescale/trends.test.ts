@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
-import { getTrendTile, __test_watermarkOverride } from '../../timescale/trends.js';
+import {
+  getTrendTile,
+  __test_watermarkOverride,
+  __test_lastUsedSources,
+  __test_getWatermarkMs,
+} from '../../timescale/trends.js';
 import type { RawTrendTile, AggregateTrendTile } from '../../timescale/trends.js';
 
 // ── Guard: skip all integration tests if TimescaleDB is not configured ─────────
@@ -601,26 +606,42 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — watermark fall-through', asyn
   });
 
   // ── Test 5: cascade through two CAG levels ────────────────────────────────────
+  //
+  // Uses a 10s_cagg dispatch range (bucketS = 115.2) so the fall-through ladder
+  // goes: dispatch=10s_cagg → split at watermark mid-window → tail falls through
+  // 1s_cagg (watermark before window) → raw (tag_samples). Two distinct sources
+  // actually serve data: tag_samples_10s_cagg (left half) + tag_samples (right half).
 
-  it('cascade through two levels: 1s_cagg → 10s_cagg → 1s_cagg (deeper recursion)', async () => {
-    // 1s_cagg watermark before the window → fall to 10s_cagg.
-    // 10s_cagg watermark mid-window → splits there, tail goes to 1s_cagg next-finer (raw).
-    // This tests multi-level recursion.
-    const splitMs = Number(START) + 200 * BUCKET_MS;
+  it('cascade through two levels: 10s_cagg splits, tail falls through 1s_cagg → raw', async () => {
+    // 10s_cagg dispatch range: START_10S=4h, END_10S=12h, COUNT=250.
+    // bucketS = 28_800_000 / 250_000 = 115.2 → tag_samples_10s_cagg dispatch.
+    // bucketSMs = Math.round(115.2 * 1000) = 115_200.
+    const START_10S     = 14_400_000n;  // 4h past epoch (bucket-aligned: 14_400_000 / 115_200 = 125)
+    const END_10S       = 43_200_000n;  // 12h past epoch
+    const BUCKET_MS_10S = 115_200;
+
+    // Place 10s_cagg watermark 200 buckets into the window:
+    //   splitBoundaryMs = 14_400_000 + 200 * 115_200 = 37_440_000 (exact boundary)
+    const splitMs10s = Number(START_10S) + 200 * BUCKET_MS_10S; // 37_440_000
     __test_watermarkOverride.current = new Map([
-      ['tag_samples_1s_cagg',  Number(START) - 10_000],  // before window → skip entirely
-      ['tag_samples_10s_cagg', splitMs + 1],              // mid-window watermark
-      // tag_samples (raw) has Infinity watermark — terminates recursion
+      ['tag_samples_10s_cagg', splitMs10s + 1],             // watermark just past split
+      ['tag_samples_1s_cagg',  Number(START_10S) - 10_000], // before window → falls through to raw
     ]);
 
-    await writeTestSamples([{ ts: START + 1_000n, tagId: 6005, value: 3.0 }]);
+    await writeTestSamples([{ ts: START_10S + 1_000n, tagId: 6005, value: 3.0 }]);
     await refreshTestCagg('1s_cagg');
     await refreshTestCagg('10s_cagg');
 
-    const tile = await getTrendTile([6005], START, END, COUNT) as AggregateTrendTile;
+    const tile = await getTrendTile([6005], START_10S, END_10S, COUNT) as AggregateTrendTile;
     expect(tile.source).toBe('mixed');
     expect(tile.n).toBe(COUNT);
     expect(tile.series[0].value).toHaveLength(COUNT);
+
+    // Prove recursion reached two distinct sources:
+    // 10s_cagg served the left half; tag_samples served the right half (1s_cagg fell through entirely).
+    expect(__test_lastUsedSources.current.size).toBeGreaterThanOrEqual(2);
+    expect(__test_lastUsedSources.current.has('tag_samples_10s_cagg')).toBe(true);
+    expect(__test_lastUsedSources.current.has('tag_samples')).toBe(true);
   });
 
   // ── Test 6: raw dispatch is unaffected by watermark overrides ─────────────────
@@ -655,16 +676,24 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — watermark fall-through', asyn
   // Skips if TIMESCALE_HOST is unset (existing guard pattern).
 
   it('live-edge smoke: [now-10min, now] with production watermark (no override)', async () => {
+    const { pickRecentlyActiveTagId } = await import('../helpers/trends-test-range.js');
+    const tagId = await pickRecentlyActiveTagId();
+    if (tagId === null) {
+      // No active tag in the last 5 minutes — skip rather than fail.
+      console.warn('[live-edge smoke] no recently active tag found; test skipped');
+      return;
+    }
+
     // Ensure production watermarks are used.
     __test_watermarkOverride.current = null;
 
-    const nowMs   = BigInt(Date.now());
-    const tenMin  = 600_000n;
+    const nowMs     = BigInt(Date.now());
+    const tenMin    = 600_000n;
     const liveStart = nowMs - tenMin;
     const liveEnd   = nowMs;
 
     // bucketS = 600_000 / 250_000 = 2.4 → 1s_cagg dispatch
-    const tile = await getTrendTile([2654], liveStart, liveEnd, COUNT) as AggregateTrendTile;
+    const tile = await getTrendTile([tagId], liveStart, liveEnd, COUNT) as AggregateTrendTile;
 
     // Source must be '1s_cagg' (watermark covers full range) or 'mixed' (fall-through).
     expect(['1s_cagg', 'mixed']).toContain(tile.source);
@@ -675,10 +704,44 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — watermark fall-through', asyn
     // The value array must have n entries.
     expect(tile.series[0].value).toHaveLength(tile.n);
 
-    // At least one non-null value must exist near the live edge
-    // (proves we're getting current data, not a full-range stale gap).
-    const lastFew = tile.series[0].value.slice(-10);
-    const nonNullCount = lastFew.filter(v => v !== null).length;
+    // At least one non-null value must exist anywhere in the window.
+    // (The tag may have logged data earlier in the 10-min span, not only at the edge.)
+    const nonNullCount = tile.series[0].value.filter(v => v !== null).length;
     expect(nonNullCount).toBeGreaterThan(0);
+  });
+});
+
+// ── getWatermarkMs — direct catalog query (Part 2A) ───────────────────────────
+//
+// Validates the live catalog path without going through getTrendTile or any
+// watermark override. Skip the suite if TIMESCALE_HOST is unset.
+
+describe.skipIf(!HAVE_TIMESCALE)('getWatermarkMs — direct catalog query', async () => {
+  const CAGG_SOURCES = [
+    'tag_samples_1s_cagg',
+    'tag_samples_10s_cagg',
+    'tag_samples_1min_cagg',
+    'tag_samples_10min_cagg',
+  ] as const;
+
+  it.each(CAGG_SOURCES)('%s: returns finite ms timestamp within expected range', async (source) => {
+    const wmMs = await __test_getWatermarkMs(source);
+
+    // Watermark must be a finite number.
+    expect(Number.isFinite(wmMs)).toBe(true);
+
+    // Watermark must be positive (CAGs have been refreshed at least once).
+    expect(wmMs).toBeGreaterThan(0);
+
+    // Watermark must be no more than 10 minutes in the past (active refresh policy).
+    expect(wmMs).toBeGreaterThan(Date.now() - 600_000);
+
+    // Watermark must not be in the future.
+    expect(wmMs).toBeLessThanOrEqual(Date.now() + 1_000); // +1 s tolerance for clock skew
+  });
+
+  it('tag_samples (raw): returns Infinity (no watermark concept)', async () => {
+    const wmMs = await __test_getWatermarkMs('tag_samples');
+    expect(wmMs).toBe(Infinity);
   });
 });
