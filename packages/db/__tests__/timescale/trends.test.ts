@@ -1,0 +1,684 @@
+import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
+import { getTrendTile, __test_watermarkOverride } from '../../timescale/trends.js';
+import type { RawTrendTile, AggregateTrendTile } from '../../timescale/trends.js';
+
+// ── Guard: skip all integration tests if TimescaleDB is not configured ─────────
+
+const HAVE_TIMESCALE = !!process.env.TIMESCALE_HOST;
+
+if (HAVE_TIMESCALE) {
+  afterAll(async () => {
+    const { timescalePool } = await import('../helpers/trends-test-range.js');
+    await timescalePool.end();
+  });
+}
+
+// ── Cross-cutting validation (no DB needed) ────────────────────────────────────
+
+describe('getTrendTile — INVALID_TAG_IDS', () => {
+  it('throws on empty array', async () => {
+    await expect(getTrendTile([], 1n, 1_000_000n, 250))
+      .rejects.toMatchObject({ code: 'INVALID_TAG_IDS' });
+  });
+
+  it('throws on 9-element array (exceeds 8-tag cap)', async () => {
+    await expect(getTrendTile([1,2,3,4,5,6,7,8,9], 1n, 1_000_000n, 250))
+      .rejects.toMatchObject({ code: 'INVALID_TAG_IDS' });
+  });
+
+  it('throws when a tagId is not an integer', async () => {
+    await expect(getTrendTile([1.5], 1n, 1_000_000n, 250))
+      .rejects.toMatchObject({ code: 'INVALID_TAG_IDS' });
+  });
+
+  it('throws when a tagId is zero', async () => {
+    await expect(getTrendTile([0], 1n, 1_000_000n, 250))
+      .rejects.toMatchObject({ code: 'INVALID_TAG_IDS' });
+  });
+
+  it('throws when a tagId is negative', async () => {
+    await expect(getTrendTile([-1], 1n, 1_000_000n, 250))
+      .rejects.toMatchObject({ code: 'INVALID_TAG_IDS' });
+  });
+});
+
+describe('getTrendTile — INVALID_RANGE', () => {
+  it('throws when endTime equals startTime', async () => {
+    await expect(getTrendTile([1], 1_000_000n, 1_000_000n, 250))
+      .rejects.toMatchObject({ code: 'INVALID_RANGE' });
+  });
+
+  it('throws when endTime is less than startTime', async () => {
+    await expect(getTrendTile([1], 2_000_000n, 1_000_000n, 250))
+      .rejects.toMatchObject({ code: 'INVALID_RANGE' });
+  });
+
+  it('throws when startTime is zero (non-positive)', async () => {
+    await expect(getTrendTile([1], 0n, 1_000_000n, 250))
+      .rejects.toMatchObject({ code: 'INVALID_RANGE' });
+  });
+
+  it('throws when startTime is negative', async () => {
+    await expect(getTrendTile([1], -1n, 1_000_000n, 250))
+      .rejects.toMatchObject({ code: 'INVALID_RANGE' });
+  });
+});
+
+describe('getTrendTile — INVALID_BUCKET_COUNT', () => {
+  it('throws on bucketCount = 0', async () => {
+    await expect(getTrendTile([1], 1n, 1_000_000n, 0))
+      .rejects.toMatchObject({ code: 'INVALID_BUCKET_COUNT' });
+  });
+
+  it('throws on bucketCount = -1', async () => {
+    await expect(getTrendTile([1], 1n, 1_000_000n, -1))
+      .rejects.toMatchObject({ code: 'INVALID_BUCKET_COUNT' });
+  });
+
+  it('throws on bucketCount = 2501', async () => {
+    await expect(getTrendTile([1], 1n, 1_000_000n, 2501))
+      .rejects.toMatchObject({ code: 'INVALID_BUCKET_COUNT' });
+  });
+
+  it('throws on non-integer bucketCount', async () => {
+    await expect(getTrendTile([1], 1n, 1_000_000n, 250.5))
+      .rejects.toMatchObject({ code: 'INVALID_BUCKET_COUNT' });
+  });
+});
+
+describe('getTrendTile — INVALID_BUCKET_S', () => {
+  // bucketS = Number(endTime - startTime) / (bucketCount * 1000)
+  // bucketS > 14746 → INVALID_BUCKET_S
+  // Range of 3_700_000_000 ms with 250 buckets: 3_700_000_000 / 250_000 = 14_800 > 14746
+  it('throws when derived bucketS exceeds 14746', async () => {
+    const start = 1n;
+    const end   = start + 3_700_000_000n; // ~42.8 days
+    await expect(getTrendTile([1], start, end, 250))
+      .rejects.toMatchObject({ code: 'INVALID_BUCKET_S' });
+  });
+});
+
+// ── Integration tests — live TimescaleDB ──────────────────────────────────────
+//
+// All samples live in [TEST_RANGE_START=0n, TEST_RANGE_END=946_684_799_000n]
+// (epoch 1970 → 1999-12-31). This window never collides with real operational
+// data (which begins after platform deployment, post-2025).
+//
+// Tile startTime must be > 0n per INVALID_RANGE validation; tests use offsets
+// from epoch to keep windows cleanly within the sandbox.
+
+// ── RAW branch (bucketS < 1.0) ────────────────────────────────────────────────
+// Window: startTime=3_600_000n (1h), endTime=3_840_000n (1h4m), bucketCount=250
+// bucketS = 240_000 / 250_000 = 0.96 — raw path.
+
+describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: RAW branch (bucketS=0.96)', async () => {
+  const {
+    writeTestSamples, resetTestRange,
+  } = await import('../helpers/trends-test-range.js');
+
+  const START = 3_600_000n;  // 1h past epoch
+  const END   = 3_840_000n;  // 1h 4min past epoch
+  const COUNT = 250;
+
+  beforeEach(() => resetTestRange());
+  afterAll(() => resetTestRange());
+
+  it('returns shape { source: "raw", startTime, endTime, series }', async () => {
+    await writeTestSamples([{ ts: START + 1_000n, tagId: 1001, value: 5.0 }]);
+    const tile = await getTrendTile([1001], START, END, COUNT) as RawTrendTile;
+    expect(tile.source).toBe('raw');
+    expect(tile.startTime).toBe(START);
+    expect(tile.endTime).toBe(END);
+    expect(tile.series).toHaveLength(1);
+    expect(tile.series[0].tagId).toBe(1001);
+  });
+
+  it('returns COV samples in chronological order per tag', async () => {
+    await writeTestSamples([
+      { ts: START + 2_000n, tagId: 1002, value: 10.0 },
+      { ts: START + 5_000n, tagId: 1002, value: 20.0 },
+      { ts: START + 1_000n, tagId: 1002, value:  5.0 },
+    ]);
+    const tile = await getTrendTile([1002], START, END, COUNT) as RawTrendTile;
+    const s = tile.series[0];
+    expect(s.ts[0]).toBe(START + 1_000n);
+    expect(s.ts[1]).toBe(START + 2_000n);
+    expect(s.ts[2]).toBe(START + 5_000n);
+    expect(s.value).toEqual([5.0, 10.0, 20.0]);
+  });
+
+  it('tagIds order is preserved in series array even when a tag has no samples', async () => {
+    await writeTestSamples([{ ts: START + 1_000n, tagId: 1004, value: 1.0 }]);
+    const tile = await getTrendTile([1005, 1004], START, END, COUNT) as RawTrendTile;
+    expect(tile.series[0].tagId).toBe(1005);
+    expect(tile.series[0].ts).toEqual([]);
+    expect(tile.series[0].value).toEqual([]);
+    expect(tile.series[1].tagId).toBe(1004);
+    expect(tile.series[1].value).toEqual([1.0]);
+  });
+
+  it('empty range: tag with no samples returns ts:[] value:[]', async () => {
+    const tile = await getTrendTile([1006], START, END, COUNT) as RawTrendTile;
+    expect(tile.series[0].ts).toEqual([]);
+    expect(tile.series[0].value).toEqual([]);
+  });
+
+  it('value array preserves null entries', async () => {
+    await writeTestSamples([
+      { ts: START + 1_000n, tagId: 1007, value: 3.0 },
+      { ts: START + 2_000n, tagId: 1007, value: null },
+      { ts: START + 3_000n, tagId: 1007, value: 4.0 },
+    ]);
+    const tile = await getTrendTile([1007], START, END, COUNT) as RawTrendTile;
+    expect(tile.series[0].value[1]).toBeNull();
+  });
+
+  it('ts arrays carry bigint values', async () => {
+    await writeTestSamples([{ ts: START + 1_500n, tagId: 1008, value: 7.0 }]);
+    const tile = await getTrendTile([1008], START, END, COUNT) as RawTrendTile;
+    expect(typeof tile.series[0].ts[0]).toBe('bigint');
+    expect(tile.series[0].ts[0]).toBe(START + 1_500n);
+  });
+
+  it('raw path: startTime and endTime match the request exactly regardless of alignment', async () => {
+    // Raw path (bucketS < 1.0) must never mutate the requested range.
+    const unalignedStart = START + 123n;
+    const unalignedEnd   = END   + 123n;
+    await writeTestSamples([{ ts: unalignedStart + 1_000n, tagId: 1009, value: 7.0 }]);
+    const tile = await getTrendTile([1009], unalignedStart, unalignedEnd, COUNT) as RawTrendTile;
+    expect(tile.source).toBe('raw');
+    expect(tile.startTime).toBe(unalignedStart);
+    expect(tile.endTime).toBe(unalignedEnd);
+  });
+});
+
+// ── 1s CAG branch (1.0 ≤ bucketS < 16) ───────────────────────────────────────
+// Window: startTime=7_200_000n (2h), endTime=10_800_000n (3h), bucketCount=250
+// bucketS = 3_600_000 / 250_000 = 14.4 — 1s CAG path.
+
+describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (bucketS=14.4)', async () => {
+  const {
+    writeTestSamples, resetTestRange, refreshTestCagg,
+  } = await import('../helpers/trends-test-range.js');
+
+  const START = 7_200_000n;   // 2h past epoch
+  const END   = 10_800_000n;  // 3h past epoch
+  const COUNT = 250;
+  const VIEW  = '1s_cagg' as const;
+
+  // Reset raw + clear CAG before each test; the next afterAll does final cleanup.
+  beforeEach(async () => {
+    await resetTestRange();
+    await refreshTestCagg(VIEW); // clear any CAG rows left from previous test
+  });
+  afterAll(async () => {
+    await resetTestRange();
+    await refreshTestCagg(VIEW);
+  });
+
+  it('dispatches to source="1s_cagg" for a 1h window with 250 buckets', async () => {
+    await writeTestSamples([{ ts: START + 1_000n, tagId: 2001, value: 1.0 }]);
+    await refreshTestCagg(VIEW);
+    const tile = await getTrendTile([2001], START, END, COUNT) as AggregateTrendTile;
+    expect(tile.source).toBe('1s_cagg');
+  });
+
+  it('aggregate response has n === bucketCount', async () => {
+    await writeTestSamples([{ ts: START + 1_000n, tagId: 2002, value: 1.0 }]);
+    await refreshTestCagg(VIEW);
+    const tile = await getTrendTile([2002], START, END, COUNT) as AggregateTrendTile;
+    expect(tile.n).toBe(COUNT);
+    expect(tile.series[0].value).toHaveLength(COUNT);
+  });
+
+  it('LOCF carries forward across empty buckets', async () => {
+    // Write one sample early in the window; the rest of the 250 buckets should carry it.
+    await writeTestSamples([{ ts: START + 500n, tagId: 2003, value: 42.0 }]);
+    await refreshTestCagg(VIEW);
+    const tile = await getTrendTile([2003], START, END, COUNT) as AggregateTrendTile;
+    const { value } = tile.series[0];
+    // First bucket should contain 42.0; all subsequent buckets carry it forward.
+    expect(value[0]).toBe(42.0);
+    expect(value[COUNT - 1]).toBe(42.0);
+    expect(value.every(v => v === 42.0)).toBe(true);
+  });
+
+  it('bucket containing a NULL sample emits null in value array regardless of LOCF', async () => {
+    // Write value=10 early, then null, then 20 near end.
+    // The bucket containing the null must emit null even though locf would carry 10.
+    const bucketSMs = BigInt(Math.round(14.4 * 1000)); // ~14400 ms per outer bucket
+    await writeTestSamples([
+      { ts: START + 100n,            tagId: 2004, value: 10.0 },
+      { ts: START + bucketSMs * 5n,  tagId: 2004, value: null },
+      { ts: START + bucketSMs * 10n, tagId: 2004, value: 20.0 },
+    ]);
+    await refreshTestCagg(VIEW);
+    const tile = await getTrendTile([2004], START, END, COUNT) as AggregateTrendTile;
+    const { value } = tile.series[0];
+    // bucket 5 must be null
+    expect(value[5]).toBeNull();
+    // bucket 10 should be 20
+    expect(value[10]).toBe(20.0);
+  });
+
+  it('bounded prev populates left edge when prior sample exists in the 5-minute pre-window', async () => {
+    // Write a sample 60 s before the window (within the 5-minute prev bound),
+    // and one sample inside the window to ensure gapfill produces rows for this tag.
+    const priorTs = START - 60_000n;  // 60s before window
+    const inTs    = START + 3_500_000n; // ~58 min into the window (bucket ~243)
+    await writeTestSamples([
+      { ts: priorTs, tagId: 2005, value: 55.5 },
+      { ts: inTs,    tagId: 2005, value: 99.0 },
+    ]);
+    await refreshTestCagg(VIEW);
+    const tile = await getTrendTile([2005], START, END, COUNT) as AggregateTrendTile;
+    const { value } = tile.series[0];
+    // Left edge buckets (before inTs) should carry the prev value 55.5.
+    expect(value[0]).toBe(55.5);
+    // Late bucket (at inTs) should be 99.0.
+    expect(value[COUNT - 1]).toBe(99.0);
+  });
+
+  it('bounded prev returns null when no prior sample exists within 5 minutes', async () => {
+    // Write ONLY one in-window sample with nothing in the pre-window.
+    // Left-edge buckets before it must be null.
+    const inTs = START + 1_800_000n; // 30 min into the window (bucket ~125)
+    await writeTestSamples([{ ts: inTs, tagId: 2006, value: 7.0 }]);
+    await refreshTestCagg(VIEW);
+    const tile = await getTrendTile([2006], START, END, COUNT) as AggregateTrendTile;
+    const { value } = tile.series[0];
+    expect(value[0]).toBeNull(); // left edge: no prev
+    expect(value[COUNT - 1]).toBe(7.0); // right side carries forward
+  });
+
+  it('empty range: tag with no CAG data returns value:[null]*n', async () => {
+    // No samples written; CAG has nothing for this tag.
+    const tile = await getTrendTile([2007], START, END, COUNT) as AggregateTrendTile;
+    expect(tile.series[0].value).toHaveLength(COUNT);
+    expect(tile.series[0].value.every(v => v === null)).toBe(true);
+  });
+
+  it('startTime and endTime are returned as bigint', async () => {
+    await writeTestSamples([{ ts: START + 1_000n, tagId: 2008, value: 1.0 }]);
+    await refreshTestCagg(VIEW);
+    const tile = await getTrendTile([2008], START, END, COUNT) as AggregateTrendTile;
+    expect(typeof tile.startTime).toBe('bigint');
+    expect(typeof tile.endTime).toBe('bigint');
+    expect(tile.startTime).toBe(START);
+    expect(tile.endTime).toBe(END);
+  });
+
+  // ── Alignment contract tests ─────────────────────────────────────────────────
+  // bucketSMs = round(14.4 * 1000) = 14400 ms per outer bucket.
+  // START = 7_200_000n; 7200000 % 14400 = 0  → aligned.
+
+  it('aligned startTime returns exactly bucketCount buckets with matching startTime/endTime', async () => {
+    await writeTestSamples([{ ts: START + 1_000n, tagId: 2009, value: 3.0 }]);
+    await refreshTestCagg(VIEW);
+    const tile = await getTrendTile([2009], START, END, COUNT) as AggregateTrendTile;
+    expect(tile.n).toBe(COUNT);
+    expect(tile.startTime).toBe(START);
+    expect(tile.endTime).toBe(END);
+    expect(tile.series[0].value).toHaveLength(COUNT);
+  });
+
+  it('unaligned startTime returns bucketCount+1 buckets; served grid wraps the request', async () => {
+    const BUCKET_MS = 14_400;
+    // Shift by 100 ms: 7_200_100 % 14400 = 100 — not a natural bucket boundary.
+    const unalignedStart = START + 100n;
+    const unalignedEnd   = unalignedStart + BigInt(COUNT * BUCKET_MS);
+
+    await writeTestSamples([{ ts: unalignedStart + 1_000n, tagId: 2010, value: 5.0 }]);
+    await refreshTestCagg(VIEW);
+
+    const tile = await getTrendTile([2010], unalignedStart, unalignedEnd, COUNT) as AggregateTrendTile;
+    expect(tile.source).toBe('1s_cagg');
+    expect(tile.n).toBe(COUNT + 1);
+    // Served grid snaps back to the natural boundary before unalignedStart.
+    expect(tile.startTime).toBe(START);                                  // 7_200_000n
+    expect(tile.endTime).toBe(START + BigInt((COUNT + 1) * BUCKET_MS));  // 10_814_400n
+    expect(tile.series[0].value).toHaveLength(COUNT + 1);
+  });
+
+  it('multi-tag unaligned request: all series share the same bucket grid', async () => {
+    const BUCKET_MS = 14_400;
+    const unalignedStart = START + 500n;
+    const unalignedEnd   = unalignedStart + BigInt(COUNT * BUCKET_MS);
+
+    await writeTestSamples([
+      { ts: unalignedStart + 1_000n, tagId: 2011, value: 1.0 },
+      { ts: unalignedStart + 2_000n, tagId: 2012, value: 2.0 },
+      { ts: unalignedStart + 3_000n, tagId: 2013, value: 3.0 },
+    ]);
+    await refreshTestCagg(VIEW);
+
+    const tile = await getTrendTile([2011, 2012, 2013], unalignedStart, unalignedEnd, COUNT) as AggregateTrendTile;
+    expect(tile.n).toBe(COUNT + 1);
+    expect(tile.series).toHaveLength(3);
+    for (const s of tile.series) {
+      expect(s.value).toHaveLength(tile.n);
+    }
+  });
+});
+
+// ── 10s CAG branch (16 ≤ bucketS < 160) ──────────────────────────────────────
+// Window: startTime=14_400_000n (4h), endTime=43_200_000n (12h), bucketCount=250
+// bucketS = 28_800_000 / 250_000 = 115.2 — 10s CAG path.
+
+describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 10s CAG branch (bucketS=115.2)', async () => {
+  const {
+    writeTestSamples, resetTestRange, refreshTestCagg,
+  } = await import('../helpers/trends-test-range.js');
+
+  const START = 14_400_000n;  // 4h past epoch
+  const END   = 43_200_000n;  // 12h past epoch
+  const COUNT = 250;
+  const VIEW  = '10s_cagg' as const;
+
+  beforeEach(async () => {
+    await resetTestRange();
+    await refreshTestCagg(VIEW);
+  });
+  afterAll(async () => {
+    await resetTestRange();
+    await refreshTestCagg(VIEW);
+  });
+
+  it('dispatches to source="10s_cagg" for the 8h window', async () => {
+    await writeTestSamples([{ ts: START + 1_000n, tagId: 3001, value: 1.0 }]);
+    await refreshTestCagg(VIEW);
+    const tile = await getTrendTile([3001], START, END, COUNT) as AggregateTrendTile;
+    expect(tile.source).toBe('10s_cagg');
+    expect(tile.n).toBe(COUNT);
+    expect(tile.series[0].value).toHaveLength(COUNT);
+  });
+});
+
+// ── 1min CAG branch (160 ≤ bucketS < 1600) ────────────────────────────────────
+// Window: startTime=86_400_000n (1d), endTime=259_200_000n (3d), bucketCount=250
+// bucketS = 172_800_000 / 250_000 = 691.2 — 1min CAG path.
+
+describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1min CAG branch (bucketS=691.2)', async () => {
+  const {
+    writeTestSamples, resetTestRange, refreshTestCagg,
+  } = await import('../helpers/trends-test-range.js');
+
+  const START = 86_400_000n;   // 1 day past epoch
+  const END   = 259_200_000n;  // 3 days past epoch
+  const COUNT = 250;
+  const VIEW  = '1min_cagg' as const;
+
+  beforeEach(async () => {
+    await resetTestRange();
+    await refreshTestCagg(VIEW);
+  });
+  afterAll(async () => {
+    await resetTestRange();
+    await refreshTestCagg(VIEW);
+  });
+
+  it('dispatches to source="1min_cagg" for the 2-day window', async () => {
+    await writeTestSamples([{ ts: START + 1_000n, tagId: 4001, value: 1.0 }]);
+    await refreshTestCagg(VIEW);
+    const tile = await getTrendTile([4001], START, END, COUNT) as AggregateTrendTile;
+    expect(tile.source).toBe('1min_cagg');
+    expect(tile.n).toBe(COUNT);
+    expect(tile.series[0].value).toHaveLength(COUNT);
+  });
+});
+
+// ── 10min CAG branch (bucketS ≥ 1600) ─────────────────────────────────────────
+// Window: startTime=604_800_000n (7d), endTime=1_900_800_000n (22d), bucketCount=250
+// bucketS = 1_296_000_000 / 250_000 = 5184 — 10min CAG path.
+
+describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 10min CAG branch (bucketS=5184)', async () => {
+  const {
+    writeTestSamples, resetTestRange, refreshTestCagg,
+  } = await import('../helpers/trends-test-range.js');
+
+  // startTime must be epoch-aligned to the outer bucketS (5184 s).
+  // 1_296_000_000 ms = 1296000 s; 1296000 / 5184 = 250 (exact multiple).
+  // endTime = startTime + 250 * 5184 * 1000 = startTime + 1_296_000_000.
+  const START = 1_296_000_000n;  // 15 days past epoch
+  const END   = 2_592_000_000n;  // 30 days past epoch
+  const COUNT = 250;
+  const VIEW  = '10min_cagg' as const;
+
+  beforeEach(async () => {
+    await resetTestRange();
+    await refreshTestCagg(VIEW);
+  });
+  afterAll(async () => {
+    await resetTestRange();
+    await refreshTestCagg(VIEW);
+  });
+
+  it('dispatches to source="10min_cagg" for the 15-day window', async () => {
+    await writeTestSamples([{ ts: START + 1_000n, tagId: 5001, value: 1.0 }]);
+    await refreshTestCagg(VIEW);
+    const tile = await getTrendTile([5001], START, END, COUNT) as AggregateTrendTile;
+    expect(tile.source).toBe('10min_cagg');
+    expect(tile.n).toBe(COUNT);
+    expect(tile.series[0].value).toHaveLength(COUNT);
+  });
+});
+
+// ── Watermark fall-through tests ───────────────────────────────────────────────
+//
+// All synthetic-fixture tests use __test_watermarkOverride to control watermarks
+// deterministically. The sandbox window is 1970-epoch; watermark ms values are
+// chosen relative to the test ranges.
+//
+// Tag IDs 6001–6099 are reserved for this block.
+//
+// Window: 1s CAG range (same as the 1s_cagg block above).
+// bucketS = 3_600_000 / 250_000 = 14.4 → 1s_cagg dispatch.
+// bucketSMs = 14_400.
+
+describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — watermark fall-through', async () => {
+  const {
+    writeTestSamples, resetTestRange, refreshTestCagg,
+  } = await import('../helpers/trends-test-range.js');
+
+  // Use 1s_cagg dispatch window (same parameters as the 1s_cagg block).
+  const START     = 7_200_000n;   // 2h past epoch
+  const END       = 10_800_000n;  // 3h past epoch
+  const COUNT     = 250;
+  const BUCKET_MS = 14_400;       // Math.round(14.4 * 1000)
+
+  beforeEach(async () => {
+    await resetTestRange();
+    await refreshTestCagg('1s_cagg');
+    // Ensure production watermark is NOT used by any test in this block.
+    // Each test sets its own override; this guards against override leak.
+    __test_watermarkOverride.current = null;
+  });
+
+  afterEach(() => {
+    // Always restore production watermark behaviour after each test.
+    __test_watermarkOverride.current = null;
+  });
+
+  afterAll(async () => {
+    await resetTestRange();
+    await refreshTestCagg('1s_cagg');
+    __test_watermarkOverride.current = null;
+  });
+
+  // ── Test 1: watermark past endTime — no fall-through ─────────────────────────
+
+  it('watermark past endTime → single source, no fall-through', async () => {
+    // Set watermark well past END so the entire window is covered by 1s_cagg.
+    __test_watermarkOverride.current = new Map([
+      ['tag_samples_1s_cagg', Number(END) + 60_000],
+    ]);
+
+    await writeTestSamples([{ ts: START + 1_000n, tagId: 6001, value: 7.5 }]);
+    await refreshTestCagg('1s_cagg');
+
+    const tile = await getTrendTile([6001], START, END, COUNT) as AggregateTrendTile;
+    expect(tile.source).toBe('1s_cagg');   // NOT 'mixed'
+    expect(tile.n).toBe(COUNT);
+    expect(tile.series[0].value).toHaveLength(COUNT);
+    // LOCF carries the value across all buckets.
+    expect(tile.series[0].value[0]).toBe(7.5);
+    expect(tile.series[0].value[COUNT - 1]).toBe(7.5);
+  });
+
+  // ── Test 2: watermark mid-range → fall-through to next-finer CAG ─────────────
+
+  it('watermark mid-range → source=mixed, 1s_cagg+10s_cagg stitch', async () => {
+    // Split at bucket boundary: 125 buckets into the window.
+    const splitMs = Number(START) + 125 * BUCKET_MS; // exactly bucket-aligned
+    __test_watermarkOverride.current = new Map([
+      ['tag_samples_1s_cagg',   splitMs + 1],  // watermark just past split → splitBoundary = splitMs
+      ['tag_samples_10s_cagg',  Number(END) + 60_000],  // 10s_cagg covers the tail
+    ]);
+
+    // Write data in both halves so both segments return non-null values.
+    await writeTestSamples([
+      { ts: START + 1_000n,                                value: 1.0, tagId: 6002 },
+      { ts: BigInt(splitMs) + 1_000n,                      value: 2.0, tagId: 6002 },
+    ]);
+    await refreshTestCagg('1s_cagg');
+    // 10s_cagg doesn't need refresh for the tail — raw-as-aggregate path will be
+    // used if 10s_cagg also has no data, which is fine (null values expected).
+    // Refresh 10s_cagg for the sandbox window so it can contribute.
+    await refreshTestCagg('10s_cagg');
+
+    const tile = await getTrendTile([6002], START, END, COUNT) as AggregateTrendTile;
+    expect(tile.source).toBe('mixed');
+    expect(tile.n).toBe(COUNT);
+    expect(tile.series[0].value).toHaveLength(COUNT);
+  });
+
+  // ── Test 3: watermark before startTime → entire range falls through ──────────
+
+  it('watermark before startTime → entire range falls through to next-finer', async () => {
+    // 1s_cagg watermark is before the test window; 10s_cagg covers the whole range.
+    __test_watermarkOverride.current = new Map([
+      ['tag_samples_1s_cagg',  Number(START) - 10_000],  // before window
+      ['tag_samples_10s_cagg', Number(END)   + 60_000],  // covers everything
+    ]);
+
+    await writeTestSamples([{ ts: START + 1_000n, tagId: 6003, value: 5.0 }]);
+    await refreshTestCagg('1s_cagg');
+    await refreshTestCagg('10s_cagg');
+
+    const tile = await getTrendTile([6003], START, END, COUNT) as AggregateTrendTile;
+    // Fall-through occurred (1s_cagg not used), so source = 'mixed'.
+    expect(tile.source).toBe('mixed');
+    expect(tile.n).toBe(COUNT);
+    expect(tile.series[0].value).toHaveLength(COUNT);
+  });
+
+  // ── Test 4: split at non-bucket-aligned watermark — boundary rounds down ──────
+
+  it('non-bucket-aligned watermark → splitBoundary rounds down, n stays bucketCount', async () => {
+    // Watermark falls 7200 ms into a 14400 ms bucket (halfway).
+    // splitBoundary = floor((START + 125*BUCKET_MS + 7200) / BUCKET_MS) * BUCKET_MS
+    //               = START + 125*BUCKET_MS (rounded down, not up).
+    const splitMs        = Number(START) + 125 * BUCKET_MS;
+    const midBucketWmMs  = splitMs + 7_200;  // halfway through bucket 125
+
+    __test_watermarkOverride.current = new Map([
+      ['tag_samples_1s_cagg',  midBucketWmMs],
+      ['tag_samples_10s_cagg', Number(END) + 60_000],
+    ]);
+
+    await writeTestSamples([
+      { ts: START + 1_000n,           value: 11.0, tagId: 6004 },
+      { ts: BigInt(splitMs) + 1_000n, value: 22.0, tagId: 6004 },
+    ]);
+    await refreshTestCagg('1s_cagg');
+    await refreshTestCagg('10s_cagg');
+
+    const tile = await getTrendTile([6004], START, END, COUNT) as AggregateTrendTile;
+    expect(tile.source).toBe('mixed');
+    // n must still be exactly COUNT (aligned request, aligned split).
+    expect(tile.n).toBe(COUNT);
+    expect(tile.series[0].value).toHaveLength(COUNT);
+  });
+
+  // ── Test 5: cascade through two CAG levels ────────────────────────────────────
+
+  it('cascade through two levels: 1s_cagg → 10s_cagg → 1s_cagg (deeper recursion)', async () => {
+    // 1s_cagg watermark before the window → fall to 10s_cagg.
+    // 10s_cagg watermark mid-window → splits there, tail goes to 1s_cagg next-finer (raw).
+    // This tests multi-level recursion.
+    const splitMs = Number(START) + 200 * BUCKET_MS;
+    __test_watermarkOverride.current = new Map([
+      ['tag_samples_1s_cagg',  Number(START) - 10_000],  // before window → skip entirely
+      ['tag_samples_10s_cagg', splitMs + 1],              // mid-window watermark
+      // tag_samples (raw) has Infinity watermark — terminates recursion
+    ]);
+
+    await writeTestSamples([{ ts: START + 1_000n, tagId: 6005, value: 3.0 }]);
+    await refreshTestCagg('1s_cagg');
+    await refreshTestCagg('10s_cagg');
+
+    const tile = await getTrendTile([6005], START, END, COUNT) as AggregateTrendTile;
+    expect(tile.source).toBe('mixed');
+    expect(tile.n).toBe(COUNT);
+    expect(tile.series[0].value).toHaveLength(COUNT);
+  });
+
+  // ── Test 6: raw dispatch is unaffected by watermark overrides ─────────────────
+
+  it('raw dispatch (bucketS < 1.0) ignores watermark overrides', async () => {
+    // Set overrides for all CAGs to weird values — raw path must not use them.
+    __test_watermarkOverride.current = new Map([
+      ['tag_samples_1s_cagg',    0],
+      ['tag_samples_10s_cagg',   0],
+      ['tag_samples_1min_cagg',  0],
+      ['tag_samples_10min_cagg', 0],
+    ]);
+
+    // Raw window: bucketS = 240_000 / 250_000 = 0.96 < 1.0
+    const RAW_START = 3_600_000n;
+    const RAW_END   = 3_840_000n;
+    await writeTestSamples([{ ts: RAW_START + 1_000n, tagId: 6006, value: 8.0 }]);
+
+    const tile = await getTrendTile([6006], RAW_START, RAW_END, COUNT) as RawTrendTile;
+    expect(tile.source).toBe('raw');
+    expect(tile.startTime).toBe(RAW_START);
+    expect(tile.endTime).toBe(RAW_END);
+    expect(tile.series[0].value).toEqual([8.0]);
+  });
+
+  // ── Test 7: live-edge smoke (production watermark, no override) ───────────────
+  //
+  // Validates real-world fall-through against the running system.
+  // Uses [now-10min, now] → bucketS=2.4s → 1s_cagg dispatch.
+  // 1s_cagg watermark typically lags now by ~60s, so the trailing portion
+  // falls through to tag_samples (raw-as-aggregate) or the next-finer level.
+  // Skips if TIMESCALE_HOST is unset (existing guard pattern).
+
+  it('live-edge smoke: [now-10min, now] with production watermark (no override)', async () => {
+    // Ensure production watermarks are used.
+    __test_watermarkOverride.current = null;
+
+    const nowMs   = BigInt(Date.now());
+    const tenMin  = 600_000n;
+    const liveStart = nowMs - tenMin;
+    const liveEnd   = nowMs;
+
+    // bucketS = 600_000 / 250_000 = 2.4 → 1s_cagg dispatch
+    const tile = await getTrendTile([2654], liveStart, liveEnd, COUNT) as AggregateTrendTile;
+
+    // Source must be '1s_cagg' (watermark covers full range) or 'mixed' (fall-through).
+    expect(['1s_cagg', 'mixed']).toContain(tile.source);
+
+    // n must be COUNT or COUNT+1 (alignment contract).
+    expect([COUNT, COUNT + 1]).toContain(tile.n);
+
+    // The value array must have n entries.
+    expect(tile.series[0].value).toHaveLength(tile.n);
+
+    // At least one non-null value must exist near the live edge
+    // (proves we're getting current data, not a full-range stale gap).
+    const lastFew = tile.series[0].value.slice(-10);
+    const nonNullCount = lastFew.filter(v => v !== null).length;
+    expect(nonNullCount).toBeGreaterThan(0);
+  });
+});
