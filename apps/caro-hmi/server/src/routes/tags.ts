@@ -21,8 +21,18 @@ function coerceValue(raw: unknown): number | boolean | null {
 export function createTagsRouter(
   tagMap: Map<number, TagDef>,
   cmdController: CmdController,
+  trendableTagIds: Set<number>,
 ): Router {
   const router = Router();
+
+  router.get('/trendable', asyncWrap(async (_req, res) => {
+    const tags: Array<{ tag_id: number; tag_path: string }> = [];
+    for (const id of trendableTagIds) {
+      const def = tagMap.get(id);
+      if (def) tags.push({ tag_id: def.tag_id, tag_path: def.tag_path });
+    }
+    res.json({ ok: true, data: { tags } });
+  }));
 
   router.get('/', asyncWrap(async (_req, res) => {
     const tags = Array.from(tagMap.values());

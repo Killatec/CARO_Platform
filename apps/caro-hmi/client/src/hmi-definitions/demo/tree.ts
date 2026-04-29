@@ -5,6 +5,7 @@ import { Beam1Page } from './pages/Beam1Page.js';
 import { RfControlPage } from './pages/RfControlPage.js';
 import { PowerPage } from './pages/PowerPage.js';
 import { CoolingPage } from './pages/CoolingPage.js';
+import { TrendsPerfTestPage } from './pages/TrendsPerfTestPage.js';
 
 export const tree: TreeNode[] = [
   {
@@ -36,5 +37,10 @@ export const tree: TreeNode[] = [
     id: 'summary',
     label: 'Summary',
     page: SummaryPage,
+  },
+  {
+    id: 'dev-trends-perf',
+    label: 'Dev: Trends Perf',
+    page: TrendsPerfTestPage,
   },
 ];

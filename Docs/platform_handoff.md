@@ -9,7 +9,7 @@
 |---|---|---|---|
 | Tag Registry | 3001 | 5173 | Complete |
 | MQTT Simulator | 3002 | 5174 | Active development |
-| CARO HMI | 3003 | 5175 | Phase 3 complete + historian write pipeline live. Server core + client shell + demo pages. HmiTagSource publishes Module_Info arrays and 7 Trend_Info observability tags (Trending, Queue_Depth, Rows_Per_Sec, Flush_ms, Dropped_Pkgs, Error_Count, DB_Size) every 250ms. TimescaleDbWriter writes trendable tags to TimescaleDB via DbPipeline (peek-then-consume, 500ms tick); NullDbWriter fallback if Timescale unreachable at boot. TimescaleSizeMonitor polls DB size every 30s. TrendStatusBox shows all 7 Trend_Info tags on System Overview. Trends tile endpoint live: `GET /api/v1/trends/tile?tag_ids&bucket_s&tile_index` (snake_case params, camelCase body, 20-tag cap, optional gzip via HMI_TRENDS_GZIP). TrendSnapshotScheduler ensures every trendable tag gets ≥1 DB row per minute via piggyback (on next MQTT ingest) or force-write (silent modules). |
+| CARO HMI | 3003 | 5175 | Phase A Trends API complete. Server core + client shell + demo pages + full trends read path. HmiTagSource publishes 7 Trend_Info observability tags (Trending, Queue_Depth, Rows_Per_Sec, Flush_ms, Dropped_Pkgs, Error_Count, DB_Size) every 250ms via DbPipeline (peek-then-consume, 500ms tick); NullDbWriter fallback at boot; TimescaleSizeMonitor every 30s. TrendSnapshotScheduler guarantees ≥1 DB row/tag/minute via piggyback or force-write. **Trends API v0.7:** `GET /api/v1/trends/tile` — v0.5+ wire contract (`tag_ids`, `start_time`, `end_time`, `bucket_count`); dispatches on derived `bucketS` across raw + four CAGs (1s/10s/1min/10min) all with `null_count`/`min`/`max` columns; watermark-aware fall-through with recursive descent (`source: 'mixed'` on stitch); N≤8 cap enforced; optional gzip via `HMI_TRENDS_GZIP`. `GET /api/v1/trends/extent` — hypertable-wide min/max ts. `GET /api/v1/tags/trendable` — trendable tag list. Dev perf test page at `#dev-trends-perf` sweeps all 9 CAG dispatch zones with client-observed latency. Test coverage: 93 @caro/db, 226 server (unit + integration + E2E), 33 client. Next: Step 7 — `packages/trend-chart/` scaffold. |
 
 ---
 
@@ -17,7 +17,7 @@
 
 | Package | Path | Purpose |
 |---|---|---|
-| `@caro/db` | `packages/db/` | All PostgreSQL and TimescaleDB access. Exports: `pool`, `query`, `withTransaction`, `ping`, `runMigrations`, `getActiveTags`, `applyRegistryRevision`, `getTagTypes`, `getModuleTypes`, `getRevisions` (main Postgres); `timescalePool`, `pingTimescale`, `runTimescaleMigrations`, `writeTagSamples`, `getTimescaleDatabaseSizeBytes`, `getTrendTile`, `tileSpanFor` (TimescaleDB). `getTrendTile(tagIds, bucketS, tileIndex)` is the single trend read entry point — dispatches on `bucketS` (0 = raw, >0 = on-the-fly aggregate); tile span derived internally via `tileSpanFor(bucketS)`. Returns a discriminated-union `TrendTile` type; the REST route passes it through as the envelope `data` field without remapping. Integration test helpers live at `packages/db/__tests__/helpers/trends-test-range.ts`. Tests in this package use `.ts` extensions; `vitest.config.js` include pattern is `*.test.{js,ts}` to cover both legacy `.js` and new `.ts` tests. |
+| `@caro/db` | `packages/db/` | All PostgreSQL and TimescaleDB access. Exports: `pool`, `query`, `withTransaction`, `ping`, `runMigrations`, `getActiveTags`, `applyRegistryRevision`, `getTagTypes`, `getModuleTypes`, `getRevisions` (main Postgres); `timescalePool`, `pingTimescale`, `runTimescaleMigrations`, `writeTagSamples`, `getTimescaleDatabaseSizeBytes`, `getTrendTile`, `getTrendExtent` (TimescaleDB). `getTrendTile(tagIds, startTime, endTime, bucketCount)` is the single trend read entry point — derives `bucketS` internally, dispatches on it across raw + four CAGs, applies watermark-aware fall-through; returns a discriminated-union `TrendTile`. `getTrendExtent()` returns hypertable-wide `{ oldestMs: bigint|null, newestMs: bigint|null }`. Integration test helpers at `packages/db/__tests__/helpers/trends-test-range.ts` (sandbox window 1970–1999, `resetTestRange`/`resetTestRangeExpectClean`/`writeTestSamples`/`refreshTestCagg`). Tests use `.ts` extensions; `vitest.config.js` include pattern is `*.test.{js,ts}`. |
 | `@caro/ui` | `packages/ui/` | Shared React primitives, tokens, and `apiClient` (`@caro/ui/api/client`) |
 | `@caro/server` | `packages/server/` | Shared Express middleware — asyncWrap, errorHandler |
 | `@caro/proto` | `packages/proto/` | Shared Protobuf schemas (`tag.proto`) |
@@ -69,7 +69,7 @@ Schema spec: `Docs/CARO_DB_Spec.md`
 
 HMI tables (`users`, `sessions`, `commissioned_modules`, `operation_modes`, `mode_revisions`, `setpoint_values`, `pending_setpoint_values`, `system_settings`, `audit_log`) specified in DB Spec §4–§10, not yet migrated.
 
-**TimescaleDB (port 5433, separate container):** Started via `docker-compose.timescale.yml` at the repo root. Development database: `caro_timescale`. Migrations in `db/timescale/migrations/` (`T00N_` prefix). HMI server calls `pingTimescale()` → `runTimescaleMigrations()` at startup (soft-fail — falls back to `NullDbWriter` if unreachable). Applied migrations: `T001_create_tag_samples.sql` (tag_samples hypertable: DOUBLE PRECISION value, `compress_segmentby = tag_id`, `compress_orderby = ts DESC`, retain 14 days); `T004_tighten_compression_policy.sql` (1h chunks, `compress_after = 10 min`, `schedule_interval = 5 min` — see `Docs/TimescaleDB_Perf_Decisions.md` for justification). Note: T004 is incompatible with existing 12h chunks — a `TRUNCATE tag_samples` data wipe is required before first startup on any environment that previously ran under T001 settings.
+**TimescaleDB (port 5433, separate container):** Started via `docker-compose.timescale.yml` at the repo root. Development database: `caro_timescale`. Migrations in `db/timescale/migrations/` (`T00N_` prefix). HMI server calls `pingTimescale()` → `runTimescaleMigrations()` at startup (soft-fail — falls back to `NullDbWriter` if unreachable). Applied migrations: `T001_create_tag_samples.sql` (tag_samples hypertable: DOUBLE PRECISION value, `compress_segmentby = tag_id`, `compress_orderby = ts DESC`, retain 14 days); `T004_tighten_compression_policy.sql` (1h chunks, `compress_after = 10 min`, `schedule_interval = 5 min`); `T006_create_cag_1s.sql` through `T009_create_cag_10min.sql` — four CAGs: `tag_samples_1s_cagg` (1s buckets, 14d retention), `tag_samples_10s_cagg` (10s, 90d), `tag_samples_1min_cagg` (1min, 1y), `tag_samples_10min_cagg` (10min, indefinite). All CAGs materialize `last`, `null_count`, `min`, `max` from `tag_samples` (flat topology — each CAG reads raw directly). The 10min CAG uses `start_offset = 1 hour` (vs 15 min on the other three) to satisfy TimescaleDB's 2×bucket_width refresh-window rule. Note: T004 is incompatible with existing 12h chunks — a `TRUNCATE tag_samples` wipe is required before first startup on any environment that ran under T001 settings.
 
 ---
 
@@ -105,7 +105,7 @@ Then scaffold new TypeScript packages:
 
 ## Open TODOs
 
-None.
+**Next priority — Step 7: `packages/trend-chart/` scaffold.** Trends API (v0.7), watermark fall-through, perf test page, and test coverage are all complete. The client-side feature package (`trend-chart/`) is the next build step — cache (`tileCache.ts`, `level.ts`), `useTrendData` hook, `TrendChart.tsx` wrapping uPlot, tag picker, and time-range bar. Build order and scope in `Docs/hmi_trend_viewer_spec.md` §17.1.1 steps 7–12. Full TODO list in `Docs/platform_todo.md`.
 
 ---
 
@@ -134,4 +134,5 @@ All platform and app documentation consolidated to `C:\KillaTec\CARO_Platform\Do
 | HMI Widget Spec | `hmi_widget_spec.md` |
 | HMI Trend Viewer Spec | `hmi_trend_viewer_spec.md` |
 | HMI Trend Viewer Spec Delta | `hmi_trends_deltas.md` |
+| HMI Trends Perf Test Spec | `hmi_trends_perf_test_spec.md` |
 | HMI Bootstrap | `hmi_bootstrap.md` |

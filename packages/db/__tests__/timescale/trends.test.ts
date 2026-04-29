@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
 import {
   getTrendTile,
+  getTrendExtent,
   __test_watermarkOverride,
   __test_lastUsedSources,
   __test_getWatermarkMs,
@@ -118,15 +119,16 @@ describe('getTrendTile — INVALID_BUCKET_S', () => {
 
 describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: RAW branch (bucketS=0.96)', async () => {
   const {
-    writeTestSamples, resetTestRange,
+    writeTestSamples, resetTestRange, resetTestRangeExpectClean,
   } = await import('../helpers/trends-test-range.js');
 
   const START = 3_600_000n;  // 1h past epoch
   const END   = 3_840_000n;  // 1h 4min past epoch
   const COUNT = 250;
 
-  beforeEach(() => resetTestRange());
-  afterAll(() => resetTestRange());
+  beforeEach(async () => { await resetTestRangeExpectClean(); });
+  afterEach(async () => { await resetTestRange(); });
+  afterAll(async () => { await resetTestRange(); });
 
   it('returns shape { source: "raw", startTime, endTime, series }', async () => {
     await writeTestSamples([{ ts: START + 1_000n, tagId: 1001, value: 5.0 }]);
@@ -203,7 +205,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: RAW branch (buck
 
 describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (bucketS=14.4)', async () => {
   const {
-    writeTestSamples, resetTestRange, refreshTestCagg,
+    writeTestSamples, resetTestRange, resetTestRangeExpectClean, refreshTestCagg,
   } = await import('../helpers/trends-test-range.js');
 
   const START = 7_200_000n;   // 2h past epoch
@@ -211,10 +213,13 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (b
   const COUNT = 250;
   const VIEW  = '1s_cagg' as const;
 
-  // Reset raw + clear CAG before each test; the next afterAll does final cleanup.
   beforeEach(async () => {
+    await resetTestRangeExpectClean();
+    await refreshTestCagg(VIEW);
+  });
+  afterEach(async () => {
     await resetTestRange();
-    await refreshTestCagg(VIEW); // clear any CAG rows left from previous test
+    await refreshTestCagg(VIEW);
   });
   afterAll(async () => {
     await resetTestRange();
@@ -372,7 +377,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (b
 
 describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 10s CAG branch (bucketS=115.2)', async () => {
   const {
-    writeTestSamples, resetTestRange, refreshTestCagg,
+    writeTestSamples, resetTestRange, resetTestRangeExpectClean, refreshTestCagg,
   } = await import('../helpers/trends-test-range.js');
 
   const START = 14_400_000n;  // 4h past epoch
@@ -381,6 +386,10 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 10s CAG branch (
   const VIEW  = '10s_cagg' as const;
 
   beforeEach(async () => {
+    await resetTestRangeExpectClean();
+    await refreshTestCagg(VIEW);
+  });
+  afterEach(async () => {
     await resetTestRange();
     await refreshTestCagg(VIEW);
   });
@@ -405,7 +414,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 10s CAG branch (
 
 describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1min CAG branch (bucketS=691.2)', async () => {
   const {
-    writeTestSamples, resetTestRange, refreshTestCagg,
+    writeTestSamples, resetTestRange, resetTestRangeExpectClean, refreshTestCagg,
   } = await import('../helpers/trends-test-range.js');
 
   const START = 86_400_000n;   // 1 day past epoch
@@ -414,6 +423,10 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1min CAG branch 
   const VIEW  = '1min_cagg' as const;
 
   beforeEach(async () => {
+    await resetTestRangeExpectClean();
+    await refreshTestCagg(VIEW);
+  });
+  afterEach(async () => {
     await resetTestRange();
     await refreshTestCagg(VIEW);
   });
@@ -438,7 +451,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1min CAG branch 
 
 describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 10min CAG branch (bucketS=5184)', async () => {
   const {
-    writeTestSamples, resetTestRange, refreshTestCagg,
+    writeTestSamples, resetTestRange, resetTestRangeExpectClean, refreshTestCagg,
   } = await import('../helpers/trends-test-range.js');
 
   // startTime must be epoch-aligned to the outer bucketS (5184 s).
@@ -450,6 +463,10 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 10min CAG branch
   const VIEW  = '10min_cagg' as const;
 
   beforeEach(async () => {
+    await resetTestRangeExpectClean();
+    await refreshTestCagg(VIEW);
+  });
+  afterEach(async () => {
     await resetTestRange();
     await refreshTestCagg(VIEW);
   });
@@ -482,7 +499,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 10min CAG branch
 
 describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — watermark fall-through', async () => {
   const {
-    writeTestSamples, resetTestRange, refreshTestCagg,
+    writeTestSamples, resetTestRange, resetTestRangeExpectClean, refreshTestCagg,
   } = await import('../helpers/trends-test-range.js');
 
   // Use 1s_cagg dispatch window (same parameters as the 1s_cagg block).
@@ -492,16 +509,17 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — watermark fall-through', asyn
   const BUCKET_MS = 14_400;       // Math.round(14.4 * 1000)
 
   beforeEach(async () => {
-    await resetTestRange();
+    await resetTestRangeExpectClean();
     await refreshTestCagg('1s_cagg');
     // Ensure production watermark is NOT used by any test in this block.
     // Each test sets its own override; this guards against override leak.
     __test_watermarkOverride.current = null;
   });
 
-  afterEach(() => {
-    // Always restore production watermark behaviour after each test.
+  afterEach(async () => {
     __test_watermarkOverride.current = null;
+    await resetTestRange();
+    await refreshTestCagg('1s_cagg');
   });
 
   afterAll(async () => {
@@ -743,5 +761,43 @@ describe.skipIf(!HAVE_TIMESCALE)('getWatermarkMs — direct catalog query', asyn
   it('tag_samples (raw): returns Infinity (no watermark concept)', async () => {
     const wmMs = await __test_getWatermarkMs('tag_samples');
     expect(wmMs).toBe(Infinity);
+  });
+});
+
+// ── getTrendExtent — direct query ─────────────────────────────────────────────
+//
+// Tag IDs 8001–8099 are reserved for this block.
+// Tests query the full table, so assertions are conservative: any data (from
+// live operational writes or the sandbox) satisfies them. The null/null case
+// (empty table) cannot be reliably tested in a shared dev environment without
+// truncating the whole hypertable, so it is covered at the route unit test
+// layer (mocked) in server/__tests__/routes/trends.test.ts.
+
+describe.skipIf(!HAVE_TIMESCALE)('getTrendExtent — direct query', async () => {
+  const {
+    writeTestSamples, resetTestRange, resetTestRangeExpectClean,
+  } = await import('../helpers/trends-test-range.js');
+
+  beforeEach(async () => { await resetTestRangeExpectClean(); });
+  afterEach(async () => { await resetTestRange(); });
+  afterAll(async () => { await resetTestRange(); });
+
+  it('returns non-null bigints with oldestMs <= newestMs when table has samples', async () => {
+    await writeTestSamples([
+      { tagId: 8001, ts: 10_000_000n, value: 1.0 },
+      { tagId: 8001, ts: 20_000_000n, value: 2.0 },
+    ]);
+
+    const result = await getTrendExtent();
+
+    expect(result.oldestMs).not.toBeNull();
+    expect(result.newestMs).not.toBeNull();
+    // Type narrowing — both are bigint here.
+    expect(typeof result.oldestMs).toBe('bigint');
+    expect(typeof result.newestMs).toBe('bigint');
+    expect(result.oldestMs!).toBeLessThanOrEqual(result.newestMs!);
+    // Sanity: newestMs reflects real data — must be a plausible epoch-ms value
+    // (at minimum the sandbox sample at 10_000_000 ms past epoch).
+    expect(result.oldestMs!).toBeGreaterThan(0n);
   });
 });

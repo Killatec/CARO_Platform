@@ -15,6 +15,7 @@ export function createApp(
   tagMap: Map<number, TagDef>,
   cmdController: CmdController,
   resetBus: ResetBus,
+  trendableTagIds: Set<number>,
 ): Application {
   const app = express();
 
@@ -29,7 +30,7 @@ export function createApp(
   app.use(express.json());
   app.use(authStub);
 
-  app.use('/api/v1/tags', createTagsRouter(tagMap, cmdController));
+  app.use('/api/v1/tags', createTagsRouter(tagMap, cmdController, trendableTagIds));
   app.use('/api/v1/reset', createResetRouter(resetBus));
 
   if (process.env.HMI_TRENDS_GZIP === '1') {

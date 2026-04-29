@@ -38,13 +38,28 @@ export async function writeTestSamples(samples: TestSample[]): Promise<void> {
   })));
 }
 
-export async function resetTestRange(): Promise<void> {
-  await timescalePool.query(
+export async function resetTestRange(): Promise<number> {
+  const res = await timescalePool.query(
     `DELETE FROM tag_samples
      WHERE ts >= to_timestamp($1::bigint / 1000.0)
        AND ts <= to_timestamp($2::bigint / 1000.0)`,
     [TEST_RANGE_START, TEST_RANGE_END],
   );
+  return res.rowCount ?? 0;
+}
+
+/**
+ * Like resetTestRange but warns when rows are found and deleted.
+ * Use in beforeEach — a non-zero count means a prior test leaked sandbox data.
+ */
+export async function resetTestRangeExpectClean(): Promise<number> {
+  const deleted = await resetTestRange();
+  if (deleted > 0) {
+    console.warn(
+      `[trends-test-range] beforeEach cleanup deleted ${deleted} sandbox rows — prior test did not clean up properly`,
+    );
+  }
+  return deleted;
 }
 
 /**

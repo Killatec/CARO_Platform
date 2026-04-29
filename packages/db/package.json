@@ -9,7 +9,17 @@
     "build": "tsc",
     "test": "vitest run",
     "perf:single-tag": "tsx scripts/perf-single-tag.ts",
-    "perf:tag-scaling": "tsx scripts/perf-tag-scaling.ts"
+    "perf:tag-scaling": "tsx scripts/perf-tag-scaling.ts",
+    "perf:multi-tag": "tsx scripts/perf-multi-tag.ts",
+    "perf:multi-tag-gapfill": "tsx scripts/perf-multi-tag-gapfill.ts",
+    "perf:multi-tag-gapfill-bucketcount": "tsx scripts/perf-multi-tag-gapfill-bucketcount.ts",
+    "perf:tile-split": "tsx scripts/perf-tile-split.ts",
+    "perf:multi-tag-gapfill-raw-vs-cag": "tsx scripts/perf-multi-tag-gapfill-raw-vs-cag.ts",
+    "perf:gate-raw-16min": "tsx scripts/perf-gate-raw-16min.ts",
+    "perf:gate-raw-16min-unbounded": "tsx scripts/perf-gate-raw-16min.ts --no-prev-bound",
+    "perf:gate-raw-16min-prepared": "tsx scripts/perf-gate-raw-16min.ts --prepared",
+    "perf:gate-1scag-div24": "tsx scripts/perf-gate-1scag-div24.ts",
+    "perf:gate-1scag-div24-prepared": "tsx scripts/perf-gate-1scag-div24.ts --prepared"
   },
   "dependencies": {
     "pg": "^8.13.0"

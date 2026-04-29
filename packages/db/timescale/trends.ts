@@ -502,3 +502,26 @@ export async function getTrendTile(
 
   return { source, startTime: servedStartTime, endTime: servedEndTime, bucketS, n: totalN, series };
 }
+
+// ── getTrendExtent ─────────────────────────────────────────────────────────────
+
+/**
+ * Returns the global oldest and newest tag_samples timestamps in ms since epoch.
+ * Returns { oldestMs: null, newestMs: null } when the hypertable is empty.
+ * TimescaleDB resolves min/max via chunk metadata — no full table scan.
+ */
+export async function getTrendExtent(): Promise<{
+  oldestMs: bigint | null;
+  newestMs: bigint | null;
+}> {
+  const res = await timescalePool.query(
+    `SELECT (extract(epoch from min(ts)) * 1000)::bigint AS oldest_ms,
+            (extract(epoch from max(ts)) * 1000)::bigint AS newest_ms
+     FROM tag_samples`,
+  );
+  const row = res.rows[0] as { oldest_ms: string | null; newest_ms: string | null };
+  return {
+    oldestMs: row.oldest_ms !== null ? BigInt(row.oldest_ms) : null,
+    newestMs: row.newest_ms !== null ? BigInt(row.newest_ms) : null,
+  };
+}

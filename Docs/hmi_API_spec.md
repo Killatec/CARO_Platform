@@ -16,6 +16,7 @@ hmi_functional_spec | CARO_MQTT_Spec | Tag Registry Functional Spec | CARO_DB_Sp
 | 1.3 | 2026-03-26 | PM / Claude | Rate limiting defaults added: 100 req/min read, 20 req/min write, both configurable (OI-02 closed). Idempotency note added: write retries are safe — telemetry loop resolves ambiguity. command_id correlation via WebSocket not required — out-of-sync detection handles outcome visibility. |
 | 1.4 | 2026-03-28 | PM / Claude | Audit log endpoint updated: tag.write split into tag.write.request and tag.write.outcome (two-row pattern with shared command_id); tag.sync.lost and tag.sync.reset added; comment no longer required on tag writes (mode save only). Sync reset endpoint added: POST /api/v1/tags/{tag_id}/sync-reset. PENDING_TABLE_EMPTY error code updated: no longer references cmd_status. |
 | 1.5 | 2026-04-14 | PM / Claude | POST /tags/write: `comment` field changed from required to optional for individual tag writes. The HMI client sends a default value but the field is not validated as required. `comment` remains required only for mode save operations (Section 8, POST /modes/{mode_id}/save). |
+| 1.6 | 2026-04-29 | PM / Claude | Section 7 Trends: replaced stub with live endpoint documentation — GET /api/v1/trends/tile (v0.5+ wire contract with start_time/end_time/bucket_count, watermark fall-through, discriminated source response), GET /api/v1/trends/extent (hypertable extent), GET /api/v1/tags/trendable (trendable tag discovery). Added error codes: INVALID_TAG_IDS (trends), INVALID_RANGE, INVALID_BUCKET_COUNT, INVALID_BUCKET_S, MISSING_QUERY_PARAM. Detailed spec: Docs/hmi_trend_viewer_spec.md. |
 
 ---
 
@@ -356,14 +357,108 @@ Response:
 
 ## 7. Trends (TimescaleDB)
 
-Trend endpoints provide historical tag data via TimescaleDB integration.
+Trend endpoints provide historical tag data from TimescaleDB. Detailed contract: `Docs/hmi_trend_viewer_spec.md` §6.
 
-### GET /api/v1/trends/{tag_id}
-Query historical tag values
+### GET /api/v1/trends/tile
+Fetch a time-bucketed tile for one or more trendable tags.
 
-*Required role: ALL*
+*Required role: ALL (dev mode — no auth gate currently)*
 
-Query parameters, aggregation strategy, resolution, and response shape: pending TimescaleDB integration.
+Query parameters:
+
+| Parameter | Type | Constraints |
+|---|---|---|
+| `tag_ids` | comma-separated integers | required; 1 ≤ count ≤ 8 |
+| `start_time` | integer (ms since epoch) | required; positive |
+| `end_time` | integer (ms since epoch) | required; must be > start_time |
+| `bucket_count` | integer | required; 1..2500 |
+
+The server derives `bucketS = (end_time - start_time) / (bucket_count × 1000)` and dispatches on it: `< 1.0` → raw `tag_samples`; `< 16` → `1s_cagg`; `< 160` → `10s_cagg`; `< 1600` → `1min_cagg`; else → `10min_cagg`. Each source is queried with watermark-aware fall-through — if `end_time` is past the source's materialization watermark, the trailing portion is served from the next-finer source and `source: 'mixed'` is returned.
+
+Raw response (`bucketS < 1.0` — COV samples, irregular timestamps):
+```json
+{
+  "ok": true,
+  "data": {
+    "source": "raw",
+    "startTime": 1776864000000,
+    "endTime": 1776864480000,
+    "series": [
+      { "tagId": 42, "ts": [1776864001234, 1776864003445], "value": [1.9, 1.8] }
+    ]
+  }
+}
+```
+
+Aggregate response (`bucketS ≥ 1.0` — regular bucket grid):
+```json
+{
+  "ok": true,
+  "data": {
+    "source": "1s_cagg",
+    "startTime": 1776864000000,
+    "endTime": 1776864480000,
+    "bucketS": 1.92,
+    "n": 250,
+    "series": [
+      { "tagId": 42, "value": [1.9, 1.8, null, 2.0] }
+    ]
+  }
+}
+```
+
+`source` is one of `'raw'`, `'1s_cagg'`, `'10s_cagg'`, `'1min_cagg'`, `'10min_cagg'`, or `'mixed'`. `n` is the actual row count — equals `bucket_count` for aligned requests, `bucket_count + 1` for unaligned. `null` in a value array represents a null-quality sample or a gap bucket. `startTime` / `endTime` are serialized as plain numbers (safe within `Number.MAX_SAFE_INTEGER`).
+
+Validation errors:
+
+| Code | Trigger |
+|---|---|
+| `INVALID_TAG_IDS` | Empty list, count > 8, non-integer IDs, or ID outside the trendable set |
+| `INVALID_RANGE` | `end_time ≤ start_time` or either timestamp is non-positive |
+| `INVALID_BUCKET_COUNT` | `bucket_count` outside 1..2500 or non-integer |
+| `INVALID_BUCKET_S` | Derived `bucketS` outside (0, 14746] — internal sanity check |
+| `MISSING_QUERY_PARAM` | Any required query parameter is absent |
+
+### GET /api/v1/trends/extent
+Return the hypertable-wide oldest and newest `ts` values in `tag_samples`.
+
+*Required role: ALL (dev mode)*
+
+No query parameters.
+
+Response:
+```json
+{
+  "ok": true,
+  "data": {
+    "oldestTs": 1745000000000,
+    "newestTs": 1777489680000
+  }
+}
+```
+
+Both fields are `number | null`. Returns `null` / `null` if the hypertable is empty. Used by the perf test page (`/dev/trends-perf`) to compute historical tile windows. No new error codes — standard 500 on DB failure.
+
+### GET /api/v1/tags/trendable
+Return the list of tags that are enabled for historian trending.
+
+*Required role: ALL (dev mode)*
+
+No query parameters.
+
+Response:
+```json
+{
+  "ok": true,
+  "data": {
+    "tags": [
+      { "tag_id": 101, "tag_path": "Beam_Current.Gun.Current" }
+    ]
+  }
+}
+```
+
+The server filters the in-memory tag map by the `trendableTagIds` set (built at startup from the tag registry `is_trendable` flag). Used by the perf test page to discover tag IDs for sweep runs.
 
 ---
 
@@ -637,11 +732,15 @@ MODE_CHANGED payload:
 | DEVICE_NOT_READY | 422 | Device offline or handshake not completed. |
 | INVALID_CHALLENGE_TOKEN | 401 | Save-time MFA token missing, invalid, or expired. |
 | PENDING_TABLE_EMPTY | 422 | No rows in pending_setpoint_values to promote. |
+| INVALID_TAG_IDS | 400 | Trends tile: tag_ids empty, count > 8, contains non-integer, or contains IDs outside the trendable set. |
+| INVALID_RANGE | 400 | Trends tile: end_time ≤ start_time, or either timestamp is non-positive. |
+| INVALID_BUCKET_COUNT | 400 | Trends tile: bucket_count outside 1..2500 or non-integer. |
+| INVALID_BUCKET_S | 400 | Trends tile: derived bucketS outside (0, 14746] — request spans too large a range for the given bucket count. |
+| MISSING_QUERY_PARAM | 400 | Trends tile: a required query parameter (tag_ids, start_time, end_time, or bucket_count) is absent. |
 | INTERNAL_ERROR | 500 | Unexpected server error. |
 
 ## Open Questions
 
-- What are the trends endpoint query parameters and aggregation strategy? Depends on TimescaleDB schema.
 - Should `challenge_token` be stored in-memory or derived via HMAC?
 - Can activated revisions be cloned (REVISION_IMMUTABLE policy)?
 

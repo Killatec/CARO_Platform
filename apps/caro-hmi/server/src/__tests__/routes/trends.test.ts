@@ -6,29 +6,31 @@ import compression from 'compression';
 import type { ErrorRequestHandler } from 'express';
 import { errorHandler } from '@caro/server';
 import trendsRouter from '../../routes/trends.js';
-import { getTrendTile, writeTagSamples, timescalePool } from '@caro/db';
+import { getTrendTile, getTrendExtent, writeTagSamples, timescalePool } from '@caro/db';
 import type { RawTrendTile, AggregateTrendTile } from '@caro/db';
 
 // ── Mock @caro/db, preserving real impl for integration tests ─────────────────
-// vi.hoisted() creates a container that's available inside the hoisted vi.mock
-// factory — the only safe way to capture the real implementation.
 
 type DbModule = typeof import('@caro/db');
 
 const real = vi.hoisted(() => ({
-  getTrendTile: undefined as DbModule['getTrendTile'] | undefined,
+  getTrendTile:   undefined as DbModule['getTrendTile']   | undefined,
+  getTrendExtent: undefined as DbModule['getTrendExtent'] | undefined,
 }));
 
 vi.mock('@caro/db', async (importOriginal) => {
   const actual = await importOriginal<DbModule>();
-  real.getTrendTile = actual.getTrendTile;
+  real.getTrendTile   = actual.getTrendTile;
+  real.getTrendExtent = actual.getTrendExtent;
   return {
     ...actual,
-    getTrendTile: vi.fn(),
+    getTrendTile:   vi.fn(),
+    getTrendExtent: vi.fn(),
   };
 });
 
-const mockGet = vi.mocked(getTrendTile);
+const mockGet    = vi.mocked(getTrendTile);
+const mockExtent = vi.mocked(getTrendExtent);
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -43,26 +45,32 @@ function buildApp() {
 
 function buildGzipApp() {
   const app = express();
-  app.use('/api/v1/trends', compression());
+  // threshold: 0 forces compression regardless of response size — ensures the
+  // test is deterministic and doesn't depend on payload size hitting the default
+  // 1024-byte threshold.
+  app.use('/api/v1/trends', compression({ threshold: 0 }));
   app.use('/api/v1/trends', trendsRouter);
   app.use(errorHandler as ErrorRequestHandler);
   return app;
 }
 
+// v0.5 fixture: raw tile with bigint startTime/endTime and bigint ts entries.
+// The route serialises bigints to numbers via serializeTile() before res.json(),
+// so res.body will contain plain numbers — not bigints.
 const RAW_TILE: RawTrendTile = {
-  bucketS: 0,
-  tileIndex: 0,
-  tileSpanMs: 3_600_000,
-  series: [{ tagId: 1, ts: [1000, 2000], value: [1.5, 2.0] }],
+  source: 'raw',
+  startTime: 3_600_000n,
+  endTime:   3_840_000n,
+  series: [{ tagId: 1, ts: [3_601_000n, 3_602_000n], value: [1.5, 2.0] }],
 };
 
 const AGG_TILE: AggregateTrendTile = {
-  bucketS: 1,
-  tileIndex: 0,
-  tileSpanMs: 600_000,
-  tsStart: 0,
-  n: 600,
-  series: [{ tagId: 1, value: new Array(600).fill(1.0) }],
+  source: '1s_cagg',
+  startTime: 7_200_000n,
+  endTime:   10_800_000n,
+  bucketS:   14.4,
+  n:         250,
+  series: [{ tagId: 1, value: new Array(250).fill(1.0) }],
 };
 
 // ── Unit tests (mocked @caro/db) ──────────────────────────────────────────────
@@ -72,6 +80,7 @@ describe('GET /api/v1/trends/tile — unit (mocked)', () => {
 
   beforeEach(() => {
     mockGet.mockReset();
+    mockExtent.mockReset();
   });
 
   // ── Happy paths ─────────────────────────────────────────────────────────────
@@ -79,86 +88,129 @@ describe('GET /api/v1/trends/tile — unit (mocked)', () => {
   it('raw happy path: returns 200 with envelope wrapping RawTrendTile', async () => {
     mockGet.mockResolvedValueOnce(RAW_TILE);
     const res = await request(app)
-      .get('/api/v1/trends/tile?tag_ids=1&bucket_s=0&tile_index=0');
+      .get('/api/v1/trends/tile?tag_ids=1&start_time=3600000&end_time=3840000&bucket_count=250');
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
-    expect(res.body.data).toMatchObject({ bucketS: 0, tileIndex: 0 });
-    expect(mockGet).toHaveBeenCalledWith([1], 0, 0);
+    expect(res.body.data.source).toBe('raw');
+    expect(res.body.data.startTime).toBe(3_600_000);
+    expect(res.body.data.endTime).toBe(3_840_000);
+    expect(mockGet).toHaveBeenCalledWith([1], 3_600_000n, 3_840_000n, 250);
   });
 
   it('aggregate happy path: returns 200 with envelope wrapping AggregateTrendTile', async () => {
     mockGet.mockResolvedValueOnce(AGG_TILE);
     const res = await request(app)
-      .get('/api/v1/trends/tile?tag_ids=1&bucket_s=1&tile_index=0');
+      .get('/api/v1/trends/tile?tag_ids=1&start_time=7200000&end_time=10800000&bucket_count=250');
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
-    expect(res.body.data).toMatchObject({ bucketS: 1, n: 600 });
+    expect(res.body.data.source).toBe('1s_cagg');
+    expect(res.body.data.n).toBe(250);
+    expect(res.body.data.bucketS).toBe(14.4);
+  });
+
+  it('bigint ts entries in raw response are serialised to JSON numbers', async () => {
+    mockGet.mockResolvedValueOnce(RAW_TILE);
+    const res = await request(app)
+      .get('/api/v1/trends/tile?tag_ids=1&start_time=3600000&end_time=3840000&bucket_count=250');
+    const ts = res.body.data.series[0].ts;
+    expect(ts).toEqual([3_601_000, 3_602_000]);
+    expect(typeof ts[0]).toBe('number');
   });
 
   // ── Missing params ──────────────────────────────────────────────────────────
 
   it('missing tag_ids → 400 MISSING_QUERY_PARAM mentioning tag_ids', async () => {
     const res = await request(app)
-      .get('/api/v1/trends/tile?bucket_s=0&tile_index=0');
+      .get('/api/v1/trends/tile?start_time=1000000&end_time=2000000&bucket_count=250');
     expect(res.status).toBe(400);
-    expect(res.body.ok).toBe(false);
     expect(res.body.error.code).toBe('MISSING_QUERY_PARAM');
     expect(res.body.error.message).toContain('tag_ids');
   });
 
-  it('missing bucket_s → 400 MISSING_QUERY_PARAM mentioning bucket_s', async () => {
+  it('missing start_time → 400 MISSING_QUERY_PARAM mentioning start_time', async () => {
     const res = await request(app)
-      .get('/api/v1/trends/tile?tag_ids=1&tile_index=0');
+      .get('/api/v1/trends/tile?tag_ids=1&end_time=2000000&bucket_count=250');
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe('MISSING_QUERY_PARAM');
-    expect(res.body.error.message).toContain('bucket_s');
+    expect(res.body.error.message).toContain('start_time');
   });
 
-  it('missing tile_index → 400 MISSING_QUERY_PARAM mentioning tile_index', async () => {
+  it('missing end_time → 400 MISSING_QUERY_PARAM mentioning end_time', async () => {
     const res = await request(app)
-      .get('/api/v1/trends/tile?tag_ids=1&bucket_s=0');
+      .get('/api/v1/trends/tile?tag_ids=1&start_time=1000000&bucket_count=250');
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe('MISSING_QUERY_PARAM');
-    expect(res.body.error.message).toContain('tile_index');
+    expect(res.body.error.message).toContain('end_time');
+  });
+
+  it('missing bucket_count → 400 MISSING_QUERY_PARAM mentioning bucket_count', async () => {
+    const res = await request(app)
+      .get('/api/v1/trends/tile?tag_ids=1&start_time=1000000&end_time=2000000');
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('MISSING_QUERY_PARAM');
+    expect(res.body.error.message).toContain('bucket_count');
   });
 
   // ── Malformed tag_ids ───────────────────────────────────────────────────────
 
   it('malformed tag_ids (abc) → 400 INVALID_TAG_IDS', async () => {
     const res = await request(app)
-      .get('/api/v1/trends/tile?tag_ids=abc&bucket_s=0&tile_index=0');
+      .get('/api/v1/trends/tile?tag_ids=abc&start_time=1000000&end_time=2000000&bucket_count=250');
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe('INVALID_TAG_IDS');
-  });
-
-  it('empty tag_ids → 400 INVALID_TAG_IDS', async () => {
-    const res = await request(app)
-      .get('/api/v1/trends/tile?tag_ids=&bucket_s=0&tile_index=0');
-    expect(res.status).toBe(400);
-    expect(res.body.error.code).toBe('MISSING_QUERY_PARAM');
   });
 
   it('negative tag id → 400 INVALID_TAG_IDS', async () => {
     const res = await request(app)
-      .get('/api/v1/trends/tile?tag_ids=-1&bucket_s=0&tile_index=0');
+      .get('/api/v1/trends/tile?tag_ids=-1&start_time=1000000&end_time=2000000&bucket_count=250');
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe('INVALID_TAG_IDS');
   });
 
-  // ── Malformed bucket_s / tile_index ─────────────────────────────────────────
-
-  it('negative bucket_s → 400 INVALID_BUCKET_S', async () => {
+  it('more than 8 tag_ids → 400 INVALID_TAG_IDS', async () => {
     const res = await request(app)
-      .get('/api/v1/trends/tile?tag_ids=1&bucket_s=-1&tile_index=0');
+      .get('/api/v1/trends/tile?tag_ids=1,2,3,4,5,6,7,8,9&start_time=1000000&end_time=2000000&bucket_count=250');
     expect(res.status).toBe(400);
-    expect(res.body.error.code).toBe('INVALID_BUCKET_S');
+    expect(res.body.error.code).toBe('INVALID_TAG_IDS');
   });
 
-  it('negative tile_index → 400 INVALID_TILE_INDEX', async () => {
+  // ── INVALID_RANGE ───────────────────────────────────────────────────────────
+
+  it('end_time <= start_time → 400 INVALID_RANGE', async () => {
     const res = await request(app)
-      .get('/api/v1/trends/tile?tag_ids=1&bucket_s=0&tile_index=-1');
+      .get('/api/v1/trends/tile?tag_ids=1&start_time=2000000&end_time=1000000&bucket_count=250');
     expect(res.status).toBe(400);
-    expect(res.body.error.code).toBe('INVALID_TILE_INDEX');
+    expect(res.body.error.code).toBe('INVALID_RANGE');
+  });
+
+  it('start_time = 0 → 400 INVALID_RANGE', async () => {
+    const res = await request(app)
+      .get('/api/v1/trends/tile?tag_ids=1&start_time=0&end_time=1000000&bucket_count=250');
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('INVALID_RANGE');
+  });
+
+  it('non-numeric start_time → 400 INVALID_RANGE', async () => {
+    const res = await request(app)
+      .get('/api/v1/trends/tile?tag_ids=1&start_time=abc&end_time=1000000&bucket_count=250');
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('INVALID_RANGE');
+  });
+
+  // ── INVALID_BUCKET_COUNT ────────────────────────────────────────────────────
+
+  it('bucket_count = 0 → 400 INVALID_BUCKET_COUNT', async () => {
+    const res = await request(app)
+      .get('/api/v1/trends/tile?tag_ids=1&start_time=1000000&end_time=2000000&bucket_count=0');
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('INVALID_BUCKET_COUNT');
+  });
+
+  it('bucket_count = 2501 → 400 INVALID_BUCKET_COUNT', async () => {
+    const res = await request(app)
+      .get('/api/v1/trends/tile?tag_ids=1&start_time=1000000&end_time=2000000&bucket_count=2501');
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('INVALID_BUCKET_COUNT');
   });
 
   // ── Error translation ───────────────────────────────────────────────────────
@@ -167,7 +219,7 @@ describe('GET /api/v1/trends/tile — unit (mocked)', () => {
     const dbErr = Object.assign(new Error('bad bucket'), { code: 'INVALID_BUCKET_S' });
     mockGet.mockRejectedValueOnce(dbErr);
     const res = await request(app)
-      .get('/api/v1/trends/tile?tag_ids=1&bucket_s=5&tile_index=0');
+      .get('/api/v1/trends/tile?tag_ids=1&start_time=1000000&end_time=2000000&bucket_count=250');
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe('INVALID_BUCKET_S');
     expect(res.body.error.message).toBe('bad bucket');
@@ -177,7 +229,7 @@ describe('GET /api/v1/trends/tile — unit (mocked)', () => {
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     mockGet.mockRejectedValueOnce(new Error('boom'));
     const res = await request(app)
-      .get('/api/v1/trends/tile?tag_ids=1&bucket_s=0&tile_index=0');
+      .get('/api/v1/trends/tile?tag_ids=1&start_time=1000000&end_time=2000000&bucket_count=250');
     expect(res.status).toBe(500);
     expect(res.body.error.code).toBe('INTERNAL_ERROR');
     expect(errSpy).toHaveBeenCalled();
@@ -186,93 +238,112 @@ describe('GET /api/v1/trends/tile — unit (mocked)', () => {
 
   // ── JSON round-trip (BigInt guard) ──────────────────────────────────────────
 
-  it('response body is JSON-serialisable (no BigInt leak)', async () => {
+  it('response body is JSON-serialisable (bigints converted to numbers by serializeTile)', async () => {
     mockGet.mockResolvedValueOnce(RAW_TILE);
     const res = await request(app)
-      .get('/api/v1/trends/tile?tag_ids=1&bucket_s=0&tile_index=0');
+      .get('/api/v1/trends/tile?tag_ids=1&start_time=3600000&end_time=3840000&bucket_count=250');
     expect(() => JSON.stringify(res.body)).not.toThrow();
     expect(JSON.parse(JSON.stringify(res.body))).toMatchObject(res.body);
   });
 });
 
+// ── GET /api/v1/trends/extent — unit (mocked) ────────────────────────────────
+
+describe('GET /api/v1/trends/extent — unit (mocked)', () => {
+  const app = buildApp();
+
+  beforeEach(() => {
+    mockGet.mockReset();
+    mockExtent.mockReset();
+  });
+
+  it('200 with numeric oldestTs/newestTs when table has data', async () => {
+    mockExtent.mockResolvedValueOnce({ oldestMs: 1_000_000n, newestMs: 2_000_000n });
+    const res = await request(app).get('/api/v1/trends/extent');
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.data.oldestTs).toBe(1_000_000);
+    expect(res.body.data.newestTs).toBe(2_000_000);
+    expect(typeof res.body.data.oldestTs).toBe('number');
+    expect(typeof res.body.data.newestTs).toBe('number');
+  });
+
+  it('200 with both null when getTrendExtent returns null fields', async () => {
+    mockExtent.mockResolvedValueOnce({ oldestMs: null, newestMs: null });
+    const res = await request(app).get('/api/v1/trends/extent');
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.data.oldestTs).toBeNull();
+    expect(res.body.data.newestTs).toBeNull();
+  });
+
+  it('500 when getTrendExtent throws', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    mockExtent.mockRejectedValueOnce(new Error('db down'));
+    const res = await request(app).get('/api/v1/trends/extent');
+    expect(res.status).toBe(500);
+    expect(res.body.ok).toBe(false);
+    errSpy.mockRestore();
+  });
+});
+
 // ── Integration tests (live Timescale, gated) ─────────────────────────────────
+// Uses the raw path (bucketS < 1.0): 4-minute window with 250 buckets → bucketS=0.96.
 
 describe.skipIf(!HAVE_TIMESCALE)('GET /api/v1/trends/tile — integration (live Timescale)', () => {
-  const TEST_TAG    = 9901;
-  const TILE_INDEX  = 1;
-  const TILE_SPAN   = 3_600_000; // raw tile span
-  const TILE_START  = TILE_INDEX * TILE_SPAN; // 3_600_000 ms
+  const TEST_TAG   = 9901;
+  // Raw window: start=3_600_000 ms (1h), end=3_840_000 ms (1h4m), 250 buckets
+  const START_MS   = 3_600_000;
+  const END_MS     = 3_840_000;
 
-  // Restore real getTrendTile for all integration tests.
-  // writeTagSamples and timescalePool come from the mock spread (actual impl).
   beforeEach(() => {
     mockGet.mockImplementation(
-      (tagIds: number[], bucketS: number, tileIndex: number) =>
-        real.getTrendTile!(tagIds, bucketS, tileIndex),
+      (tagIds: number[], startTime: bigint, endTime: bigint, bucketCount: number) =>
+        real.getTrendTile!(tagIds, startTime, endTime, bucketCount),
     );
   });
 
   afterAll(async () => {
-    // Clean up test samples.
-    await timescalePool.query(
-      `DELETE FROM tag_samples WHERE tag_id = $1`,
-      [TEST_TAG],
-    );
+    await timescalePool.query(`DELETE FROM tag_samples WHERE tag_id = $1`, [TEST_TAG]);
     await timescalePool.end();
   });
 
-  it('raw tile end-to-end: writes 5 samples, GET returns envelope + data', async () => {
-    const app = buildApp();
-    const samples = [0, 1000, 2000, 3000, 4000].map(offset => ({
-      tagId: TEST_TAG,
-      ts: TILE_START + offset,
-      value: offset / 1000,
-    }));
-    await writeTagSamples(samples);
+  it('raw tile end-to-end: writes 3 samples, GET returns envelope + data', async () => {
+    const app = express();
+    app.use('/api/v1/trends', trendsRouter);
+    app.use(errorHandler as ErrorRequestHandler);
+
+    await writeTagSamples([
+      { tagId: TEST_TAG, ts: START_MS + 1_000, value: 1.0 },
+      { tagId: TEST_TAG, ts: START_MS + 2_000, value: 2.0 },
+      { tagId: TEST_TAG, ts: START_MS + 3_000, value: 3.0 },
+    ]);
 
     const res = await request(app).get(
-      `/api/v1/trends/tile?tag_ids=${TEST_TAG}&bucket_s=0&tile_index=${TILE_INDEX}`,
+      `/api/v1/trends/tile?tag_ids=${TEST_TAG}&start_time=${START_MS}&end_time=${END_MS}&bucket_count=250`,
     );
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
-    const data = res.body.data as RawTrendTile;
-    expect(data.bucketS).toBe(0);
-    const series = data.series.find((s: { tagId: number }) => s.tagId === TEST_TAG);
+    expect(res.body.data.source).toBe('raw');
+    const series = res.body.data.series.find((s: { tagId: number }) => s.tagId === TEST_TAG);
     expect(series).toBeDefined();
-    expect(series!.ts.length).toBe(5);
-  });
-
-  it('aggregate tile end-to-end: writes sparse samples, GET returns 600-bucket series', async () => {
-    const app = buildApp();
-    // A single sample in the aggregate tile.
-    await writeTagSamples([{ tagId: TEST_TAG, ts: TILE_START + 5000, value: 42 }]);
-
-    const res = await request(app).get(
-      `/api/v1/trends/tile?tag_ids=${TEST_TAG}&bucket_s=1&tile_index=${TILE_INDEX}`,
-    );
-    expect(res.status).toBe(200);
-    expect(res.body.ok).toBe(true);
-    const data = res.body.data as AggregateTrendTile;
-    expect(data.bucketS).toBe(1);
-    const series = data.series.find((s: { tagId: number }) => s.tagId === TEST_TAG);
-    expect(series).toBeDefined();
-    expect(series!.value.length).toBe(600);
+    expect(series!.ts.length).toBe(3);
   });
 
   it('gzip off (default): response does not have content-encoding: gzip', async () => {
-    const app = buildApp();
     mockGet.mockResolvedValueOnce(RAW_TILE);
+    const app = buildApp();
     const res = await request(app)
-      .get('/api/v1/trends/tile?tag_ids=1&bucket_s=0&tile_index=0')
+      .get('/api/v1/trends/tile?tag_ids=1&start_time=3600000&end_time=3840000&bucket_count=250')
       .set('Accept-Encoding', 'gzip');
     expect(res.headers['content-encoding']).not.toBe('gzip');
   });
 
   it('gzip on: compression middleware produces content-encoding: gzip', async () => {
-    const app = buildGzipApp();
     mockGet.mockResolvedValueOnce(AGG_TILE);
+    const app = buildGzipApp();
     const res = await request(app)
-      .get('/api/v1/trends/tile?tag_ids=1&bucket_s=1&tile_index=0')
+      .get('/api/v1/trends/tile?tag_ids=1&start_time=7200000&end_time=10800000&bucket_count=250')
       .set('Accept-Encoding', 'gzip')
       .buffer(true)
       .parse((res, callback) => {

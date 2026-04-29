@@ -27,13 +27,24 @@ if (HAVE_TIMESCALE) {
 const TEST_RANGE_START = 0n;
 const TEST_RANGE_END   = 946_684_799_000n; // 1999-12-31T23:59:59Z
 
-async function resetTestRange(): Promise<void> {
-  await timescalePool.query(
+async function resetTestRange(): Promise<number> {
+  const res = await timescalePool.query(
     `DELETE FROM tag_samples
      WHERE ts >= to_timestamp($1::bigint / 1000.0)
        AND ts <= to_timestamp($2::bigint / 1000.0)`,
     [TEST_RANGE_START, TEST_RANGE_END],
   );
+  return res.rowCount ?? 0;
+}
+
+async function resetTestRangeExpectClean(): Promise<number> {
+  const deleted = await resetTestRange();
+  if (deleted > 0) {
+    console.warn(
+      `[trends-test-range] beforeEach cleanup deleted ${deleted} sandbox rows — prior test did not clean up properly`,
+    );
+  }
+  return deleted;
 }
 
 async function writeTestSamples(
@@ -96,6 +107,10 @@ describe.skipIf(!HAVE_TIMESCALE)('GET /api/v1/trends/tile — E2E (real DB, no m
 
   describe('200 happy path: aligned 1s_cagg request', () => {
     beforeEach(async () => {
+      await resetTestRangeExpectClean();
+      await refreshTestCagg('1s_cagg');
+    });
+    afterEach(async () => {
       await resetTestRange();
       await refreshTestCagg('1s_cagg');
     });
@@ -127,7 +142,8 @@ describe.skipIf(!HAVE_TIMESCALE)('GET /api/v1/trends/tile — E2E (real DB, no m
   // ── 2. Raw path: unaligned range, exact round-trip ──────────────────────────
 
   describe('200 raw path: unaligned range, exact range round-trip', () => {
-    beforeEach(() => resetTestRange());
+    beforeEach(async () => { await resetTestRangeExpectClean(); });
+    afterEach(async () => { await resetTestRange(); });
 
     it('returns source=raw with startTime/endTime matching request exactly', async () => {
       // Deliberately unaligned timestamps (+ 123 ms offset).
@@ -157,6 +173,10 @@ describe.skipIf(!HAVE_TIMESCALE)('GET /api/v1/trends/tile — E2E (real DB, no m
 
   describe('200 unaligned aggregate: served grid wraps the request', () => {
     beforeEach(async () => {
+      await resetTestRangeExpectClean();
+      await refreshTestCagg('1s_cagg');
+    });
+    afterEach(async () => {
       await resetTestRange();
       await refreshTestCagg('1s_cagg');
     });
@@ -294,14 +314,17 @@ describe.skipIf(!HAVE_TIMESCALE)('GET /api/v1/trends/tile — E2E (real DB, no m
 
   describe('200 watermark fall-through: source=mixed over HTTP', () => {
     beforeEach(async () => {
-      await resetTestRange();
+      await resetTestRangeExpectClean();
       await refreshTestCagg('1s_cagg');
       await refreshTestCagg('10s_cagg');
       __test_watermarkOverride.current = null;
     });
 
-    afterEach(() => {
+    afterEach(async () => {
       __test_watermarkOverride.current = null;
+      await resetTestRange();
+      await refreshTestCagg('1s_cagg');
+      await refreshTestCagg('10s_cagg');
     });
 
     it('source=mixed when watermark splits the range mid-window', async () => {

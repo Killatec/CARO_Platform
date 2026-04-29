@@ -14,7 +14,7 @@
       "template_name": "numeric_mon",
       "asset_name": "Queue_Depth",
       "fields": {
-        "Trends": false,
+        "Trends": true,
         "format": "#",
         "data_type": "i16"
       }
@@ -23,7 +23,7 @@
       "template_name": "numeric_mon",
       "asset_name": "Rows_Per_Sec",
       "fields": {
-        "Trends": false,
+        "Trends": true,
         "format": "#",
         "unit": "#/s"
       }
@@ -32,7 +32,7 @@
       "template_name": "numeric_mon",
       "asset_name": "Flush_ms",
       "fields": {
-        "Trends": false,
+        "Trends": true,
         "unit": "ms"
       }
     },
@@ -41,7 +41,7 @@
       "asset_name": "Dropped_Pkgs",
       "fields": {
         "data_type": "i16",
-        "Trends": false,
+        "Trends": true,
         "format": "#"
       }
     },
@@ -50,7 +50,7 @@
       "asset_name": "Error_Count",
       "fields": {
         "data_type": "i16",
-        "Trends": false,
+        "Trends": true,
         "format": "#"
       }
     },

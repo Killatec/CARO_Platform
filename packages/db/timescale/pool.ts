@@ -31,12 +31,14 @@ interface DbPool {
   query(queryText: string, values?: unknown[]): Promise<QueryResult>;
   connect(): Promise<PoolClient>;
   end(): Promise<void>;
+  on(event: 'connect', listener: (client: PoolClient) => void): void;
 }
 
 const timescalePool: DbPool = {
   query:   (queryText, values) => getPool().query(queryText, values as unknown[]),
   connect: () => getPool().connect(),
   end:     () => getPool().end(),
+  on:      (event, listener)   => { getPool().on(event, listener); },
 };
 
 export default timescalePool;
