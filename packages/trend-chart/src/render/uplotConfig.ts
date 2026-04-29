@@ -12,6 +12,8 @@ export interface BuildUplotConfigOpts {
   height: number;
   siteTimezone?: string;
   onCursorChange?: (idx: number | null, left: number, top: number) => void;
+  /** Initial X scale in ms — sets the visible range when uPlot is first built. */
+  initialXRange?: { startMs: bigint; endMs: bigint };
 }
 
 /**
@@ -22,10 +24,19 @@ export interface BuildUplotConfigOpts {
  * Only the selected trace's Y axis is visible.
  */
 export function buildUplotConfig(opts: BuildUplotConfigOpts): uPlot.Options {
-  const { tagIds, selectedTagId, tagMap, width, height, siteTimezone, onCursorChange } = opts;
+  const { tagIds, selectedTagId, tagMap, width, height, siteTimezone, onCursorChange, initialXRange } = opts;
 
   // Build named scale entries for each tag.
-  const scales: uPlot.Options['scales'] = { x: { time: true } };
+  const xScale: uPlot.Scale = initialXRange
+    ? {
+        time: true,
+        range: [
+          Number(initialXRange.startMs) / 1000,
+          Number(initialXRange.endMs) / 1000,
+        ],
+      }
+    : { time: true };
+  const scales: uPlot.Options['scales'] = { x: xScale };
   for (const tagId of tagIds) {
     const tag = tagMap.get(tagId);
     const yRange = tag ? defaultYScale(tag) : null;

@@ -8,11 +8,17 @@ import type { AggregateSeriesData } from '../src/types.js';
 // ── uPlot mock (canvas not available in jsdom) ────────────────────────────────
 
 vi.mock('uplot', () => {
-  const MockUPlot = vi.fn().mockImplementation(() => ({
-    destroy: vi.fn(),
-    setData: vi.fn(),
-    redraw: vi.fn(),
-  }));
+  const MockUPlot = vi.fn().mockImplementation(() => {
+    const over = document.createElement('div');
+    return {
+      destroy: vi.fn(),
+      setData: vi.fn(),
+      redraw: vi.fn(),
+      setScale: vi.fn(),
+      scales: { x: { min: 0, max: 3600 } },
+      over,
+    };
+  });
   (MockUPlot as unknown as Record<string, unknown>).paths = {
     stepped: vi.fn(() => vi.fn()),
   };
@@ -48,10 +54,17 @@ function makeData(tagIds: number[] = [1, 2, 3, 4]): AggregateSeriesData {
   };
 }
 
-function renderChart(tagIds: number[] = [1, 2, 3, 4], data = makeData(tagIds)) {
+function renderChart(tagIds: number[] = [1, 2, 3, 4], data = makeData(tagIds), onTagRemove?: (id: number) => void) {
   return render(
     <MockHmiProvider tagDefs={TAG_DEFS}>
-      <TrendChart data={data} tagIds={tagIds} siteTimezone="UTC" width={800} height={400} />
+      <TrendChart
+        data={data}
+        tagIds={tagIds}
+        siteTimezone="UTC"
+        width={800}
+        height={400}
+        onTagRemove={onTagRemove}
+      />
     </MockHmiProvider>,
   );
 }
@@ -90,13 +103,13 @@ describe('TrendChart', () => {
     expect(powerEntry.style.fontWeight).toBe('700');
   });
 
-  it('clicking the remove button removes the trace from legend', () => {
-    renderChart([1, 2]);
+  it('clicking the remove button calls onTagRemove with the correct tagId', () => {
+    const onTagRemove = vi.fn();
+    renderChart([1, 2], makeData([1, 2]), onTagRemove);
     const removeButtons = screen.getAllByTitle('Remove trace');
-    // Remove the first tag (Temp).
+    // Remove the first tag (Temp = tag 1).
     fireEvent.click(removeButtons[0]!);
-    expect(screen.queryByText('Temp')).toBeNull();
-    expect(screen.getByText('Power')).toBeTruthy();
+    expect(onTagRemove).toHaveBeenCalledWith(1);
   });
 
   it('shows resolution indicator text', () => {
