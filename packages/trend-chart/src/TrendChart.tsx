@@ -6,9 +6,20 @@ import { useTagMap } from '@caro/hmi-context';
 import type { TrendData } from './types.js';
 import { Legend } from './Legend.js';
 import { ResolutionIndicator } from './ResolutionIndicator.js';
-import { Tooltip } from './Tooltip.js';
+import {
+  pruneRemovedTagOverrides,
+  isInYAxisHitZone,
+  panYScale,
+  zoomYScale,
+  panThresholdCheck,
+  isInXAxisHitZone,
+  panXScale,
+  zoomXScale,
+  checkAndExtendXCoverage,
+} from './axisInteractions.js';
 import { buildUplotConfig } from './render/uplotConfig.js';
 import { seriesFromTrendData } from './render/seriesFromTrendData.js';
+import { computeZoomLevelTransition } from './level.js';
 
 export interface TrendChartProps {
   data: TrendData;
@@ -19,13 +30,20 @@ export interface TrendChartProps {
   height?: number;
   /** Initial X scale and live imperative updates (not in rebuild deps — see below). */
   xRange?: { startMs: bigint; endMs: bigint };
-  /**
-   * Called during pan (isFinal=false per frame) and at drag-end / wheel
-   * (isFinal=true). Container uses isFinal to optionally flush the debounce.
-   */
-  onRangeChange?: (range: { startMs: bigint; endMs: bigint }, isFinal: boolean) => void;
   /** Called when the legend remove button is clicked for a tag. */
   onTagRemove?: (tagId: number) => void;
+  /** Triggers background prefetch when the visible window approaches the cached extent. */
+  ensureCovered?: (startMs: bigint, endMs: bigint) => void;
+  /** Visible span (ms) at which the current zoom level was last set. Used by the wheel handler to detect 1.5× threshold crossings. */
+  zoomAnchorSpan?: bigint;
+  /** Called when continuous wheel-zoom crosses the 1.5× threshold. Container responds by switching bucket size and dataViewport. */
+  onZoomLevelSwitch?: (direction: 'in' | 'out', cursorTimeMs: bigint) => void;
+  /** Incremented by useTrendData each time performSwap completes. Triggers a single post-swap coverage check. */
+  swapCounter?: number;
+  /** Current active-tile count from useTrendData. Used in the setData log. */
+  activeTileCount?: number;
+  /** Called when the user completes a drag-zoom selection. Container snaps to nearest discrete level. */
+  onDragZoom?: (startMs: bigint, endMs: bigint) => void;
 }
 
 const WRAPPER: CSSProperties = {
@@ -54,14 +72,19 @@ export function TrendChart({
   width = 800,
   height = 400,
   xRange,
-  onRangeChange,
   onTagRemove,
+  ensureCovered,
+  zoomAnchorSpan,
+  onZoomLevelSwitch,
+  swapCounter,
+  activeTileCount,
+  onDragZoom,
 }: TrendChartProps) {
   const tagMap = useTagMap();
 
   // selectedTagId is pure UI state — stays in TrendChart.
   const [selectedTagId, setSelectedTagId] = useState<number>(() => tagIds[0] ?? 0);
-  const [cursorState, setCursorState] = useState<{ idx: number; left: number; top: number } | null>(null);
+  const [cursorState, setCursorState] = useState<{ idx: number; tsMs: number | null } | null>(null);
 
   // If the selected tag was removed by the container, fall back to first remaining.
   const effectiveSelectedId = tagIds.includes(selectedTagId)
@@ -71,13 +94,14 @@ export function TrendChart({
   const containerRef = useRef<HTMLDivElement>(null);
   const uplotRef = useRef<uPlot | null>(null);
   const canvasWrapRef = useRef<HTMLDivElement>(null);
+  // Captured in cleanup, consumed on next effect body — preserves user X-zoom across rebuilds.
+  const preservedXRangeRef = useRef<{ min: number; max: number } | null>(null);
+  // Persists user Y-axis pan/zoom across rebuilds. Keyed by tagId.
+  // Ref (not state) so handler writes don't trigger re-renders.
+  const yScaleOverridesRef = useRef<Map<number, { min: number; max: number }>>(new Map());
 
-  // Stable refs so pan/zoom handlers never stale-close over props.
-  const onRangeChangeRef = useRef(onRangeChange);
+  // Stable ref so pan/zoom handlers never stale-close over effectiveSelectedId.
   const selectedTagIdRef = useRef(effectiveSelectedId);
-  // Synchronised on every render (not a useEffect) so they're current when
-  // the init hook's closures next fire.
-  onRangeChangeRef.current = onRangeChange;
   selectedTagIdRef.current = effectiveSelectedId;
 
   // Capture the latest xRange for use in the rebuild effect without
@@ -85,12 +109,25 @@ export function TrendChart({
   const xRangeRef = useRef(xRange);
   xRangeRef.current = xRange;
 
+  // Stable ref so onXMove never stale-closes over ensureCovered.
+  const ensureCoveredRef = useRef(ensureCovered);
+  ensureCoveredRef.current = ensureCovered;
+
+  // Stable refs for zoom-level switch — updated each render so the wheel handler never stale-closes.
+  const zoomAnchorSpanRef = useRef(zoomAnchorSpan);
+  const onZoomLevelSwitchRef = useRef(onZoomLevelSwitch);
+  zoomAnchorSpanRef.current = zoomAnchorSpan;
+  onZoomLevelSwitchRef.current = onZoomLevelSwitch;
+
+  const onDragZoomRef = useRef(onDragZoom);
+  onDragZoomRef.current = onDragZoom;
+
   const onCursorChange = useCallback(
-    (idx: number | null, left: number, top: number) => {
+    (idx: number | null, tsMs: number | null) => {
       if (idx === null || idx < 0) {
         setCursorState(null);
       } else {
-        setCursorState({ idx, left, top });
+        setCursorState({ idx, tsMs });
       }
     },
     [],
@@ -118,144 +155,214 @@ export function TrendChart({
       height,
       siteTimezone,
       onCursorChange,
-      initialXRange: xRangeRef.current,
+      yScaleOverrides: yScaleOverridesRef.current,
+      onDragZoom: (s, e) => onDragZoomRef.current?.(s, e),
     });
 
-    uplotRef.current?.destroy();
-    uplotRef.current = null;
+    // Old instance was destroyed in cleanup; preservedXRangeRef was written there.
     container.innerHTML = '';
 
     const u = new uPlot(config, uplotData, container);
     uplotRef.current = u;
 
-    // ── Pan / Zoom listeners ───────────────────────────────────────────────
-    const over = u.over;
+    // Consume the X range captured in cleanup. Null on first mount → fall back to prop.
+    const preservedXRange = preservedXRangeRef.current;
+    preservedXRangeRef.current = null;
 
-    let dragStartClientX: number | null = null;
-    let dragStartClientY: number | null = null;
-    let dragStartXMin = 0;
-    let dragStartXMax = 0;
-    let dragStartYMin = 0;
-    let dragStartYMax = 0;
-    let isShiftDrag = false;
+    if (preservedXRange) {
+      u.setScale('x', preservedXRange);
+    } else if (xRangeRef.current) {
+      u.setScale('x', {
+        min: Number(xRangeRef.current.startMs) / 1000,
+        max: Number(xRangeRef.current.endMs) / 1000,
+      });
+    }
 
-    const onMouseDown = (e: MouseEvent) => {
-      const xScale = u.scales['x'];
-      if (!xScale) return;
-      dragStartClientX = e.clientX;
-      dragStartClientY = e.clientY;
-      dragStartXMin = xScale.min ?? 0;
-      dragStartXMax = xScale.max ?? 0;
-      isShiftDrag = e.shiftKey;
-      if (isShiftDrag) {
-        const key = `y_${selectedTagIdRef.current}`;
-        const yScale = u.scales[key];
-        dragStartYMin = yScale?.min ?? 0;
-        dragStartYMax = yScale?.max ?? 0;
-      }
+    // ── Y-axis hover: vertical pan / zoom ─────────────────────────────────────
+    // Hit zone: the strip left of u.over (Y-axis labels), full height of u.over.
+    // Wheel in zone → zoom selected Y scale. Left-drag in zone → pan selected Y scale.
+    // No keyboard modifier required. Other Y scales and the X axis are unaffected.
+    const wrap = container;
+    let yDragStart: { clientY: number; minY: number; maxY: number } | null = null;
+    let inYZone = false;
+    let xDragStart: { clientX: number; minX: number; maxX: number } | null = null;
+    let inXZone = false;
+
+    // Single cursor-state resolver: X drag/zone wins over Y; both off → default.
+    const updateCursor = () => {
+      if (xDragStart !== null || inXZone) wrap.style.cursor = 'ew-resize';
+      else if (yDragStart !== null || inYZone) wrap.style.cursor = 'ns-resize';
+      else wrap.style.cursor = '';
     };
 
-    const onMouseMove = (e: MouseEvent) => {
-      if (dragStartClientX === null) return;
-      const overW = over.clientWidth;
-      const overH = over.clientHeight;
-
-      if (isShiftDrag) {
-        // Vertical pan on selected trace Y-scale.
+    const onYMove = (e: MouseEvent) => {
+      const wasInYZone = inYZone;
+      inYZone = isInYAxisHitZone(u, e.clientX, e.clientY);
+      if (inYZone !== wasInYZone) updateCursor();
+      if (yDragStart !== null) {
         const key = `y_${selectedTagIdRef.current}`;
-        const ySpan = dragStartYMax - dragStartYMin;
-        if (overH === 0 || ySpan === 0) return;
-        const dy = e.clientY - (dragStartClientY ?? 0);
-        const dataDy = (dy / overH) * ySpan;
-        u.setScale(key, { min: dragStartYMin + dataDy, max: dragStartYMax + dataDy });
-        return;
-      }
-
-      // Horizontal pan.
-      const xSpan = dragStartXMax - dragStartXMin;
-      if (overW === 0) return;
-      const dx = e.clientX - dragStartClientX;
-      const dataDx = (dx / overW) * xSpan;
-      const newMin = dragStartXMin - dataDx;
-      const newMax = dragStartXMax - dataDx;
-      u.setScale('x', { min: newMin, max: newMax });
-      onRangeChangeRef.current?.(
-        { startMs: BigInt(Math.round(newMin * 1000)), endMs: BigInt(Math.round(newMax * 1000)) },
-        false,
-      );
-    };
-
-    const onMouseUp = () => {
-      if (dragStartClientX === null) return;
-      if (!isShiftDrag) {
-        const xScale = u.scales['x'];
-        if (xScale) {
-          const newMin = xScale.min ?? dragStartXMin;
-          const newMax = xScale.max ?? dragStartXMax;
-          onRangeChangeRef.current?.(
-            { startMs: BigInt(Math.round(newMin * 1000)), endMs: BigInt(Math.round(newMax * 1000)) },
-            true,
-          );
+        const overH = u.over.clientHeight;
+        const dyPx = e.clientY - yDragStart.clientY;
+        const span = yDragStart.maxY - yDragStart.minY;
+        if (overH === 0 || span === 0) return;
+        const dataDy = (dyPx / overH) * span;
+        u.setScale(key, { min: yDragStart.minY + dataDy, max: yDragStart.maxY + dataDy });
+        const sc = u.scales[key];
+        if (sc?.min != null && sc?.max != null) {
+          yScaleOverridesRef.current.set(selectedTagIdRef.current, { min: sc.min, max: sc.max });
         }
       }
-      dragStartClientX = null;
-      dragStartClientY = null;
     };
 
-    const onWheel = (e: WheelEvent) => {
+    const onYDown = (e: MouseEvent) => {
+      if (!inYZone || e.button !== 0) return;
+      const key = `y_${selectedTagIdRef.current}`;
+      const yScale = u.scales[key];
+      if (!yScale) return;
+      yDragStart = {
+        clientY: e.clientY,
+        minY: yScale.min ?? 0,
+        maxY: yScale.max ?? 1,
+      };
       e.preventDefault();
+    };
+
+    const onYUp = () => {
+      yDragStart = null;
+      updateCursor();
+    };
+
+    const onYWheel = (e: WheelEvent) => {
+      if (!inYZone) return;
+      e.preventDefault();
+      const key = `y_${selectedTagIdRef.current}`;
+      const r = u.over.getBoundingClientRect();
+      zoomYScale(u, key, e.deltaY, e.clientY - r.top, u.over.clientHeight);
+      const sc = u.scales[key];
+      if (sc?.min != null && sc?.max != null) {
+        yScaleOverridesRef.current.set(selectedTagIdRef.current, { min: sc.min, max: sc.max });
+      }
+    };
+
+    // ── X-axis hover: horizontal pan (visual-only, no refetch) ────────────────
+    // Hit zone: the strip below u.over (X-axis labels), full plot width.
+    // Left-drag → translates X scale. No wheel (future). No onRangeChange call —
+    // the pan is ephemeral; preset / Live / Custom resets it via the imperative effect.
+    const onXMove = (e: MouseEvent) => {
+      const wasInXZone = inXZone;
+      inXZone = isInXAxisHitZone(u, e.clientX, e.clientY);
+      if (inXZone !== wasInXZone) updateCursor();
+      if (xDragStart !== null) {
+        const overW = u.over.clientWidth;
+        const dxPx = e.clientX - xDragStart.clientX;
+        const span = xDragStart.maxX - xDragStart.minX;
+        if (overW === 0 || span === 0) return;
+        const dataDx = (dxPx / overW) * span;
+        u.setScale('x', { min: xDragStart.minX - dataDx, max: xDragStart.maxX - dataDx });
+        // Prefetch check: fire ensureCovered when visible edge approaches cached extent.
+        checkAndExtendXCoverage(u, ensureCoveredRef.current);
+      }
+    };
+
+    const onXDown = (e: MouseEvent) => {
+      if (!inXZone || e.button !== 0) return;
       const xScale = u.scales['x'];
       if (!xScale) return;
-
-      if (e.shiftKey) {
-        // Vertical zoom on selected trace Y-scale.
-        const key = `y_${selectedTagIdRef.current}`;
-        const yScale = u.scales[key];
-        if (!yScale) return;
-        const yMin = yScale.min ?? 0;
-        const yMax = yScale.max ?? 1;
-        const ySpan = yMax - yMin;
-        const factor = e.deltaY > 0 ? 1.2 : 1 / 1.2;
-        const newYSpan = ySpan * factor;
-        const overH = over.clientHeight;
-        const cursorFrac = overH > 0 ? Math.max(0, Math.min(1, 1 - e.offsetY / overH)) : 0.5;
-        const cursorY = yMin + cursorFrac * ySpan;
-        u.setScale(key, { min: cursorY - cursorFrac * newYSpan, max: cursorY + (1 - cursorFrac) * newYSpan });
-        return;
-      }
-
-      // Horizontal zoom anchored at cursor x.
-      const xMin = xScale.min ?? 0;
-      const xMax = xScale.max ?? 1;
-      const xSpan = xMax - xMin;
-      const factor = e.deltaY > 0 ? 1.2 : 1 / 1.2;
-      const newXSpan = xSpan * factor;
-      const overW = over.clientWidth;
-      const cursorFrac = overW > 0 ? Math.max(0, Math.min(1, e.offsetX / overW)) : 0.5;
-      const cursorX = xMin + cursorFrac * xSpan;
-      const newMin = cursorX - cursorFrac * newXSpan;
-      const newMax = cursorX + (1 - cursorFrac) * newXSpan;
-      u.setScale('x', { min: newMin, max: newMax });
-      onRangeChangeRef.current?.(
-        { startMs: BigInt(Math.round(newMin * 1000)), endMs: BigInt(Math.round(newMax * 1000)) },
-        true,
-      );
+      xDragStart = {
+        clientX: e.clientX,
+        minX: xScale.min ?? 0,
+        maxX: xScale.max ?? 1,
+      };
+      e.preventDefault();
     };
 
-    over.addEventListener('mousedown', onMouseDown);
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
-    over.addEventListener('wheel', onWheel, { passive: false });
+    const onXUp = () => {
+      xDragStart = null;
+      updateCursor();
+    };
+
+    const onXWheel = (e: WheelEvent) => {
+      if (!inXZone) return;
+      e.preventDefault();
+      const r = u.over.getBoundingClientRect();
+      const cursorXPx = e.clientX - r.left;
+      zoomXScale(u, e.deltaY, cursorXPx, u.over.clientWidth);
+
+      // Check for zoom-level threshold crossing after the scale has been updated.
+      const xScale = u.scales['x'];
+      if (xScale) {
+        const newSpanSec = (xScale.max ?? 0) - (xScale.min ?? 0);
+        const newSpanMs = BigInt(Math.round(newSpanSec * 1000));
+        const anchorSpan = zoomAnchorSpanRef.current;
+        const switchCb = onZoomLevelSwitchRef.current;
+        if (anchorSpan && switchCb) {
+          const transition = computeZoomLevelTransition(newSpanMs, anchorSpan);
+          if (transition) {
+            // Cursor data-X at the current pixel position.
+            const cursorXSec = (xScale.min ?? 0) + (cursorXPx / u.over.clientWidth) * newSpanSec;
+            const cursorTimeMs = BigInt(Math.round(cursorXSec * 1000));
+            switchCb(transition, cursorTimeMs);
+            return; // Skip coverage check — fresh fetches will fire from the new dataViewport.
+          }
+        }
+      }
+
+      // No level transition: standard coverage check (Prompt 1 behavior).
+      checkAndExtendXCoverage(u, ensureCoveredRef.current);
+    };
+
+    wrap.addEventListener('mousemove', onYMove);
+    wrap.addEventListener('mousedown', onYDown);
+    window.addEventListener('mouseup', onYUp);
+    wrap.addEventListener('wheel', onYWheel, { passive: false });
+    wrap.addEventListener('mousemove', onXMove);
+    wrap.addEventListener('mousedown', onXDown);
+    window.addEventListener('mouseup', onXUp);
+    wrap.addEventListener('wheel', onXWheel, { passive: false });
 
     return () => {
-      over.removeEventListener('mousedown', onMouseDown);
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
-      over.removeEventListener('wheel', onWheel);
+      // Capture X scale before destroying so the next effect body can restore it.
+      if (uplotRef.current) {
+        const oldX = uplotRef.current.scales['x'];
+        if (oldX && oldX.min != null && oldX.max != null && Number.isFinite(oldX.min) && Number.isFinite(oldX.max)) {
+          preservedXRangeRef.current = { min: oldX.min, max: oldX.max };
+        }
+      }
+      wrap.removeEventListener('mousemove', onYMove);
+      wrap.removeEventListener('mousedown', onYDown);
+      window.removeEventListener('mouseup', onYUp);
+      wrap.removeEventListener('wheel', onYWheel);
+      wrap.removeEventListener('mousemove', onXMove);
+      wrap.removeEventListener('mousedown', onXDown);
+      window.removeEventListener('mouseup', onXUp);
+      wrap.removeEventListener('wheel', onXWheel);
+      wrap.style.cursor = '';
       uplotRef.current?.destroy();
       uplotRef.current = null;
     };
-  }, [data, tagIds, effectiveSelectedId, tagMap, width, height, siteTimezone, onCursorChange]);
+  }, [tagIds, effectiveSelectedId, tagMap, width, height, siteTimezone, onCursorChange]);
+
+  // ── Apply data updates without rebuilding uPlot ───────────────────────────
+  // Cheap path: preserves the uPlot instance, all event listeners, and drag state.
+  // Fires after the rebuild effect on the same render (React effect ordering), so
+  // uplotRef.current is always the current instance when this runs.
+  useEffect(() => {
+    if (!uplotRef.current || tagIds.length === 0) return;
+    const { xs, ys } = seriesFromTrendData(data, tagIds);
+    uplotRef.current.setData([xs, ...ys] as uPlot.AlignedData);
+    console.log(`[TrendChart] setData: ${xs.length} points (${activeTileCount ?? 0} active tiles)`);
+  }, [data, tagIds]);
+
+  // ── Post-swap coverage check — fires once per performSwap, not on every setData ──
+  // swapCounter increments only when useTrendData installs a new active tile set.
+  // This handles the case where the user kept zooming past the level-switch threshold,
+  // leaving xRange wider than the new active set. Pan-driven setData events do NOT
+  // increment swapCounter, so panThresholdCheck in onXMove handles those instead.
+  useEffect(() => {
+    if (uplotRef.current && ensureCoveredRef.current) {
+      checkAndExtendXCoverage(uplotRef.current, ensureCoveredRef.current);
+    }
+  }, [swapCounter]);
 
   // ── Imperative X-scale update — does NOT rebuild uPlot ───────────────────
   useEffect(() => {
@@ -266,18 +373,11 @@ export function TrendChart({
     });
   }, [xRange]);
 
-  // Compute chart bounds for tooltip snap.
-  const [chartBounds, setChartBounds] = useState({ left: 0, top: 0, right: 0, bottom: 0 });
+  // ── Prune Y-scale overrides when tags are removed ─────────────────────────
+  // Runs on every tagIds change. Re-adding a previously removed tag starts fresh.
   useEffect(() => {
-    if (!containerRef.current) return;
-    const rect = containerRef.current.getBoundingClientRect();
-    setChartBounds({ left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom });
-  }, [width, height]);
-
-  // Tooltip x position is relative to canvas container.
-  const canvasBounds = canvasWrapRef.current?.getBoundingClientRect();
-  const tooltipClientX = canvasBounds ? canvasBounds.left + (cursorState?.left ?? 0) : 0;
-  const tooltipClientY = canvasBounds ? canvasBounds.top + (cursorState?.top ?? 0) : 0;
+    pruneRemovedTagOverrides(yScaleOverridesRef.current, tagIds);
+  }, [tagIds]);
 
   // Memoised to avoid flickering on parent re-renders caused by xRange ticks.
   const legend = useMemo(() => (
@@ -290,10 +390,12 @@ export function TrendChart({
         cursorIdx={cursorState?.idx}
         onSelect={setSelectedTagId}
         onRemove={tagId => onTagRemove?.(tagId)}
+        cursorTsMs={cursorState?.tsMs ?? null}
+        siteTimezone={siteTimezone}
       />
     ) : null
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  ), [tagIds, data, tagMap, effectiveSelectedId, cursorState?.idx, onTagRemove]);
+  ), [tagIds, data, tagMap, effectiveSelectedId, cursorState?.idx, cursorState?.tsMs, onTagRemove, siteTimezone]);
 
   return (
     <div style={{ ...WRAPPER, width: width + 24 }} ref={canvasWrapRef}>
@@ -301,18 +403,6 @@ export function TrendChart({
         <ResolutionIndicator data={data} />
       </div>
       <div ref={containerRef} />
-      {cursorState !== null && tagIds.length > 0 && (
-        <Tooltip
-          cursorIdx={cursorState.idx}
-          cursorClientX={tooltipClientX}
-          cursorClientY={tooltipClientY}
-          chartBounds={chartBounds}
-          data={data}
-          tagIds={tagIds}
-          tagMap={tagMap}
-          siteTimezone={siteTimezone}
-        />
-      )}
       {legend}
     </div>
   );

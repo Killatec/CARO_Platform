@@ -62,7 +62,7 @@ export function TrendViewerTestPage() {
 
       <TrendChartContainer
         tagIds={tagIds}
-        siteTimezone="America/Chicago"
+        siteTimezone="America/New_York"
         width={900}
         height={420}
       />

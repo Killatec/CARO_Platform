@@ -85,6 +85,11 @@ describe('TrendChart', () => {
     expect(screen.getByText('Pressure')).toBeTruthy();
   });
 
+  it('shows "Time: --" in legend on initial mount (no cursor)', () => {
+    renderChart([1, 2]);
+    expect(screen.getByText(/^Time:/).textContent).toBe('Time: --');
+  });
+
   it('first tag is selected by default (legend entry is bolded)', () => {
     renderChart([1, 2]);
     const tempEntry = screen.getByText('Temp');

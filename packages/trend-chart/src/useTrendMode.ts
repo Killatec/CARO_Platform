@@ -5,6 +5,10 @@ import type { Viewport } from './types.js';
 export const NEAR_NOW_MS = 60_000n;
 const DEFAULT_SIZE_MS = 3_600_000n; // 1 hour default
 
+// Dormant: the 1Hz tick that advances tailing-mode `nowMs`. To re-enable when
+// WebSocket / live-data path lands (Step 11), set to true.
+const LIVE_MODE_ENABLED = false;
+
 /**
  * Discriminated mode state. Fixed carries sizeMs to restore when returning to
  * tailing via liveClicked (spec §12.3 "preserving the prior sizeMs").
@@ -80,6 +84,7 @@ export function useTrendMode(): UseTrendModeResult {
   }));
 
   useEffect(() => {
+    if (!LIVE_MODE_ENABLED) return;
     const id = setInterval(() => {
       dispatch({ type: 'tick', nowMs: BigInt(Date.now()) });
     }, 1000);

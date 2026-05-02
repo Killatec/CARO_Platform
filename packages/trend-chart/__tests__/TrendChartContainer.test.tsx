@@ -3,6 +3,7 @@ import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
 import { MockHmiProvider } from '@caro/hmi-context';
 import type { TagDef } from '@caro/hmi-context';
 import { TrendChartContainer } from '../src/TrendChartContainer.js';
+import { computeDragZoomViewport } from '../src/useZoomState.js';
 import { useTrendData } from '../src/useTrendData.js';
 import type { UseTrendDataResult } from '../src/useTrendData.js';
 
@@ -138,10 +139,8 @@ describe('TrendChartContainer', () => {
     expect(screen.getByText('● Live')).toBeTruthy();
   });
 
-  it('passes correct viewport to useTrendData after debounce', async () => {
+  it('passes correct viewport and tagIds to useTrendData on first render', () => {
     renderContainer();
-    // Advance debounce timer
-    act(() => { vi.advanceTimersByTime(150); });
     expect(mockUseTrendData).toHaveBeenCalled();
     const lastCall = mockUseTrendData.mock.calls[mockUseTrendData.mock.calls.length - 1]!;
     const opts = lastCall[0];
@@ -149,20 +148,21 @@ describe('TrendChartContainer', () => {
     expect(opts.viewport).toBeDefined();
   });
 
-  it('repeated onRangeChange calls debounce to one useTrendData call per 100ms', async () => {
-    renderContainer();
+  it('preset click resets dataViewport span to the new preset duration', () => {
+    renderContainer([1]);
     const callsBefore = mockUseTrendData.mock.calls.length;
 
-    // Advance time by 50ms (debounce not yet fired)
-    act(() => { vi.advanceTimersByTime(50); });
-    const callsMid = mockUseTrendData.mock.calls.length;
+    // Click the 4h preset button.
+    fireEvent.click(screen.getByText('4h'));
 
-    // Advance past debounce (total 150ms)
-    act(() => { vi.advanceTimersByTime(100); });
-
-    // At most one more call after debounce fires
-    const callsAfter = mockUseTrendData.mock.calls.length;
-    expect(callsAfter - callsBefore).toBeLessThanOrEqual(callsMid - callsBefore + 2);
+    // useTrendData must have been called with a 4h-span viewport.
+    const calls = mockUseTrendData.mock.calls.slice(callsBefore);
+    const expected4hMs = 4n * 60n * 60n * 1000n;
+    const found = calls.some(([opts]) => {
+      const span = opts.viewport.end - opts.viewport.start;
+      return span === expected4hMs;
+    });
+    expect(found).toBe(true);
   });
 
   it('onTagRemove drops the tag from the list passed to useTrendData', () => {
@@ -215,5 +215,76 @@ describe('TrendChartContainer', () => {
     fireEvent.click(screen.getByText('Apply'));
     // Should stay in / return to tailing.
     expect(screen.getByText('● Live')).toBeTruthy();
+  });
+});
+
+// ── computeDragZoomViewport (pure snap-and-center math) ───────────────────────
+
+describe('computeDragZoomViewport', () => {
+  // Constants matching production defaults: 2 visible tiles × 500 buckets = 1000
+  const VT = 2;
+  const BC = 500;
+
+  it('~1/4 selection span → 2 zoom-in levels (bucketSMs halved twice)', () => {
+    // currentBucketSMs = 3600s, full span = 3600 × 1000 = 3_600_000ms
+    // selection = 1/4 of full span → targetBucketSMs = 900, ratio=4, N=2
+    const currentBucket = 3_600_000n; // ms
+    const selStart = 0n;
+    const selEnd = 3_600_000n * 1000n / 4n; // 1/4 of full span
+    const result = computeDragZoomViewport(currentBucket, selStart, selEnd, VT, BC);
+    expect(result).not.toBeNull();
+    expect(result!.newBucketSMs).toBe(3_600_000n >> 2n); // 900_000n
+  });
+
+  it('~1/8 selection span → 3 zoom-in levels (bucketSMs >> 3)', () => {
+    const currentBucket = 3_600_000n;
+    const fullSpan = currentBucket * BigInt(VT * BC);
+    const selStart = 0n;
+    const selEnd = fullSpan / 8n;
+    const result = computeDragZoomViewport(currentBucket, selStart, selEnd, VT, BC);
+    expect(result).not.toBeNull();
+    expect(result!.newBucketSMs).toBe(currentBucket >> 3n);
+  });
+
+  it('full-span selection (N=0) → bucketSMs unchanged', () => {
+    const currentBucket = 3_600_000n;
+    const fullSpan = currentBucket * BigInt(VT * BC);
+    const result = computeDragZoomViewport(currentBucket, 0n, fullSpan, VT, BC);
+    expect(result).not.toBeNull();
+    expect(result!.newBucketSMs).toBe(currentBucket);
+  });
+
+  it('recenters correctly: newStart = center - newSpan/2, newEnd = newStart + newSpan', () => {
+    const currentBucket = 3_600_000n;
+    const selStart = 1_000_000n;
+    const selEnd = 3_000_000n;
+    const result = computeDragZoomViewport(currentBucket, selStart, selEnd, VT, BC);
+    expect(result).not.toBeNull();
+    const { newStart, newEnd, newBucketSMs } = result!;
+    const newSpan = newBucketSMs * BigInt(VT * BC);
+    const center = (selStart + selEnd) / 2n;
+    expect(newStart).toBe(center - newSpan / 2n);
+    expect(newEnd).toBe(newStart + newSpan);
+  });
+
+  it('zero-width selection → returns null', () => {
+    expect(computeDragZoomViewport(3_600_000n, 1_000n, 1_000n, VT, BC)).toBeNull();
+  });
+
+  it('negative-span selection → returns null', () => {
+    expect(computeDragZoomViewport(3_600_000n, 5_000n, 1_000n, VT, BC)).toBeNull();
+  });
+
+  it('selection too narrow (targetBucketSMs rounds to 0) → returns null', () => {
+    // selectionSpan = 1n, VT*BC = 1000 → targetBucketSMs = 0 → null
+    expect(computeDragZoomViewport(3_600_000n, 0n, 1n, VT, BC)).toBeNull();
+  });
+
+  it('extreme zoom-in: clamps newBucketSMs to 1n floor when shift overflows', () => {
+    // currentBucketSMs = 3n, targetBucketSMs = 1n → ratio=3, N=round(log2(3))=2
+    // 3n >> 2n = 0n → clamps to 1n.
+    const result = computeDragZoomViewport(3n, 0n, 1000n, VT, BC);
+    expect(result).not.toBeNull();
+    expect(result!.newBucketSMs).toBe(1n);
   });
 });

@@ -1,6 +1,6 @@
 # CARO_HMI Trend Viewer — Design Specification
 **Date:** 2026-04-27
-**Status:** Design — not yet implemented (Phase A build pending T005 CAG reconciliation)
+**Status:** Phase A Steps 1–10 complete. Step 11 (Live tail) and Step 12 (Tag picker) pending.
 **Companion Documents**
 
 CARO_Trending_Reference | hmi_functional_spec | hmi_API_spec | hmi_widget_spec | CARO_DB_Spec | DB_Config_Usage_And_Perf | platform_handoff
@@ -11,6 +11,7 @@ CARO_Trending_Reference | hmi_functional_spec | hmi_API_spec | hmi_widget_spec |
 
 | Version | Date | Author | Summary |
 |---|---|---|---|
+| 1.0 | 2026-05-01 | PM / Claude | Phase A Steps 1–10 complete. Inline amendments: §7.1 (actual file layout, TrendChartContainer rename); §8.5 (cursor-time in Legend, no floating tooltip); §9.1/9.2 (hit-zone gating replaces shift-key modifier; X-pan visual-only; drag-zoom on plot area; zoom-level threshold 1.5×); §9.3 (pan/zoom no longer trigger mode transitions — time-range-bar actions only); §9.4 added sizeMs note; §10.4 (TS_BUCKET_ORIGIN_MS alignment); §10.5 (ensureCovered edge-anchoring); §5.5 (MAX(ts) LOCF cutoff); §12.2 (Intl.DateTimeFormat); §17.1.1 (Step 10 marked done). Feature-flag note updated (INTERACTIONS_ENABLED + TOOLTIP_ENABLED deleted; LIVE_MODE_ENABLED dormant). |
 | 0.9.1 | 2026-04-29 | PM / Claude | Editorial: align Tag Registry field references to actual `TagDef` type — `engineering_min`/`engineering_max`/`units` → `eng_min`/`eng_max`/`unit` in §8.1.1 and §8.1.3. No contract change. |
 | 0.9 | 2026-04-29 | PM / Claude | Tile geometry pivot. Visible tiles per window 4→2, bucket_count per tile 250→500, plus 1 prefetch tile each side fired async (not render-blocking). Empirically driven by perf-page sweep showing "4×250 vs 1×1000" perf gap was ~0–10% with high variance, not the 51% the spec previously claimed. New justification is time-to-first-render (slowest-of-2 vs slowest-of-4) plus halved DB concurrency pressure plus decoupled prefetch. Trend viewer client locks to bucketCount=500, visibleTilesPerWindow=2, overfetchPerSide=1; server still accepts 1..2500. Cache reuse during pan/zoom unchanged. `packages/trend-chart/` scaffold (Step 7) ships with these defaults. Section §10 rewritten to match. |
 | 0.8 | 2026-04-29 | PM / Claude | Phase A scope tightened. Per-tile perf log polish (§14.7), connection-pool sizing (§15), and EXPLAIN-plan validation (§5.5) deferred from Phase A to Phase B. API functional work and test coverage are complete; deferred items are observability/operational/perf-gate, not contract-level. Existing v0.3-era LOG_TILE_QUERIES gate remains in place; will be polished when revisited. |
@@ -231,6 +232,8 @@ If writer cadence ever changes, this bound must be re-derived.
 
 **Prepared statements: do not use.** PostgreSQL's generic-plan regime (activated after the 5th prepared execution) cannot use bind values for chunk pruning at plan time. Prepared statements move chunk-enumeration cost from plan-time to execution-time without reducing it, and break the bounded-`prev` optimization. Use standard `client.query(text, values)` form. Tested in `perf_gates_prepared_2026-04-XX.md` — disproved.
 
+**LOCF cutoff at `MAX(ts)` (implementation).** `getTrendTile` in `@caro/db` looks up `MAX(ts) FROM tag_samples WHERE tag_id = ANY($tagIds)` before each aggregate query. The gapfill+LOCF query is wrapped in a CTE; an outer `CASE WHEN gf_bucket <= maxTs THEN locf_value ELSE NULL END` nulls any bucket past the data extent. Without this, LOCF propagates the last known value into future empty buckets — producing a flat line at the live edge where no data yet exists. This is a mandatory complement to watermark-aware fall-through (§4.3).
+
 ---
 
 ## 6. API — `GET /api/v1/trends/tile`
@@ -389,30 +392,45 @@ Single workspace package `packages/trend-chart/`. Rationale against splitting in
 
 ### 7.1 Layout
 
+> **Implementation note (v1.0):** The wrapper component is named `TrendChartContainer`, not `TrendChartProvider` as originally specced. `Provider` implies a React Context; this component is a stateful wiring layer, not a context. The file structure below reflects the as-built layout.
+
 ```
 packages/trend-chart/
   src/
-    TrendChart.tsx                # main component, wraps uPlot
-    TrendChartProvider.tsx        # internal state: mode, window, tags, cache
-    hooks/
-      useTrendData.ts             # REST fetch orchestration + tile cache
-      useLiveSubscription.ts      # WS tail (tailing mode only)
-      useTrendViews.ts            # load/save saved views (Phase B)
-    cache/
-      tileCache.ts                # LRU, keyed by (tagId, bucketKey, tileIndex)
-      level.ts                    # windowSec → bucket_s; bucket_s → tileSpanMs (= 250 * bucket_s * 1000); tile math
-    panel/
-      Legend.tsx
-      TagPickerDrawer.tsx
-      TimeRangeBar.tsx
-      SavedViewDropdown.tsx       # Phase B
+    index.ts                      # all public exports
+    types.ts                      # Tile, Viewport, AggregateSeriesData, RawSeriesData, TrendData
+
+    # ── Core primitives (no React) ──────────────────────────────────────────
+    level.ts                      # alignedTilesInRange, tilesForViewport, deriveBucketSMs,
+                                  # TREND_VIEWER_DEFAULTS, TS_BUCKET_ORIGIN_MS, floorDiv, ceilDiv
+    tileCache.ts                  # TileCache (LRU, 50 MB cap), makeTileCacheKey
+    colorAssign.ts                # colorAssign(tagId), PALETTE, PALETTE_SIZE
+    axisInteractions.ts           # pure axis pan/zoom helpers (9 exported functions)
+
+    # ── React hooks ─────────────────────────────────────────────────────────
+    useTrendData.ts               # REST fetch orchestration; owns TileCache instance
+    useTrendMode.ts               # tailing/fixed mode state machine; exports reducer
+    useZoomState.ts               # zoom level state; exports computeDragZoomViewport
+
+    # ── Components ──────────────────────────────────────────────────────────
+    TrendChart.tsx                # uPlot canvas wrapper; rebuild lifecycle, X-scale
+                                  # preservation, per-trace Y-scale overrides, wheel/drag
+    TrendChartContainer.tsx       # stateful wiring layer (renamed from TrendChartProvider)
+    TimeRangeBar.tsx              # preset buttons + Custom picker + Live button
+    Legend.tsx
+    ResolutionIndicator.tsx
+
     render/
-      downsample.ts               # MinMax / LTTB if needed past coarsest level
-      colorAssign.ts              # deterministic color from tag ID
-    types.ts
+      uplotConfig.ts
+      yScales.ts
+      seriesFromTrendData.ts
+      formatters.ts
+
   package.json
   tsconfig.json
 ```
+
+Hooks that are in the original spec but not yet built: `useLiveSubscription.ts` (Step 11), `useTrendViews.ts` (Phase B). `TagPickerDrawer.tsx` (Step 12), `SavedViewDropdown.tsx` (Phase B) are also pending.
 
 ### 7.2 Dependencies
 
@@ -477,14 +495,15 @@ Horizontal strip below the chart. Each entry shows:
 
 Click on a legend entry selects that trace. Selected trace is highlighted (e.g., bold text, colored swatch border), Y axis adopts its color and scale, and non-selected traces dim slightly.
 
-### 8.5 Hover Tooltip
+### 8.5 Cursor Time in Legend
 
-On hover anywhere in the plot area, a tooltip displays:
+> **Implementation note (v1.0):** A separate floating per-trace tooltip is not rendered. Cursor-time is surfaced in the `Legend` strip below the chart instead.
 
-- Timestamp at cursor position, rendered in the **fixed site timezone** (not the operator's browser timezone). Source: `HMI_SITE_TIMEZONE` env var (e.g., `America/Chicago`), rendered via `Intl.DateTimeFormat` with the `timeZone` option. Industrial-SCADA convention — timestamps describe the plant, not the viewer. A remote engineer VPNed in from another region sees the same wall-clock values an on-site operator sees. Falls back to browser-local time if the env var is unset.
-- One row per trace: color swatch, tag name, value at that timestamp (or "—" if null)
+The `Legend` strip contains a `Time:` field at its left edge. When the cursor is over the plot area, the field displays the timestamp of the data bucket under the cursor, rendered in the **fixed site timezone** (sourced from the `siteTimezone` prop, ultimately from `HMI_SITE_TIMEZONE` env var). When the cursor is outside the plot area the field shows `Time: --`.
 
-Tooltip follows the cursor, positioned to avoid the chart edges.
+Format: full date + time via `Intl.DateTimeFormat` with the `timeZone` option (e.g. `2026-05-01 14:30:42`). Timestamps describe the plant — a remote engineer VPNed in from another region sees the same wall-clock values an on-site operator sees. Falls back to browser-local time when `siteTimezone` is absent.
+
+The Legend's per-tag rows already display each trace's value at the cursor index (live-mode last bucket or cursor-position bucket in fixed mode). A separate floating cursor overlay is a Phase B UX decision. The `Tooltip.tsx` component file is preserved in the package but is not wired in Phase A.
 
 ### 8.6 Resolution Indicator
 
@@ -496,31 +515,42 @@ Small gray text in the chart header showing the current `bucket_s` rounded to a 
 
 ### 9.1 Pan
 
-- **Horizontal pan.** Drag left/right (mouse) or swipe (touch, Phase B). All traces share the X axis. The visible window `[from, to]` shifts by the drag distance. Pan triggers a mode transition: if the chart was tailing and the user drags backward (left), mode becomes `fixed` with the window frozen at its new position.
-- **Vertical pan.** Drag up/down with modifier (e.g., shift-drag, TBD) adjusts the **selected trace's** Y-scale only. Non-selected traces retain their existing Y-scales — they are sticky per-trace. Unselected traces do not move vertically when the selected trace pans.
+Pan is gated by hovering over the relevant axis margin — no keyboard modifier is required. The cursor changes shape to indicate the active gesture.
+
+- **Horizontal pan.** Hover over the X-axis tick-label strip below the plot area → cursor changes to `ew-resize`. Left-click and drag horizontally → translates the X scale (`u.setScale('x', ...)`). Pan is **visual-only**: it does not dispatch a mode action or change `dataViewport`. When the visible edge approaches the cached extent's boundary, `ensureCovered` fires to fetch the next prefetch tile in the direction of travel. Preset, Live, or Custom commit resets the visual position by overwriting the X scale via the imperative `xRange` effect.
+- **Vertical pan.** Hover over the Y-axis label strip left of the plot area → cursor changes to `ns-resize`. Left-click and drag vertically → adjusts the **selected trace's** Y-scale only via `u.setScale('y_<tagId>', ...)`. Non-selected traces retain their existing Y-scales (sticky per-trace, persisted across uPlot rebuilds in `yScaleOverridesRef`). No mode transition occurs.
 
 ### 9.2 Zoom
 
-- **Horizontal zoom.** Mouse wheel (or pinch, Phase B). Expands or contracts the visible window around the cursor position. A zoom that moves `to` away from `now` transitions to `fixed`; a zoom that keeps `to` at `now` stays in `tailing`.
-- **Vertical zoom.** Modifier + wheel zooms the selected trace's Y-scale around the cursor value. Other traces unaffected.
+Zoom is gated by hovering over the relevant axis margin for wheel events, or by drag-selecting on the plot area for box-zoom. No keyboard modifier is required for any gesture.
+
+- **Horizontal wheel-zoom.** Hover over the X-axis margin → wheel up/down → continuous zoom anchored at the cursor data-X via `u.setScale('x', ...)`. After each wheel event, `computeZoomLevelTransition(newSpanMs, zoomAnchorSpan)` checks whether the new span has crossed the **1.5× threshold** relative to the anchor span. If it has, a discrete **zoom-level switch** fires: `bucketSMs` halves (zoom-in) or doubles (zoom-out), `dataViewport` recenters on the cursor data-X with the new bucket-aligned span, and fresh visible + prefetch tiles fetch at the new resolution (bridge render until they arrive). No mode transition occurs.
+- **Vertical wheel-zoom.** Hover over the Y-axis margin → wheel up/down → zooms the **selected trace's** Y-scale around the cursor data-Y. Other traces unaffected. No mode transition occurs.
+- **Drag-zoom on plot area.** Left-click-drag on the plot area produces a uPlot drag-selection rectangle (`cursor.drag.x: true, setScale: false`). On mouse-up, the `setSelect` hook applies the selection as the new visual X range and calls `onDragZoom(startMs, endMs)`. The container's `handleDragZoom` snaps to the nearest discrete level via `computeDragZoomViewport` and updates `dataViewport` and `bucketSMs` accordingly. `cursor.bind.dblclick: () => null` disables uPlot's built-in fit-to-data reset, which would break tile alignment.
 
 ### 9.3 Mode State Machine
 
 Two modes only. No explicit Pause or Resume buttons.
 
 ```
-                   pan left / custom range w/ to < now
-                   zoom that moves `to` away from now
-         tailing ───────────────────────────────────▶ fixed
-                                                       │
-                   click preset / click "Live" /       │
-                   custom range with to ≈ now          │
-                 ◀──────────────────────────────────── ┘
+                   customCommitted (to < now − NEAR_NOW_MS)
+         tailing ───────────────────────────────────────▶ fixed
+                                                           │
+                   presetClicked / liveClicked /           │
+                   customCommitted (to ≈ now)              │
+                 ◀──────────────────────────────────────── ┘
 ```
 
-Transitions are implicit. Any pan, zoom, or range change that makes `to < now` enters `fixed`. Any preset click, Live button click, or custom range with `to` within ~1 minute of `now` enters `tailing`.
+Transitions are driven exclusively by explicit time-range-bar actions dispatched through `useTrendMode`. Pan and zoom on the chart are **visual-only** and do not trigger mode transitions.
+
+- `presetClicked` → always tailing.
+- `liveClicked` → tailing, restoring prior `sizeMs` if coming from fixed.
+- `customCommitted` with `to ≥ nowMs − NEAR_NOW_MS` → tailing; otherwise → fixed.
+- `viewportChanged` (reserved for Step 11 drag/programmatic navigation) follows the same near-now heuristic.
 
 Tailing enables the WebSocket subscription; fixed disables it. One WebSocket connection, lifecycle managed by mode.
+
+> **Implementation note (v1.0):** The `fixed` branch of `ModeState` carries `sizeMs: bigint` in addition to `from`/`to`. This is required to implement the `liveClicked` rule "preserve the prior window size when returning to tailing from fixed" — without carrying `sizeMs` through the fixed state, the window size would default to `to - from` on every `liveClicked`, which is wrong when the operator zoomed in before pausing. The `NEAR_NOW_MS` constant is `60_000n` (1 minute).
 
 ### 9.4 Selected Trace
 
@@ -588,6 +618,8 @@ prefetch[after]  = tile immediately after visible[visibleTilesPerWindow - 1]
 
 All timestamp arithmetic is bigint to avoid float drift. Visible tiles are fired via `Promise.all` and awaited before chart render. Prefetch tiles fire concurrently but their resolution does NOT gate render.
 
+> **Implementation note (v1.0):** Tile boundaries are aligned to `TS_BUCKET_ORIGIN_MS = 946_857_600_000n` (2000-01-03T00:00:00Z UTC) — TimescaleDB's actual `time_bucket()` default origin for fixed-width intervals. Aligning to Unix epoch (0) produces boundaries that do not match TimescaleDB's natural bucket grid, which caused 502 errors on 7d/14d windows when the derived `bucketS` crossed a CAG dispatch threshold. The exported constant was renamed from `PG_EPOCH_MS` to `TS_BUCKET_ORIGIN_MS` to reflect this. `alignedTilesInRange` and `tilesForViewport` in `level.ts` both use this origin.
+
 Tiles already in the cache are skipped. This ensures:
 
 - All tiles are uniform and cacheable across clients.
@@ -610,6 +642,8 @@ The N ≤ 8 cap derives from the heap-scatter cliff (§6.6) and is enforced serv
 - **Zoom across §6.3 dispatch threshold**: `bucketCount` changes (effectively — the tile span changes), so the new tiles have distinct cache keys from the old ones. The old tiles remain cached until evicted by LRU. Bridge render: display the old level's data scaled into the new pixel space until the new visible tiles resolve.
 - **Debounce.** Pan events debounce at ~100 ms to avoid issuing a new fetch on every frame of a drag.
 - **Bridge render.** When `bucketS` changes, render the old level's data scaled into the new pixels until the new visible fetches resolve. Bridge data may span a watermark fall-through transition (§4.3) silently — the client does not need to inspect the `source` field of a cached response to render it.
+
+> **Implementation note (v1.0):** `ensureCovered` (the function called by `TrendChart`'s wheel/pan handlers to request additional tiles for the new viewport) anchors candidate tile computation to the *active-set edges* (`cachedStart`/`cachedEnd`) and walks outward from them, rather than re-deriving from the `TS_BUCKET_ORIGIN_MS` grid. This avoids a dependency on the origin constant inside `useTrendData.ts` and ensures candidates are contiguous with what's already cached regardless of how `viewport` was derived. `TS_BUCKET_ORIGIN_MS`, `floorDiv`, and `ceilDiv` are not imported by `useTrendData.ts`.
 
 ### 10.6 Live Tail Stitching
 
@@ -674,6 +708,8 @@ Six presets in a horizontal strip: **15m · 1h · 4h · 24h · 7d · 14d**. Clic
 
 - If `to` is within ~1 minute of `now`: enters `tailing` with window = `to - from`.
 - Otherwise: enters `fixed` with the exact `[from, to]` as committed.
+
+> **Implementation note (v1.0):** The picker uses `<input type="datetime-local">` elements. The string values these elements produce are interpreted as site-local wall time using `siteTimezone` prop via `Intl.DateTimeFormat` (with the `timeZone` option). If `siteTimezone` is absent the picker falls back to browser-local time. This matches the tooltip's timezone convention (§8.5).
 
 ### 12.3 Live Button
 
@@ -931,7 +967,7 @@ No formal percentage target. Every public function in `cache/` and `hooks/` has 
 - Preset buttons + custom range + Live button
 - Tag picker drawer (tree + search, multi-select commit)
 - Legend (name, color, current value, click to select trace, remove button)
-- Hover tooltip (timestamp, all tag values at cursor)
+- Cursor time in Legend strip (`Time:` field, site-timezone formatted); per-tag value at cursor index already in Legend rows (§8.5). A separate floating cursor overlay is Phase B.
 - Null-as-gap rendering (uPlot `spanGaps: false`)
 - WebSocket live tail with gap-on-disconnect, silent resume on reconnect
 - Client-side bucket accumulator for live tail stitching at the active `bucket_s`
@@ -958,8 +994,8 @@ Non-binding, but each step is landable independently and its tests pass in isola
 | 6 | **Remaining CAG migrations** (10s, 1min, 10min) and dispatch branches in `getTrendTile()`. Integration tests for each. | 5 | Full §6.3 dispatch coverage |
 | 7 | **`packages/trend-chart/` scaffold**: workspace package, `level.ts` (`alignedTilesInRange` primitive; `tilesForViewport` composite returning `{visible, prefetch}` with `bucketCount=500` / `visibleTilesPerWindow=2` / `overfetchPerSide=1` defaults; `deriveBucketSMs` helper), `tileCache.ts` (LRU keyed by `(tagId, startTime, endTime, bucketCount)`, 50 MB cap, generic byte-size accounting), `colorAssign.ts` (`schemeTableau10` cycled to 20 entries). Pure unit tests (41 passing), no React. | 5 (types only) | client-side range math, cache eviction, palette determinism |
 | 8 | **`useTrendData` hook**: range-aligned fetch orchestration, 2-tile parallelism (visible) + 2 async prefetch tiles, ⌈N/8⌉ tag-group fan-out, single-tag exception for tag-add (§10.4), stale-generation guard. ✓ Done — 62 total passing at step completion. | 7 | fetch coordination, cache population, fan-out correctness |
-| 9 | **`TrendChart` static rendering**: uPlot wrapper, `spanGaps: false`, stepped interpolation, per-trace Y-scale defaults (§8.1.1), legend with `unit` (§8.1.3), hover tooltip with site timezone (§8.5), resolution indicator (§8.6). Dev test page at `/dev/trend-chart-test`. ✓ Done — 106 total passing in @caro/trend-chart. Pan/zoom and time-range controls deferred to Step 10. | 8 | render path, null-as-gap, color/legend/tooltip |
-| 10 | **Mode state machine + time range UI**: tailing / fixed transitions (§9.3), preset strip (§12.1), custom range picker (§12.2), Live button (§12.3), pan/zoom interactions (§9.1–9.2). Still no WS. | 9 | interaction model, mode correctness |
+| 9 | **`TrendChart` static rendering**: uPlot wrapper, `spanGaps: false`, stepped interpolation, per-trace Y-scale defaults (§8.1.1), Legend component with `unit` and cursor-time field (§8.4, §8.5), resolution indicator (§8.6). Dev test page at `/dev/trend-chart-test`. ✓ Done — 106 total passing in @caro/trend-chart. Pan/zoom and time-range controls deferred to Step 10. | 8 | render path, null-as-gap, color/legend/cursor-time |
+| 10 | **Mode state machine + time range UI**: tailing / fixed transitions (§9.3), preset strip (§12.1), custom range picker (§12.2), Live button (§12.3), pan/zoom interactions (§9.1–9.2). Still no WS. ✓ Done — 254 total passing in @caro/trend-chart. | 9 | interaction model, mode correctness |
 | 11 | **Live tail**: WS subscription wiring via `@caro/hmi-context`, client-side bucket accumulator (§10.6), per-tag subscription lifecycle (§10.7), reconnect/backoff (§14.4). | 10 | live stitching, subscription correctness |
 | 12 | **Tag picker drawer**: tree + search (§11.2), multi-select commit (§11.3), trendable filter (§11.4). | 11 | picker UX, trendable filtering |
 | 13 | **Connection pool resize and monitoring**: bump `@caro/db` Timescale pool from 10 to 20–30; add NULL `prev` rate monitoring per `DB_Config_Usage_And_Perf.md` §8.1; add per-CAG latency dashboards. | runs alongside production rollout | pool sufficiency, writer-cadence monitoring |

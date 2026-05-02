@@ -3,6 +3,7 @@ import type { TagDef } from '@caro/hmi-context';
 import type { TrendData } from './types.js';
 import { colorAssign } from './colorAssign.js';
 import { formatValue } from './render/formatValue.js';
+import { formatTimestamp } from './render/formatTimestamp.js';
 
 export interface LegendProps {
   tagIds: number[];
@@ -13,6 +14,9 @@ export interface LegendProps {
   cursorIdx?: number;
   onSelect: (tagId: number) => void;
   onRemove: (tagId: number) => void;
+  /** Cursor timestamp in ms (number from uPlot); null / undefined → show "--". */
+  cursorTsMs?: number | null;
+  siteTimezone?: string;
 }
 
 const STRIP: CSSProperties = {
@@ -119,9 +123,22 @@ function LegendEntry({ tagId, tag, isSelected, value, onSelect, onRemove }: Entr
   );
 }
 
-export function Legend({ tagIds, data, tagMap, selectedTagId, cursorIdx, onSelect, onRemove }: LegendProps) {
+const TIME_DISPLAY: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  padding: '4px 8px',
+  fontSize: 12,
+  fontFamily: 'monospace',
+  color: '#374151',
+  flexShrink: 0,
+};
+
+export function Legend({ tagIds, data, tagMap, selectedTagId, cursorIdx, onSelect, onRemove, cursorTsMs, siteTimezone }: LegendProps) {
   return (
     <div style={STRIP}>
+      <div style={TIME_DISPLAY}>
+        Time: {cursorTsMs == null ? '--' : formatTimestamp(cursorTsMs, siteTimezone)}
+      </div>
       {tagIds.map(tagId => (
         <LegendEntry
           key={tagId}

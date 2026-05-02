@@ -2,7 +2,7 @@ import uPlot from 'uplot';
 import type { TagDef } from '@caro/hmi-context';
 import { colorAssign } from '../colorAssign.js';
 import { defaultYScale } from './yScales.js';
-import { formatTimestamp } from './formatTimestamp.js';
+import { formatTimestamp, formatTickLabel } from './formatTimestamp.js';
 
 export interface BuildUplotConfigOpts {
   tagIds: number[];
@@ -11,9 +11,11 @@ export interface BuildUplotConfigOpts {
   width: number;
   height: number;
   siteTimezone?: string;
-  onCursorChange?: (idx: number | null, left: number, top: number) => void;
-  /** Initial X scale in ms — sets the visible range when uPlot is first built. */
-  initialXRange?: { startMs: bigint; endMs: bigint };
+  onCursorChange?: (idx: number | null, tsMs: number | null) => void;
+  /** User-applied Y-scale overrides that survive rebuilds. Keyed by tagId. */
+  yScaleOverrides?: Map<number, { min: number; max: number }>;
+  /** Called when the user completes a drag-zoom selection on the plot area. */
+  onDragZoom?: (startMs: bigint, endMs: bigint) => void;
 }
 
 /**
@@ -24,20 +26,20 @@ export interface BuildUplotConfigOpts {
  * Only the selected trace's Y axis is visible.
  */
 export function buildUplotConfig(opts: BuildUplotConfigOpts): uPlot.Options {
-  const { tagIds, selectedTagId, tagMap, width, height, siteTimezone, onCursorChange, initialXRange } = opts;
+  const { tagIds, selectedTagId, tagMap, width, height, siteTimezone, onCursorChange, yScaleOverrides, onDragZoom } = opts;
 
   // Build named scale entries for each tag.
-  const xScale: uPlot.Scale = initialXRange
-    ? {
-        time: true,
-        range: [
-          Number(initialXRange.startMs) / 1000,
-          Number(initialXRange.endMs) / 1000,
-        ],
-      }
-    : { time: true };
+  // X scale has no static range — the caller applies the initial range via setScale
+  // immediately after construction so that uPlot never stores a permanent range constraint
+  // (a static range array is wrapped by uPlot as a constraint that overrides setScale).
+  const xScale: uPlot.Scale = { time: true, auto: false };
   const scales: uPlot.Options['scales'] = { x: xScale };
   for (const tagId of tagIds) {
+    const override = yScaleOverrides?.get(tagId);
+    if (override) {
+      scales[`y_${tagId}`] = { auto: false, range: [override.min, override.max] };
+      continue;
+    }
     const tag = tagMap.get(tagId);
     const yRange = tag ? defaultYScale(tag) : null;
     scales[`y_${tagId}`] = yRange
@@ -53,11 +55,11 @@ export function buildUplotConfig(opts: BuildUplotConfigOpts): uPlot.Options {
   const axes: uPlot.Axis[] = [
     {
       scale: 'x',
-      values: (_u, vals) =>
-        vals.map(v => {
-          if (v == null) return '';
-          return formatTimestamp(v * 1000, siteTimezone);
-        }),
+      space: 150,
+      values: (_u, vals, _axisIdx, _foundSpace, _foundIncr) => {
+        const incrSec = vals.length >= 2 ? Math.abs(vals[1]! - vals[0]!) : 60;
+        return vals.map(v => v == null ? '' : formatTickLabel(v * 1000, siteTimezone, incrSec));
+      },
     },
     {
       scale: `y_${selectedTagId}`,
@@ -87,22 +89,37 @@ export function buildUplotConfig(opts: BuildUplotConfigOpts): uPlot.Options {
     }),
   ];
 
-  const hooks: uPlot.Hooks.Arrays = onCursorChange
-    ? {
-        setCursor: [
-          (u) => {
-            const left = u.cursor.left ?? -1;
-            const top = u.cursor.top ?? 0;
-            const idx = u.cursor.idx ?? null;
-            if (left < 0) {
-              onCursorChange(null, 0, 0);
-            } else {
-              onCursorChange(idx, left, top);
-            }
-          },
-        ],
-      }
-    : {};
+  const setSelectHook = (u: uPlot) => {
+    if (u.select.width <= 0) return;
+    const minSec = u.posToVal(u.select.left, 'x');
+    const maxSec = u.posToVal(u.select.left + u.select.width, 'x');
+    u.setScale('x', { min: minSec, max: maxSec });
+    const minMs = BigInt(Math.round(minSec * 1000));
+    const maxMs = BigInt(Math.round(maxSec * 1000));
+    onDragZoom?.(minMs, maxMs);
+    u.setSelect({ left: 0, top: 0, width: 0, height: 0 }, false);
+  };
+
+  const hooks: uPlot.Hooks.Arrays = {
+    ...(onCursorChange
+      ? {
+          setCursor: [
+            (u) => {
+              const left = u.cursor.left ?? -1;
+              const idx = u.cursor.idx ?? null;
+              if (left < 0 || idx == null) {
+                onCursorChange(null, null);
+                return;
+              }
+              const tsSec = u.data[0]?.[idx];
+              const tsMs = tsSec != null ? Number(tsSec) * 1000 : null;
+              onCursorChange(idx, tsMs);
+            },
+          ],
+        }
+      : {}),
+    setSelect: [setSelectHook],
+  };
 
   return {
     width,
@@ -113,6 +130,16 @@ export function buildUplotConfig(opts: BuildUplotConfigOpts): uPlot.Options {
     hooks,
     cursor: {
       points: { show: true },
+      bind: {
+        dblclick: () => null,  // Disable uPlot's default fit-to-data on double-click.
+      },
+      drag: {
+        x: true,
+        y: false,
+        setScale: false,  // we handle scale application manually in setSelect hook
+      },
     },
+    // Suppress uPlot's built-in legend table; we render our own <Legend> strip.
+    legend: { show: false },
   };
 }

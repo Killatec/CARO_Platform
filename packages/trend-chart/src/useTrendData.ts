@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { tilesForViewport, TREND_VIEWER_DEFAULTS } from './level.js';
 import { makeTileCacheKey } from './tileCache.js';
 import { TileCache } from './tileCache.js';
@@ -28,6 +28,7 @@ function estimateCachedEntrySize(entry: CachedEntry): number {
 }
 
 const DEFAULT_CACHE_CAPACITY = 50_000_000;
+const MAX_ACTIVE_TILES = 8;
 
 export interface UseTrendDataOptions {
   viewport: Viewport;
@@ -38,10 +39,16 @@ export interface UseTrendDataOptions {
   cacheCapacityBytes?: number;
 }
 
-export interface UseTrendDataResult {
+interface HookState {
   data: TrendData | null;
   isLoading: boolean;
   error: string | null;
+}
+
+export interface UseTrendDataResult extends HookState {
+  ensureCovered: (startMs: bigint, endMs: bigint) => void;
+  swapCounter: number;
+  activeTileCount: number;
 }
 
 function chunkArray<T>(arr: T[], size: number): T[][] {
@@ -90,15 +97,15 @@ function storeTileResult(
 }
 
 function assembleData(
-  visible: Tile[],
+  tilesInOrder: Tile[],
   tagIds: number[],
   cache: TileCache<CachedEntry>,
 ): TrendData | null {
-  if (tagIds.length === 0 || visible.length === 0) return null;
+  if (tagIds.length === 0 || tilesInOrder.length === 0) return null;
 
   // Determine raw vs aggregate from the first available cache entry.
   let isRaw = false;
-  outer: for (const tile of visible) {
+  outer: for (const tile of tilesInOrder) {
     for (const tagId of tagIds) {
       const entry = cache.get(
         makeTileCacheKey({ tagId, startTime: tile.startTime, endTime: tile.endTime, bucketCount: tile.bucketCount }),
@@ -115,7 +122,7 @@ function assembleData(
     for (const tagId of tagIds) {
       const ts: bigint[] = [];
       const value: (number | null)[] = [];
-      for (const tile of visible) {
+      for (const tile of tilesInOrder) {
         const entry = cache.get(
           makeTileCacheKey({ tagId, startTime: tile.startTime, endTime: tile.endTime, bucketCount: tile.bucketCount }),
         );
@@ -129,8 +136,8 @@ function assembleData(
     const result: RawSeriesData = {
       type: 'raw',
       source: 'raw',
-      startTime: visible[0]!.startTime,
-      endTime: visible[visible.length - 1]!.endTime,
+      startTime: tilesInOrder[0]!.startTime,
+      endTime: tilesInOrder[tilesInOrder.length - 1]!.endTime,
       series,
     };
     return result;
@@ -144,7 +151,7 @@ function assembleData(
   let totalN = 0;
   let lastBucketS = 0;
 
-  for (const tile of visible) {
+  for (const tile of tilesInOrder) {
     // Find tile metadata (n, bucketS, source) from any available entry.
     let tileN = tile.bucketCount;
     let tileBucketS = 0;
@@ -188,19 +195,40 @@ function assembleData(
     lastBucketS > 0
       ? lastBucketS * 1000
       : totalN > 0
-        ? Number(visible[visible.length - 1]!.endTime - visible[0]!.startTime) / totalN
+        ? Number(tilesInOrder[tilesInOrder.length - 1]!.endTime - tilesInOrder[0]!.startTime) / totalN
         : 0;
 
   const result: AggregateSeriesData = {
     type: 'aggregate',
     source: effectiveSource,
-    startTime: visible[0]!.startTime,
-    endTime: visible[visible.length - 1]!.endTime,
+    startTime: tilesInOrder[0]!.startTime,
+    endTime: tilesInOrder[tilesInOrder.length - 1]!.endTime,
     n: totalN,
     bucketSMs,
     series,
   };
   return result;
+}
+
+/**
+ * Add `newTile` to `activeSet` and prune to `maxSize`, dropping from the side
+ * farthest from `newTile`. Returns the new sorted active set.
+ *
+ * - newTile left of extent  → drop rightmost tile.
+ * - newTile right of extent → drop leftmost tile.
+ * - newTile in the middle (defensive, shouldn't happen) → drop leftmost, warn.
+ */
+export function pruneAndAdd(activeSet: Tile[], newTile: Tile, maxSize = MAX_ACTIVE_TILES): Tile[] {
+  if (activeSet.length === 0) return [newTile];
+  const sorted = [...activeSet, newTile].sort((a, b) => Number(a.startTime - b.startTime));
+  if (sorted.length <= maxSize) return sorted;
+
+  const isLeftEnd = newTile.startTime < activeSet[0]!.startTime;
+  const isRightEnd = newTile.endTime > activeSet[activeSet.length - 1]!.endTime;
+  if (isLeftEnd) return sorted.slice(0, maxSize);
+  if (isRightEnd) return sorted.slice(sorted.length - maxSize);
+  console.warn('[useTrendData] pruneAndAdd: newTile is in the middle of activeSet — unexpected');
+  return sorted.slice(sorted.length - maxSize);
 }
 
 export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
@@ -222,14 +250,25 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     [cacheCapacityBytes],
   );
 
-  const [hookResult, setHookResult] = useState<UseTrendDataResult>({
+  const [hookResult, setHookResult] = useState<HookState>({
     data: null,
     isLoading: true,
     error: null,
   });
+  const [swapCounter, setSwapCounter] = useState(0);
+  const [activeTileCount, setActiveTileCount] = useState<number>(0);
 
   // Incremented on each opts change; async callbacks from stale effects are ignored.
   const generationRef = useRef(0);
+  // Bounded active tile set fed into uPlot; NOT immediately reset on effect re-run —
+  // reset is deferred until new visible tiles settle (bridge render).
+  const activeTilesRef = useRef<Tile[]>([]);
+  const inFlightTilesRef = useRef<Set<string>>(new Set());
+  // Points at the latest finalize closure; cleared on effect cleanup.
+  const finalizeRef = useRef<(() => void) | null>(null);
+  // True between effect re-run and the performSwap point; blocks ensureCovered
+  // so pan fetches don't fire during a zoom-level transition.
+  const levelTransitionPendingRef = useRef<boolean>(false);
 
   // Stable dep keys: tagIds array → joined string; Viewport object → component fields.
   const tagIdsKey = tagIds.join(',');
@@ -244,17 +283,30 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     }
 
     const currentViewport: Viewport = { start: viewportStart, end: viewportEnd };
+    const nowMs = BigInt(Date.now());
     const { visible, prefetch } = tilesForViewport({
       viewport: currentViewport,
       bucketCount,
       visibleTilesPerWindow,
       overfetchPerSide,
+      nowMs,
     });
 
     if (visible.length === 0) {
       setHookResult({ data: null, isLoading: false, error: null });
       return;
     }
+
+    // Capture old active set for selective eviction on swap.
+    // activeTilesRef is NOT reset here — bridge render keeps old data visible
+    // until all new visible tiles have settled.
+    const oldActiveTiles = activeTilesRef.current;
+    inFlightTilesRef.current.clear();
+    levelTransitionPendingRef.current = true;
+
+    const newSorted = [...prefetch, ...visible].sort(
+      (a, b) => Number(a.startTime - b.startTime),
+    );
 
     const generation = ++generationRef.current;
 
@@ -268,12 +320,41 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
 
     const finalize = () => {
       if (generationRef.current !== generation) return;
+      const allTiles = activeTilesRef.current;
       try {
-        const data = assembleData(visible, tagIds, cache);
+        const data = assembleData(allTiles, tagIds, cache);
         setHookResult({ data, isLoading: false, error: null });
       } catch (e) {
         setHookResult({ data: null, isLoading: false, error: e instanceof Error ? e.message : String(e) });
       }
+    };
+
+    finalizeRef.current = finalize;
+
+    // Called once all new visible tiles have settled. Evicts old active tiles
+    // that are not in the new tile set (cursor-anchored level-switch tiles can't
+    // be reused), then atomically swaps to the new active set and clears the
+    // transition-pending flag.
+    const performSwap = () => {
+      if (generationRef.current !== generation) return;
+      const newTileKeys = new Set(newSorted.map(t => `${t.startTime}:${t.endTime}`));
+      for (const tile of oldActiveTiles) {
+        if (!newTileKeys.has(`${tile.startTime}:${tile.endTime}`)) {
+          for (const tagId of tagIds) {
+            cache.delete(makeTileCacheKey({
+              tagId,
+              startTime: tile.startTime,
+              endTime: tile.endTime,
+              bucketCount: tile.bucketCount,
+            }));
+          }
+        }
+      }
+      activeTilesRef.current = newSorted;
+      setActiveTileCount(newSorted.length);
+      levelTransitionPendingRef.current = false;
+      finalize();
+      setSwapCounter(c => c + 1);
     };
 
     let resolvedCount = 0;
@@ -282,7 +363,7 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     const onVisibleTileSettled = () => {
       resolvedCount++;
       if (resolvedCount < totalVisible) return;
-      finalize();
+      performSwap();
     };
 
     setHookResult(prev => ({ ...prev, isLoading: true }));
@@ -291,10 +372,12 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     for (const tile of visible) {
       const missing = getMissing(tile);
       if (missing.length === 0) {
+        console.log(`[useTrendData] tile [${new Date(Number(tile.startTime)).toISOString()}] cache hit (source: visible)`);
         resolvedCount++;
         continue;
       }
 
+      const tileT0 = performance.now();
       const groups = chunkArray(missing, 8);
       const promises = groups.map(group =>
         fetchTile({ tagIds: group, startTime: tile.startTime, endTime: tile.endTime, bucketCount: tile.bucketCount }).then(
@@ -308,6 +391,7 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
       Promise.all(promises)
         .then(() => {
           if (generationRef.current !== generation) return;
+          console.log(`[useTrendData] tile [${new Date(Number(tile.startTime)).toISOString()}] fetched in ${Math.round(performance.now() - tileT0)}ms (source: visible)`);
           onVisibleTileSettled();
         })
         .catch(e => {
@@ -323,16 +407,15 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
         });
     }
 
-    // All visible tiles were already cached — finalize synchronously.
-    if (resolvedCount === totalVisible) {
-      finalize();
-    }
-
     // ── Prefetch tiles (async, not render-blocking) ───────────────────────────
     for (const tile of prefetch) {
       const missing = getMissing(tile);
-      if (missing.length === 0) continue;
+      if (missing.length === 0) {
+        console.log(`[useTrendData] tile [${new Date(Number(tile.startTime)).toISOString()}] cache hit (source: prefetch)`);
+        continue;
+      }
 
+      const tileT0 = performance.now();
       const groups = chunkArray(missing, 8);
       const promises = groups.map(group =>
         fetchTile({ tagIds: group, startTime: tile.startTime, endTime: tile.endTime, bucketCount: tile.bucketCount }).then(
@@ -343,17 +426,128 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
         ),
       );
 
-      Promise.all(promises).catch(e => {
-        if (generationRef.current !== generation) return;
-        console.warn('[useTrendData] prefetch fetch failed', {
-          tagIds: missing,
-          startTime: tile.startTime,
-          endTime: tile.endTime,
-          error: e,
+      Promise.all(promises)
+        .then(() => {
+          if (generationRef.current !== generation) return;
+          // Don't finalize during a transition — wait for performSwap to set the new active set first.
+          if (levelTransitionPendingRef.current) return;
+          console.log(`[useTrendData] tile [${new Date(Number(tile.startTime)).toISOString()}] fetched in ${Math.round(performance.now() - tileT0)}ms (source: prefetch)`);
+          finalize();
+        })
+        .catch(e => {
+          if (generationRef.current !== generation) return;
+          console.warn('[useTrendData] prefetch fetch failed', {
+            tagIds: missing,
+            startTime: tile.startTime,
+            endTime: tile.endTime,
+            error: e,
+          });
         });
-      });
     }
+
+    // All visible tiles were already cached — performSwap synchronously after the
+    // prefetch loop so the prefetch loop's cache checks run before any eviction.
+    if (resolvedCount === totalVisible) {
+      performSwap();
+    }
+
+    return () => {
+      finalizeRef.current = null;
+    };
   }, [tagIdsKey, viewportStart, viewportEnd, bucketCount, visibleTilesPerWindow, overfetchPerSide, cache]);
 
-  return hookResult;
+  const ensureCovered = useCallback((startMs: bigint, endMs: bigint) => {
+    // Block during zoom-level transition; pan visually works but no tile fetches
+    // fire until performSwap completes and the new active set is in place.
+    if (levelTransitionPendingRef.current) return;
+    if (tagIds.length === 0) return;
+    const active = activeTilesRef.current;
+    if (active.length === 0) return;
+
+    const tileSpanMs = (viewportEnd - viewportStart) / BigInt(visibleTilesPerWindow);
+    if (tileSpanMs === 0n) return;
+
+    const cachedStart = active[0]!.startTime;
+    const cachedEnd = active[active.length - 1]!.endTime;
+    const candidates: Tile[] = [];
+
+    // Extend left: walk backward from cachedStart until startMs is covered.
+    let leftEnd = cachedStart;
+    while (leftEnd > startMs) {
+      candidates.push({ startTime: leftEnd - tileSpanMs, endTime: leftEnd, bucketCount });
+      leftEnd -= tileSpanMs;
+    }
+
+    // Extend right: walk forward from cachedEnd until endMs is covered.
+    let rightStart = cachedEnd;
+    while (rightStart < endMs) {
+      candidates.push({ startTime: rightStart, endTime: rightStart + tileSpanMs, bucketCount });
+      rightStart += tileSpanMs;
+    }
+
+    // Drop tiles whose start is at or past now (future tiles).
+    const nowMs = BigInt(Date.now());
+    const filtered = candidates.filter(t => t.startTime < nowMs);
+
+    const gen = generationRef.current;
+
+    for (const tile of filtered) {
+      const tileKey = `${tile.startTime}:${tile.endTime}:${tile.bucketCount}`;
+
+      // Already in the active set — nothing to do.
+      if (activeTilesRef.current.some(t => t.startTime === tile.startTime && t.endTime === tile.endTime)) {
+        console.log(`[useTrendData] tile [${new Date(Number(tile.startTime)).toISOString()}] cache hit (source: dynamic)`);
+        continue;
+      }
+
+      // A fetch is already in-flight for this tile — deduplicate.
+      if (inFlightTilesRef.current.has(tileKey)) continue;
+
+      const missing = tagIds.filter(
+        tagId =>
+          !cache.has(
+            makeTileCacheKey({ tagId, startTime: tile.startTime, endTime: tile.endTime, bucketCount: tile.bucketCount }),
+          ),
+      );
+
+      if (missing.length === 0) {
+        // Tile is fully in LRU cache (e.g. pan-back scenario) — update active set immediately.
+        console.log(`[useTrendData] tile [${new Date(Number(tile.startTime)).toISOString()}] cache hit (source: dynamic)`);
+        activeTilesRef.current = pruneAndAdd(activeTilesRef.current, tile);
+        setActiveTileCount(activeTilesRef.current.length);
+        finalizeRef.current?.();
+        continue;
+      }
+
+      inFlightTilesRef.current.add(tileKey);
+      const tileT0 = performance.now();
+
+      const groups = chunkArray(missing, 8);
+      const promises = groups.map(group =>
+        fetchTile({ tagIds: group, startTime: tile.startTime, endTime: tile.endTime, bucketCount: tile.bucketCount }).then(
+          res => {
+            if (generationRef.current !== gen) return;
+            storeTileResult(tile, res, cache);
+          },
+        ),
+      );
+
+      Promise.all(promises)
+        .then(() => {
+          inFlightTilesRef.current.delete(tileKey);
+          if (generationRef.current !== gen) return;
+          activeTilesRef.current = pruneAndAdd(activeTilesRef.current, tile);
+          setActiveTileCount(activeTilesRef.current.length);
+          console.log(`[useTrendData] tile [${new Date(Number(tile.startTime)).toISOString()}] fetched in ${Math.round(performance.now() - tileT0)}ms (source: dynamic)`);
+          finalizeRef.current?.();
+        })
+        .catch(e => {
+          inFlightTilesRef.current.delete(tileKey);
+          if (generationRef.current !== gen) return;
+          console.warn('[useTrendData] dynamic fetch failed', { tile, error: e });
+        });
+    }
+  }, [tagIds, viewportStart, viewportEnd, bucketCount, visibleTilesPerWindow, cache]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return { ...hookResult, ensureCovered, swapCounter, activeTileCount };
 }

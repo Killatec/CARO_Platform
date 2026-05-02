@@ -139,7 +139,7 @@ TIMESCALE_LOG_TILE_QUERIES=        # unset/off by default — set to 1 to log ti
 | 3 — Client Shell | ✅ Complete | Vite React app, shell components, demo page, E2E pipeline working |
 | 4 — Auth | Not started | express-session, Argon2id, TOTP MFA |
 | 4.5 — DB Migrations | Not started | HMI tables (users, sessions, audit_log, etc.) |
-| 5 — REST Endpoints | In progress | Tag list + setpoint write route implemented; trends tile endpoint live (`GET /api/v1/trends/tile`); remaining CRUD per hmi_API_spec not started |
+| 5 — REST Endpoints + Trend Chart | In progress (Steps 1–10 done) | Trends API complete (tile + extent + trendable routes). `@caro/trend-chart` package complete through Step 10: `TrendChartContainer`, `TrendChart`, `TimeRangeBar`, `Legend`, `ResolutionIndicator`, `useTrendMode`, `useZoomState`, `useTrendData`, `axisInteractions`. 254 tests passing. Remaining: Step 11 (live tail), Step 12 (tag picker), remaining CRUD per hmi_API_spec. |
 | 6 — Protobuf | Not started | Replace JSON WS messages with Protobuf encoding |
 
 ## Related Docs
@@ -151,6 +151,8 @@ TIMESCALE_LOG_TILE_QUERIES=        # unset/off by default — set to 1 to log ti
 | API Spec | `Docs/hmi_API_spec.md` |
 | Widget Spec | `Docs/hmi_widget_spec.md` |
 | Spec Deltas | `Docs/hmi_deltas.md` |
+| Trend Viewer Spec | `Docs/hmi_trend_viewer_spec.md` |
+| Trend Viewer Handoff | `Docs/hmi_trend_viewer_handoff.md` |
 | Phase 2 Design | `Docs/Phase2_HMI_ServerCore_Design.docx` |
 | MQTT Spec | `Docs/CARO_MQTT_Spec.md` |
 | DB Spec | `Docs/CARO_DB_Spec.md` |

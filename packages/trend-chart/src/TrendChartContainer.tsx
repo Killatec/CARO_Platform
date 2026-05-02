@@ -1,10 +1,14 @@
-import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
+import { useCallback, useState, useMemo } from 'react';
 import type { CSSProperties } from 'react';
 import { useTrendMode } from './useTrendMode.js';
 import { useTrendData } from './useTrendData.js';
+import { useZoomState } from './useZoomState.js';
 import { TimeRangeBar } from './TimeRangeBar.js';
 import { TrendChart } from './TrendChart.js';
-import type { Viewport } from './types.js';
+import { TREND_VIEWER_DEFAULTS } from './level.js';
+
+const VISIBLE_TILES_PER_WINDOW = TREND_VIEWER_DEFAULTS.visibleTilesPerWindow;
+const BUCKET_COUNT = TREND_VIEWER_DEFAULTS.bucketCount;
 
 export interface TrendChartContainerProps {
   /**
@@ -42,24 +46,15 @@ export function TrendChartContainer({
   // ── Tag list (container owns; removes come from Legend via TrendChart) ────
   const [tagIds, setTagIds] = useState<number[]>(initialTagIds);
 
-  // ── dataViewport: debounced behind the live mode viewport ─────────────────
-  // renderViewport = modeViewport (updated immediately by mode reducer + tick)
-  // dataViewport   = debounced 100 ms behind modeViewport
-  const [dataViewport, setDataViewport] = useState<Viewport>(modeViewport);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // ── Zoom-level state ──────────────────────────────────────────────────────
+  const { zoomAnchorSpan, dataViewport, handleDragZoom, handleZoomLevelSwitch } = useZoomState({
+    modeViewport,
+    visibleTilesPerWindow: VISIBLE_TILES_PER_WINDOW,
+    bucketCount: BUCKET_COUNT,
+  });
 
-  useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      setDataViewport({ start: modeViewport.start, end: modeViewport.end });
-    }, 100);
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-    };
-  }, [modeViewport.start, modeViewport.end]);
-
-  // ── Data fetch (driven by debounced viewport) ─────────────────────────────
-  const { data, isLoading } = useTrendData({ viewport: dataViewport, tagIds });
+  // ── Data fetch (driven by explicit dataViewport) ──────────────────────────
+  const { data, isLoading, ensureCovered, swapCounter, activeTileCount } = useTrendData({ viewport: dataViewport, tagIds });
 
   // ── xRange: passes the live mode viewport to TrendChart for imperative
   //    setScale — updated every tick in tailing, or on preset/custom/pan. ──
@@ -69,18 +64,6 @@ export function TrendChartContainer({
   );
 
   // ── Callbacks ─────────────────────────────────────────────────────────────
-
-  const handleRangeChange = useCallback(
-    (range: { startMs: bigint; endMs: bigint }, _isFinal: boolean) => {
-      dispatch({
-        type: 'viewportChanged',
-        from: range.startMs,
-        to: range.endMs,
-        nowMs: BigInt(Date.now()),
-      });
-    },
-    [dispatch],
-  );
 
   const handleTagRemove = useCallback((tagId: number) => {
     setTagIds(prev => prev.filter(id => id !== tagId));
@@ -122,8 +105,13 @@ export function TrendChartContainer({
           width={width}
           height={height}
           xRange={xRange}
-          onRangeChange={handleRangeChange}
           onTagRemove={handleTagRemove}
+          ensureCovered={ensureCovered}
+          zoomAnchorSpan={zoomAnchorSpan}
+          onZoomLevelSwitch={handleZoomLevelSwitch}
+          swapCounter={swapCounter}
+          activeTileCount={activeTileCount}
+          onDragZoom={handleDragZoom}
         />
       ) : (
         <div style={LOADING_HINT}>

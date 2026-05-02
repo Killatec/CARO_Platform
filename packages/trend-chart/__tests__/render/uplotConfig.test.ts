@@ -82,4 +82,22 @@ describe('buildUplotConfig', () => {
     const hooks = config.hooks ?? {};
     expect((hooks as Record<string, unknown>).setCursor ?? []).toHaveLength(0);
   });
+
+  it('yScaleOverrides: uses override range instead of defaultYScale when present', () => {
+    // Tag 1 has eng_min=0, eng_max=100 — defaultYScale would produce [0, 100].
+    // Passing an override for tag 1 should use [25, 75] instead.
+    const overrides = new Map([[1, { min: 25, max: 75 }]]);
+    const config = buildUplotConfig({ ...baseOpts, yScaleOverrides: overrides });
+    expect(config.scales!['y_1']).toEqual({ auto: false, range: [25, 75] });
+  });
+
+  it('yScaleOverrides: tags without an override fall back to defaultYScale', () => {
+    // Only tag 1 overridden; tag 2 (bool) and tag 3 (autoscale) use defaults.
+    const overrides = new Map([[1, { min: 25, max: 75 }]]);
+    const config = buildUplotConfig({ ...baseOpts, yScaleOverrides: overrides });
+    // Tag 2 is bool → defaultYScale returns [-0.5, 1.5].
+    expect(config.scales!['y_2']).toEqual({ auto: false, range: [-0.5, 1.5] });
+    // Tag 3 has no eng range → autoscale.
+    expect(config.scales!['y_3']).toEqual({ auto: true });
+  });
 });

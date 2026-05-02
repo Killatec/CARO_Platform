@@ -285,8 +285,8 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (b
     const { value } = tile.series[0];
     // Left edge buckets (before inTs) should carry the prev value 55.5.
     expect(value[0]).toBe(55.5);
-    // Late bucket (at inTs) should be 99.0.
-    expect(value[COUNT - 1]).toBe(99.0);
+    // inTs is ~bucket 243; buckets past inTs are past max(ts) → cutoff nulls them.
+    expect(value[COUNT - 1]).toBeNull();
   });
 
   it('bounded prev returns null when no prior sample exists within 5 minutes', async () => {
@@ -298,7 +298,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (b
     const tile = await getTrendTile([2006], START, END, COUNT) as AggregateTrendTile;
     const { value } = tile.series[0];
     expect(value[0]).toBeNull(); // left edge: no prev
-    expect(value[COUNT - 1]).toBe(7.0); // right side carries forward
+    expect(value[COUNT - 1]).toBeNull(); // inTs is ~bucket 125; buckets past inTs are past max(ts) → cutoff
   });
 
   it('empty range: tag with no CAG data returns value:[null]*n', async () => {
@@ -543,9 +543,9 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — watermark fall-through', asyn
     expect(tile.source).toBe('1s_cagg');   // NOT 'mixed'
     expect(tile.n).toBe(COUNT);
     expect(tile.series[0].value).toHaveLength(COUNT);
-    // LOCF carries the value across all buckets.
+    // Bucket 0 has the real sample; all later buckets are past max(ts) → cutoff nulls them.
     expect(tile.series[0].value[0]).toBe(7.5);
-    expect(tile.series[0].value[COUNT - 1]).toBe(7.5);
+    expect(tile.series[0].value[COUNT - 1]).toBeNull();
   });
 
   // ── Test 2: watermark mid-range → fall-through to next-finer CAG ─────────────
@@ -799,5 +799,77 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendExtent — direct query', async () => 
     // Sanity: newestMs reflects real data — must be a plausible epoch-ms value
     // (at minimum the sandbox sample at 10_000_000 ms past epoch).
     expect(result.oldestMs!).toBeGreaterThan(0n);
+  });
+});
+
+describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — LOCF data-extent cutoff', async () => {
+  const {
+    writeTestSamples, resetTestRange, resetTestRangeExpectClean, refreshTestCagg,
+  } = await import('../helpers/trends-test-range.js');
+
+  // T = 1970-01-11T00:00:00Z — divisible by 720s and 60s, well inside sandbox epoch range.
+  const TAG  = 7001;
+  const T    = 864_000_000n; // ms
+  const B    = 720_000n;     // one 720s bucket in ms → dispatches to 1min_cagg (720 ∈ [160,1600))
+  const VIEW = '1min_cagg' as const;
+
+  beforeEach(async () => {
+    await resetTestRangeExpectClean();
+    await refreshTestCagg(VIEW);
+  });
+  afterEach(async () => {
+    await resetTestRange();
+    await refreshTestCagg(VIEW);
+  });
+  afterAll(async () => {
+    await resetTestRange();
+    await refreshTestCagg(VIEW);
+  });
+
+  it('buckets past max(ts) are null; buckets at or before max(ts) carry LOCF values', async () => {
+    await writeTestSamples([
+      { tagId: TAG, ts: T - 2n * B, value: 5.0 },
+      { tagId: TAG, ts: T,           value: 10.0 },
+    ]);
+    await refreshTestCagg(VIEW);
+    // Range [T-2B, T+2B], 4 buckets × 720s → bucketS=720 → 1min_cagg
+    const tile = await getTrendTile([TAG], T - 2n * B, T + 2n * B, 4) as AggregateTrendTile;
+    expect(tile.source).toBe('1min_cagg');
+    const vals = tile.series[0]!.value;
+    expect(vals).toHaveLength(4);
+    expect(vals[0]).toBe(5.0);   // bucket T-2B: actual sample
+    expect(vals[1]).toBe(5.0);   // bucket T-B:  LOCF from T-2B (gap within range → fills)
+    expect(vals[2]).toBe(10.0);  // bucket T:    actual sample
+    expect(vals[3]).toBeNull();  // bucket T+B:  past max(ts) → cutoff
+  });
+
+  it('query range entirely past max(ts) — all buckets null', async () => {
+    await writeTestSamples([{ tagId: TAG, ts: T, value: 10.0 }]);
+    await refreshTestCagg(VIEW);
+    // Range [T+2B, T+7B]: all 5 buckets start after T → all null
+    const tile = await getTrendTile([TAG], T + 2n * B, T + 7n * B, 5) as AggregateTrendTile;
+    expect(tile.source).toBe('1min_cagg');
+    const vals = tile.series[0]!.value;
+    expect(vals).toHaveLength(5);
+    expect(vals.every(v => v === null)).toBe(true);
+  });
+
+  it('gap in data before max(ts) — LOCF fills gap, only post-extent bucket is null', async () => {
+    await writeTestSamples([
+      { tagId: TAG, ts: T - 4n * B, value: 5.0 },
+      { tagId: TAG, ts: T,           value: 10.0 },
+    ]);
+    await refreshTestCagg(VIEW);
+    // Range [T-4B, T+2B], 6 buckets × 720s → bucketS=720 → 1min_cagg
+    const tile = await getTrendTile([TAG], T - 4n * B, T + 2n * B, 6) as AggregateTrendTile;
+    expect(tile.source).toBe('1min_cagg');
+    const vals = tile.series[0]!.value;
+    expect(vals).toHaveLength(6);
+    expect(vals[0]).toBe(5.0);   // T-4B: actual sample
+    expect(vals[1]).toBe(5.0);   // T-3B: LOCF from T-4B
+    expect(vals[2]).toBe(5.0);   // T-2B: LOCF
+    expect(vals[3]).toBe(5.0);   // T-B:  LOCF
+    expect(vals[4]).toBe(10.0);  // T:    actual sample
+    expect(vals[5]).toBeNull();  // T+B:  past max(ts) → cutoff
   });
 });

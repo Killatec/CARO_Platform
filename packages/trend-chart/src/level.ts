@@ -1,5 +1,48 @@
 import type { Tile, Viewport } from './types.js';
 
+/**
+ * TimescaleDB's time_bucket() default origin for fixed-width intervals
+ * (make_interval(secs => N)) is 2000-01-03 00:00:00 UTC — the first Monday of
+ * year 2000, not the PostgreSQL epoch (2000-01-01). Tile boundaries must be
+ * multiples of bucketSMs from this origin, not from Unix epoch (1970-01-01),
+ * otherwise gapfill emits partial-coverage buckets at the edges and the server
+ * throws an assertion (n = bucketCount + 2).
+ *
+ * Empirically confirmed via psql: time_bucket(make_interval(secs => 604.8),
+ * '2000-01-03') → '2000-01-03' (exact boundary); the same call with
+ * '2000-01-01' → '1999-12-31 23:57:07.2' (not a boundary).
+ *
+ * The 15m/1h/4h/24h presets happen to align at any origin in this family
+ * because 10,957 days (Unix↔PG epoch delta) divides evenly at those strides.
+ * The 7d and 14d strides have a 2-day remainder, so origin matters — exactly
+ * the presets that were producing 502 errors before this fix.
+ */
+export const TS_BUCKET_ORIGIN_MS = 946_857_600_000n; // 2000-01-03 00:00:00 UTC in ms
+
+/**
+ * True bigint floor division. JavaScript's bigint `/` operator truncates toward
+ * zero, which matches floor for positive operands but rounds the wrong way for
+ * negative dividends. Exported for callers that need left-anchor arithmetic on
+ * TS_BUCKET_ORIGIN_MS-relative offsets from pre-2000-01-03 timestamps.
+ */
+export function floorDiv(a: bigint, b: bigint): bigint {
+  const q = a / b;
+  // Adjust down by one when there is a remainder and the signs differ.
+  return q * b !== a && (a < 0n) !== (b < 0n) ? q - 1n : q;
+}
+
+/**
+ * True bigint ceiling division. For positive operands: (a + b - 1) / b.
+ * For negative a, positive b: truncation toward zero is already ceiling, so
+ * the (a < 0) !== (b < 0) branch adds 0 (no adjustment).
+ */
+export function ceilDiv(a: bigint, b: bigint): bigint {
+  const q = a / b;
+  // Adjust up by one when there is a remainder and the signs agree (both positive
+  // is the common case; the negative-a branch falls through unchanged).
+  return q * b !== a && (a < 0n) === (b < 0n) ? q + 1n : q;
+}
+
 /** Trend viewer client policy defaults. Server accepts bucketCount 1..2500. */
 export const TREND_VIEWER_DEFAULTS = {
   bucketCount: 500,
@@ -8,20 +51,19 @@ export const TREND_VIEWER_DEFAULTS = {
 } as const;
 
 /**
- * Returns epoch-aligned tiles fully covering [rangeStart, rangeEnd).
+ * Returns bucket-grid-aligned tiles covering [rangeStart, rangeEnd).
  *
- * tileSpanMs is derived as floor((rangeEnd - rangeStart) / tileCount) where
- * tileCount = ceil(rangeSpan / (bucketCount * 1ms-per-bucket)). For this
- * primitive the caller controls bucketCount; the number of tiles returned is
- * the minimum needed to cover the range at that tile width.
+ * Alignment strategy: right-anchor on the bucket grid. lastEnd is the first
+ * bucket boundary at or after rangeEnd; the single tile spans
+ * [lastEnd − tileSpanMs, lastEnd]. Both edges are multiples of bucketSMs from
+ * TS_BUCKET_ORIGIN_MS, so time_bucket_gapfill returns exactly bucketCount rows.
  *
- * Alignment: each tile's startTime is an integer multiple of tileSpanMs from
- * epoch, so identical logical ranges produce identical wire values across
- * clients.
+ * The right edge is guaranteed to cover rangeEnd. The left edge sits at
+ * [rangeStart, rangeStart + bucketSMs) — it may be up to one bucket ahead of
+ * rangeStart. For typical use (analytics, tile cache misses) the gap is
+ * sub-minute and invisible.
  *
- * Note: when rangeEnd - rangeStart is not evenly divisible by tileSpanMs the
- * last tile may extend slightly past rangeEnd. This is correct — the server
- * returns the natural bucket grid and the caller renders what it needs.
+ * For multi-tile viewport layouts use tilesForViewport instead.
  */
 export function alignedTilesInRange(opts: {
   rangeStart: bigint;
@@ -32,31 +74,12 @@ export function alignedTilesInRange(opts: {
   if (rangeEnd <= rangeStart) return [];
 
   const spanMs = rangeEnd - rangeStart;
-  // Each tile spans exactly bucketCount buckets; derive a natural integer tile
-  // span by taking the floor of the raw span divided by the number of tiles
-  // needed. We compute the number of tiles as ceil(spanMs / targetTileSpan)
-  // where targetTileSpan = spanMs / 1 (single tile) to start — simplified: we
-  // just use 1 tile as the minimum and let the caller compose multiple calls
-  // for multi-tile layouts. For range covering, 1 tile per call is the atomic
-  // primitive; alignedTilesInRange covers a contiguous range.
-  //
-  // Implementation: produce tiles of width = spanMs (one tile) is too coarse.
-  // Instead: tileSpanMs is the smallest power-of-10-friendly value ≥ spanMs
-  // that fits the epoch alignment. Simpler and correct: tileSpanMs = spanMs
-  // when the caller wants a single tile. For multi-tile layout callers use
-  // tilesForViewport. This primitive just aligns [rangeStart, rangeEnd) to
-  // epoch-multiples of the derived per-tile span.
-  //
-  // Practical use: analytics/export consumers call this with their own
-  // rangeStart/rangeEnd/bucketCount. The tile span equals spanMs / n where n
-  // is derived from the natural epoch alignment.
-
-  // Derive tileSpanMs: one tile spans exactly (rangeEnd - rangeStart).
-  // For aligned multi-tile usage, callers invoke once per tile.
   const tileSpanMs = spanMs;
+  const bucketSMs = tileSpanMs / BigInt(bucketCount);
 
-  // Epoch-align the start.
-  const alignedStart = (rangeStart / tileSpanMs) * tileSpanMs;
+  // Right-anchor: find the first bucket boundary at or after rangeEnd.
+  const lastEnd = TS_BUCKET_ORIGIN_MS + ceilDiv(rangeEnd - TS_BUCKET_ORIGIN_MS, bucketSMs) * bucketSMs;
+  const alignedStart = lastEnd - tileSpanMs;
 
   const tiles: Tile[] = [];
   let cursor = alignedStart;
@@ -74,27 +97,47 @@ export function alignedTilesInRange(opts: {
 /**
  * Trend viewer composite: 2 visible tiles + prefetch tiles per side.
  *
- * tileSpanMs = floor((viewport.end - viewport.start) / visibleTilesPerWindow)
+ * tileSpanMs = floor((viewport.end − viewport.start) / visibleTilesPerWindow)
+ * bucketSMs  = tileSpanMs / bucketCount  (exact for standard preset spans)
  *
- * Visible tiles are epoch-aligned and render-blocking. Prefetch tiles are
- * contiguous with the visible set and fire async without gating render.
+ * Alignment strategy: right-anchor on the bucket grid.
+ *   lastVisibleEnd    = first bucket boundary AT OR AFTER viewport.end
+ *   firstVisibleStart = lastVisibleEnd − visibleTilesPerWindow × tileSpanMs
  *
- * Note: bigint floor division is used throughout. For typical viewport spans
- * (minutes to weeks) the result divides cleanly. For non-divisible spans the
- * visible tiles cumulatively span tileSpanMs * visibleTilesPerWindow ms, which
- * may be 1 ms short of the full viewport — invisible to a chart.
+ * This ensures:
+ *   • lastVisibleEnd ≥ viewport.end — the live edge is always covered.
+ *   • lastVisibleEnd − viewport.end < bucketSMs — gap is sub-minute even for
+ *     7d/14d presets (≤ ~10 min at 604.8 s/bucket, versus ≤ 3.5 d with a
+ *     tile-grid left-anchor).
+ *   • Every tile boundary is a multiple of bucketSMs from TS_BUCKET_ORIGIN_MS,
+ *     so time_bucket_gapfill returns exactly bucketCount rows per tile request.
+ *
+ * The left edge (firstVisibleStart) may sit up to one bucketSMs after
+ * viewport.start — the visible region shifts forward slightly. At standard
+ * presets this is sub-minute and invisible to the chart.
+ *
+ * Prefetch tiles after the visible window may extend past now in tailing mode;
+ * the server returns null/locf for the future portion, no client-side handling
+ * needed.
+ *
+ * Note: bigint floor division is used for tileSpanMs. For typical viewport
+ * spans (minutes to weeks) the span divides cleanly by visibleTilesPerWindow.
+ * For non-divisible spans the visible region is 1 ms short — invisible.
  */
 export function tilesForViewport(opts: {
   viewport: Viewport;
   bucketCount?: number;
   visibleTilesPerWindow?: number;
   overfetchPerSide?: number;
+  /** When provided, prefetch tiles whose startTime >= nowMs are dropped (future-only tiles). */
+  nowMs?: bigint;
 }): { visible: Tile[]; prefetch: Tile[] } {
   const {
     viewport,
     bucketCount = TREND_VIEWER_DEFAULTS.bucketCount,
     visibleTilesPerWindow = TREND_VIEWER_DEFAULTS.visibleTilesPerWindow,
     overfetchPerSide = TREND_VIEWER_DEFAULTS.overfetchPerSide,
+    nowMs,
   } = opts;
 
   const viewportSpan = viewport.end - viewport.start;
@@ -104,8 +147,15 @@ export function tilesForViewport(opts: {
   const tileSpanMs = viewportSpan / BigInt(visibleTilesPerWindow);
   if (tileSpanMs === 0n) return { visible: [], prefetch: [] };
 
-  // Epoch-align the first visible tile.
-  const firstVisibleStart = (viewport.start / tileSpanMs) * tileSpanMs;
+  // bucketSMs is exact for all standard preset spans (7d/2/500 = 604800ms etc.).
+  const bucketSMs = tileSpanMs / BigInt(bucketCount);
+
+  // Right-anchor on the bucket grid: last visible end is the first bucket
+  // boundary at or after viewport.end. firstVisibleStart steps back by the
+  // full visible window width. Both are multiples of bucketSMs from origin.
+  const lastVisibleEnd = TS_BUCKET_ORIGIN_MS +
+    ceilDiv(viewport.end - TS_BUCKET_ORIGIN_MS, bucketSMs) * bucketSMs;
+  const firstVisibleStart = lastVisibleEnd - BigInt(visibleTilesPerWindow) * tileSpanMs;
 
   const visible: Tile[] = [];
   for (let k = 0; k < visibleTilesPerWindow; k++) {
@@ -120,13 +170,15 @@ export function tilesForViewport(opts: {
     prefetch.push({ startTime: start, endTime: start + tileSpanMs, bucketCount });
   }
   // Tiles after the visible window.
-  const lastVisibleEnd = firstVisibleStart + BigInt(visibleTilesPerWindow) * tileSpanMs;
   for (let i = 0; i < overfetchPerSide; i++) {
     const start = lastVisibleEnd + BigInt(i) * tileSpanMs;
     prefetch.push({ startTime: start, endTime: start + tileSpanMs, bucketCount });
   }
 
-  return { visible, prefetch };
+  const filteredPrefetch =
+    nowMs === undefined ? prefetch : prefetch.filter(t => t.startTime < nowMs);
+
+  return { visible, prefetch: filteredPrefetch };
 }
 
 /**
@@ -148,3 +200,22 @@ export function deriveBucketSMs(opts: {
   const viewportSpanMs = Number(viewport.end - viewport.start);
   return viewportSpanMs / (visibleTilesPerWindow * bucketCount);
 }
+
+/**
+ * Detect zoom-level threshold crossing.
+ * Returns 'out' if newSpan / anchorSpan > threshold (zoom-out triggered),
+ * returns 'in'  if newSpan / anchorSpan < 1 / threshold (zoom-in triggered),
+ * returns null otherwise (within safe continuous-zoom range).
+ */
+export function computeZoomLevelTransition(
+  newSpanMs: bigint,
+  anchorSpanMs: bigint,
+  threshold = 1.5,
+): 'in' | 'out' | null {
+  if (anchorSpanMs <= 0n) return null;
+  const ratio = Number(newSpanMs) / Number(anchorSpanMs);
+  if (ratio > threshold) return 'out';
+  if (ratio < 1 / threshold) return 'in';
+  return null;
+}
+

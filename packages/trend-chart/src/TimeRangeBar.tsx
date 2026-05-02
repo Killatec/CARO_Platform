@@ -106,7 +106,9 @@ const BAR: CSSProperties = {
 
 const BASE_BTN: CSSProperties = {
   padding: '4px 10px',
-  border: '1px solid #d1d5db',
+  borderWidth: 1,
+  borderStyle: 'solid',
+  borderColor: '#d1d5db',
   borderRadius: 4,
   cursor: 'pointer',
   fontFamily: 'monospace',

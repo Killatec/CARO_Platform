@@ -8,7 +8,8 @@
 
 ## HMI
 
-- [ ] **Step 10 — Mode state machine + time-range UI (active next build):** Tailing/fixed mode transitions (§9.3), preset strip 15m/1h/4h/24h/7d/14d (§12.1), custom range picker (§12.2), Live button (§12.3), pan/zoom interactions (§9.1–9.2). First production wiring of `useTrendData`. Still no WS. Build order in `Docs/hmi_trend_viewer_spec.md` §17.1.1 steps 10–12.
+- [ ] **Step 11 — Live tail (active next build):** WebSocket subscription wiring via `@caro/hmi-context`, client-side bucket accumulator (§10.6), per-tag subscription lifecycle (§10.7), reconnect/backoff (§14.4). Requires setting `LIVE_MODE_ENABLED = true` in `useTrendMode.ts`. Build order in `Docs/hmi_trend_viewer_spec.md` §17.1.1.
+- [ ] **Step 12 — Tag picker drawer:** Side drawer with tag tree + type-ahead search (§11.2), multi-select commit (§11.3), trendable filter (§11.4). Depends on Step 11.
 - [ ] Add NULL `prev` rate monitoring per `DB_Config_Usage_And_Perf.md` §8.1 — daily sample at 1-min bound; non-zero rate signals writer-cadence drift
 
 ### Trend Viewer — Deferred / Possible Future Improvements
