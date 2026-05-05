@@ -13,8 +13,8 @@ function makeAggregate(overrides?: Partial<AggregateSeriesData>): AggregateSerie
     n: 3,
     bucketSMs: 1000,
     series: new Map([
-      [1, [10, 20, 30]],
-      [2, [null, 5, null]],
+      [1, { value: [10, 20, 30] }],
+      [2, { value: [null, 5, null] }],
     ]),
     ...overrides,
   };

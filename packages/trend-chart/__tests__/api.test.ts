@@ -20,7 +20,12 @@ const AGG_BODY: { ok: true; data: TileApiResponse } = {
     endTime: 3_600_000,
     bucketSMs: 3_600,
     n: 500,
-    series: [{ tagId: 1, value: new Array(500).fill(1.0) }],
+    series: [{
+      tagId: 1,
+      value: new Array(500).fill(1.0),
+      min:   new Array(500).fill(0.9),
+      max:   new Array(500).fill(1.1),
+    }],
   },
 };
 
@@ -112,6 +117,20 @@ describe('fetchTile', () => {
     expect(typeof result.endTime).toBe('number');
     expect(result.startTime).toBe(0);
     expect(result.endTime).toBe(3_600_000);
+  });
+
+  it('aggregate response: min and max arrays present and aligned with value', async () => {
+    fetchSpy.mockResolvedValueOnce(mockResponse(AGG_BODY));
+
+    const result = await fetchTile({ tagIds: [1], startTime: 0n, endTime: 3_600_000n, bucketCount: 500 });
+
+    expect(result.source).not.toBe('raw');
+    if (result.source !== 'raw') {
+      expect(result.series[0]!.min).toHaveLength(500);
+      expect(result.series[0]!.max).toHaveLength(500);
+      expect(result.series[0]!.min[0]).toBe(0.9);
+      expect(result.series[0]!.max[0]).toBe(1.1);
+    }
   });
 
   it('raw response: series includes ts and value arrays', async () => {

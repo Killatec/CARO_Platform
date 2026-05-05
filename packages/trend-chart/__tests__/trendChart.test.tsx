@@ -50,7 +50,7 @@ function makeData(tagIds: number[] = [1, 2, 3, 4]): AggregateSeriesData {
     endTime: BigInt(n * 1000),
     n,
     bucketSMs: 1000,
-    series: new Map(tagIds.map(id => [id, new Array(n).fill(id * 1.0)])),
+    series: new Map(tagIds.map(id => [id, { value: new Array(n).fill(id * 1.0) }])),
   };
 }
 
@@ -148,7 +148,7 @@ describe('TrendChart', () => {
       endTime: 3_000n,
       n: 3,
       bucketSMs: 1000,
-      series: new Map([[1, [1.0, null, 3.0]]]),
+      series: new Map([[1, { value: [1.0, null, 3.0] }]]),
     };
     renderChart([1], dataWithNulls);
     // uPlot constructor should have been called; the data passed should contain null.

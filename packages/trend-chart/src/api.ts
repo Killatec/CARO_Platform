@@ -20,7 +20,12 @@ export type TileApiResponse =
       endTime: number;
       bucketSMs: number;
       n: number;
-      series: Array<{ tagId: number; value: (number | null)[] }>;
+      series: Array<{
+        tagId: number;
+        value: (number | null)[];
+        min:   (number | null)[];
+        max:   (number | null)[];
+      }>;
     };
 
 /**

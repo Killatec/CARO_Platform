@@ -20,7 +20,10 @@ function makeData(): AggregateSeriesData {
     endTime: 5_000n,
     n: 5,
     bucketSMs: 1000,
-    series: new Map([[1, [10, 20, 30, 40, 50]], [2, [1, 2, 3, 4, 5]]]),
+    series: new Map([
+      [1, { value: [10, 20, 30, 40, 50] }],
+      [2, { value: [1, 2, 3, 4, 5] }],
+    ]),
   };
 }
 

@@ -14,17 +14,21 @@ interface CachedEntry {
   // Aggregate fields
   bucketSMs?: number;
   n?: number;
-  value?: (number | null)[];
+  value?:    (number | null)[];
+  min?:      (number | null)[];
+  max?:      (number | null)[];
   // Raw fields
-  ts?: bigint[];
+  ts?:       bigint[];
   valueRaw?: (number | null)[];
 }
 
 function estimateCachedEntrySize(entry: CachedEntry): number {
   const valueLen = entry.value?.length ?? 0;
-  const tsLen = entry.ts?.length ?? 0;
-  const rawLen = entry.valueRaw?.length ?? 0;
-  return (valueLen + tsLen + rawLen) * 8 + 100;
+  const minLen   = entry.min?.length   ?? 0;
+  const maxLen   = entry.max?.length   ?? 0;
+  const tsLen    = entry.ts?.length    ?? 0;
+  const rawLen   = entry.valueRaw?.length ?? 0;
+  return (valueLen + minLen + maxLen + tsLen + rawLen) * 8 + 100;
 }
 
 const DEFAULT_CACHE_CAPACITY = 50_000_000;
@@ -49,6 +53,9 @@ export interface UseTrendDataResult extends HookState {
   ensureCovered: (startMs: bigint, endMs: bigint) => void;
   swapCounter: number;
   activeTileCount: number;
+  /** Wall-clock ms of the most recent viewport-change batch (visible tiles only).
+   *  null until the first batch settles. Includes failed batches. */
+  lastFetchMs: number | null;
 }
 
 function chunkArray<T>(arr: T[], size: number): T[][] {
@@ -87,10 +94,12 @@ function storeTileResult(
         bucketCount: tile.bucketCount,
       });
       cache.set(key, {
-        source: res.source,
+        source:    res.source,
         bucketSMs: res.bucketSMs,
-        n: res.n,
-        value: s.value,
+        n:         res.n,
+        value:     s.value,
+        min:       s.min,
+        max:       s.max,
       });
     }
   }
@@ -144,26 +153,33 @@ function assembleData(
   }
 
   // Aggregate path — one pass per tile.
-  const series = new Map<number, (number | null)[]>();
-  for (const tagId of tagIds) series.set(tagId, []);
+  type AggTagAccum = {
+    value:     (number | null)[];
+    mins:      (number | null)[];
+    maxs:      (number | null)[];
+    hasAllMin: boolean; // false when any present cache entry lacks min (v0.7 hit)
+  };
+  const perTag = new Map<number, AggTagAccum>();
+  for (const tagId of tagIds) {
+    perTag.set(tagId, { value: [], mins: [], maxs: [], hasAllMin: true });
+  }
 
   const tileSourceSet = new Set<string>();
   let totalN = 0;
   let lastBucketSMs = 0;
 
   for (const tile of tilesInOrder) {
-    // Find tile metadata (n, bucketSMs, source) from any available entry.
     let tileN = tile.bucketCount;
     let tileBucketSMs = 0;
     let tileSourceFound: string | undefined;
-    const tileValues = new Map<number, (number | null)[]>();
+    const tileData = new Map<number, { value: (number|null)[]; min?: (number|null)[]; max?: (number|null)[] }>();
 
     for (const tagId of tagIds) {
       const entry = cache.get(
         makeTileCacheKey({ tagId, startTime: tile.startTime, endTime: tile.endTime, bucketCount: tile.bucketCount }),
       );
       if (entry?.value !== undefined) {
-        tileValues.set(tagId, entry.value);
+        tileData.set(tagId, { value: entry.value, min: entry.min, max: entry.max });
         if (!tileSourceFound && entry.n !== undefined) {
           tileN = entry.n;
           tileBucketSMs = entry.bucketSMs ?? 0;
@@ -176,10 +192,25 @@ function assembleData(
     if (tileBucketSMs > 0) lastBucketSMs = tileBucketSMs;
     totalN += tileN;
 
+    const nullFill = new Array<null>(tileN).fill(null);
     for (const tagId of tagIds) {
-      const values = tileValues.get(tagId) ?? new Array<null>(tileN).fill(null);
-      series.get(tagId)!.push(...values);
+      const te = perTag.get(tagId)!;
+      const td = tileData.get(tagId);
+      te.value.push(...(td?.value ?? nullFill));
+      te.mins.push(...(td?.min   ?? nullFill));
+      te.maxs.push(...(td?.max   ?? nullFill));
+      // Present entry with no min = v0.7 cache hit → disable bands for this tag.
+      if (td !== undefined && td.min === undefined) te.hasAllMin = false;
     }
+  }
+
+  const series = new Map<number, { value: (number|null)[]; min?: (number|null)[]; max?: (number|null)[] }>();
+  for (const tagId of tagIds) {
+    const te = perTag.get(tagId)!;
+    series.set(tagId, te.hasAllMin
+      ? { value: te.value, min: te.mins, max: te.maxs }
+      : { value: te.value },
+    );
   }
 
   let effectiveSource: AggregateSeriesData['source'];
@@ -261,6 +292,7 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
   });
   const [swapCounter, setSwapCounter] = useState(0);
   const [activeTileCount, setActiveTileCount] = useState<number>(0);
+  const [lastFetchMs, setLastFetchMs] = useState<number | null>(null);
 
   // Incremented on each opts change; async callbacks from stale effects are ignored.
   const generationRef = useRef(0);
@@ -300,6 +332,10 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
       setHookResult({ data: null, isLoading: false, error: null });
       return;
     }
+
+    // Wall-clock start of this viewport-change batch. performSwap() is the natural
+    // end boundary — it fires when all visible tiles have settled (success or failure).
+    const batchT0 = performance.now();
 
     // Capture old active set for selective eviction on swap.
     // activeTilesRef is NOT reset here — bridge render keeps old data visible
@@ -357,6 +393,7 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
       activeTilesRef.current = newSorted;
       setActiveTileCount(newSorted.length);
       levelTransitionPendingRef.current = false;
+      setLastFetchMs(Math.round(performance.now() - batchT0));
       finalize();
       setSwapCounter(c => c + 1);
     };
@@ -380,7 +417,6 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
         continue;
       }
 
-      const tileT0 = performance.now();
       const groups = chunkArray(missing, 8);
       const promises = groups.map(group =>
         fetchTile({ tagIds: group, startTime: tile.startTime, endTime: tile.endTime, bucketCount: tile.bucketCount }).then(
@@ -416,7 +452,6 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
         continue;
       }
 
-      const tileT0 = performance.now();
       const groups = chunkArray(missing, 8);
       const promises = groups.map(group =>
         fetchTile({ tagIds: group, startTime: tile.startTime, endTime: tile.endTime, bucketCount: tile.bucketCount }).then(
@@ -517,8 +552,10 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
         continue;
       }
 
-      inFlightTilesRef.current.add(tileKey);
+      // Pan-induced fetches update lastFetchMs per-tile (last-settle-wins).
+      // This mirrors the viewport-change path so the indicator always reflects wire latency.
       const tileT0 = performance.now();
+      inFlightTilesRef.current.add(tileKey);
 
       const groups = chunkArray(missing, 8);
       const promises = groups.map(group =>
@@ -533,6 +570,7 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
       Promise.all(promises)
         .then(() => {
           inFlightTilesRef.current.delete(tileKey);
+          setLastFetchMs(Math.round(performance.now() - tileT0));
           if (generationRef.current !== gen) return;
           activeTilesRef.current = pruneAndAdd(activeTilesRef.current, tile);
           setActiveTileCount(activeTilesRef.current.length);
@@ -540,11 +578,12 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
         })
         .catch(e => {
           inFlightTilesRef.current.delete(tileKey);
+          setLastFetchMs(Math.round(performance.now() - tileT0));
           if (generationRef.current !== gen) return;
           console.warn('[useTrendData] dynamic fetch failed', { tile, error: e });
         });
     }
   }, [tagIds, viewportStart, viewportEnd, bucketCount, visibleTilesPerWindow, cache]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  return { ...hookResult, ensureCovered, swapCounter, activeTileCount };
+  return { ...hookResult, ensureCovered, swapCounter, activeTileCount, lastFetchMs };
 }

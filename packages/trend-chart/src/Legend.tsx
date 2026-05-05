@@ -34,8 +34,9 @@ function getCurrentValue(
   showLastWhenIdle: boolean,
 ): number | null {
   if (data.type === 'aggregate') {
-    const vals = data.series.get(tagId);
-    if (!vals) return null;
+    const entry = data.series.get(tagId);
+    if (!entry) return null;
+    const vals = entry.value;
     if (cursorIdx !== undefined) return vals[Math.min(cursorIdx, vals.length - 1)] ?? null;
     return showLastWhenIdle ? (vals[vals.length - 1] ?? null) : null;
   }

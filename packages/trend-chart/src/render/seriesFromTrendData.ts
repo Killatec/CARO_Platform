@@ -26,9 +26,9 @@ export function seriesFromTrendData(data: TrendData, tagIds: number[]): SeriesAr
     }
 
     const ys = tagIds.map(tagId => {
-      const vals = data.series.get(tagId);
-      if (!vals) return new Array<number | null>(n).fill(null);
-      return vals.slice(0, n) as (number | null)[];
+      const entry = data.series.get(tagId);
+      if (!entry) return new Array<number | null>(n).fill(null);
+      return entry.value.slice(0, n) as (number | null)[];
     });
 
     return { xs, ys };
