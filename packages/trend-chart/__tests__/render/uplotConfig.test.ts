@@ -72,12 +72,21 @@ describe('buildUplotConfig', () => {
 
   it('each band references correct min/max series indices', () => {
     const config = buildUplotConfig(baseOpts);
-    // Tag 0 (tagIds[0]=1): minIdx=1, maxIdx=2
-    // Tag 1 (tagIds[1]=2): minIdx=3, maxIdx=4
-    // Tag 2 (tagIds[2]=3): minIdx=5, maxIdx=6
-    expect(config.bands![0]!.series).toEqual([1, 2]);
-    expect(config.bands![1]!.series).toEqual([3, 4]);
-    expect(config.bands![2]!.series).toEqual([5, 6]);
+    // Per-tag layout: minSeriesIdx = 1+i*2, maxSeriesIdx = 1+i*2+1
+    // uPlot convention: series[0] = upper/from edge (max), series[1] = lower/to edge (min)
+    // Tag 0 (tagIds[0]=1): maxIdx=2, minIdx=1
+    // Tag 1 (tagIds[1]=2): maxIdx=4, minIdx=3
+    // Tag 2 (tagIds[2]=3): maxIdx=6, minIdx=5
+    expect(config.bands![0]!.series).toEqual([2, 1]);
+    expect(config.bands![1]!.series).toEqual([4, 3]);
+    expect(config.bands![2]!.series).toEqual([6, 5]);
+  });
+
+  it('band series[0] > series[1] — max (upper) index is always first per uPlot convention', () => {
+    const config = buildUplotConfig(baseOpts);
+    for (const band of config.bands!) {
+      expect(band.series[0]).toBeGreaterThan(band.series[1]);
+    }
   });
 
   it('min series has transparent stroke; max series has a visible stroke string', () => {

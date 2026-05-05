@@ -120,8 +120,10 @@ export function buildUplotConfig(opts: BuildUplotConfigOpts): uPlot.Options {
       paths: uPlot.paths.stepped!({ align: 1 }),
     } satisfies uPlot.Series);
 
+    // uPlot convention: series[0] = upper/"from" edge (max), series[1] = lower/"to" edge (min).
+    // Fill goes downward from max; min provides the upward clip. Inversion → empty band.
     bandsArr.push({
-      series: [minSeriesIdx, maxSeriesIdx],
+      series: [maxSeriesIdx, minSeriesIdx],
       fill: hexToRgba(color, fillAlpha),
     } satisfies uPlot.Band);
   });
