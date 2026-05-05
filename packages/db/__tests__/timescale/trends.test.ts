@@ -233,12 +233,14 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (b
     expect(tile.source).toBe('1s_cagg');
   });
 
-  it('aggregate response has n === bucketCount', async () => {
+  it('aggregate response has n === bucketCount, all three series arrays have same length', async () => {
     await writeTestSamples([{ ts: START + 1_000n, tagId: 2002, value: 1.0 }]);
     await refreshTestCagg(VIEW);
     const tile = await getTrendTile([2002], START, END, COUNT) as AggregateTrendTile;
     expect(tile.n).toBe(COUNT);
     expect(tile.series[0].value).toHaveLength(COUNT);
+    expect(tile.series[0].min).toHaveLength(COUNT);
+    expect(tile.series[0].max).toHaveLength(COUNT);
   });
 
   it('LOCF carries forward across empty buckets', async () => {
@@ -246,11 +248,16 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (b
     await writeTestSamples([{ ts: START + 500n, tagId: 2003, value: 42.0 }]);
     await refreshTestCagg(VIEW);
     const tile = await getTrendTile([2003], START, END, COUNT) as AggregateTrendTile;
-    const { value } = tile.series[0];
+    const { value, min, max } = tile.series[0];
     // First bucket should contain 42.0; all subsequent buckets carry it forward.
     expect(value[0]).toBe(42.0);
     expect(value[COUNT - 1]).toBe(42.0);
     expect(value.every(v => v === 42.0)).toBe(true);
+    // Empty buckets must collapse min/max to the LOCF'd value — no phantom spread.
+    expect(min[0]).toBe(42.0);
+    expect(max[0]).toBe(42.0);
+    expect(min.every(m => m === 42.0)).toBe(true);
+    expect(max.every(m => m === 42.0)).toBe(true);
   });
 
   it('bucket containing a NULL sample emits null in value array regardless of LOCF', async () => {
@@ -264,9 +271,11 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (b
     ]);
     await refreshTestCagg(VIEW);
     const tile = await getTrendTile([2004], START, END, COUNT) as AggregateTrendTile;
-    const { value } = tile.series[0];
-    // bucket 5 must be null
+    const { value, min, max } = tile.series[0];
+    // bucket 5 must be null — mixed-null rule nulls all three arrays
     expect(value[5]).toBeNull();
+    expect(min[5]).toBeNull();
+    expect(max[5]).toBeNull();
     // bucket 10 should be 20
     expect(value[10]).toBe(20.0);
   });
@@ -291,21 +300,28 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (b
 
   it('bounded prev returns null when no prior sample exists within 5 minutes', async () => {
     // Write ONLY one in-window sample with nothing in the pre-window.
-    // Left-edge buckets before it must be null.
+    // Left-edge buckets before it must be null (leading-edge NULL prev case).
     const inTs = START + 1_800_000n; // 30 min into the window (bucket ~125)
     await writeTestSamples([{ ts: inTs, tagId: 2006, value: 7.0 }]);
     await refreshTestCagg(VIEW);
     const tile = await getTrendTile([2006], START, END, COUNT) as AggregateTrendTile;
-    const { value } = tile.series[0];
+    const { value, min, max } = tile.series[0];
     expect(value[0]).toBeNull(); // left edge: no prev
     expect(value[COUNT - 1]).toBeNull(); // inTs is ~bucket 125; buckets past inTs are past max(ts) → cutoff
+    // Leading-edge null: empty bucket with null LOCF → collapse to null/null/null.
+    expect(min[0]).toBeNull();
+    expect(max[0]).toBeNull();
   });
 
-  it('empty range: tag with no CAG data returns value:[null]*n', async () => {
+  it('empty range: tag with no CAG data returns value/min/max:[null]*n', async () => {
     // No samples written; CAG has nothing for this tag.
     const tile = await getTrendTile([2007], START, END, COUNT) as AggregateTrendTile;
     expect(tile.series[0].value).toHaveLength(COUNT);
     expect(tile.series[0].value.every(v => v === null)).toBe(true);
+    expect(tile.series[0].min).toHaveLength(COUNT);
+    expect(tile.series[0].min.every(m => m === null)).toBe(true);
+    expect(tile.series[0].max).toHaveLength(COUNT);
+    expect(tile.series[0].max.every(m => m === null)).toBe(true);
   });
 
   it('startTime and endTime are returned as bigint', async () => {
@@ -367,7 +383,113 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (b
     expect(tile.series).toHaveLength(3);
     for (const s of tile.series) {
       expect(s.value).toHaveLength(tile.n);
+      expect(s.min).toHaveLength(tile.n);
+      expect(s.max).toHaveLength(tile.n);
     }
+  });
+
+  // ── min/max bands — three-case rule ───────────────────────────────────────────
+  // Tag IDs 2100–2119 reserved for this block.
+  // All tests use the 1s_cagg dispatch zone: START=7_200_000n, END=10_800_000n,
+  // bucketSMs=14400ms.
+
+  it('three-case: normal bucket — measured spread (value=last, min=true-min, max=true-max)', async () => {
+    // Three samples in outer bucket 5 ([START+72000ms, START+86400ms)):
+    //   ts +72100 → 1.0   ts +72200 → 3.0   ts +72300 → 2.0 (latest → last=2.0)
+    // No guard needed: bucket 5's gf_bucket (7272000ms) < max(ts) (7272300ms) so cutoff won't fire.
+    const B5 = START + 72_000n; // start of outer bucket 5 (14400ms × 5 = 72000ms past START)
+    await writeTestSamples([
+      { ts: B5 + 100n, tagId: 2100, value: 1.0 },
+      { ts: B5 + 200n, tagId: 2100, value: 3.0 },
+      { ts: B5 + 300n, tagId: 2100, value: 2.0 },
+    ]);
+    await refreshTestCagg(VIEW);
+    const tile = await getTrendTile([2100], START, END, COUNT) as AggregateTrendTile;
+    const { value, min, max } = tile.series[0];
+    expect(value[5]).toBe(2.0);  // last by ts within bucket 5
+    expect(min[5]).toBe(1.0);    // true minimum across all samples in bucket 5
+    expect(max[5]).toBe(3.0);    // true maximum
+  });
+
+  it('three-case: single-sample bucket — degenerate band (value === min === max)', async () => {
+    // One sample in outer bucket 3; no guard needed: cutoff = max(ts) = B3+100ms is
+    // after gf_bucket (B3), so bucket 3 is not past-cutoff.
+    const B3 = START + 43_200n; // start of outer bucket 3 (14400ms × 3 = 43200ms past START)
+    await writeTestSamples([
+      { ts: B3 + 100n, tagId: 2101, value: 5.0 },
+    ]);
+    await refreshTestCagg(VIEW);
+    const tile = await getTrendTile([2101], START, END, COUNT) as AggregateTrendTile;
+    const { value, min, max } = tile.series[0];
+    expect(value[3]).toBe(5.0);
+    expect(min[3]).toBe(5.0);  // degenerate: min === value
+    expect(max[3]).toBe(5.0);  // degenerate: max === value
+  });
+
+  it('three-case: empty bucket LOCF collapse — min/max equal LOCF value, not prior spread', async () => {
+    // Sample at bucket 0: value=7.0.  Sample at bucket 10: value=99.0.
+    // Buckets 1–9 are empty (gapfilled) between these two real samples.
+    // Their LOCF'd value is 7.0. min/max must collapse to 7.0, not carry prior spread.
+    const B10 = START + BigInt(10 * 14_400); // start of outer bucket 10
+    await writeTestSamples([
+      { ts: START + 100n, tagId: 2102, value: 7.0 },
+      { ts: B10 + 100n,   tagId: 2102, value: 99.0 },
+    ]);
+    await refreshTestCagg(VIEW);
+    const tile = await getTrendTile([2102], START, END, COUNT) as AggregateTrendTile;
+    const { value, min, max } = tile.series[0];
+    // Bucket 5 is empty — LOCF'd from bucket 0's last = 7.0.
+    expect(value[5]).toBe(7.0);
+    expect(min[5]).toBe(7.0);   // collapsed, not null and not a spread
+    expect(max[5]).toBe(7.0);   // collapsed
+    // Bucket 10 has the real sample.
+    expect(value[10]).toBe(99.0);
+    expect(min[10]).toBe(99.0); // single sample
+    expect(max[10]).toBe(99.0);
+  });
+
+  it('three-case: mixed-null bucket — all three fields null (band gap)', async () => {
+    // Write samples across three separate 1s sub-buckets inside outer bucket 5.
+    // One sample is null → null_count=1 in the 1s CAG → outer sum(null_count)>0 → band gap.
+    // No guard: gf_bucket(7272000ms) < max(ts)(7274100ms) so cutoff won't fire.
+    const B5 = START + 72_000n;
+    await writeTestSamples([
+      { ts: B5 + 100n,   tagId: 2103, value: 1.0  },  // 1s sub-bucket 7272000ms
+      { ts: B5 + 1_100n, tagId: 2103, value: null },  // 1s sub-bucket 7273000ms → null_count=1
+      { ts: B5 + 2_100n, tagId: 2103, value: 2.0  },  // 1s sub-bucket 7274000ms
+    ]);
+    await refreshTestCagg(VIEW);
+    const tile = await getTrendTile([2103], START, END, COUNT) as AggregateTrendTile;
+    const { value, min, max } = tile.series[0];
+    // Bucket 5: sum(null_count)=1 → mixed-null case → all three must be null.
+    expect(value[5]).toBeNull();
+    expect(min[5]).toBeNull();
+    expect(max[5]).toBeNull();
+  });
+
+  // ── Aggregator correction spot-check (Div=8) ──────────────────────────────────
+  // Verifies min(s.min) / max(s.max) — not last(s.min, s.bucket) / last(s.max, s.bucket).
+  // With bucketSMs=8000ms the dispatch stays 1s_cagg (8.0s < 16s).
+  // 4 samples occupy different 1s sub-buckets within outer bucket 0.
+  // The *last* 1s sub-bucket by time (at +7000ms) has value=35.0 — NOT the global min/max.
+  // Correct:   min=5.0  max=50.0   (min/max across all four sub-buckets)
+  // Wrong doc: min=35.0 max=35.0   (min/max of the last sub-bucket only)
+
+  it('aggregator correction (Div=8): min(s.min)/max(s.max) spans all sub-buckets, not just the last', async () => {
+    const COUNT_8 = 450; // bucketSMs = round(3_600_000 / 450) = 8000ms
+    await writeTestSamples([
+      { ts: START +   500n, tagId: 2104, value:  5.0 }, // global min  — 1s sub-bucket 0
+      { ts: START + 1_500n, tagId: 2104, value: 50.0 }, // global max  — 1s sub-bucket 1
+      { ts: START + 2_500n, tagId: 2104, value: 20.0 }, //              1s sub-bucket 2
+      { ts: START + 7_000n, tagId: 2104, value: 35.0 }, // LAST by time — 1s sub-bucket 7
+    ]);
+    await refreshTestCagg(VIEW);
+    const tile = await getTrendTile([2104], START, END, COUNT_8) as AggregateTrendTile;
+    const { value, min, max } = tile.series[0];
+    expect(value[0]).toBe(35.0);  // last by ts in bucket 0
+    // Correct aggregation: min/max span all four sub-buckets.
+    expect(min[0]).toBe(5.0);   // true minimum — would be 35.0 with last(s.min, s.bucket)
+    expect(max[0]).toBe(50.0);  // true maximum — would be 35.0 with last(s.max, s.bucket)
   });
 });
 
@@ -573,6 +695,9 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — watermark fall-through', asyn
     expect(tile.source).toBe('mixed');
     expect(tile.n).toBe(COUNT);
     expect(tile.series[0].value).toHaveLength(COUNT);
+    // min/max must stitch correctly across the source seam — same length as value.
+    expect(tile.series[0].min).toHaveLength(COUNT);
+    expect(tile.series[0].max).toHaveLength(COUNT);
   });
 
   // ── Test 3: watermark before startTime → entire range falls through ──────────
@@ -900,26 +1025,31 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — LOCF data-extent cutoff', asy
     // Range [T-2B, T+2B], 4 buckets × 720s → bucketS=720 → 1min_cagg
     const tile = await getTrendTile([TAG], T - 2n * B, T + 2n * B, 4) as AggregateTrendTile;
     expect(tile.source).toBe('1min_cagg');
-    const vals = tile.series[0]!.value;
+    const { value: vals, min: mins, max: maxs } = tile.series[0]!;
     expect(vals).toHaveLength(4);
     expect(vals[0]).toBe(5.0);   // bucket T-2B: actual sample
     expect(vals[1]).toBe(5.0);   // bucket T-B:  LOCF from T-2B (gap within range → fills)
     expect(vals[2]).toBe(10.0);  // bucket T:    actual sample
     expect(vals[3]).toBeNull();  // bucket T+B:  past max(ts) → cutoff
+    // Past-extent cutoff must null all three fields, not just value.
+    expect(mins[3]).toBeNull();
+    expect(maxs[3]).toBeNull();
   });
 
-  it('query range entirely past max(ts) — all buckets null', async () => {
+  it('query range entirely past max(ts) — all buckets null in all three fields', async () => {
     await writeTestSamples([{ tagId: TAG, ts: T, value: 10.0 }]);
     await refreshTestCagg(VIEW);
     // Range [T+2B, T+7B]: all 5 buckets start after T → all null
     const tile = await getTrendTile([TAG], T + 2n * B, T + 7n * B, 5) as AggregateTrendTile;
     expect(tile.source).toBe('1min_cagg');
-    const vals = tile.series[0]!.value;
+    const { value: vals, min: mins, max: maxs } = tile.series[0]!;
     expect(vals).toHaveLength(5);
     expect(vals.every(v => v === null)).toBe(true);
+    expect(mins.every(m => m === null)).toBe(true);
+    expect(maxs.every(m => m === null)).toBe(true);
   });
 
-  it('gap in data before max(ts) — LOCF fills gap, only post-extent bucket is null', async () => {
+  it('gap in data before max(ts) — LOCF fills gap, only post-extent bucket is null in all three', async () => {
     await writeTestSamples([
       { tagId: TAG, ts: T - 4n * B, value: 5.0 },
       { tagId: TAG, ts: T,           value: 10.0 },
@@ -928,7 +1058,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — LOCF data-extent cutoff', asy
     // Range [T-4B, T+2B], 6 buckets × 720s → bucketS=720 → 1min_cagg
     const tile = await getTrendTile([TAG], T - 4n * B, T + 2n * B, 6) as AggregateTrendTile;
     expect(tile.source).toBe('1min_cagg');
-    const vals = tile.series[0]!.value;
+    const { value: vals, min: mins, max: maxs } = tile.series[0]!;
     expect(vals).toHaveLength(6);
     expect(vals[0]).toBe(5.0);   // T-4B: actual sample
     expect(vals[1]).toBe(5.0);   // T-3B: LOCF from T-4B
@@ -936,5 +1066,11 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — LOCF data-extent cutoff', asy
     expect(vals[3]).toBe(5.0);   // T-B:  LOCF
     expect(vals[4]).toBe(10.0);  // T:    actual sample
     expect(vals[5]).toBeNull();  // T+B:  past max(ts) → cutoff
+    // LOCF'd buckets (1–3): empty bucket collapse — min === max === LOCF'd value.
+    expect(mins[1]).toBe(5.0);
+    expect(maxs[1]).toBe(5.0);
+    // Past-extent cutoff must null all three fields.
+    expect(mins[5]).toBeNull();
+    expect(maxs[5]).toBeNull();
   });
 });

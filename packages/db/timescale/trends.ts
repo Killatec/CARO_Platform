@@ -13,6 +13,8 @@ export interface RawTrendSeries {
 export interface AggregateTrendSeries {
   tagId: number;
   value: (number | null)[];
+  min:   (number | null)[];
+  max:   (number | null)[];
 }
 
 export interface RawTrendTile {
@@ -192,10 +194,14 @@ async function queryRaw(
 // ── Segment result ─────────────────────────────────────────────────────────────
 
 interface SegmentResult {
-  servedStart: number;                          // ms — start of first bucket
-  servedEnd: number;                            // ms — end of last bucket
-  n: number;                                    // bucket count in this segment
-  valuesByTag: Map<number, (number | null)[]>;  // n values per tag
+  servedStart: number;  // ms — start of first bucket
+  servedEnd: number;    // ms — end of last bucket
+  n: number;            // bucket count in this segment
+  valuesByTag: Map<number, {
+    value: (number | null)[];
+    min:   (number | null)[];
+    max:   (number | null)[];
+  }>;
 }
 
 // ── AggRow (shared by both SQL templates) ──────────────────────────────────────
@@ -204,6 +210,8 @@ type AggRow = {
   tag_id: number;
   gf_bucket: Date;  // node-postgres returns TimescaleDB timestamps as Date objects
   val: number | null;
+  bucket_min: number | null;
+  bucket_max: number | null;
   bucket_null_count: string | number | null;
 };
 
@@ -246,6 +254,8 @@ async function querySegment(
                            ORDER BY ts DESC
                            LIMIT 1)
                ) AS val,
+               min(s.value) AS bucket_min,
+               max(s.value) AS bucket_max,
                count(*) FILTER (WHERE s.value IS NULL) AS bucket_null_count
         FROM tag_samples s
         WHERE s.tag_id = ANY($4::int[])
@@ -255,7 +265,9 @@ async function querySegment(
       )
       SELECT tag_id,
              gf_bucket,
-             CASE WHEN gf_bucket > to_timestamp($5::bigint / 1000.0) THEN NULL ELSE val END AS val,
+             CASE WHEN gf_bucket > to_timestamp($5::bigint / 1000.0) THEN NULL ELSE val        END AS val,
+             CASE WHEN gf_bucket > to_timestamp($5::bigint / 1000.0) THEN NULL ELSE bucket_min END AS bucket_min,
+             CASE WHEN gf_bucket > to_timestamp($5::bigint / 1000.0) THEN NULL ELSE bucket_max END AS bucket_max,
              bucket_null_count
       FROM gapfilled
       ORDER BY tag_id, gf_bucket
@@ -281,6 +293,8 @@ async function querySegment(
                            ORDER BY bucket DESC
                            LIMIT 1)
                ) AS val,
+               min(s.min) AS bucket_min,
+               max(s.max) AS bucket_max,
                sum(s.null_count) AS bucket_null_count
         FROM ${source} s
         WHERE s.tag_id = ANY($4::int[])
@@ -290,7 +304,9 @@ async function querySegment(
       )
       SELECT tag_id,
              gf_bucket,
-             CASE WHEN gf_bucket > to_timestamp($5::bigint / 1000.0) THEN NULL ELSE val END AS val,
+             CASE WHEN gf_bucket > to_timestamp($5::bigint / 1000.0) THEN NULL ELSE val        END AS val,
+             CASE WHEN gf_bucket > to_timestamp($5::bigint / 1000.0) THEN NULL ELSE bucket_min END AS bucket_min,
+             CASE WHEN gf_bucket > to_timestamp($5::bigint / 1000.0) THEN NULL ELSE bucket_max END AS bucket_max,
              bucket_null_count
       FROM gapfilled
       ORDER BY tag_id, gf_bucket
@@ -307,21 +323,44 @@ async function querySegment(
     );
   }
 
-  // Collect per-tag value arrays and track the first/last bucket timestamp.
-  const valuesByTag = new Map<number, (number | null)[]>();
-  for (const id of tagIds) valuesByTag.set(id, []);
+  // Collect per-tag arrays (value/min/max) and track the first/last bucket timestamp.
+  const valuesByTag = new Map<number, {
+    value: (number | null)[];
+    min:   (number | null)[];
+    max:   (number | null)[];
+  }>();
+  for (const id of tagIds) valuesByTag.set(id, { value: [], min: [], max: [] });
 
   let firstBucketMs: number | null = null;
   let lastBucketMs:  number | null = null;
 
   for (const row of result.rows as AggRow[]) {
-    const arr = valuesByTag.get(row.tag_id);
-    if (!arr) continue;
+    const arrs = valuesByTag.get(row.tag_id);
+    if (!arrs) continue;
     const bucketMs = row.gf_bucket.getTime();
     if (firstBucketMs === null || bucketMs < firstBucketMs) firstBucketMs = bucketMs;
     if (lastBucketMs  === null || bucketMs > lastBucketMs)  lastBucketMs  = bucketMs;
+
     const nullCount = row.bucket_null_count != null ? Number(row.bucket_null_count) : 0;
-    arr.push(nullCount > 0 ? null : row.val);
+
+    if (nullCount > 0) {
+      // Mixed-null bucket — null-as-gap rule (§2.1).
+      arrs.value.push(null);
+      arrs.min.push(null);
+      arrs.max.push(null);
+    } else if (row.bucket_min === null) {
+      // Empty (gapfilled) bucket — COV semantics: value held constant.
+      // Band collapses to the LOCF'd last. May itself be null at the leading
+      // edge if the bounded prev lookup returned NULL; that's correct.
+      arrs.value.push(row.val);
+      arrs.min.push(row.val);
+      arrs.max.push(row.val);
+    } else {
+      // Normal bucket — measured spread.
+      arrs.value.push(row.val);
+      arrs.min.push(row.bucket_min);
+      arrs.max.push(row.bucket_max);
+    }
   }
 
   // Compute the served bucket grid for this segment.
@@ -360,14 +399,19 @@ async function querySegment(
   }
 
   // Tags completely absent from this segment get null×n to fill the grid.
-  // Tags with rows must match n exactly (gapfill invariant).
+  // Tags with rows must match n exactly (gapfill invariant; check value length — all
+  // three arrays are built in lockstep so one check suffices).
   for (const id of tagIds) {
-    const arr = valuesByTag.get(id)!;
-    if (arr.length === 0) {
-      valuesByTag.set(id, new Array<number | null>(n).fill(null));
-    } else if (arr.length !== n) {
+    const arrs = valuesByTag.get(id)!;
+    if (arrs.value.length === 0) {
+      valuesByTag.set(id, {
+        value: new Array<number | null>(n).fill(null),
+        min:   new Array<number | null>(n).fill(null),
+        max:   new Array<number | null>(n).fill(null),
+      });
+    } else if (arrs.value.length !== n) {
       throw new Error(
-        `querySegment: tag ${id} yielded ${arr.length} buckets but grid is ${n}` +
+        `querySegment: tag ${id} yielded ${arrs.value.length} buckets but grid is ${n}` +
         ` — gapfill output is inconsistent (source=${source}, bucketSMs=${bucketSMs})`,
       );
     }
@@ -537,7 +581,11 @@ export async function getTrendTile(
     const left  = segments[i]!;
     const right = segments[i + 1]!;
     if (left.servedEnd - bucketSMs === right.servedStart) {
-      for (const arr of left.valuesByTag.values()) arr.pop();
+      for (const arrs of left.valuesByTag.values()) {
+        arrs.value.pop();
+        arrs.min.pop();
+        arrs.max.pop();
+      }
       left.n       -= 1;
       left.servedEnd -= bucketSMs;
     }
@@ -559,12 +607,22 @@ export async function getTrendTile(
   }
 
   const series: AggregateTrendSeries[] = tagIds.map(id => {
-    const values: (number | null)[] = [];
+    const value: (number | null)[] = [];
+    const min:   (number | null)[] = [];
+    const max:   (number | null)[] = [];
     for (const seg of segments) {
-      const segValues = seg.valuesByTag.get(id) ?? new Array<number | null>(seg.n).fill(null);
-      values.push(...segValues);
+      const segArrs = seg.valuesByTag.get(id);
+      if (segArrs) {
+        value.push(...segArrs.value);
+        min.push(...segArrs.min);
+        max.push(...segArrs.max);
+      } else {
+        value.push(...new Array<number | null>(seg.n).fill(null));
+        min.push(...new Array<number | null>(seg.n).fill(null));
+        max.push(...new Array<number | null>(seg.n).fill(null));
+      }
     }
-    return { tagId: id, value: values };
+    return { tagId: id, value, min, max };
   });
 
   // ── Source label ─────────────────────────────────────────────────────────────
