@@ -353,4 +353,124 @@ describe.skipIf(!HAVE_TIMESCALE)('GET /api/v1/trends/tile — E2E (real DB, no m
       expect(res.body.data.n).toBe(COUNT);
     });
   });
+
+  // ── 11. Min/max bands (v0.8) ──────────────────────────────────────────────────
+
+  describe('200 aggregate min/max bands (v0.8)', () => {
+    beforeEach(async () => {
+      await resetTestRangeExpectClean();
+      await refreshTestCagg('1s_cagg');
+    });
+    afterEach(async () => {
+      await resetTestRange();
+      await refreshTestCagg('1s_cagg');
+    });
+
+    it('aggregate series carries value/min/max arrays of length n', async () => {
+      await writeTestSamples([
+        { ts: AGG_START + 1_000n, tagId: 7010, value: 1.0 },
+        { ts: AGG_START + 5_000n, tagId: 7010, value: 3.0 },
+        { ts: AGG_START + 10_000n, tagId: 7010, value: 2.0 },
+      ]);
+      await refreshTestCagg('1s_cagg');
+
+      const res = await request(app).get(
+        `/api/v1/trends/tile?tag_ids=7010` +
+        `&start_time=${AGG_START}&end_time=${AGG_END}&bucket_count=${COUNT}`,
+      );
+
+      expect(res.status).toBe(200);
+      const { n, series } = res.body.data;
+      const s = series[0];
+      expect(s.value).toHaveLength(n);
+      expect(s.min).toHaveLength(n);
+      expect(s.max).toHaveLength(n);
+    });
+
+    it('normal bucket: value=last, min=1.0, max=3.0 for spread samples', async () => {
+      // Bucket 0: AGG_START to AGG_START+BUCKET_MS. Three 1s sub-buckets:
+      // ts+1000 → last=1.0, ts+5000 → last=3.0, ts+10000 → last=2.0 (max bucket → value)
+      await writeTestSamples([
+        { ts: AGG_START + 1_000n,  tagId: 7011, value: 1.0 },
+        { ts: AGG_START + 5_000n,  tagId: 7011, value: 3.0 },
+        { ts: AGG_START + 10_000n, tagId: 7011, value: 2.0 },
+      ]);
+      await refreshTestCagg('1s_cagg');
+
+      const res = await request(app).get(
+        `/api/v1/trends/tile?tag_ids=7011` +
+        `&start_time=${AGG_START}&end_time=${AGG_END}&bucket_count=${COUNT}`,
+      );
+
+      const s = res.body.data.series[0];
+      expect(s.value[0]).toBe(2.0);
+      expect(s.min[0]).toBe(1.0);
+      expect(s.max[0]).toBe(3.0);
+    });
+
+    it('empty bucket: min === max === value (LOCF collapse, COV semantics)', async () => {
+      // Bucket 0 has data (5.0). Bucket 5 is empty → LOCF'd to 5.0.
+      // Guard sample in bucket 6 pushes the 1s_cagg watermark to 7287000ms,
+      // which is ≥ bucket 5's gf_bucket (7272000ms), so the past-extent CASE
+      // does not null bucket 5 out.
+      await writeTestSamples([
+        { ts: AGG_START + 1_000n,                          tagId: 7012, value: 5.0  },
+        { ts: AGG_START + BigInt(6 * BUCKET_MS) + 1_000n, tagId: 7012, value: 99.0 },
+      ]);
+      await refreshTestCagg('1s_cagg');
+
+      const res = await request(app).get(
+        `/api/v1/trends/tile?tag_ids=7012` +
+        `&start_time=${AGG_START}&end_time=${AGG_END}&bucket_count=${COUNT}`,
+      );
+
+      const s = res.body.data.series[0];
+      expect(s.value[5]).toBe(5.0);
+      expect(s.min[5]).toBe(5.0);
+      expect(s.max[5]).toBe(5.0);
+    });
+
+    it('mixed-null bucket: value/min/max all null (band gap)', async () => {
+      // Three samples in bucket 0 across three 1s sub-buckets; middle is null.
+      // sum(null_count) = 1 > 0 → mixed-null case.
+      await writeTestSamples([
+        { ts: AGG_START + 1_000n, tagId: 7013, value: 1.0  },
+        { ts: AGG_START + 2_000n, tagId: 7013, value: null },
+        { ts: AGG_START + 3_000n, tagId: 7013, value: 2.0  },
+      ]);
+      await refreshTestCagg('1s_cagg');
+
+      const res = await request(app).get(
+        `/api/v1/trends/tile?tag_ids=7013` +
+        `&start_time=${AGG_START}&end_time=${AGG_END}&bucket_count=${COUNT}`,
+      );
+
+      const s = res.body.data.series[0];
+      expect(s.value[0]).toBeNull();
+      expect(s.min[0]).toBeNull();
+      expect(s.max[0]).toBeNull();
+    });
+  });
+
+  // ── 12. Raw path: no min/max leakage (discriminated-union invariant) ──────────
+
+  describe('raw path: series carries no min or max keys', () => {
+    beforeEach(async () => { await resetTestRangeExpectClean(); });
+    afterEach(async () => { await resetTestRange(); });
+
+    it('Object.keys(series[0]) does not include min or max', async () => {
+      await writeTestSamples([{ ts: RAW_START + 1_000n, tagId: 7019, value: 9.9 }]);
+
+      const res = await request(app).get(
+        `/api/v1/trends/tile?tag_ids=7019` +
+        `&start_time=${RAW_START}&end_time=${RAW_END}&bucket_count=${COUNT}`,
+      );
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.source).toBe('raw');
+      const keys = Object.keys(res.body.data.series[0]);
+      expect(keys).not.toContain('min');
+      expect(keys).not.toContain('max');
+    });
+  });
 });

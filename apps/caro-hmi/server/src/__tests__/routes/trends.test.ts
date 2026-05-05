@@ -70,7 +70,12 @@ const AGG_TILE: AggregateTrendTile = {
   endTime:   10_800_000n,
   bucketSMs: 14_400,
   n:         250,
-  series: [{ tagId: 1, value: new Array(250).fill(1.0) }],
+  series: [{
+    tagId: 1,
+    value: new Array(250).fill(1.0),
+    min:   new Array(250).fill(0.9),
+    max:   new Array(250).fill(1.1),
+  }],
 };
 
 // ── Unit tests (mocked @caro/db) ──────────────────────────────────────────────
@@ -106,6 +111,29 @@ describe('GET /api/v1/trends/tile — unit (mocked)', () => {
     expect(res.body.data.source).toBe('1s_cagg');
     expect(res.body.data.n).toBe(250);
     expect(res.body.data.bucketSMs).toBe(14_400);
+  });
+
+  it('aggregate response carries min and max arrays aligned with value', async () => {
+    mockGet.mockResolvedValueOnce(AGG_TILE);
+    const res = await request(app)
+      .get('/api/v1/trends/tile?tag_ids=1&start_time=7200000&end_time=10800000&bucket_count=250');
+    expect(res.status).toBe(200);
+    const s = res.body.data.series[0];
+    expect(s.value).toHaveLength(250);
+    expect(s.min).toHaveLength(250);
+    expect(s.max).toHaveLength(250);
+    expect(s.min[0]).toBe(0.9);
+    expect(s.max[0]).toBe(1.1);
+  });
+
+  it('raw response does not carry min or max on series (discriminated-union invariant)', async () => {
+    mockGet.mockResolvedValueOnce(RAW_TILE);
+    const res = await request(app)
+      .get('/api/v1/trends/tile?tag_ids=1&start_time=3600000&end_time=3840000&bucket_count=250');
+    expect(res.status).toBe(200);
+    const keys = Object.keys(res.body.data.series[0]);
+    expect(keys).not.toContain('min');
+    expect(keys).not.toContain('max');
   });
 
   it('bigint ts entries in raw response are serialised to JSON numbers', async () => {
