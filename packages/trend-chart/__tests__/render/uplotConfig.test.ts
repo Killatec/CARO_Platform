@@ -56,13 +56,18 @@ describe('buildUplotConfig', () => {
     expect(config.scales!['x']!.time).toBe(true);
   });
 
-  it('produces series[0] as x-axis placeholder, then one per tagId', () => {
+  it('raw mode (default): series[0] as x-axis placeholder, then one value series per tagId', () => {
     const config = buildUplotConfig(baseOpts);
-    // series[0] is the X axis placeholder
+    // 1 (x placeholder) + 3 value series
     expect(config.series).toHaveLength(1 + 3);
   });
 
-  it('selected series has higher width/alpha than others', () => {
+  it('raw mode: no bands config', () => {
+    const config = buildUplotConfig(baseOpts);
+    expect(config.bands).toBeUndefined();
+  });
+
+  it('raw mode: selected series has higher width/alpha than others', () => {
     const config = buildUplotConfig(baseOpts);
     const selected = config.series![1]!; // tag_id=1 is selectedTagId
     const other = config.series![2]!;
@@ -84,20 +89,66 @@ describe('buildUplotConfig', () => {
   });
 
   it('yScaleOverrides: uses override range instead of defaultYScale when present', () => {
-    // Tag 1 has eng_min=0, eng_max=100 — defaultYScale would produce [0, 100].
-    // Passing an override for tag 1 should use [25, 75] instead.
     const overrides = new Map([[1, { min: 25, max: 75 }]]);
     const config = buildUplotConfig({ ...baseOpts, yScaleOverrides: overrides });
     expect(config.scales!['y_1']).toEqual({ auto: false, range: [25, 75] });
   });
 
   it('yScaleOverrides: tags without an override fall back to defaultYScale', () => {
-    // Only tag 1 overridden; tag 2 (bool) and tag 3 (autoscale) use defaults.
     const overrides = new Map([[1, { min: 25, max: 75 }]]);
     const config = buildUplotConfig({ ...baseOpts, yScaleOverrides: overrides });
-    // Tag 2 is bool → defaultYScale returns [-0.5, 1.5].
     expect(config.scales!['y_2']).toEqual({ auto: false, range: [-0.5, 1.5] });
-    // Tag 3 has no eng range → autoscale.
     expect(config.scales!['y_3']).toEqual({ auto: true });
+  });
+
+  // ── Aggregate (isAggregate: true) ──────────────────────────────────────────
+
+  it('aggregate mode: series count is 1 + 2 per tag (min + max band series)', () => {
+    const config = buildUplotConfig({ ...baseOpts, isAggregate: true });
+    // 1 (x placeholder) + 3 tags × 2 (min + max) = 7
+    expect(config.series).toHaveLength(1 + 3 * 2);
+  });
+
+  it('aggregate mode: bands array has one entry per tag', () => {
+    const config = buildUplotConfig({ ...baseOpts, isAggregate: true });
+    expect(config.bands).toBeDefined();
+    expect(config.bands).toHaveLength(3);
+  });
+
+  it('aggregate mode: each band series entry references correct min/max indices', () => {
+    const config = buildUplotConfig({ ...baseOpts, isAggregate: true });
+    // Tag 0 (tagIds[0]=1): minIdx=1, maxIdx=2
+    // Tag 1 (tagIds[1]=2): minIdx=3, maxIdx=4
+    // Tag 2 (tagIds[2]=3): minIdx=5, maxIdx=6
+    expect(config.bands![0]!.series).toEqual([1, 2]);
+    expect(config.bands![1]!.series).toEqual([3, 4]);
+    expect(config.bands![2]!.series).toEqual([5, 6]);
+  });
+
+  it('aggregate mode: selected band fill string contains higher alpha than non-selected', () => {
+    const config = buildUplotConfig({ ...baseOpts, selectedTagId: 1, isAggregate: true });
+    // Tag 1 is selected (band index 0), tag 2 is not (band index 1).
+    const selectedFill = config.bands![0]!.fill as string;
+    const otherFill    = config.bands![1]!.fill as string;
+    // Selected: alpha 0.5; non-selected: alpha 0.15 — both encoded in rgba string.
+    expect(selectedFill).toContain('0.5');
+    expect(otherFill).toContain('0.15');
+  });
+
+  it('aggregate mode: min series has no visible stroke; max series has a stroke', () => {
+    const config = buildUplotConfig({ ...baseOpts, isAggregate: true });
+    // series[1] = min for tag 1, series[2] = max for tag 1
+    const minSeries = config.series![1]!;
+    const maxSeries = config.series![2]!;
+    expect(minSeries.stroke).toBe('transparent');
+    expect(maxSeries.stroke).not.toBe('transparent');
+    expect(typeof maxSeries.stroke).toBe('string');
+  });
+
+  it('aggregate mode: y-scale names are still present', () => {
+    const config = buildUplotConfig({ ...baseOpts, isAggregate: true });
+    expect(config.scales).toHaveProperty('y_1');
+    expect(config.scales).toHaveProperty('y_2');
+    expect(config.scales).toHaveProperty('y_3');
   });
 });

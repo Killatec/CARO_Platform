@@ -25,13 +25,9 @@ export function seriesFromTrendData(data: TrendData, tagIds: number[]): SeriesAr
       xs[k] = startS + k * bucketSs;
     }
 
-    const ys = tagIds.map(tagId => {
-      const entry = data.series.get(tagId);
-      if (!entry) return new Array<number | null>(n).fill(null);
-      return entry.value.slice(0, n) as (number | null)[];
-    });
-
-    return { xs, ys };
+    // Aggregate mode: band series (min/max) replace the value line.
+    // Callers use bandsFromTrendData for the actual series data.
+    return { xs, ys: [] };
   }
 
   // Raw path: collect union of all ts values, sort, forward-fill per tag.

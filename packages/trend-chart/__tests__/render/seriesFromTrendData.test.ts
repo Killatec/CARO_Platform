@@ -34,6 +34,9 @@ function makeRaw(): RawSeriesData {
 }
 
 // ── Aggregate path ─────────────────────────────────────────────────────────────
+// Aggregate mode: bands (min/max) replace value lines.
+// seriesFromTrendData returns xs for the X axis; ys is empty.
+// Callers use bandsFromTrendData for the actual series data arrays.
 
 describe('seriesFromTrendData — aggregate', () => {
   it('produces xs in seconds from startTime and bucketSMs', () => {
@@ -42,25 +45,20 @@ describe('seriesFromTrendData — aggregate', () => {
     expect(xs).toEqual([0, 1, 2]);
   });
 
-  it('produces one ys array per tagId', () => {
+  it('returns empty ys — band series replace value lines in aggregate mode', () => {
     const { ys } = seriesFromTrendData(makeAggregate(), [1, 2]);
-    expect(ys).toHaveLength(2);
-  });
-
-  it('preserves null values in ys', () => {
-    const { ys } = seriesFromTrendData(makeAggregate(), [1, 2]);
-    expect(ys[1]).toEqual([null, 5, null]);
-  });
-
-  it('fills absent tagId ys with nulls', () => {
-    const { ys } = seriesFromTrendData(makeAggregate(), [99]);
-    expect(ys[0]).toEqual([null, null, null]);
+    expect(ys).toHaveLength(0);
   });
 
   it('handles bigint startTime correctly', () => {
     const data = makeAggregate({ startTime: 3_600_000n, bucketSMs: 1000 });
     const { xs } = seriesFromTrendData(data, [1]);
     expect(xs[0]).toBeCloseTo(3600, 3);
+  });
+
+  it('xs length equals data.n', () => {
+    const { xs } = seriesFromTrendData(makeAggregate(), [1, 2]);
+    expect(xs).toHaveLength(3);
   });
 });
 

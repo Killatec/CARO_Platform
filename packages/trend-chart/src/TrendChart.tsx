@@ -19,6 +19,7 @@ import {
 } from './axisInteractions.js';
 import { buildUplotConfig } from './render/uplotConfig.js';
 import { seriesFromTrendData } from './render/seriesFromTrendData.js';
+import { bandsFromTrendData } from './render/bandsFromTrendData.js';
 import { computeZoomLevelTransition } from './level.js';
 
 export interface TrendChartProps {
@@ -240,8 +241,20 @@ export function TrendChart({
       return;
     }
 
-    const { xs, ys } = seriesFromTrendData(data, tagIds);
-    const uplotData: uPlot.AlignedData = [xs, ...ys] as uPlot.AlignedData;
+    const isAggregate = data.type === 'aggregate';
+    let uplotData: uPlot.AlignedData;
+    if (isAggregate) {
+      const bands = bandsFromTrendData(data, tagIds)!;
+      const interleaved: (number | null)[][] = [];
+      for (let i = 0; i < tagIds.length; i++) {
+        interleaved.push(bands.mins[i]!);
+        interleaved.push(bands.maxs[i]!);
+      }
+      uplotData = [bands.xs, ...interleaved] as uPlot.AlignedData;
+    } else {
+      const { xs, ys } = seriesFromTrendData(data, tagIds);
+      uplotData = [xs, ...ys] as uPlot.AlignedData;
+    }
 
     const config = buildUplotConfig({
       tagIds,
@@ -253,6 +266,7 @@ export function TrendChart({
       onCursorChange,
       yScaleOverrides: yScaleOverridesRef.current,
       onDragZoom: (s, e) => onDragZoomRef.current?.(s, e),
+      isAggregate,
     });
 
     // Old instance was destroyed in cleanup; preservedXRangeRef was written there.
@@ -458,7 +472,7 @@ export function TrendChart({
       uplotRef.current?.destroy();
       uplotRef.current = null;
     };
-  }, [tagIds, effectiveSelectedId, tagMap, height, siteTimezone, onCursorChange, rebuildToken]);
+  }, [tagIds, effectiveSelectedId, tagMap, height, siteTimezone, onCursorChange, rebuildToken, data.type]);
 
   // ── Apply data updates without rebuilding uPlot ───────────────────────────
   // Cheap path: preserves the uPlot instance, all event listeners, and drag state.
@@ -466,8 +480,18 @@ export function TrendChart({
   // uplotRef.current is always the current instance when this runs.
   useEffect(() => {
     if (!uplotRef.current || tagIds.length === 0) return;
-    const { xs, ys } = seriesFromTrendData(data, tagIds);
-    uplotRef.current.setData([xs, ...ys] as uPlot.AlignedData);
+    if (data.type === 'aggregate') {
+      const bands = bandsFromTrendData(data, tagIds)!;
+      const interleaved: (number | null)[][] = [];
+      for (let i = 0; i < tagIds.length; i++) {
+        interleaved.push(bands.mins[i]!);
+        interleaved.push(bands.maxs[i]!);
+      }
+      uplotRef.current.setData([bands.xs, ...interleaved] as uPlot.AlignedData);
+    } else {
+      const { xs, ys } = seriesFromTrendData(data, tagIds);
+      uplotRef.current.setData([xs, ...ys] as uPlot.AlignedData);
+    }
   }, [data, tagIds]);
 
   // ── Post-swap coverage check — fires once per performSwap, not on every setData ──
