@@ -16,11 +16,6 @@ export interface BuildUplotConfigOpts {
   yScaleOverrides?: Map<number, { min: number; max: number }>;
   /** Called when the user completes a drag-zoom selection on the plot area. */
   onDragZoom?: (startMs: bigint, endMs: bigint) => void;
-  /**
-   * When true, registers two band series per tag (min + max) with filled area
-   * between them. Raw mode (false/absent) registers one stepped value line per tag.
-   */
-  isAggregate?: boolean;
 }
 
 /** Parse a hex color like '#4e79a7' into rgba(r,g,b,alpha). */
@@ -34,15 +29,19 @@ function hexToRgba(hex: string, alpha: number): string {
 /**
  * Builds uPlot options for the trend chart.
  *
- * Aggregate mode: two series per tag (min / max) drawn as a filled band.
- *   Selected band fill α=0.5, stroke α=0.8; non-selected α=0.15 / α=0.4.
- * Raw mode: one stepped value line per tag (existing behavior).
- * Only the selected trace's Y axis is visible in both modes.
+ * Always registers two series per tag (min + max) and a bands[] config.
+ *
+ * Aggregate mode: mins/maxs are real bucket extremes → visible filled band.
+ * Raw mode: mins[i] === maxs[i] (same value array) → zero-area band; only the
+ *   max-series 1px stroke is visible, rendering the stepped COV line.
+ *
+ * Selected trace: fill α=0.5, stroke α=0.8. Non-selected: fill α=0.15, stroke α=0.4.
+ * This contrast applies uniformly to both aggregate bands and raw stepped lines.
  */
 export function buildUplotConfig(opts: BuildUplotConfigOpts): uPlot.Options {
-  const { tagIds, selectedTagId, tagMap, width, height, siteTimezone, onCursorChange, yScaleOverrides, onDragZoom, isAggregate } = opts;
+  const { tagIds, selectedTagId, tagMap, width, height, siteTimezone, onCursorChange, yScaleOverrides, onDragZoom } = opts;
 
-  // Named scale entries — one per tag, shared by both band series (aggregate) and value series (raw).
+  // Named scale entries — one per tag, shared by both band series.
   const xScale: uPlot.Scale = { time: true, auto: false };
   const scales: uPlot.Options['scales'] = { x: xScale };
   for (const tagId of tagIds) {
@@ -84,75 +83,51 @@ export function buildUplotConfig(opts: BuildUplotConfigOpts): uPlot.Options {
     },
   ];
 
-  let series: uPlot.Series[];
-  let bands: uPlot.Band[] | undefined;
+  // Always-band: 2 series per tag (min bottom edge + max top edge) + bands[] fill config.
+  // Aggregate: band is visible (min < max). Raw: min === max → zero-area band, stroke draws the line.
+  const bandSeriesArr: uPlot.Series[] = [];
+  const bandsArr: uPlot.Band[] = [];
 
-  if (isAggregate) {
-    // Two series per tag: min (bottom edge, no stroke) + max (top edge, thin stroke).
-    // uPlot fills the region between them via the bands config.
-    const bandSeriesArr: uPlot.Series[] = [];
-    const bandsArr: uPlot.Band[] = [];
+  tagIds.forEach((tagId, i) => {
+    const color = colorAssign(tagId);
+    const isSelected = tagId === selectedTagId;
+    const fillAlpha   = isSelected ? 0.5  : 0.15;
+    const strokeAlpha = isSelected ? 0.8  : 0.4;
 
-    tagIds.forEach((tagId, i) => {
-      const color = colorAssign(tagId);
-      const isSelected = tagId === selectedTagId;
-      const fillAlpha   = isSelected ? 0.5  : 0.15;
-      const strokeAlpha = isSelected ? 0.8  : 0.4;
+    // series[0] is X placeholder; min is at 1 + i*2, max is at 1 + i*2 + 1.
+    const minSeriesIdx = 1 + i * 2;
+    const maxSeriesIdx = 1 + i * 2 + 1;
 
-      // series[0] is X; min is at 1+i*2, max is at 1+i*2+1.
-      const minSeriesIdx = 1 + i * 2;
-      const maxSeriesIdx = 1 + i * 2 + 1;
+    // Min series: bottom edge — no visible stroke.
+    bandSeriesArr.push({
+      scale: `y_${tagId}`,
+      stroke: 'transparent',
+      fill: 'transparent',
+      width: 0,
+      points: { show: false },
+      spanGaps: false,
+      paths: uPlot.paths.stepped!({ align: 1 }),
+    } satisfies uPlot.Series);
 
-      // Min series: bottom edge — no visible stroke.
-      bandSeriesArr.push({
-        scale: `y_${tagId}`,
-        stroke: 'transparent',
-        fill: 'transparent',
-        width: 0,
-        points: { show: false },
-        spanGaps: false,
-        paths: uPlot.paths.stepped!({ align: 1 }),
-      } satisfies uPlot.Series);
+    // Max series: top edge — 1px stroke renders the line when band is zero-area (raw).
+    bandSeriesArr.push({
+      scale: `y_${tagId}`,
+      stroke: hexToRgba(color, strokeAlpha),
+      fill: 'transparent',
+      width: 1,
+      points: { show: false },
+      spanGaps: false,
+      paths: uPlot.paths.stepped!({ align: 1 }),
+    } satisfies uPlot.Series);
 
-      // Max series: top edge — thin stroke so collapsed (min===max) bands stay visible.
-      bandSeriesArr.push({
-        scale: `y_${tagId}`,
-        stroke: hexToRgba(color, strokeAlpha),
-        fill: 'transparent',
-        width: 1,
-        points: { show: false },
-        spanGaps: false,
-        paths: uPlot.paths.stepped!({ align: 1 }),
-      } satisfies uPlot.Series);
+    bandsArr.push({
+      series: [minSeriesIdx, maxSeriesIdx],
+      fill: hexToRgba(color, fillAlpha),
+    } satisfies uPlot.Band);
+  });
 
-      bandsArr.push({
-        series: [minSeriesIdx, maxSeriesIdx],
-        fill: hexToRgba(color, fillAlpha),
-      } satisfies uPlot.Band);
-    });
-
-    series = [{}, ...bandSeriesArr];
-    bands = bandsArr;
-  } else {
-    // Raw mode: one stepped value line per tag.
-    series = [
-      {},
-      ...tagIds.map(tagId => {
-        const color = colorAssign(tagId);
-        const tag = tagMap.get(tagId);
-        const isSelected = tagId === selectedTagId;
-        return {
-          label: tag?.tag_path ?? String(tagId),
-          scale: `y_${tagId}`,
-          stroke: color,
-          width: isSelected ? 2 : 1.5,
-          alpha: isSelected ? 1.0 : 0.55,
-          spanGaps: false,
-          paths: uPlot.paths.stepped!({ align: 1 }),
-        } satisfies uPlot.Series;
-      }),
-    ];
-  }
+  const series: uPlot.Series[] = [{}, ...bandSeriesArr];
+  const bands: uPlot.Band[] = bandsArr;
 
   const setSelectHook = (u: uPlot) => {
     if (u.select.width <= 0) return;

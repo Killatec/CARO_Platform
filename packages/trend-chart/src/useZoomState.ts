@@ -97,7 +97,8 @@ export function useZoomState({
       const newBucketSMs = direction === 'out' ? currentBucketSMs * 2n : currentBucketSMs / 2n;
       if (newBucketSMs <= 0n) return;
       const newSpan = newBucketSMs * BigInt(visibleTilesPerWindow * bucketCount);
-      const newStart = cursorTimeMs - newSpan / 2n;
+      let newStart = cursorTimeMs - newSpan / 2n;
+      if (newStart < 1n) newStart = 1n;
       const newEnd = newStart + newSpan;
       setCurrentBucketSMs(newBucketSMs);
       setZoomAnchorSpan(newSpan);

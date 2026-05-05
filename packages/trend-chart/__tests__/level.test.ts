@@ -163,6 +163,20 @@ describe('tilesForViewport', () => {
     expect(prefetch).toHaveLength(0);
   });
 
+  it('returns empty arrays when bucketSMs rounds to 0n (viewport span < bucketCount)', () => {
+    // span=400ms → tileSpanMs=200n → bucketSMs=200n/500n=0n → was crashing ceilDiv
+    const { visible, prefetch } = tilesForViewport({ viewport: { start: 0n, end: 400n } });
+    expect(visible).toHaveLength(0);
+    expect(prefetch).toHaveLength(0);
+  });
+
+  it('returns empty arrays at exact bucketCount boundary (span === bucketCount ms → bucketSMs=1n)', () => {
+    // span=500ms → tileSpanMs=250n → bucketSMs=250n/500n=0n — still sub-millisecond
+    const { visible, prefetch } = tilesForViewport({ viewport: { start: 0n, end: 500n } });
+    expect(visible).toHaveLength(0);
+    expect(prefetch).toHaveLength(0);
+  });
+
   it('nowMs omitted: prefetch contains both before and after tiles (existing behaviour)', () => {
     const { prefetch } = tilesForViewport({ viewport });
     expect(prefetch).toHaveLength(2); // 1 before + 1 after

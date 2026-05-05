@@ -56,23 +56,55 @@ describe('buildUplotConfig', () => {
     expect(config.scales!['x']!.time).toBe(true);
   });
 
-  it('raw mode (default): series[0] as x-axis placeholder, then one value series per tagId', () => {
+  // ── Always-band shape (2 series per tag regardless of raw/aggregate data) ───
+
+  it('series[0] is x-axis placeholder, then 2 series per tag (min + max)', () => {
     const config = buildUplotConfig(baseOpts);
-    // 1 (x placeholder) + 3 value series
-    expect(config.series).toHaveLength(1 + 3);
+    // 1 (x placeholder) + 3 tags × 2 = 7
+    expect(config.series).toHaveLength(1 + 3 * 2);
   });
 
-  it('raw mode: no bands config', () => {
+  it('bands array is always present — one entry per tag', () => {
     const config = buildUplotConfig(baseOpts);
-    expect(config.bands).toBeUndefined();
+    expect(config.bands).toBeDefined();
+    expect(config.bands).toHaveLength(3);
   });
 
-  it('raw mode: selected series has higher width/alpha than others', () => {
+  it('each band references correct min/max series indices', () => {
     const config = buildUplotConfig(baseOpts);
-    const selected = config.series![1]!; // tag_id=1 is selectedTagId
-    const other = config.series![2]!;
-    expect(selected.width).toBeGreaterThan(other.width as number);
-    expect(selected.alpha).toBeGreaterThan(other.alpha as number);
+    // Tag 0 (tagIds[0]=1): minIdx=1, maxIdx=2
+    // Tag 1 (tagIds[1]=2): minIdx=3, maxIdx=4
+    // Tag 2 (tagIds[2]=3): minIdx=5, maxIdx=6
+    expect(config.bands![0]!.series).toEqual([1, 2]);
+    expect(config.bands![1]!.series).toEqual([3, 4]);
+    expect(config.bands![2]!.series).toEqual([5, 6]);
+  });
+
+  it('min series has transparent stroke; max series has a visible stroke string', () => {
+    const config = buildUplotConfig(baseOpts);
+    const minSeries = config.series![1]!; // min for tag 1
+    const maxSeries = config.series![2]!; // max for tag 1
+    expect(minSeries.stroke).toBe('transparent');
+    expect(maxSeries.stroke).not.toBe('transparent');
+    expect(typeof maxSeries.stroke).toBe('string');
+  });
+
+  it('selected band fill has higher alpha than non-selected', () => {
+    const config = buildUplotConfig({ ...baseOpts, selectedTagId: 1 });
+    // tag 1 = selected (band[0]); tag 2 = non-selected (band[1])
+    const selectedFill = config.bands![0]!.fill as string;
+    const otherFill    = config.bands![1]!.fill as string;
+    expect(selectedFill).toContain('0.5');
+    expect(otherFill).toContain('0.15');
+  });
+
+  it('selected max-series stroke has higher alpha than non-selected max-series stroke', () => {
+    const config = buildUplotConfig({ ...baseOpts, selectedTagId: 1 });
+    // series[2] = max for tag 1 (selected); series[4] = max for tag 2 (non-selected)
+    const selectedStroke = config.series![2]!.stroke as string;
+    const otherStroke    = config.series![4]!.stroke as string;
+    expect(selectedStroke).toContain('0.8');
+    expect(otherStroke).toContain('0.4');
   });
 
   it('calls onCursorChange when hook fires', () => {
@@ -101,52 +133,8 @@ describe('buildUplotConfig', () => {
     expect(config.scales!['y_3']).toEqual({ auto: true });
   });
 
-  // ── Aggregate (isAggregate: true) ──────────────────────────────────────────
-
-  it('aggregate mode: series count is 1 + 2 per tag (min + max band series)', () => {
-    const config = buildUplotConfig({ ...baseOpts, isAggregate: true });
-    // 1 (x placeholder) + 3 tags × 2 (min + max) = 7
-    expect(config.series).toHaveLength(1 + 3 * 2);
-  });
-
-  it('aggregate mode: bands array has one entry per tag', () => {
-    const config = buildUplotConfig({ ...baseOpts, isAggregate: true });
-    expect(config.bands).toBeDefined();
-    expect(config.bands).toHaveLength(3);
-  });
-
-  it('aggregate mode: each band series entry references correct min/max indices', () => {
-    const config = buildUplotConfig({ ...baseOpts, isAggregate: true });
-    // Tag 0 (tagIds[0]=1): minIdx=1, maxIdx=2
-    // Tag 1 (tagIds[1]=2): minIdx=3, maxIdx=4
-    // Tag 2 (tagIds[2]=3): minIdx=5, maxIdx=6
-    expect(config.bands![0]!.series).toEqual([1, 2]);
-    expect(config.bands![1]!.series).toEqual([3, 4]);
-    expect(config.bands![2]!.series).toEqual([5, 6]);
-  });
-
-  it('aggregate mode: selected band fill string contains higher alpha than non-selected', () => {
-    const config = buildUplotConfig({ ...baseOpts, selectedTagId: 1, isAggregate: true });
-    // Tag 1 is selected (band index 0), tag 2 is not (band index 1).
-    const selectedFill = config.bands![0]!.fill as string;
-    const otherFill    = config.bands![1]!.fill as string;
-    // Selected: alpha 0.5; non-selected: alpha 0.15 — both encoded in rgba string.
-    expect(selectedFill).toContain('0.5');
-    expect(otherFill).toContain('0.15');
-  });
-
-  it('aggregate mode: min series has no visible stroke; max series has a stroke', () => {
-    const config = buildUplotConfig({ ...baseOpts, isAggregate: true });
-    // series[1] = min for tag 1, series[2] = max for tag 1
-    const minSeries = config.series![1]!;
-    const maxSeries = config.series![2]!;
-    expect(minSeries.stroke).toBe('transparent');
-    expect(maxSeries.stroke).not.toBe('transparent');
-    expect(typeof maxSeries.stroke).toBe('string');
-  });
-
-  it('aggregate mode: y-scale names are still present', () => {
-    const config = buildUplotConfig({ ...baseOpts, isAggregate: true });
+  it('y-scale names are present for all tags', () => {
+    const config = buildUplotConfig(baseOpts);
     expect(config.scales).toHaveProperty('y_1');
     expect(config.scales).toHaveProperty('y_2');
     expect(config.scales).toHaveProperty('y_3');

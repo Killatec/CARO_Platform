@@ -208,15 +208,43 @@ describe('TrendChart', () => {
     expect(mins.every(v => v === null)).toBe(true);
   });
 
-  it('raw mode: uPlot receives value arrays (not band interleaving)', async () => {
+  it('raw mode: uPlot receives mins === maxs (same reference) — zero-area band', async () => {
     const { default: MockUPlot } = await import('uplot');
     const rawData = makeRawData([1]);
     renderChart([1], rawData);
     const calls = (MockUPlot as ReturnType<typeof vi.fn>).mock.calls;
     const uplotData = calls[calls.length - 1]![1] as unknown[][];
-    // Raw: uplotData[1] is the forward-filled value series for tag 1
-    // ts=[0n,1000n,2000n], value=[1.0,2.0,null] → xs=[0,1,2], ys=[[1.0,2.0,null]]
-    const ys = uplotData[1] as (number | null)[];
-    expect(ys).toEqual([1.0, 2.0, null]);
+    // Raw always-band: uplotData[1] = mins[0], uplotData[2] = maxs[0].
+    // They are the same array reference (zero-area band).
+    const mins = uplotData[1] as (number | null)[];
+    const maxs = uplotData[2] as (number | null)[];
+    expect(mins).toBe(maxs); // same reference
+    // ts=[0n,1000n,2000n], value=[1.0,2.0,null] — forward-filled values
+    expect(mins).toEqual([1.0, 2.0, null]);
+  });
+
+  it('data.type flip (aggregate → raw) does NOT trigger uPlot destroy/recreate', async () => {
+    const { default: MockUPlot } = await import('uplot');
+    const aggData = makeDataWithBands([1]);
+    // Stable tagIds reference — avoids rebuild from tagIds reference-equality change.
+    const stableTagIds = [1];
+    const { rerender } = render(
+      <MockHmiProvider tagDefs={TAG_DEFS}>
+        <TrendChart data={aggData} tagIds={stableTagIds} siteTimezone="UTC" height={400} />
+      </MockHmiProvider>,
+    );
+    const callsAfterFirst = (MockUPlot as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    // Switch to raw data (data.type: 'aggregate' → 'raw'), tagIds unchanged.
+    const rawData = makeRawData([1]);
+    rerender(
+      <MockHmiProvider tagDefs={TAG_DEFS}>
+        <TrendChart data={rawData} tagIds={stableTagIds} siteTimezone="UTC" height={400} />
+      </MockHmiProvider>,
+    );
+
+    // uPlot constructor must NOT be called again — setData handles the mode flip.
+    const callsAfterSwitch = (MockUPlot as ReturnType<typeof vi.fn>).mock.calls.length;
+    expect(callsAfterSwitch).toBe(callsAfterFirst);
   });
 });
