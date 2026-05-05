@@ -68,7 +68,7 @@ const AGG_TILE: AggregateTrendTile = {
   source: '1s_cagg',
   startTime: 7_200_000n,
   endTime:   10_800_000n,
-  bucketS:   14.4,
+  bucketSMs: 14_400,
   n:         250,
   series: [{ tagId: 1, value: new Array(250).fill(1.0) }],
 };
@@ -105,7 +105,7 @@ describe('GET /api/v1/trends/tile — unit (mocked)', () => {
     expect(res.body.ok).toBe(true);
     expect(res.body.data.source).toBe('1s_cagg');
     expect(res.body.data.n).toBe(250);
-    expect(res.body.data.bucketS).toBe(14.4);
+    expect(res.body.data.bucketSMs).toBe(14_400);
   });
 
   it('bigint ts entries in raw response are serialised to JSON numbers', async () => {

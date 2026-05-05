@@ -729,6 +729,71 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — watermark fall-through', asyn
   });
 });
 
+// ── Seam regression: non-Postgres-epoch-aligned bucketSMs ────────────────────
+//
+// Uses bucketSMs = 6221 ms (not a divisor of POSTGRES_EPOCH_MS = 946_684_800_000).
+// Old code computed: splitBoundary = floor(watermarkMs / 6221) * 6221  (Unix epoch)
+// New code computes: splitBoundary = floor((watermarkMs - POSTGRES_EPOCH_MS) / 6221) * 6221 + POSTGRES_EPOCH_MS
+// These differ whenever POSTGRES_EPOCH_MS % bucketSMs ≠ 0.
+// With the old formula, the split lands off the TimescaleDB time_bucket grid →
+// left and right segments overlap at the seam → merged n = 502 → assertion throws.
+// Tag IDs 9001–9099 are reserved for this block.
+
+describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — seam regression: non-Postgres-epoch-aligned bucketSMs', async () => {
+  const {
+    writeTestSamples, resetTestRange, resetTestRangeExpectClean, refreshTestCagg,
+  } = await import('../helpers/trends-test-range.js');
+
+  // span = 250 * 6221 ms = 1_555_250 ms → exact integer bucketSMs, no float error.
+  // bucketS = 6.221 → dispatches to 1s_cagg (1.0 ≤ 6.221 < 16).
+  const COUNT      = 250;
+  const BUCKET_SMs = 6221;
+  const START      = 7_200_000n;
+  const END        = START + BigInt(COUNT * BUCKET_SMs); // 8_755_250n
+
+  beforeEach(async () => {
+    await resetTestRangeExpectClean();
+    await refreshTestCagg('1s_cagg');
+    __test_watermarkOverride.current = null;
+  });
+
+  afterEach(async () => {
+    __test_watermarkOverride.current = null;
+    await resetTestRange();
+    await refreshTestCagg('1s_cagg');
+  });
+
+  afterAll(async () => {
+    await resetTestRange();
+    await refreshTestCagg('1s_cagg');
+    __test_watermarkOverride.current = null;
+  });
+
+  it('split at non-Postgres-epoch-aligned boundary: n is COUNT or COUNT+1, bucketSMs is integer', async () => {
+    // Place the watermark just past the 125th bucket boundary to force a mid-range split.
+    const midMs = Number(START) + 125 * BUCKET_SMs; // 8_977_625
+    __test_watermarkOverride.current = new Map([
+      ['tag_samples_1s_cagg',  midMs + 1],                // 1s_cagg covers left half
+      ['tag_samples_10s_cagg', Number(END) + 60_000],     // 10s_cagg covers right half
+    ]);
+
+    await writeTestSamples([{ ts: START + 1_000n, tagId: 9001, value: 5.0 }]);
+    await refreshTestCagg('1s_cagg');
+    await refreshTestCagg('10s_cagg');
+
+    const tile = await getTrendTile([9001], START, END, COUNT) as AggregateTrendTile;
+
+    expect(tile.source).toBe('mixed');
+    expect(Number.isInteger(tile.bucketSMs)).toBe(true);
+    expect(tile.bucketSMs).toBe(BUCKET_SMs);
+    // Without the Postgres-epoch alignment fix, the split lands off the TimescaleDB
+    // grid → both segments include the seam bucket → merged n = 502 → throws.
+    // With the fix, n must be exactly COUNT (aligned start) or COUNT+1 (unaligned).
+    expect([COUNT, COUNT + 1]).toContain(tile.n);
+    expect(tile.series[0].value).toHaveLength(tile.n);
+  });
+});
+
 // ── getWatermarkMs — direct catalog query (Part 2A) ───────────────────────────
 //
 // Validates the live catalog path without going through getTrendTile or any

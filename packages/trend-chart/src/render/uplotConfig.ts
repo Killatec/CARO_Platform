@@ -2,7 +2,7 @@ import uPlot from 'uplot';
 import type { TagDef } from '@caro/hmi-context';
 import { colorAssign } from '../colorAssign.js';
 import { defaultYScale } from './yScales.js';
-import { formatTimestamp, formatTickLabel } from './formatTimestamp.js';
+import { formatTickLabel } from './formatTickLabel.js';
 
 export interface BuildUplotConfigOpts {
   tagIds: number[];
@@ -58,7 +58,11 @@ export function buildUplotConfig(opts: BuildUplotConfigOpts): uPlot.Options {
       space: 150,
       values: (_u, vals, _axisIdx, _foundSpace, _foundIncr) => {
         const incrSec = vals.length >= 2 ? Math.abs(vals[1]! - vals[0]!) : 60;
-        return vals.map(v => v == null ? '' : formatTickLabel(v * 1000, siteTimezone, incrSec));
+        return vals.map((v, i) => {
+          if (v == null) return '';
+          const prevMs = i > 0 && vals[i - 1] != null ? vals[i - 1]! * 1000 : undefined;
+          return formatTickLabel(v * 1000, siteTimezone, incrSec, prevMs);
+        });
       },
     },
     {

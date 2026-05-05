@@ -3,7 +3,7 @@ import type { TagDef } from '@caro/hmi-context';
 import type { TrendData } from './types.js';
 import { colorAssign } from './colorAssign.js';
 import { formatValue } from './render/formatValue.js';
-import { formatTimestamp } from './render/formatTimestamp.js';
+import { formatDateTime } from './dateUtils.js';
 
 export interface TooltipProps {
   cursorIdx: number;
@@ -71,7 +71,7 @@ export function Tooltip({
   siteTimezone,
 }: TooltipProps) {
   const tsMs = getTimestampMs(data, cursorIdx);
-  const label = formatTimestamp(tsMs, siteTimezone);
+  const label = formatDateTime(tsMs, siteTimezone);
 
   // Snap tooltip to stay within chart bounds: prefer right of cursor, fall back left.
   const OFFSET = 14;

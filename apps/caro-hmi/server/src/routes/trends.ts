@@ -34,7 +34,7 @@ function serializeTile(tile: TrendTile): unknown {
     source:    tile.source,
     startTime: Number(tile.startTime),
     endTime:   Number(tile.endTime),
-    bucketS:   tile.bucketS,
+    bucketSMs: tile.bucketSMs,
     n:         tile.n,
     series: tile.series.map(s => ({ tagId: s.tagId, value: s.value })),
   };

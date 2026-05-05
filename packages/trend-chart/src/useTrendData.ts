@@ -12,7 +12,7 @@ type TileSource = TileApiResponse['source'];
 interface CachedEntry {
   source: TileSource;
   // Aggregate fields
-  bucketS?: number;
+  bucketSMs?: number;
   n?: number;
   value?: (number | null)[];
   // Raw fields
@@ -88,7 +88,7 @@ function storeTileResult(
       });
       cache.set(key, {
         source: res.source,
-        bucketS: res.bucketS,
+        bucketSMs: res.bucketSMs,
         n: res.n,
         value: s.value,
       });
@@ -149,12 +149,12 @@ function assembleData(
 
   const tileSourceSet = new Set<string>();
   let totalN = 0;
-  let lastBucketS = 0;
+  let lastBucketSMs = 0;
 
   for (const tile of tilesInOrder) {
-    // Find tile metadata (n, bucketS, source) from any available entry.
+    // Find tile metadata (n, bucketSMs, source) from any available entry.
     let tileN = tile.bucketCount;
-    let tileBucketS = 0;
+    let tileBucketSMs = 0;
     let tileSourceFound: string | undefined;
     const tileValues = new Map<number, (number | null)[]>();
 
@@ -166,14 +166,14 @@ function assembleData(
         tileValues.set(tagId, entry.value);
         if (!tileSourceFound && entry.n !== undefined) {
           tileN = entry.n;
-          tileBucketS = entry.bucketS ?? 0;
+          tileBucketSMs = entry.bucketSMs ?? 0;
           tileSourceFound = entry.source;
         }
       }
     }
 
     if (tileSourceFound) tileSourceSet.add(tileSourceFound);
-    if (tileBucketS > 0) lastBucketS = tileBucketS;
+    if (tileBucketSMs > 0) lastBucketSMs = tileBucketSMs;
     totalN += tileN;
 
     for (const tagId of tagIds) {
@@ -192,11 +192,15 @@ function assembleData(
   }
 
   const bucketSMs =
-    lastBucketS > 0
-      ? lastBucketS * 1000
+    lastBucketSMs > 0
+      ? lastBucketSMs
       : totalN > 0
-        ? Number(tilesInOrder[tilesInOrder.length - 1]!.endTime - tilesInOrder[0]!.startTime) / totalN
+        ? Math.round(Number(tilesInOrder[tilesInOrder.length - 1]!.endTime - tilesInOrder[0]!.startTime) / totalN)
         : 0;
+
+  if (!Number.isInteger(bucketSMs)) {
+    throw new Error(`useTrendData: bucketSMs must be integer, got ${bucketSMs}`);
+  }
 
   const result: AggregateSeriesData = {
     type: 'aggregate',
@@ -372,7 +376,6 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     for (const tile of visible) {
       const missing = getMissing(tile);
       if (missing.length === 0) {
-        console.log(`[useTrendData] tile [${new Date(Number(tile.startTime)).toISOString()}] cache hit (source: visible)`);
         resolvedCount++;
         continue;
       }
@@ -391,7 +394,6 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
       Promise.all(promises)
         .then(() => {
           if (generationRef.current !== generation) return;
-          console.log(`[useTrendData] tile [${new Date(Number(tile.startTime)).toISOString()}] fetched in ${Math.round(performance.now() - tileT0)}ms (source: visible)`);
           onVisibleTileSettled();
         })
         .catch(e => {
@@ -411,7 +413,6 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     for (const tile of prefetch) {
       const missing = getMissing(tile);
       if (missing.length === 0) {
-        console.log(`[useTrendData] tile [${new Date(Number(tile.startTime)).toISOString()}] cache hit (source: prefetch)`);
         continue;
       }
 
@@ -431,7 +432,6 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
           if (generationRef.current !== generation) return;
           // Don't finalize during a transition — wait for performSwap to set the new active set first.
           if (levelTransitionPendingRef.current) return;
-          console.log(`[useTrendData] tile [${new Date(Number(tile.startTime)).toISOString()}] fetched in ${Math.round(performance.now() - tileT0)}ms (source: prefetch)`);
           finalize();
         })
         .catch(e => {
@@ -496,7 +496,6 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
 
       // Already in the active set — nothing to do.
       if (activeTilesRef.current.some(t => t.startTime === tile.startTime && t.endTime === tile.endTime)) {
-        console.log(`[useTrendData] tile [${new Date(Number(tile.startTime)).toISOString()}] cache hit (source: dynamic)`);
         continue;
       }
 
@@ -512,7 +511,6 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
 
       if (missing.length === 0) {
         // Tile is fully in LRU cache (e.g. pan-back scenario) — update active set immediately.
-        console.log(`[useTrendData] tile [${new Date(Number(tile.startTime)).toISOString()}] cache hit (source: dynamic)`);
         activeTilesRef.current = pruneAndAdd(activeTilesRef.current, tile);
         setActiveTileCount(activeTilesRef.current.length);
         finalizeRef.current?.();
@@ -538,7 +536,6 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
           if (generationRef.current !== gen) return;
           activeTilesRef.current = pruneAndAdd(activeTilesRef.current, tile);
           setActiveTileCount(activeTilesRef.current.length);
-          console.log(`[useTrendData] tile [${new Date(Number(tile.startTime)).toISOString()}] fetched in ${Math.round(performance.now() - tileT0)}ms (source: dynamic)`);
           finalizeRef.current?.();
         })
         .catch(e => {

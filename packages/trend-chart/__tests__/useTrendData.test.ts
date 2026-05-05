@@ -18,14 +18,14 @@ const HALF_HOUR = 1_800_000n;
 
 const defaultViewport: Viewport = { start: 0n, end: ONE_HOUR };
 
-function makeAggResponse(tagIds: number[], opts: { n?: number; bucketS?: number; source?: TileApiResponse['source'] } = {}): TileApiResponse {
-  const { n = 500, bucketS = 3.6, source = '1min_cagg' } = opts;
+function makeAggResponse(tagIds: number[], opts: { n?: number; bucketSMs?: number; source?: TileApiResponse['source'] } = {}): TileApiResponse {
+  const { n = 500, bucketSMs = 3_600, source = '1min_cagg' } = opts;
   if (source === 'raw') throw new Error('use makeRawResponse for raw source');
   return {
     source: source as '1min_cagg',
     startTime: 0,
     endTime: Number(ONE_HOUR),
-    bucketS,
+    bucketSMs,
     n,
     series: tagIds.map(id => ({ tagId: id, value: new Array(n).fill(1.0) })),
   };
@@ -669,7 +669,7 @@ describe('useTrendData', () => {
         source: '1min_cagg' as const,
         startTime: Number(p.startTime),
         endTime: Number(p.endTime),
-        bucketS: 0.36,
+        bucketSMs: 360,
         n: 500,
         series: p.tagIds.map(id => ({ tagId: id, value: new Array(500).fill(fill) })),
       };
@@ -694,6 +694,43 @@ describe('useTrendData', () => {
     void callIdx;
   });
 
+  it('pre-load fallback: bucketSMs is always an integer even when no cache entries resolved', async () => {
+    // Crash scenario: all visible tile fetches fail → cache stays empty → assembleData
+    // runs after performSwap with lastBucketSMs=0, falling back to span/totalN.
+    //
+    // Viewport span 79_710_576 ms, visibleTilesPerWindow=2:
+    //   tileSpan = 79_710_576 / 2 = 39_855_288 ms (bigint exact, not divisible by 500)
+    //   4 tiles total (2 vis + 2 prefetch), all fetches fail
+    //   fallback = (4 * 39_855_288) / (4 * 500) = 39_855_288 / 500 = 79_710.576...
+    // BigInt(79710.576...) would throw TypeError — the crash.
+    const BUCKET_COUNT = 500;
+    const SPAN = 79_710_576n; // tileSpan = 39_855_288 — not divisible by 500
+    const START = 1_777_900_000_000n;
+    const END   = START + SPAN;
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    // All fetches reject — cache stays empty after performSwap.
+    mockFetchTile.mockRejectedValue(new Error('network failure'));
+
+    const { result } = renderHook(() =>
+      useTrendData({ viewport: { start: START, end: END }, tagIds: [1], bucketCount: BUCKET_COUNT }),
+    );
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    const data = result.current.data;
+    // assembleData returns aggregate (all-null fill) with the fallback bucketSMs.
+    // It MUST be an integer regardless of whether span divides cleanly.
+    if (data?.type === 'aggregate') {
+      expect(Number.isInteger(data.bucketSMs)).toBe(true);
+    }
+    // The defensive assertion must not surface as an error either.
+    expect(result.current.error).toBeNull();
+
+    errorSpy.mockRestore();
+  });
+
   it("data assembly: 'mixed' source propagates if tiles have different sources", async () => {
     let callIdx = 0;
     mockFetchTile.mockImplementation(async (params) => {
@@ -704,7 +741,7 @@ describe('useTrendData', () => {
         source,
         startTime: Number(p.startTime),
         endTime: Number(p.endTime),
-        bucketS: 3.6,
+        bucketSMs: 3_600,
         n: 500,
         series: p.tagIds.map(id => ({ tagId: id, value: new Array(500).fill(1.0) })),
       };

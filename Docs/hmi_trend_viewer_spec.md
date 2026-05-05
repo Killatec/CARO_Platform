@@ -1,5 +1,5 @@
 # CARO_HMI Trend Viewer — Design Specification
-**Date:** 2026-04-27
+**Date:** 2026-05-04
 **Status:** Phase A Steps 1–10 complete. Step 11 (Live tail) and Step 12 (Tag picker) pending.
 **Companion Documents**
 
@@ -286,8 +286,8 @@ Raw responses carry per-sample timestamps (COV samples are irregular). `ts[]` an
     "source": "1s_cagg",
     "startTime": 1776864000000,
     "endTime": 1776864480000,
-    "bucketS": 1.92,
-    "n": 250,
+    "bucketSMs": 1920,
+    "n": 500,
     "series": [
       { "tagId": 42, "value": [1.9, 1.8, null, 2.0, 2.0] },
       { "tagId": 87, "value": [0.0, 0.0, 0.0, 0.1] }
@@ -296,15 +296,15 @@ Raw responses carry per-sample timestamps (COV samples are irregular). `ts[]` an
 }
 ```
 
-`source` is one of `'1s_cagg'`, `'10s_cagg'`, `'1min_cagg'`, `'10min_cagg'`, or `'mixed'`. `source: 'mixed'` appears when watermark fall-through (§4.3) stitched portions from multiple sources. `bucketS` is the server-derived value, returned for client diagnostics and the resolution indicator (§8.6).
+`source` is one of `'1s_cagg'`, `'10s_cagg'`, `'1min_cagg'`, `'10min_cagg'`, or `'mixed'`. `source: 'mixed'` appears when watermark fall-through (§4.3) stitched portions from multiple sources. `bucketSMs` is the bucket size in integer milliseconds, returned for client rendering; the server derives it as `Math.round((endTime - startTime) / bucketCount)`.
 
-`n` is the **actual** row count in each `value` array. For aligned requests (`request_startTime` is an integer multiple of `bucketS * 1000` ms from epoch) `n === bucket_count`. For unaligned requests TimescaleDB's `time_bucket_gapfill` emits one extra leading bucket whose natural start precedes `request_startTime`, so `n === bucket_count + 1`.
+`n` is the **actual** row count in each `value` array. For aligned requests (`request_startTime` is an integer multiple of `bucketSMs` from epoch) `n === bucket_count`. For unaligned requests TimescaleDB's `time_bucket_gapfill` emits one extra leading bucket whose natural start precedes `request_startTime`, so `n === bucket_count + 1`.
 
-`startTime` in the response is the start of the **first** bucket in the served grid. For aligned requests this equals the request's `start_time`. For unaligned requests it is the nearest natural epoch-aligned bucket boundary before `request_startTime` — i.e., `floor(request_startTime / (bucketS * 1000)) * (bucketS * 1000)`. `endTime` is the end of the last bucket: `response_startTime + n * bucketS * 1000`.
+`startTime` in the response is the start of the **first** bucket in the served grid. For aligned requests this equals the request's `start_time`. For unaligned requests it is the nearest natural epoch-aligned bucket boundary before `request_startTime` — i.e., `floor(request_startTime / bucketSMs) * bucketSMs`. `endTime` is the end of the last bucket: `response_startTime + n * bucketSMs`.
 
 For `RawTrendTile`, `startTime` and `endTime` always match the request exactly (raw is COV-driven, not bucketed).
 
-Timestamp for aggregate bucket index `i` is `startTime + i * bucketS * 1000` (using the response's `startTime`). No per-bucket timestamps are transmitted — this is the primary payload savings at aggregate levels.
+Timestamp for aggregate bucket index `i` is `startTime + i * bucketSMs` (using the response's `startTime`). No per-bucket timestamps are transmitted — this is the primary payload savings at aggregate levels.
 
 Wire format note: `startTime` and `endTime` are typed as `bigint` in TypeScript. JSON serializes them as numbers (safe within `Number.MAX_SAFE_INTEGER`, covering epoch ms past year 285,000). HTTP query params parse from strings.
 
@@ -399,12 +399,15 @@ packages/trend-chart/
   src/
     index.ts                      # all public exports
     types.ts                      # Tile, Viewport, AggregateSeriesData, RawSeriesData, TrendData
+    api.ts                        # fetchTile() — typed REST fetch; TileApiResponse discriminated union
 
     # ── Core primitives (no React) ──────────────────────────────────────────
     level.ts                      # alignedTilesInRange, tilesForViewport, deriveBucketSMs,
                                   # TREND_VIEWER_DEFAULTS, TS_BUCKET_ORIGIN_MS, floorDiv, ceilDiv
     tileCache.ts                  # TileCache (LRU, 50 MB cap), makeTileCacheKey
     colorAssign.ts                # colorAssign(tagId), PALETTE, PALETTE_SIZE
+    dateUtils.ts                  # msToDatetimeLocal, datetimeLocalToMs, getTzOffsetMs,
+                                  # formatDateTime — timezone-aware date helpers
     axisInteractions.ts           # pure axis pan/zoom helpers (9 exported functions)
 
     # ── React hooks ─────────────────────────────────────────────────────────
@@ -416,15 +419,22 @@ packages/trend-chart/
     TrendChart.tsx                # uPlot canvas wrapper; rebuild lifecycle, X-scale
                                   # preservation, per-trace Y-scale overrides, wheel/drag
     TrendChartContainer.tsx       # stateful wiring layer (renamed from TrendChartProvider)
-    TimeRangeBar.tsx              # preset buttons + Custom picker + Live button
-    Legend.tsx
-    ResolutionIndicator.tsx
+    SpanBucketIndicator.tsx       # footer: viewport span + bucket size display (replaces
+                                  # ResolutionIndicator — shows both, not just bucket size)
+    SpanPresets.tsx               # footer: 8-preset strip (1m/5m/15m/1h/4h/24h/7d/14d)
+    EndPicker.tsx                 # footer: End datetime picker button + Live/Go Live button
+    Legend.tsx                    # vertical column on the right side of the chart
+    CursorDisplay.tsx             # cursor-time display in the legend area
+    Tooltip.tsx                   # preserved but not wired in Phase A
 
     render/
       uplotConfig.ts
       yScales.ts
       seriesFromTrendData.ts
-      formatters.ts
+      formatBucketS.ts            # bucket size → human-readable (e.g. "3.8 min buckets")
+      formatValue.ts              # tag value formatting
+      formatTickLabel.ts          # X-axis tick label formatting
+      formatSpanMs.ts             # viewport span → human-readable (e.g. "1 h")
 
   package.json
   tsconfig.json
@@ -486,14 +496,16 @@ Stepped interpolation between samples (not linear). A recorded value of `2.0` at
 
 ### 8.4 Legend
 
-Horizontal strip below the chart. Each entry shows:
+Vertical column on the **right side** of the chart (180 px wide, scrollable). Each entry shows:
 
 - Color swatch (2px square matching trace color)
 - Tag name (truncated with tooltip on hover)
-- Current value (live in tailing mode, cursor value in fixed mode)
+- Current value — see idle-value rule below
 - Remove (×) button
 
 Click on a legend entry selects that trace. Selected trace is highlighted (e.g., bold text, colored swatch border), Y axis adopts its color and scale, and non-selected traces dim slightly.
+
+**Idle-value rule.** When the cursor is absent (not over the plot area), each trace's displayed value depends on mode: in `tailing` mode the last fetched bucket's value is shown (the most recent data point); in `fixed` mode `--` is shown. This is controlled by a `showLastWhenIdle` prop on `Legend` (and forwarded through `TrendChart`). `TrendChartContainer` sets `showLastWhenIdle={modeState.mode === 'tailing'}`.
 
 ### 8.5 Cursor Time in Legend
 
@@ -503,11 +515,13 @@ The `Legend` strip contains a `Time:` field at its left edge. When the cursor is
 
 Format: full date + time via `Intl.DateTimeFormat` with the `timeZone` option (e.g. `2026-05-01 14:30:42`). Timestamps describe the plant — a remote engineer VPNed in from another region sees the same wall-clock values an on-site operator sees. Falls back to browser-local time when `siteTimezone` is absent.
 
-The Legend's per-tag rows already display each trace's value at the cursor index (live-mode last bucket or cursor-position bucket in fixed mode). A separate floating cursor overlay is a Phase B UX decision. The `Tooltip.tsx` component file is preserved in the package but is not wired in Phase A.
+The Legend's per-tag rows display each trace's value at the cursor index when the cursor is over the plot, and fall back to the idle-value rule (§8.4) when it is not. A separate floating cursor overlay is a Phase B UX decision. The `Tooltip.tsx` component file is preserved in the package but is not wired in Phase A.
 
-### 8.6 Resolution Indicator
+### 8.6 Span and Bucket Indicator
 
-Small gray text in the chart header showing the current `bucket_s` rounded to a human-readable form: `raw` (when `bucket_s < 1.0`), `1.92 s buckets`, `28.8 s buckets`, `3.8 min buckets`, etc. Tells operators when they are looking at aggregated data versus raw samples and roughly which CAG is serving the request. Low real estate cost, high diagnostic value — especially once min/max bands ship in Phase B and are only meaningful at aggregate levels.
+> **Implementation note (v1.0):** `ResolutionIndicator` was replaced by `SpanBucketIndicator`. The new component shows two values in the footer row: the current viewport span (e.g. `Span: 4 h`) and the current bucket size (e.g. `Bucket Size: 3.8 min`). This exposes more context than bucket size alone and lives in the footer alongside `SpanPresets` and `EndPicker` rather than in the chart header.
+
+`SpanBucketIndicator` shows the current viewport span and the current `bucketSMs` in human-readable form. Tells operators the time window they are viewing and the aggregation resolution. Low real estate cost, high diagnostic value — especially once min/max bands ship in Phase B.
 
 ---
 
@@ -517,7 +531,9 @@ Small gray text in the chart header showing the current `bucket_s` rounded to a 
 
 Pan is gated by hovering over the relevant axis margin — no keyboard modifier is required. The cursor changes shape to indicate the active gesture.
 
-- **Horizontal pan.** Hover over the X-axis tick-label strip below the plot area → cursor changes to `ew-resize`. Left-click and drag horizontally → translates the X scale (`u.setScale('x', ...)`). Pan is **visual-only**: it does not dispatch a mode action or change `dataViewport`. When the visible edge approaches the cached extent's boundary, `ensureCovered` fires to fetch the next prefetch tile in the direction of travel. Preset, Live, or Custom commit resets the visual position by overwriting the X scale via the imperative `xRange` effect.
+- **Horizontal pan.** Hover over the X-axis tick-label strip below the plot area → cursor changes to `ew-resize`. Left-click and drag horizontally → translates the X scale (`u.setScale('x', ...)`). When the visible edge approaches the cached extent's boundary, `ensureCovered` fires to fetch the next prefetch tile in the direction of travel. Preset, Live, or End picker commit resets the visual position by overwriting the X scale via the imperative `xRange` effect.
+
+  > **Implementation note (v1.0):** Pan dispatches `panApplied { from, to, nowMs }` via `onXPan` → `handleXPan` (separate RAF channel). `panApplied` always produces a `fixed` state (tailing → fixed, fixed → fixed) and preserves `sizeMs` from the prior state (not derived from `to - from`). The `useZoomState` reset effect skips on `lastIntent === 'pan'`, so `dataViewport` is **not** reset and no new tile fetches fire. The spec's original "visual-only" characterization was written before `panApplied` existed — pan does update `modeViewport` (keeping `EndPicker`'s End display in sync) but it never triggers data-level changes.
 - **Vertical pan.** Hover over the Y-axis label strip left of the plot area → cursor changes to `ns-resize`. Left-click and drag vertically → adjusts the **selected trace's** Y-scale only via `u.setScale('y_<tagId>', ...)`. Non-selected traces retain their existing Y-scales (sticky per-trace, persisted across uPlot rebuilds in `yScaleOverridesRef`). No mode transition occurs.
 
 ### 9.2 Zoom
@@ -528,29 +544,50 @@ Zoom is gated by hovering over the relevant axis margin for wheel events, or by 
 - **Vertical wheel-zoom.** Hover over the Y-axis margin → wheel up/down → zooms the **selected trace's** Y-scale around the cursor data-Y. Other traces unaffected. No mode transition occurs.
 - **Drag-zoom on plot area.** Left-click-drag on the plot area produces a uPlot drag-selection rectangle (`cursor.drag.x: true, setScale: false`). On mouse-up, the `setSelect` hook applies the selection as the new visual X range and calls `onDragZoom(startMs, endMs)`. The container's `handleDragZoom` snaps to the nearest discrete level via `computeDragZoomViewport` and updates `dataViewport` and `bucketSMs` accordingly. `cursor.bind.dblclick: () => null` disables uPlot's built-in fit-to-data reset, which would break tile alignment.
 
+  > **Implementation note (v1.0):** All X-scale mutations dispatch `zoomApplied { from, to, nowMs }` via `onXRangeChange` → `handleXRangeChange` (RAF-coalesced). This keeps `modeViewport`, `SpanBucketIndicator`, preset highlight, and the `EndPicker`'s End display in sync with the visible window. `zoomApplied` from fixed always stays fixed. `zoomApplied` from tailing stays tailing only when `to ≥ nowMs − NEAR_NOW_MS`; otherwise → fixed. See §9.3 for full transition rules.
+
 ### 9.3 Mode State Machine
 
 Two modes only. No explicit Pause or Resume buttons.
 
 ```
-                   customCommitted (to < now − NEAR_NOW_MS)
-         tailing ───────────────────────────────────────▶ fixed
-                                                           │
-                   presetClicked / liveClicked /           │
-                   customCommitted (to ≈ now)              │
-                 ◀──────────────────────────────────────── ┘
+          panApplied / endPickerCommitted /
+          zoomApplied (to < now − NEAR_NOW_MS or prior mode was fixed)
+tailing ──────────────────────────────────────────────────────────────▶ fixed
+                                                                         │
+                             liveClicked only                            │
+                       ◀──────────────────────────────────────────────── ┘
 ```
 
-Transitions are driven exclusively by explicit time-range-bar actions dispatched through `useTrendMode`. Pan and zoom on the chart are **visual-only** and do not trigger mode transitions.
+`presetClicked` and `zoomApplied` (from tailing, `to ≈ now`) stay in the current mode.
 
-- `presetClicked` → always tailing.
-- `liveClicked` → tailing, restoring prior `sizeMs` if coming from fixed.
-- `customCommitted` with `to ≥ nowMs − NEAR_NOW_MS` → tailing; otherwise → fixed.
-- `viewportChanged` (reserved for Step 11 drag/programmatic navigation) follows the same near-now heuristic.
+**State type:**
+
+```typescript
+type ModeState =
+  | { mode: 'tailing'; sizeMs: bigint; nowMs: bigint; lastIntent: LastIntent }
+  | { mode: 'fixed'; from: bigint; to: bigint; sizeMs: bigint; lastIntent: LastIntent }
+
+type LastIntent = 'preset' | 'live' | 'endPicker' | 'zoom' | 'pan' | null
+```
+
+Both branches carry `sizeMs` — required so `liveClicked` can restore the prior window size when returning from fixed.
+
+**Action transition rules:**
+
+- `presetClicked { sizeMs, nowMs }` — stays in current mode. From tailing: updates `sizeMs` and `nowMs`. From fixed: preserves `to`, re-anchors `from = to - sizeMs`.
+- `liveClicked { nowMs }` — **sole entry to tailing from fixed**. Always → tailing, `sizeMs` preserved from prior state.
+- `endPickerCommitted { to, nowMs }` — always → fixed, `from = to - sizeMs` (sizeMs from prior state). No near-now branch; user clicks Live to re-enter tailing after an End pick.
+- `zoomApplied { from, to, nowMs }` — stays tailing only when prior state was already tailing AND `to ≥ nowMs − NEAR_NOW_MS` (zoom-out from tailing that keeps "now" in view). Otherwise → fixed. `sizeMs = to - from`.
+- `panApplied { from, to, nowMs }` — always → fixed. `sizeMs` preserved from prior state (not derived from `to - from`). Pan can never enter tailing.
+- `viewportChanged { from, to, nowMs }` — reserved for Step 11. Applies near-now heuristic.
+- `tick { nowMs }` — advances `nowMs` in tailing only. Preserves `lastIntent` (clock advance is not a user intent). Dormant while `LIVE_MODE_ENABLED = false`.
+
+**`lastIntent` and preset highlight rule.** `lastIntent` tracks the most recent user action. `SpanPresets` highlights the active preset when `(lastIntent === 'preset' || lastIntent === 'pan') && sizeMs === preset.sizeMs`. Pan preserves `sizeMs`, so the preset stays highlighted after a pan gesture. `tick` spreads the existing `lastIntent`.
+
+**`NEAR_NOW_MS = 60_000n`** (1 minute).
 
 Tailing enables the WebSocket subscription; fixed disables it. One WebSocket connection, lifecycle managed by mode.
-
-> **Implementation note (v1.0):** The `fixed` branch of `ModeState` carries `sizeMs: bigint` in addition to `from`/`to`. This is required to implement the `liveClicked` rule "preserve the prior window size when returning to tailing from fixed" — without carrying `sizeMs` through the fixed state, the window size would default to `to - from` on every `liveClicked`, which is wrong when the operator zoomed in before pausing. The `NEAR_NOW_MS` constant is `60_000n` (1 minute).
 
 ### 9.4 Selected Trace
 
@@ -696,20 +733,23 @@ Footer hint: when a search term matches non-trendable tags that are otherwise hi
 
 ### 12.1 Preset Buttons
 
-Six presets in a horizontal strip: **15m · 1h · 4h · 24h · 7d · 14d**. Click on a preset:
+Eight presets in a horizontal strip: **1m · 5m · 15m · 1h · 4h · 24h · 7d · 14d**. Click on a preset:
 
-1. Sets window size to the preset duration.
-2. Sets `to = now`, `from = now - size`.
-3. Enters `tailing` mode.
+- **From tailing:** stays tailing. Updates `sizeMs` to the preset duration; `nowMs` advances to the current time.
+- **From fixed:** stays fixed. Preserves `to`; re-anchors `from = to - preset duration`.
 
-### 12.2 Custom Range
+The active preset is highlighted when `lastIntent === 'preset'` (or `'pan'`) and `sizeMs` matches the preset's duration.
 
-"Custom…" button opens a date/time picker with `from` and `to` fields. Committing:
+### 12.2 End Picker
 
-- If `to` is within ~1 minute of `now`: enters `tailing` with window = `to - from`.
-- Otherwise: enters `fixed` with the exact `[from, to]` as committed.
+> **Implementation note (v1.0):** The original `from`/`to` Custom picker was replaced by an End-only picker. The `from` field was removed — `from` is always derived as `to - sizeMs`. This keeps `sizeMs` stable (same span, just a different anchor point) and removes the need to track two independent datetime fields.
 
-> **Implementation note (v1.0):** The picker uses `<input type="datetime-local">` elements. The string values these elements produce are interpreted as site-local wall time using `siteTimezone` prop via `Intl.DateTimeFormat` (with the `timeZone` option). If `siteTimezone` is absent the picker falls back to browser-local time. This matches the tooltip's timezone convention (§8.5).
+A styled button in the footer displays the current End time (formatted in site-local wall time). Clicking the button opens the browser's native `<input type="datetime-local">` popup. Committing always → fixed, `from = to - sizeMs` (current span preserved). There is no near-now → tailing branch; the operator clicks Live if they want tailing.
+
+- Invalid or too-short input is a no-op (display snaps back to the prior End value).
+- The display re-syncs from `viewport.end` whenever the viewport changes (preset click, Live button, zoom, pan).
+
+> **Implementation note (v1.0):** The picker is implemented as a styled `<button>` that overlays a hidden `<input type="datetime-local">` positioned behind it (opacity 0, pointer-events none). Clicking the button calls `input.showPicker()` to open the browser's native date/time popup anchored at the button. This avoids styling the native picker chrome while keeping keyboard and accessibility behavior on the real input element. String values produced by the input are interpreted as site-local wall time using `siteTimezone` prop via `Intl.DateTimeFormat`. Falls back to browser-local time when `siteTimezone` is absent.
 
 ### 12.3 Live Button
 
@@ -721,7 +761,9 @@ Small "Live" (or "Go to now") button adjacent to the presets. Click:
 
 ### 12.4 Return-to-Tailing Paths
 
-From `fixed` mode, the operator returns to `tailing` by: clicking any preset, clicking Live, or committing a custom range whose `to` is near `now`. There is no explicit Pause or Resume control. Panning the chart backward is the implicit "pause"; clicking a preset or Live is the implicit "resume."
+From `fixed` mode, the **only** path to `tailing` is clicking the Live button (`liveClicked`). Presets from fixed stay fixed (they preserve `to` and re-anchor `from`). End picker commits always go fixed regardless of how close `to` is to `now`. Pan always goes fixed. Zoom from fixed always goes fixed.
+
+There is no explicit Pause or Resume control. Panning the chart backward is the implicit "pause"; clicking Live is the implicit "resume."
 
 ---
 

@@ -373,7 +373,7 @@ Query parameters:
 | `end_time` | integer (ms since epoch) | required; must be > start_time |
 | `bucket_count` | integer | required; 1..2500 |
 
-The server derives `bucketS = (end_time - start_time) / (bucket_count × 1000)` and dispatches on it: `< 1.0` → raw `tag_samples`; `< 16` → `1s_cagg`; `< 160` → `10s_cagg`; `< 1600` → `1min_cagg`; else → `10min_cagg`. Each source is queried with watermark-aware fall-through — if `end_time` is past the source's materialization watermark, the trailing portion is served from the next-finer source and `source: 'mixed'` is returned.
+The server internally derives `bucketS = (end_time - start_time) / (bucket_count × 1000)` for dispatch purposes: `< 1.0` → raw `tag_samples`; `< 16` → `1s_cagg`; `< 160` → `10s_cagg`; `< 1600` → `1min_cagg`; else → `10min_cagg`. Each source is queried with watermark-aware fall-through — if `end_time` is past the source's materialization watermark, the trailing portion is served from the next-finer source and `source: 'mixed'` is returned.
 
 Raw response (`bucketS < 1.0` — COV samples, irregular timestamps):
 ```json
@@ -398,8 +398,8 @@ Aggregate response (`bucketS ≥ 1.0` — regular bucket grid):
     "source": "1s_cagg",
     "startTime": 1776864000000,
     "endTime": 1776864480000,
-    "bucketS": 1.92,
-    "n": 250,
+    "bucketSMs": 1920,
+    "n": 500,
     "series": [
       { "tagId": 42, "value": [1.9, 1.8, null, 2.0] }
     ]
@@ -407,7 +407,7 @@ Aggregate response (`bucketS ≥ 1.0` — regular bucket grid):
 }
 ```
 
-`source` is one of `'raw'`, `'1s_cagg'`, `'10s_cagg'`, `'1min_cagg'`, `'10min_cagg'`, or `'mixed'`. `n` is the actual row count — equals `bucket_count` for aligned requests, `bucket_count + 1` for unaligned. `null` in a value array represents a null-quality sample or a gap bucket. `startTime` / `endTime` are serialized as plain numbers (safe within `Number.MAX_SAFE_INTEGER`).
+`source` is one of `'raw'`, `'1s_cagg'`, `'10s_cagg'`, `'1min_cagg'`, `'10min_cagg'`, or `'mixed'`. `bucketSMs` is the bucket width in **integer milliseconds** (`Math.round(spanMs / bucketCount)` — always an integer). `n` is the actual row count — equals `bucket_count` for aligned requests, `bucket_count + 1` for unaligned. `null` in a value array represents a null-quality sample or a gap bucket. `startTime` / `endTime` are serialized as plain numbers (safe within `Number.MAX_SAFE_INTEGER`).
 
 Validation errors:
 
@@ -416,7 +416,7 @@ Validation errors:
 | `INVALID_TAG_IDS` | Empty list, count > 8, non-integer IDs, or ID outside the trendable set |
 | `INVALID_RANGE` | `end_time ≤ start_time` or either timestamp is non-positive |
 | `INVALID_BUCKET_COUNT` | `bucket_count` outside 1..2500 or non-integer |
-| `INVALID_BUCKET_S` | Derived `bucketS` outside (0, 14746] — internal sanity check |
+| `INVALID_BUCKET_S` | Derived `bucketS` (internal float seconds) outside (0, 14746] — internal sanity check |
 | `MISSING_QUERY_PARAM` | Any required query parameter is absent |
 
 ### GET /api/v1/trends/extent
@@ -735,7 +735,7 @@ MODE_CHANGED payload:
 | INVALID_TAG_IDS | 400 | Trends tile: tag_ids empty, count > 8, contains non-integer, or contains IDs outside the trendable set. |
 | INVALID_RANGE | 400 | Trends tile: end_time ≤ start_time, or either timestamp is non-positive. |
 | INVALID_BUCKET_COUNT | 400 | Trends tile: bucket_count outside 1..2500 or non-integer. |
-| INVALID_BUCKET_S | 400 | Trends tile: derived bucketS outside (0, 14746] — request spans too large a range for the given bucket count. |
+| INVALID_BUCKET_S | 400 | Trends tile: derived bucketS (internal float seconds) outside (0, 14746] — request spans too large a range for the given bucket count. |
 | MISSING_QUERY_PARAM | 400 | Trends tile: a required query parameter (tag_ids, start_time, end_time, or bucket_count) is absent. |
 | INTERNAL_ERROR | 500 | Unexpected server error. |
 

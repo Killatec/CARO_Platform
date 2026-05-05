@@ -1,5 +1,5 @@
 # CARO_HMI Trend Viewer — Subsystem Handoff
-**Updated:** 2026-05-01 | **Phase A Steps 1–10 Complete** | **Next:** Step 11 (Live tail)
+**Updated:** 2026-05-04 | **Phase A Steps 1–10 Complete** | **Next:** Step 11 (Live tail)
 
 ---
 
@@ -17,10 +17,10 @@ Phase A Steps 1–10 are complete. Steps 1–6 delivered the server-side trends 
 | 6 | 10s/1min/10min CAG migrations and dispatch branches | ✅ Done |
 | 7 | `packages/trend-chart/` scaffold: `level.ts`, `tileCache.ts`, `colorAssign.ts` — pure, no React | ✅ Done |
 | 8 | `useTrendData` hook: 2-visible + 2-prefetch parallelism, ⌈N/8⌉ fan-out, stale-gen guard | ✅ Done |
-| 9 | `TrendChart` static rendering: uPlot wrapper, per-trace Y-scales, legend, tooltip, ResolutionIndicator | ✅ Done |
-| 10 | Mode state machine + time-range UI: tailing/fixed transitions, preset strip, custom picker, Live button, pan/zoom interactions | ✅ Done |
+| 9 | `TrendChart` static rendering: uPlot wrapper, per-trace Y-scales, legend (vertical right column), cursor display | ✅ Done |
+| 10 | Mode state machine + time-range UI: tailing/fixed transitions, 8-preset strip, End picker (End-only), Live button, pan/zoom interactions | ✅ Done |
 
-**Test coverage (2026-05-01):** 254 passing in `@caro/trend-chart` (14 test files), 93 in `@caro/db`, 226 in the HMI server.
+**Test coverage (2026-05-04):** 349 passing in `@caro/trend-chart` (19 test files), 97 in `@caro/db`, 226 in the HMI server, 33 in the HMI client.
 
 ---
 
@@ -31,12 +31,20 @@ packages/trend-chart/
   src/
     index.ts                      # all public exports
     types.ts                      # Tile, Viewport, AggregateSeriesData, RawSeriesData, TrendData
+    api.ts                        # fetchTile() — typed REST fetch; TileApiResponse discriminated union
 
     # ── Core primitives (no React) ─────────────────────────────────────────────
     level.ts                      # alignedTilesInRange, tilesForViewport, deriveBucketSMs,
                                   # TREND_VIEWER_DEFAULTS, TS_BUCKET_ORIGIN_MS, floorDiv, ceilDiv
     tileCache.ts                  # TileCache (LRU, 50 MB cap), makeTileCacheKey
     colorAssign.ts                # colorAssign(tagId), PALETTE, PALETTE_SIZE
+    dateUtils.ts                  # msToDatetimeLocal, datetimeLocalToMs, getTzOffsetMs,
+                                  # formatDateTime — timezone-aware date helpers
+
+    # ── Axis interaction helpers (pure, no React) ─────────────────────────────
+    axisInteractions.ts           # pruneRemovedTagOverrides, isInYAxisHitZone, panYScale,
+                                  # zoomYScale, panThresholdCheck, isInXAxisHitZone,
+                                  # panXScale, zoomXScale, checkAndExtendXCoverage
 
     # ── React hooks ───────────────────────────────────────────────────────────
     useTrendData.ts               # REST fetch orchestration; owns the TileCache instance;
@@ -47,69 +55,93 @@ packages/trend-chart/
     useZoomState.ts               # zoom level state; exports computeDragZoomViewport (pure,
                                   # tested separately); syncs to modeViewport via useEffect
 
-    # ── Axis interaction helpers (pure, no React) ─────────────────────────────
-    axisInteractions.ts           # pruneRemovedTagOverrides, isInYAxisHitZone, panYScale,
-                                  # zoomYScale, panThresholdCheck, isInXAxisHitZone,
-                                  # panXScale, zoomXScale, checkAndExtendXCoverage
-
     # ── Components ────────────────────────────────────────────────────────────
     TrendChart.tsx                # uPlot canvas wrapper; manages rebuild lifecycle,
                                   # X-scale preservation across rebuilds, per-trace Y-scale
                                   # overrides, wheel/drag handlers, cursor state
     TrendChartContainer.tsx       # stateful wiring layer: useTrendMode + useZoomState +
-                                  # useTrendData + TimeRangeBar + TrendChart
-    TimeRangeBar.tsx              # preset buttons (15m/1h/4h/24h/7d/14d) + Custom picker +
-                                  # Live button; dispatches mode actions up via callbacks
-    Legend.tsx                    # per-trace rows with color swatch, value, remove button
-    ResolutionIndicator.tsx       # shows current bucketS in human-readable form (e.g. "3.8 min")
+                                  # useTrendData + TrendChart + footer row components
+    SpanBucketIndicator.tsx       # footer: viewport span + bucket size display
+    SpanPresets.tsx               # footer: 8-preset strip (1m/5m/15m/1h/4h/24h/7d/14d);
+                                  # highlight rule: (lastIntent==='preset'||'pan') && sizeMs match
+    EndPicker.tsx                 # footer: End datetime picker button + Live/Go Live button
+    Legend.tsx                    # vertical column (right side, 180px); per-trace rows with
+                                  # color swatch, value (showLastWhenIdle rule), remove button
+    CursorDisplay.tsx             # cursor-time display in the legend area
+    Tooltip.tsx                   # preserved but not wired in Phase A
 
     render/
       uplotConfig.ts              # builds uPlot Options; onCursorChange callback (idx, tsMs)
       yScales.ts                  # per-trace Y-scale defaults (eng_min/max, autoscale, bool)
       seriesFromTrendData.ts      # maps TrendData → uPlot series definitions
-      formatters.ts               # formatBucketS, formatValue, formatTimestamp
+      formatBucketS.ts            # bucket size → human-readable (e.g. "3.8 min buckets")
+      formatValue.ts              # tag value → display string
+      formatTickLabel.ts          # X-axis tick label formatting
+      formatSpanMs.ts             # viewport span → human-readable (e.g. "1 h")
 
     __tests__/
       level.test.ts               # alignedTilesInRange, tilesForViewport, deriveBucketSMs
       tileCache.test.ts           # LRU eviction, cache key, size accounting
       colorAssign.test.ts         # deterministic palette assignment
-      api.test.ts                 # aggregated wire format parsing
-      useTrendData.test.ts        # fetch orchestration, fan-out, stale-gen, ensureCovered
-      useTrendMode.test.ts        # trendModeReducer pure unit tests
+      api.test.ts                 # fetchTile wire format + error handling
+      dateUtils.test.ts           # timezone-aware date helpers
+      useTrendData.test.ts        # fetch orchestration, fan-out, stale-gen, ensureCovered,
+                                  # pre-load fallback bucketSMs integer invariant
+      useTrendMode.test.ts        # trendModeReducer pure unit tests (37 cases)
       axisInteractions.test.ts    # all 9 helper functions
-      TrendChartContainer.test.tsx # container behavior: presets, Live, Custom, tag remove,
+      TrendChartContainer.test.tsx # container behavior: presets, Live, End picker, tag remove,
                                   # loading hints; computeDragZoomViewport pure tests
       trendChart.test.tsx         # TrendChart render, Y-scale defaults, legend display
       legend.test.tsx             # Legend component unit tests
-      render/yScales.test.ts      # yScales helpers
+      SpanBucketIndicator.test.tsx # span + bucket size display
+      SpanPresets.test.tsx        # preset highlight rule, mode-aware behavior
+      EndPicker.test.tsx          # End picker interaction, snap-back on invalid input
+      CursorDisplay.test.tsx      # cursor-time display
+      render/formatters.test.ts   # formatBucketS, formatValue, formatSpanMs
+      render/seriesFromTrendData.test.ts
+      render/uplotConfig.test.ts
+      render/yScales.test.ts      # Y-scale defaults
 ```
 
 ---
 
 ## 3. Mode State Machine (`useTrendMode.ts`)
 
-Two modes: `tailing` and `fixed`. The reducer is pure and unit-tested separately.
+Two modes: `tailing` and `fixed`. The reducer is pure and unit-tested separately (37 test cases).
 
 ```typescript
+type LastIntent = 'preset' | 'live' | 'endPicker' | 'zoom' | 'pan' | null
+
 type ModeState =
-  | { mode: 'tailing'; sizeMs: bigint; nowMs: bigint }
-  | { mode: 'fixed'; from: bigint; to: bigint; sizeMs: bigint }  // sizeMs preserved for liveClicked
+  | { mode: 'tailing'; sizeMs: bigint; nowMs: bigint; lastIntent: LastIntent }
+  | { mode: 'fixed'; from: bigint; to: bigint; sizeMs: bigint; lastIntent: LastIntent }
 ```
 
-**Actions:** `presetClicked`, `liveClicked`, `customCommitted`, `viewportChanged`, `tick`.
+Both branches carry `sizeMs` — required so `liveClicked` can restore the prior window size when returning from fixed.
 
-**Key transition rules:**
-- `presetClicked` → always tailing, `sizeMs = preset duration`, `nowMs = now`
-- `liveClicked` from fixed → tailing, `sizeMs = state.sizeMs` (preserves prior window size)
-- `customCommitted` with `to ≥ nowMs - NEAR_NOW_MS` (60s) → tailing; otherwise → fixed
-- `viewportChanged` follows the same near-now heuristic as `customCommitted`
-- `tick` → only advances `nowMs` in tailing (dormant: `LIVE_MODE_ENABLED = false` at module scope)
+**Actions and transition rules:**
 
-`modeToViewport(state)` derives `Viewport { start: bigint; end: bigint }` from state:
+| Action | Transition | Notes |
+|---|---|---|
+| `presetClicked { sizeMs, nowMs }` | Stays in current mode | Tailing: updates sizeMs/nowMs. Fixed: preserves `to`, re-anchors `from = to - sizeMs`. |
+| `liveClicked { nowMs }` | Always → tailing | **Sole entry to tailing from fixed.** Preserves sizeMs. |
+| `endPickerCommitted { to, nowMs }` | Always → fixed | `from = to - sizeMs`. No near-now branch. |
+| `zoomApplied { from, to, nowMs }` | Tailing if prior=tailing AND `to ≥ nowMs - NEAR_NOW_MS`; else fixed | `sizeMs = to - from`. Zoom from fixed always stays fixed. |
+| `panApplied { from, to, nowMs }` | Always → fixed | Preserves `sizeMs` from state (not `to - from`). Pan can never enter tailing. |
+| `viewportChanged { from, to, nowMs }` | Near-now heuristic | Reserved for Step 11. |
+| `tick { nowMs }` | Advances `nowMs` in tailing only | Preserves `lastIntent`. Dormant while `LIVE_MODE_ENABLED = false`. |
+
+**`lastIntent` and preset highlight rule.** `lastIntent` tracks the most recent user action and drives the `SpanPresets` active-button highlight: `(lastIntent === 'preset' || lastIntent === 'pan') && sizeMs === preset.sizeMs`. Pan preserves `sizeMs`, so the active preset stays highlighted after a pan gesture. `tick` spreads the existing `lastIntent`.
+
+**`NEAR_NOW_MS = 60_000n`** (1 minute).
+
+`modeToViewport(state)` derives `Viewport { start: bigint; end: bigint }`:
 - Tailing: `{ start: nowMs - sizeMs, end: nowMs }`
 - Fixed: `{ start: from, end: to }`
 
-**`LIVE_MODE_ENABLED = false`** — the 1 Hz interval that dispatches `tick` is disabled pending Step 11 (WebSocket). The `tick` reducer case and `viewportChanged` action are preserved for Step 11. Setting `LIVE_MODE_ENABLED = true` re-enables auto-advance.
+**`LIVE_MODE_ENABLED = false`** — the 1 Hz interval that dispatches `tick` is disabled pending Step 11 (WebSocket). Setting it to `true` re-enables auto-advance. The `tick` reducer case and `viewportChanged` action are preserved for Step 11.
+
+**Step 11 follow-up note:** `viewportChanged` sets `lastIntent = 'live'`, which will trigger the `useZoomState` reset effect on every live-tick advance (clobbering bucket size each second). When Step 11 lands, either add `'live'` to the skip condition in the reset gate, or use a more targeted action for tick advances.
 
 ---
 
@@ -123,7 +155,7 @@ type ModeState =
 | `zoomAnchorSpan` | `bigint` | Full viewport span at the current zoom level — drives uPlot autoscale |
 | `dataViewport` | `Viewport` | The aligned viewport passed to `useTrendData` |
 
-A `useEffect` keyed on `modeViewport.start/end` resets all three whenever the mode changes (preset click, Live click, custom commit). This ensures preset/Live/Custom always start from a clean zoom level.
+A `useEffect` keyed on `modeViewport.start/end` resets all three on `preset`, `live`, and `endPicker` intent changes, but skips on `zoom` and `pan` (so wheel/pan zoom anchor accumulates correctly). This ensures preset/Live/End-picker actions always start from a clean zoom level.
 
 `handleDragZoom(selStart, selEnd)` and `handleZoomLevelSwitch('in'|'out', cursorMs)` update all three atomically. `computeDragZoomViewport` is exported for direct testing.
 
@@ -136,8 +168,9 @@ A `useEffect` keyed on `modeViewport.start/end` resets all three whenever the mo
 - **Tile geometry**: `TREND_VIEWER_DEFAULTS.bucketCount=500`, `visibleTilesPerWindow=2`, `overfetchPerSide=1`. `deriveBucketSMs(viewport)` derives the bucket size from viewport span.
 - **`ensureCovered`**: called by TrendChart's wheel/pan handlers to request additional tiles. Anchors candidate tiles to the *active-set edges* (`cachedStart`/`cachedEnd`) rather than re-computing from `TS_BUCKET_ORIGIN_MS` — walks outward from the current cache boundary.
 - **`swapCounter`**: incremented each time the tile set swaps on a bucket-size change (zoom across a §6.3 dispatch threshold). TrendChart uses this to trigger a full uPlot rebuild.
-- **`activeTileCount`**: count of tiles currently in the active set — used by `ResolutionIndicator` and tests.
+- **`activeTileCount`**: count of tiles currently in the active set — used by `SpanBucketIndicator` and tests.
 - **Stale-generation guard**: each fetch call captures a generation at dispatch; if `viewport` or `tagIds` change before the fetch resolves, the result is discarded.
+- **`bucketSMs` integer invariant**: the assembled `bucketSMs` value passed to the chart must always be an integer. The fallback path (when `lastBucketSMs === 0` — all tile fetches failed) applies `Math.round()` before returning. A defensive `!Number.isInteger(bucketSMs) → throw` assertion fires at the assembly boundary so any regression surfaces here, not downstream in `BigInt()` conversions.
 
 ---
 
@@ -167,7 +200,11 @@ useZoomState(...)      →  zoomAnchorSpan, dataViewport, handleDragZoom, handle
 useTrendData(...)      →  data, isLoading, ensureCovered, swapCounter, activeTileCount
 ```
 
-It owns `tagIds` state (initialized from `initialTagIds` prop; removes come from `Legend` via `TrendChart.onTagRemove`). It derives `xRange` (the imperative X-scale update value) from `modeViewport` via `useMemo`.
+It renders:
+- `TrendChart` (with `onXRangeChange` → `handleXRangeChange` RAF-coalesced → `zoomApplied`; `onXPan` → `handleXPan` RAF-coalesced → `panApplied`)
+- Footer row below the chart: `SpanBucketIndicator` | `SpanPresets` | `EndPicker + Live button`
+
+It owns `tagIds` state (initialized from `initialTagIds` prop; removes come from `Legend` via `TrendChart.onTagRemove`). It derives `xRange` (the imperative X-scale update value) from `modeViewport` via `useMemo`. It passes `showLastWhenIdle={modeState.mode === 'tailing'}` to `TrendChart` (forwarded to `Legend`).
 
 Props: `tagIds: number[]`, `siteTimezone?: string`, `width?: number` (default 900), `height?: number` (default 420).
 
@@ -186,19 +223,26 @@ Props: `tagIds: number[]`, `siteTimezone?: string`, `width?: number` (default 90
 
 ## 9. Implementation Divergences from Spec
 
-See `Docs/hmi_trends_deltas.md` for the canonical list. Key items:
+Spec was updated (v1.1) to reflect all items below — this list is for historical context.
 
-1. **`TrendChartContainer`** — spec §7.1 calls the wrapper `TrendChartProvider`; renamed because it is not a React Context provider.
-2. **`ModeState.sizeMs` on fixed branch** — spec §9.3 union omits it; required to implement "liveClicked preserves prior sizeMs".
-3. **Axis interaction gating = hover-zone, no modifier key** — spec §9.1/§9.2 described a Shift-key modifier; the implementation uses hit-zone detection (`isInYAxisHitZone` / `isInXAxisHitZone`) instead. Hover the Y-axis margin for Y pan/zoom; hover the X-axis margin for X wheel-zoom; drag anywhere on the plot area for drag-zoom.
-4. **Custom range picker uses `Intl.DateTimeFormat`** with `siteTimezone` for `datetime-local` interpretation.
-5. **Tile alignment origin = `TS_BUCKET_ORIGIN_MS = 946_857_600_000n`** (2000-01-03 UTC) — TimescaleDB's actual `time_bucket()` default origin, not Unix epoch.
-6. **`ensureCovered` anchors to active-set edges** — does not re-derive from `TS_BUCKET_ORIGIN_MS`; imported `floorDiv`/`ceilDiv`/`TS_BUCKET_ORIGIN_MS` removed from `useTrendData.ts`.
-7. **`getTrendTile` LOCF cutoff at `MAX(ts)`** — outer CASE expression nulls any gapfill bucket past the data extent, preventing LOCF propagating into future buckets.
+1. **`TrendChartContainer`** — spec §7.1 called the wrapper `TrendChartProvider`; renamed because it is not a React Context provider.
+2. **`ModeState.sizeMs` on fixed branch** — required to implement "liveClicked preserves prior sizeMs"; `lastIntent` field also added to both branches.
+3. **Axis interaction gating = hover-zone, no modifier key** — implementation uses hit-zone detection (`isInYAxisHitZone` / `isInXAxisHitZone`). Hover the Y-axis margin for Y pan/zoom; hover the X-axis margin for X wheel-zoom; drag anywhere on the plot area for drag-zoom.
+4. **End picker (End-only) replaces Custom range (from/to)** — `EndPicker.tsx` commits an End timestamp only; `from = to - sizeMs`. Uses `Intl.DateTimeFormat` with `siteTimezone`. End picker commits always go fixed — no near-now → tailing branch.
+5. **Preset list expanded to 8** — `1m · 5m · 15m · 1h · 4h · 24h · 7d · 14d` (spec originally listed 6: `15m · 1h · 4h · 24h · 7d · 14d`).
+6. **`liveClicked` is the sole entry to tailing from fixed** — presets from fixed stay fixed; zoom from fixed stays fixed; End picker always goes fixed.
+7. **Pan dispatches `panApplied`** — always fixed, preserves `sizeMs`, does not reset `dataViewport`. Zoom dispatches `zoomApplied` on every X-scale mutation (RAF-coalesced), keeping `modeViewport` in sync.
+8. **Wire field `bucketSMs` (integer ms)** — replaces `bucketS` (float seconds). Server sends `bucketSMs = Math.round(spanMs / bucketCount)`.
+9. **TimescaleDB alignment** — `splitBoundaryMs` and all-absent `firstMs` computed via `time_bucket()` SQL query, not JavaScript epoch arithmetic. `POSTGRES_EPOCH_MS` removed entirely.
+10. **Tile alignment origin = `TS_BUCKET_ORIGIN_MS = 946_857_600_000n`** (2000-01-03 UTC) — TimescaleDB's actual `time_bucket()` default origin.
+11. **`ensureCovered` anchors to active-set edges** — does not re-derive from `TS_BUCKET_ORIGIN_MS`; `floorDiv`/`ceilDiv`/`TS_BUCKET_ORIGIN_MS` removed from `useTrendData.ts`.
+12. **`getTrendTile` LOCF cutoff at `MAX(ts)`** — outer CASE expression nulls any gapfill bucket past the data extent.
 
 ---
 
 ## 10. What Comes Next
+
+> **Note:** `@caro/trend-chart` ships from `dist/`. After editing source, run `npm run build --workspace=packages/trend-chart` before testing in the browser. Tests run against source directly.
 
 | Step | Summary | Spec reference |
 |---|---|---|

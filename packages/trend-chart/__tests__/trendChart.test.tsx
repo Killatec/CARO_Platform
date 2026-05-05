@@ -61,7 +61,6 @@ function renderChart(tagIds: number[] = [1, 2, 3, 4], data = makeData(tagIds), o
         data={data}
         tagIds={tagIds}
         siteTimezone="UTC"
-        width={800}
         height={400}
         onTagRemove={onTagRemove}
       />
@@ -83,11 +82,6 @@ describe('TrendChart', () => {
     expect(screen.getByText('Power')).toBeTruthy();
     expect(screen.getByText('Valve')).toBeTruthy();
     expect(screen.getByText('Pressure')).toBeTruthy();
-  });
-
-  it('shows "Time: --" in legend on initial mount (no cursor)', () => {
-    renderChart([1, 2]);
-    expect(screen.getByText(/^Time:/).textContent).toBe('Time: --');
   });
 
   it('first tag is selected by default (legend entry is bolded)', () => {
@@ -117,18 +111,32 @@ describe('TrendChart', () => {
     expect(onTagRemove).toHaveBeenCalledWith(1);
   });
 
-  it('shows resolution indicator text', () => {
-    renderChart();
-    // bucketSMs=1000ms → bucketS=1s → "1 s buckets"
-    expect(screen.getByText('1 s buckets')).toBeTruthy();
-  });
-
   it('boolean tag current value formats as "0" or "1" in legend', () => {
     // Tag 3 is bool, value 3.0 → isBoolean → "1"
     const data = makeData([3]);
     renderChart([3], data);
     // The value in the legend entry should be "1" (since value=3.0 which is truthy→"1").
     expect(screen.getByText('1')).toBeTruthy();
+  });
+
+  it('renders footer node inside the left column, not as a sibling of Legend', () => {
+    render(
+      <MockHmiProvider tagDefs={TAG_DEFS}>
+        <TrendChart
+          data={makeData([1, 2])}
+          tagIds={[1, 2]}
+          siteTimezone="UTC"
+          height={400}
+          footer={<div data-testid="chart-footer">footer content</div>}
+        />
+      </MockHmiProvider>,
+    );
+    const footer = screen.getByTestId('chart-footer');
+    expect(footer).toBeTruthy();
+    // Footer is inside LEFT_COLUMN; Legend strip is a sibling of LEFT_COLUMN.
+    // So Remove-trace buttons are NOT inside footer's parent.
+    const [removeBtn] = screen.getAllByTitle('Remove trace');
+    expect(footer.parentElement?.contains(removeBtn!)).toBe(false);
   });
 
   it('null values in series array are passed to uPlot data as-is (null preserved)', async () => {

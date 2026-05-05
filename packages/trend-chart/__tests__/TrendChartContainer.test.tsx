@@ -1,32 +1,44 @@
+import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import { MockHmiProvider } from '@caro/hmi-context';
 import type { TagDef } from '@caro/hmi-context';
 import { TrendChartContainer } from '../src/TrendChartContainer.js';
 import { computeDragZoomViewport } from '../src/useZoomState.js';
 import { useTrendData } from '../src/useTrendData.js';
+import { formatDateTime } from '../src/dateUtils.js';
 import type { UseTrendDataResult } from '../src/useTrendData.js';
 
-// ── uPlot mock ────────────────────────────────────────────────────────────────
+// ── TrendChart mock ───────────────────────────────────────────────────────────
+// Renders the footer prop (so all footer-based assertions still work) and stub
+// remove buttons (so the onTagRemove test still works). Captures onXRangeChange
+// for the X-range-change integration test.
 
-vi.mock('uplot', () => {
-  const MockUPlot = vi.fn().mockImplementation(() => {
-    const over = document.createElement('div');
-    return {
-      destroy: vi.fn(),
-      setData: vi.fn(),
-      setScale: vi.fn(),
-      scales: { x: { min: 0, max: 3600 } },
-      over,
-    };
-  });
-  (MockUPlot as unknown as Record<string, unknown>).paths = {
-    stepped: vi.fn(() => vi.fn()),
-  };
-  return { default: MockUPlot };
-});
+let capturedOnXRangeChange: ((min: bigint, max: bigint) => void) | undefined;
+let capturedOnXPan: ((min: bigint, max: bigint) => void) | undefined;
 
-vi.mock('uplot/dist/uPlot.min.css', () => ({}));
+vi.mock('../src/TrendChart.js', () => ({
+  TrendChart: (props: {
+    tagIds: number[];
+    footer?: unknown;
+    onTagRemove?: (id: number) => void;
+    onXRangeChange?: (min: bigint, max: bigint) => void;
+    onXPan?: (min: bigint, max: bigint) => void;
+    showLastWhenIdle?: boolean;
+  }) => {
+    capturedOnXRangeChange = props.onXRangeChange;
+    capturedOnXPan = props.onXPan;
+    return (
+      <div>
+        {props.tagIds.map(id => (
+          <button key={id} title="Remove trace" onClick={() => props.onTagRemove?.(id)}>×</button>
+        ))}
+        <span data-testid="idle-mode">{props.showLastWhenIdle ? 'live' : 'fixed'}</span>
+        {props.footer as React.ReactNode}
+      </div>
+    );
+  },
+}));
 
 // ── useTrendData mock ─────────────────────────────────────────────────────────
 
@@ -72,7 +84,7 @@ function makeResult(tagIds: number[], opts: Partial<UseTrendDataResult> = {}): U
 function renderContainer(tagIds = [1, 2]) {
   return render(
     <MockHmiProvider tagDefs={TAG_DEFS}>
-      <TrendChartContainer tagIds={tagIds} siteTimezone="UTC" width={800} height={400} />
+      <TrendChartContainer tagIds={tagIds} siteTimezone="UTC" height={400} />
     </MockHmiProvider>,
   );
 }
@@ -83,15 +95,25 @@ describe('TrendChartContainer', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
+    capturedOnXRangeChange = undefined;
+    capturedOnXPan = undefined;
     mockUseTrendData.mockReturnValue(makeResult([1, 2]));
+    // EndPicker calls showPicker() on the hidden input; jsdom doesn't implement it.
+    Object.defineProperty(HTMLInputElement.prototype, 'showPicker', {
+      value: vi.fn(),
+      writable: true,
+      configurable: true,
+    });
   });
 
   afterEach(() => {
     vi.useRealTimers();
   });
 
-  it('renders TimeRangeBar preset buttons', () => {
+  it('renders span preset buttons', () => {
     renderContainer();
+    expect(screen.getByText('1m')).toBeTruthy();
+    expect(screen.getByText('5m')).toBeTruthy();
     expect(screen.getByText('15m')).toBeTruthy();
     expect(screen.getByText('1h')).toBeTruthy();
     expect(screen.getByText('4h')).toBeTruthy();
@@ -100,42 +122,8 @@ describe('TrendChartContainer', () => {
     expect(screen.getByText('14d')).toBeTruthy();
   });
 
-  it('renders Live button', () => {
+  it('renders Live button in initial tailing mode', () => {
     renderContainer();
-    // Starts in tailing mode so button shows "● Live"
-    expect(screen.getByText('● Live')).toBeTruthy();
-  });
-
-  it('default mode is tailing → 1h preset is not highlighted (no preset matched yet)', () => {
-    // Default sizeMs = 1h — the "1h" button should be active.
-    renderContainer();
-    const btn = screen.getByText('1h');
-    // Active preset has background #2563eb (set as inline style)
-    expect(btn.style.background).toBe('rgb(37, 99, 235)');
-  });
-
-  it('clicking a preset button calls dispatch with presetClicked', () => {
-    renderContainer();
-    fireEvent.click(screen.getByText('4h'));
-    // After clicking 4h, mode transitions to tailing with sizeMs=4h
-    // useTrendData should have been called at least once
-    expect(mockUseTrendData).toHaveBeenCalled();
-  });
-
-  it('clicking preset changes active highlight', () => {
-    renderContainer();
-    const btn4h = screen.getByText('4h');
-    fireEvent.click(btn4h);
-    // useReducer dispatch is synchronous in testing-library — no waitFor needed.
-    expect(btn4h.style.background).toBe('rgb(37, 99, 235)');
-  });
-
-  it('Live button in fixed mode shows "Go Live" text', async () => {
-    renderContainer();
-    // Start tailing, then simulate a viewport change that goes to fixed
-    // by triggering onRangeChange through the chart — simulated here by
-    // observing the button state after a Custom range commit with far past to
-    // We can't easily simulate drag, so just verify initial state.
     expect(screen.getByText('● Live')).toBeTruthy();
   });
 
@@ -152,10 +140,8 @@ describe('TrendChartContainer', () => {
     renderContainer([1]);
     const callsBefore = mockUseTrendData.mock.calls.length;
 
-    // Click the 4h preset button.
     fireEvent.click(screen.getByText('4h'));
 
-    // useTrendData must have been called with a 4h-span viewport.
     const calls = mockUseTrendData.mock.calls.slice(callsBefore);
     const expected4hMs = 4n * 60n * 60n * 1000n;
     const found = calls.some(([opts]) => {
@@ -165,12 +151,37 @@ describe('TrendChartContainer', () => {
     expect(found).toBe(true);
   });
 
+  it('clicking preset changes active highlight', () => {
+    renderContainer();
+    const btn4h = screen.getByText('4h');
+    fireEvent.click(btn4h);
+    expect(btn4h.style.background).toBe('rgb(37, 99, 235)');
+  });
+
+  it('preset click in initial tailing mode → preset highlighted, others not', () => {
+    renderContainer();
+    fireEvent.click(screen.getByText('4h'));
+    expect(screen.getByText('4h').style.background).toBe('rgb(37, 99, 235)');
+    expect(screen.getByText('1h').style.background).not.toBe('rgb(37, 99, 235)');
+  });
+
+  it('preset click while in fixed mode → mode stays fixed, preset highlighted', () => {
+    renderContainer([1]);
+    // Commit a far-past End via the hidden picker input to enter fixed mode.
+    const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '2020-01-02T00:00:00' } });
+    // Now in fixed mode — click 4h preset.
+    fireEvent.click(screen.getByText('4h'));
+    // Should show "Go Live" (still fixed), and 4h highlighted.
+    expect(screen.getByText('Go Live')).toBeTruthy();
+    expect(screen.getByText('4h').style.background).toBe('rgb(37, 99, 235)');
+  });
+
   it('onTagRemove drops the tag from the list passed to useTrendData', () => {
     renderContainer([1, 2]);
     const removeButtons = screen.getAllByTitle('Remove trace');
-    fireEvent.click(removeButtons[0]!); // remove tag 1 (Temp)
+    fireEvent.click(removeButtons[0]!);
 
-    // After the synchronous state update, the next render calls useTrendData with [2].
     const calls = mockUseTrendData.mock.calls;
     const found = calls.some(([opts]) => opts.tagIds.length === 1 && opts.tagIds[0] === 2);
     expect(found).toBe(true);
@@ -188,33 +199,125 @@ describe('TrendChartContainer', () => {
     expect(screen.getByText('No tags selected.')).toBeTruthy();
   });
 
-  it('Custom picker apply with past range commits customCommitted (fixed branch)', () => {
+  // ── EndPicker integration ─────────────────────────────────────────────────
+
+  it('committing a far-past End → fixed mode, Live button shows "Go Live"', () => {
     renderContainer([1]);
-    fireEvent.click(screen.getByText('Custom…'));
-    // datetime-local inputs don't have role="textbox" in jsdom — query by type.
-    const dateInputs = document.querySelectorAll('input[type="datetime-local"]');
-    expect(dateInputs.length).toBeGreaterThanOrEqual(2);
-    fireEvent.change(dateInputs[0]!, { target: { value: '2020-01-01T00:00' } });
-    fireEvent.change(dateInputs[1]!, { target: { value: '2020-01-02T00:00' } });
-    fireEvent.click(screen.getByText('Apply'));
-    // After commit with far-past range, mode → fixed; Live button → "Go Live".
+    const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '2020-01-02T00:00:00' } });
     expect(screen.getByText('Go Live')).toBeTruthy();
   });
 
-  it('Custom picker apply with to ≈ now → tailing', () => {
+  it('committing End ≈ now → goes fixed (End picker never enters tailing), shows "Go Live"', () => {
     renderContainer([1]);
-    fireEvent.click(screen.getByText('Custom…'));
-    const dateInputs = document.querySelectorAll('input[type="datetime-local"]');
-    expect(dateInputs.length).toBeGreaterThanOrEqual(2);
-    // Set to = current time (within NEAR_NOW_MS of now).
-    const now = new Date();
-    const toStr = now.toISOString().slice(0, 16);
-    const fromStr = new Date(now.getTime() - 3_600_000).toISOString().slice(0, 16);
-    fireEvent.change(dateInputs[0]!, { target: { value: fromStr } });
-    fireEvent.change(dateInputs[1]!, { target: { value: toStr } });
-    fireEvent.click(screen.getByText('Apply'));
-    // Should stay in / return to tailing.
-    expect(screen.getByText('● Live')).toBeTruthy();
+    vi.setSystemTime(new Date('2024-06-01T12:00:00Z'));
+    // '2024-06-01T12:00:00' in UTC is within NEAR_NOW_MS of Date.now(), but
+    // endPickerCommitted always goes fixed — user must click Live to enter tailing.
+    const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '2024-06-01T12:00:00' } });
+    expect(screen.getByText('Go Live')).toBeTruthy();
+  });
+
+  it('SpanBucketIndicator renders span and bucket size in the footer', () => {
+    renderContainer();
+    // Default sizeMs = 1h; bucketSMs = 3600ms = 3.6 s
+    expect(screen.getByText('Span: 1 h')).toBeTruthy();
+    expect(screen.getByText('Bucket Size: 3.6 s')).toBeTruthy();
+  });
+
+  it('after preset click, SpanBucketIndicator span line updates to match the new span', () => {
+    renderContainer();
+    fireEvent.click(screen.getByText('4h'));
+    expect(screen.getByText('Span: 4 h')).toBeTruthy();
+  });
+
+  // ── showLastWhenIdle plumbing ─────────────────────────────────────────────
+
+  it('tailing mode: showLastWhenIdle=true so legend shows latest values at rest', () => {
+    renderContainer([1]);
+    // Initial state is tailing.
+    expect(screen.getByTestId('idle-mode').textContent).toBe('live');
+  });
+
+  it('fixed mode after past End commit: showLastWhenIdle=false so legend shows -- at rest', () => {
+    renderContainer([1]);
+    const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '2020-01-02T00:00:00' } });
+    expect(screen.getByTestId('idle-mode').textContent).toBe('fixed');
+  });
+
+  it('cursor row renders above the footer (preset buttons row)', () => {
+    renderContainer();
+    const cursorEl = screen.getByText(/^Cursor:/);
+    const firstPreset = screen.getByText('1m');
+    // DOCUMENT_POSITION_FOLLOWING (4) means firstPreset comes after cursorEl in DOM.
+    expect(cursorEl.compareDocumentPosition(firstPreset) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('subsequent zoomApplied dispatch clears preset highlight', () => {
+    renderContainer([1]);
+    // Click a preset to set lastIntent = 'preset'.
+    fireEvent.click(screen.getByText('4h'));
+    expect(screen.getByText('4h').style.background).toBe('rgb(37, 99, 235)');
+
+    // Commit a far-past End via the hidden picker input → endPickerCommitted sets
+    // lastIntent = 'endPicker', clearing the preset highlight.
+    const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '2020-06-15T10:00:00' } });
+    expect(screen.getByText('4h').style.background).not.toBe('rgb(37, 99, 235)');
+  });
+
+  it('onXRangeChange clears preset highlight and updates span without a CAG-level switch', () => {
+    renderContainer([1]);
+    // Click 1h preset — lastIntent = 'preset', button highlights.
+    fireEvent.click(screen.getByText('1h'));
+    expect(screen.getByText('1h').style.background).toBe('rgb(37, 99, 235)');
+
+    // Simulate a sub-threshold wheel zoom to a far-past 45-min window.
+    const farPastEnd = 1_700_000_000_000n; // Nov 2023
+    const farPastStart = farPastEnd - 2_700_000n; // 45 min earlier
+    act(() => {
+      capturedOnXRangeChange?.(farPastStart, farPastEnd);
+      vi.runAllTimers(); // flush the coalescing RAF
+    });
+
+    // Preset highlight should clear (lastIntent = 'zoom').
+    expect(screen.getByText('1h').style.background).not.toBe('rgb(37, 99, 235)');
+    // Mode flips to fixed → Live button shows "Go Live".
+    expect(screen.getByText('Go Live')).toBeTruthy();
+    // SpanBucketIndicator reflects the new 45-min span.
+    expect(screen.getByText('Span: 45 min')).toBeTruthy();
+  });
+
+  it('onXPan after preset click preserves preset highlight and span', () => {
+    renderContainer([1]);
+    fireEvent.click(screen.getByText('1h'));
+    expect(screen.getByText('1h').style.background).toBe('rgb(37, 99, 235)');
+
+    // Simulate a pan: same 1h span, shifted into the far past.
+    const farPastEnd = 1_700_000_000_000n;
+    const farPastStart = farPastEnd - 3_600_000n; // same 1h width
+    act(() => {
+      capturedOnXPan?.(farPastStart, farPastEnd);
+      vi.runAllTimers(); // flush coalescing RAF
+    });
+
+    // Preset highlight must stay lit (lastIntent = 'pan', sizeMs still 1h).
+    expect(screen.getByText('1h').style.background).toBe('rgb(37, 99, 235)');
+    // Mode flips to fixed → Live button shows "Go Live".
+    expect(screen.getByText('Go Live')).toBeTruthy();
+    // Span unchanged at 1 h.
+    expect(screen.getByText('Span: 1 h')).toBeTruthy();
+  });
+
+  it('EndPicker display text reflects modeViewport.end after commit', () => {
+    renderContainer([1]);
+    const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
+    // Commit a far-past end: 2021-03-15T08:30:00 UTC
+    fireEvent.change(input, { target: { value: '2021-03-15T08:30:00' } });
+    // Display button should show the committed end in dd-mmm-yyyy HH:mm:ss format.
+    const displayBtn = screen.getByRole('button', { name: /pick end time/i });
+    expect(displayBtn.textContent).toContain('15-Mar-2021');
   });
 });
 
@@ -226,14 +329,12 @@ describe('computeDragZoomViewport', () => {
   const BC = 500;
 
   it('~1/4 selection span → 2 zoom-in levels (bucketSMs halved twice)', () => {
-    // currentBucketSMs = 3600s, full span = 3600 × 1000 = 3_600_000ms
-    // selection = 1/4 of full span → targetBucketSMs = 900, ratio=4, N=2
-    const currentBucket = 3_600_000n; // ms
+    const currentBucket = 3_600_000n;
     const selStart = 0n;
-    const selEnd = 3_600_000n * 1000n / 4n; // 1/4 of full span
+    const selEnd = 3_600_000n * 1000n / 4n;
     const result = computeDragZoomViewport(currentBucket, selStart, selEnd, VT, BC);
     expect(result).not.toBeNull();
-    expect(result!.newBucketSMs).toBe(3_600_000n >> 2n); // 900_000n
+    expect(result!.newBucketSMs).toBe(3_600_000n >> 2n);
   });
 
   it('~1/8 selection span → 3 zoom-in levels (bucketSMs >> 3)', () => {
@@ -276,13 +377,10 @@ describe('computeDragZoomViewport', () => {
   });
 
   it('selection too narrow (targetBucketSMs rounds to 0) → returns null', () => {
-    // selectionSpan = 1n, VT*BC = 1000 → targetBucketSMs = 0 → null
     expect(computeDragZoomViewport(3_600_000n, 0n, 1n, VT, BC)).toBeNull();
   });
 
   it('extreme zoom-in: clamps newBucketSMs to 1n floor when shift overflows', () => {
-    // currentBucketSMs = 3n, targetBucketSMs = 1n → ratio=3, N=round(log2(3))=2
-    // 3n >> 2n = 0n → clamps to 1n.
     const result = computeDragZoomViewport(3n, 0n, 1000n, VT, BC);
     expect(result).not.toBeNull();
     expect(result!.newBucketSMs).toBe(1n);

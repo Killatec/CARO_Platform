@@ -3,42 +3,47 @@ import type { TagDef } from '@caro/hmi-context';
 import type { TrendData } from './types.js';
 import { colorAssign } from './colorAssign.js';
 import { formatValue } from './render/formatValue.js';
-import { formatTimestamp } from './render/formatTimestamp.js';
 
 export interface LegendProps {
   tagIds: number[];
   data: TrendData;
   tagMap: Map<number, TagDef>;
   selectedTagId: number;
-  /** Bucket/row index from cursor; if absent, shows last-bucket value. */
+  /** Bucket/row index from cursor; if absent, falls back to last bucket when showLastWhenIdle, otherwise renders as `--`. */
   cursorIdx?: number;
+  /** When true (tailing), idle state shows the last bucket value. When false (fixed), idle state shows '--'. */
+  showLastWhenIdle: boolean;
   onSelect: (tagId: number) => void;
   onRemove: (tagId: number) => void;
-  /** Cursor timestamp in ms (number from uPlot); null / undefined → show "--". */
-  cursorTsMs?: number | null;
-  siteTimezone?: string;
 }
 
 const STRIP: CSSProperties = {
   display: 'flex',
-  flexWrap: 'wrap',
+  flexDirection: 'column',
   gap: 8,
-  padding: '6px 0',
-  overflowX: 'auto',
+  paddingLeft: 8,
+  width: 180,
+  overflowY: 'auto',
+  flexShrink: 0,
 };
 
-function getCurrentValue(data: TrendData, tagId: number, cursorIdx: number | undefined): number | null {
+function getCurrentValue(
+  data: TrendData,
+  tagId: number,
+  cursorIdx: number | undefined,
+  showLastWhenIdle: boolean,
+): number | null {
   if (data.type === 'aggregate') {
     const vals = data.series.get(tagId);
     if (!vals) return null;
-    const idx = cursorIdx !== undefined ? cursorIdx : vals.length - 1;
-    return vals[Math.min(idx, vals.length - 1)] ?? null;
+    if (cursorIdx !== undefined) return vals[Math.min(cursorIdx, vals.length - 1)] ?? null;
+    return showLastWhenIdle ? (vals[vals.length - 1] ?? null) : null;
   }
-  // Raw: show last known value
+  // Raw
   const s = data.series.get(tagId);
   if (!s || s.value.length === 0) return null;
-  const idx = cursorIdx !== undefined ? Math.min(cursorIdx, s.value.length - 1) : s.value.length - 1;
-  return s.value[idx] ?? null;
+  if (cursorIdx !== undefined) return s.value[Math.min(cursorIdx, s.value.length - 1)] ?? null;
+  return showLastWhenIdle ? (s.value[s.value.length - 1] ?? null) : null;
 }
 
 interface EntryProps {
@@ -123,29 +128,16 @@ function LegendEntry({ tagId, tag, isSelected, value, onSelect, onRemove }: Entr
   );
 }
 
-const TIME_DISPLAY: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  padding: '4px 8px',
-  fontSize: 12,
-  fontFamily: 'monospace',
-  color: '#374151',
-  flexShrink: 0,
-};
-
-export function Legend({ tagIds, data, tagMap, selectedTagId, cursorIdx, onSelect, onRemove, cursorTsMs, siteTimezone }: LegendProps) {
+export function Legend({ tagIds, data, tagMap, selectedTagId, cursorIdx, showLastWhenIdle, onSelect, onRemove }: LegendProps) {
   return (
     <div style={STRIP}>
-      <div style={TIME_DISPLAY}>
-        Time: {cursorTsMs == null ? '--' : formatTimestamp(cursorTsMs, siteTimezone)}
-      </div>
       {tagIds.map(tagId => (
         <LegendEntry
           key={tagId}
           tagId={tagId}
           tag={tagMap.get(tagId)}
           isSelected={tagId === selectedTagId}
-          value={getCurrentValue(data, tagId, cursorIdx)}
+          value={getCurrentValue(data, tagId, cursorIdx, showLastWhenIdle)}
           onSelect={() => onSelect(tagId)}
           onRemove={() => onRemove(tagId)}
         />

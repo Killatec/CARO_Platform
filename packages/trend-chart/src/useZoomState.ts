@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { Viewport } from './types.js';
+import type { LastIntent } from './useTrendMode.js';
 
 /** Pure snap-and-center math for drag-zoom. Exported for testing. */
 export function computeDragZoomViewport(
@@ -35,6 +36,8 @@ export interface UseZoomStateOpts {
   modeViewport: Viewport;
   visibleTilesPerWindow: number;
   bucketCount: number;
+  /** Prevents the reset effect from clobbering zoom anchor/dataViewport on sub-threshold wheel ticks. */
+  lastIntent: LastIntent;
 }
 
 export interface UseZoomStateResult {
@@ -48,6 +51,7 @@ export function useZoomState({
   modeViewport,
   visibleTilesPerWindow,
   bucketCount,
+  lastIntent,
 }: UseZoomStateOpts): UseZoomStateResult {
   const [currentBucketSMs, setCurrentBucketSMs] = useState<bigint>(
     () => (modeViewport.end - modeViewport.start) / BigInt(visibleTilesPerWindow * bucketCount),
@@ -58,13 +62,19 @@ export function useZoomState({
   const [dataViewport, setDataViewport] = useState<Viewport>(modeViewport);
 
   // Reset zoom level when modeViewport changes (preset click, custom commit, Live tick).
+  // Skipped when lastIntent === 'zoom' or 'pan': both gestures keep the anchor/bucket
+  // size intact so incremental threshold accumulation works correctly.
+  // NOTE (Step 11): viewportChanged will set lastIntent='live' and fire this reset on every
+  // live-tick advance — clobbering bucket size each second. When Step 11 lands, either add
+  // 'live' to the skip list here, or use a more targeted action for tick advances.
   useEffect(() => {
+    if (lastIntent === 'zoom' || lastIntent === 'pan') return;
     const span = modeViewport.end - modeViewport.start;
     const bucketSMs = span / BigInt(visibleTilesPerWindow * bucketCount);
     setCurrentBucketSMs(bucketSMs);
     setZoomAnchorSpan(span);
     setDataViewport({ start: modeViewport.start, end: modeViewport.end });
-  }, [modeViewport.start, modeViewport.end, visibleTilesPerWindow, bucketCount]);
+  }, [modeViewport.start, modeViewport.end, visibleTilesPerWindow, bucketCount, lastIntent]);
 
   const handleDragZoom = useCallback(
     (selectionStartMs: bigint, selectionEndMs: bigint) => {

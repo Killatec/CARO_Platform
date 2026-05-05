@@ -18,7 +18,7 @@ const AGG_BODY: { ok: true; data: TileApiResponse } = {
     source: '1min_cagg',
     startTime: 0,
     endTime: 3_600_000,
-    bucketS: 3.6,
+    bucketSMs: 3_600,
     n: 500,
     series: [{ tagId: 1, value: new Array(500).fill(1.0) }],
   },
@@ -99,7 +99,7 @@ describe('fetchTile', () => {
     expect(result.series).toHaveLength(1);
     if (result.source !== 'raw') {
       expect(result.n).toBe(500);
-      expect(result.bucketS).toBe(3.6);
+      expect(result.bucketSMs).toBe(3_600);
     }
   });
 

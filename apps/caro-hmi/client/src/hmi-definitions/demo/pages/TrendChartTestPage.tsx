@@ -152,7 +152,6 @@ export function TrendChartTestPage() {
           data={data}
           tagIds={TAG_IDS}
           siteTimezone="America/Chicago"
-          width={900}
           height={420}
         />
 

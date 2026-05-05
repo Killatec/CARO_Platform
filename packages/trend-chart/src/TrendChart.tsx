@@ -1,11 +1,11 @@
 import 'uplot/dist/uPlot.min.css';
 import uPlot from 'uplot';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { CSSProperties } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { useTagMap } from '@caro/hmi-context';
 import type { TrendData } from './types.js';
+import type { LastIntent } from './useTrendMode.js';
 import { Legend } from './Legend.js';
-import { ResolutionIndicator } from './ResolutionIndicator.js';
 import {
   pruneRemovedTagOverrides,
   isInYAxisHitZone,
@@ -26,7 +26,6 @@ export interface TrendChartProps {
   /** Effective tag list — container is responsible for filtering removed ids. */
   tagIds: number[];
   siteTimezone?: string;
-  width?: number;
   height?: number;
   /** Initial X scale and live imperative updates (not in rebuild deps — see below). */
   xRange?: { startMs: bigint; endMs: bigint };
@@ -44,11 +43,26 @@ export interface TrendChartProps {
   activeTileCount?: number;
   /** Called when the user completes a drag-zoom selection. Container snaps to nearest discrete level. */
   onDragZoom?: (startMs: bigint, endMs: bigint) => void;
+  /** Rendered inside the left column, below the canvas. Sized to canvas width by the flex column. */
+  footer?: ReactNode;
+  /** Called whenever the cursor timestamp changes (or becomes null on leave). */
+  onCursorTsChange?: (tsMs: number | null) => void;
+  /** When true (tailing), Legend shows last bucket at rest; when false (fixed), shows '--'. Defaults to true. */
+  showLastWhenIdle?: boolean;
+  /** Called after every wheel X-scale mutation with the post-mutation range in ms. */
+  onXRangeChange?: (min: bigint, max: bigint) => void;
+  /** Called after every X-axis pan setScale with the post-pan range in ms. */
+  onXPan?: (min: bigint, max: bigint) => void;
+  /** When 'zoom' or 'pan', the imperative setScale effect is skipped so wheel/pan don't fight modeViewport updates. */
+  lastIntent?: LastIntent;
 }
 
 const WRAPPER: CSSProperties = {
   display: 'flex',
-  flexDirection: 'column',
+  flexDirection: 'row',
+  alignItems: 'flex-start',
+  gap: 12,
+  width: '100%',
   fontFamily: 'monospace',
   background: '#fff',
   border: '1px solid #e5e7eb',
@@ -57,19 +71,18 @@ const WRAPPER: CSSProperties = {
   boxSizing: 'border-box',
 };
 
-const HEADER: CSSProperties = {
+const LEFT_COLUMN: CSSProperties = {
   display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'flex-end',
-  marginBottom: 6,
-  minHeight: 20,
+  flexDirection: 'column',
+  flex: '1 1 auto',
+  minWidth: 0,
 };
+
 
 export function TrendChart({
   data,
   tagIds,
   siteTimezone,
-  width = 800,
   height = 400,
   xRange,
   onTagRemove,
@@ -79,6 +92,12 @@ export function TrendChart({
   swapCounter,
   activeTileCount,
   onDragZoom,
+  footer,
+  onCursorTsChange,
+  showLastWhenIdle = true,
+  onXRangeChange,
+  onXPan,
+  lastIntent,
 }: TrendChartProps) {
   const tagMap = useTagMap();
 
@@ -91,9 +110,22 @@ export function TrendChart({
     ? selectedTagId
     : (tagIds[0] ?? 0);
 
+  const [plotInset, setPlotInset] = useState<{ left: number; right: number }>({ left: 0, right: 0 });
+
+  // Incremented when the first ResizeObserver measurement arrives (or jsdom fallback).
+  // Triggers the initial uPlot build without including measuredWidthRef in rebuild deps.
+  const [rebuildToken, setRebuildToken] = useState(0);
+
   const containerRef = useRef<HTMLDivElement>(null);
+  const leftColRef = useRef<HTMLDivElement>(null);
   const uplotRef = useRef<uPlot | null>(null);
-  const canvasWrapRef = useRef<HTMLDivElement>(null);
+  // Holds the latest measured LEFT_COLUMN width. Updated imperatively by ResizeObserver;
+  // never stored in state so resizes don't trigger React re-renders / rebuilds.
+  const measuredWidthRef = useRef(0);
+  // Always-fresh height for use in the ResizeObserver callback closure.
+  const heightRef = useRef(height);
+  heightRef.current = height;
+
   // Captured in cleanup, consumed on next effect body — preserves user X-zoom across rebuilds.
   const preservedXRangeRef = useRef<{ min: number; max: number } | null>(null);
   // Persists user Y-axis pan/zoom across rebuilds. Keyed by tagId.
@@ -122,23 +154,87 @@ export function TrendChart({
   const onDragZoomRef = useRef(onDragZoom);
   onDragZoomRef.current = onDragZoom;
 
+  const onCursorTsChangeRef = useRef(onCursorTsChange);
+  onCursorTsChangeRef.current = onCursorTsChange;
+
+  const onXRangeChangeRef = useRef(onXRangeChange);
+  onXRangeChangeRef.current = onXRangeChange;
+
+  const onXPanRef = useRef(onXPan);
+  onXPanRef.current = onXPan;
+
+  const lastIntentRef = useRef(lastIntent);
+  lastIntentRef.current = lastIntent;
+
   const onCursorChange = useCallback(
     (idx: number | null, tsMs: number | null) => {
       if (idx === null || idx < 0) {
         setCursorState(null);
+        onCursorTsChangeRef.current?.(null);
       } else {
         setCursorState({ idx, tsMs });
+        onCursorTsChangeRef.current?.(tsMs);
       }
     },
     [],
   );
 
-  // ── Rebuild uPlot when chart config or data changes ───────────────────────
-  // NOTE: xRange is intentionally NOT in this dep list. It is handled by the
-  // narrow imperative effect below so that pan/zoom never triggers a rebuild.
+  // ── ResizeObserver: measures LEFT_COLUMN width ────────────────────────────
+  // On first fire → sets measuredWidthRef and increments rebuildToken to trigger
+  // the initial uPlot build. On subsequent fires → calls setSize directly (no rebuild).
+  useEffect(() => {
+    const el = leftColRef.current;
+    if (!el) return;
+
+    if (typeof ResizeObserver === 'undefined') {
+      // jsdom fallback: use placeholder width so tests can create uPlot.
+      measuredWidthRef.current = 800;
+      setRebuildToken(t => t + 1);
+      return;
+    }
+
+    let insetRafId = 0;
+
+    const ro = new ResizeObserver(entries => {
+      const w = Math.floor(entries[0]!.contentRect.width);
+      if (w <= 0) return;
+      const isFirst = measuredWidthRef.current === 0;
+      measuredWidthRef.current = w;
+
+      if (uplotRef.current) {
+        // Resize existing instance in place — no rebuild, no state update.
+        uplotRef.current.setSize({ width: w, height: heightRef.current });
+        cancelAnimationFrame(insetRafId);
+        insetRafId = requestAnimationFrame(() => {
+          const c = containerRef.current;
+          if (!c || !uplotRef.current) return;
+          const cRect = c.getBoundingClientRect();
+          const oRect = uplotRef.current.over.getBoundingClientRect();
+          setPlotInset({ left: oRect.left - cRect.left, right: cRect.right - oRect.right });
+        });
+      } else if (isFirst) {
+        // First measurement, uPlot not built yet — trigger the rebuild effect.
+        setRebuildToken(t => t + 1);
+      }
+    });
+
+    ro.observe(el);
+    return () => {
+      cancelAnimationFrame(insetRafId);
+      ro.disconnect();
+    };
+  }, []);
+
+  // ── Rebuild uPlot when chart config changes ───────────────────────────────
+  // NOTE: xRange is intentionally NOT in this dep list — handled by the narrow
+  // imperative effect below so pan/zoom never triggers a rebuild.
+  // measuredWidthRef is also NOT a dep — it's a ref. rebuildToken triggers the
+  // initial build when the first ResizeObserver measurement arrives.
   useEffect(() => {
     const container = containerRef.current;
-    if (!container || tagIds.length === 0) {
+    const width = measuredWidthRef.current;
+
+    if (!container || tagIds.length === 0 || width === 0) {
       uplotRef.current?.destroy();
       uplotRef.current = null;
       return;
@@ -164,6 +260,15 @@ export function TrendChart({
 
     const u = new uPlot(config, uplotData, container);
     uplotRef.current = u;
+
+    // Measure plot area after uPlot's layout frame — u.over has zero width synchronously.
+    let insetRafId = requestAnimationFrame(() => {
+      const c = containerRef.current;
+      if (!c || !uplotRef.current) return;
+      const cRect = c.getBoundingClientRect();
+      const oRect = uplotRef.current.over.getBoundingClientRect();
+      setPlotInset({ left: oRect.left - cRect.left, right: cRect.right - oRect.right });
+    });
 
     // Consume the X range captured in cleanup. Null on first mount → fall back to prop.
     const preservedXRange = preservedXRangeRef.current;
@@ -259,6 +364,13 @@ export function TrendChart({
         if (overW === 0 || span === 0) return;
         const dataDx = (dxPx / overW) * span;
         u.setScale('x', { min: xDragStart.minX - dataDx, max: xDragStart.maxX - dataDx });
+        const xScalePan = u.scales['x'];
+        if (xScalePan?.min != null && xScalePan?.max != null) {
+          onXPanRef.current?.(
+            BigInt(Math.round(xScalePan.min * 1000)),
+            BigInt(Math.round(xScalePan.max * 1000)),
+          );
+        }
         // Prefetch check: fire ensureCovered when visible edge approaches cached extent.
         checkAndExtendXCoverage(u, ensureCoveredRef.current);
       }
@@ -288,18 +400,23 @@ export function TrendChart({
       const cursorXPx = e.clientX - r.left;
       zoomXScale(u, e.deltaY, cursorXPx, u.over.clientWidth);
 
-      // Check for zoom-level threshold crossing after the scale has been updated.
       const xScale = u.scales['x'];
-      if (xScale) {
-        const newSpanSec = (xScale.max ?? 0) - (xScale.min ?? 0);
+      if (xScale?.min != null && xScale?.max != null) {
+        // Fire on every wheel tick — drives mode-state sync regardless of threshold.
+        onXRangeChangeRef.current?.(
+          BigInt(Math.round(xScale.min * 1000)),
+          BigInt(Math.round(xScale.max * 1000)),
+        );
+
+        // Check for zoom-level threshold crossing (CAG bucket-size switch).
+        const newSpanSec = xScale.max - xScale.min;
         const newSpanMs = BigInt(Math.round(newSpanSec * 1000));
         const anchorSpan = zoomAnchorSpanRef.current;
         const switchCb = onZoomLevelSwitchRef.current;
         if (anchorSpan && switchCb) {
           const transition = computeZoomLevelTransition(newSpanMs, anchorSpan);
           if (transition) {
-            // Cursor data-X at the current pixel position.
-            const cursorXSec = (xScale.min ?? 0) + (cursorXPx / u.over.clientWidth) * newSpanSec;
+            const cursorXSec = xScale.min + (cursorXPx / u.over.clientWidth) * newSpanSec;
             const cursorTimeMs = BigInt(Math.round(cursorXSec * 1000));
             switchCb(transition, cursorTimeMs);
             return; // Skip coverage check — fresh fetches will fire from the new dataViewport.
@@ -321,6 +438,7 @@ export function TrendChart({
     wrap.addEventListener('wheel', onXWheel, { passive: false });
 
     return () => {
+      cancelAnimationFrame(insetRafId);
       // Capture X scale before destroying so the next effect body can restore it.
       if (uplotRef.current) {
         const oldX = uplotRef.current.scales['x'];
@@ -340,7 +458,7 @@ export function TrendChart({
       uplotRef.current?.destroy();
       uplotRef.current = null;
     };
-  }, [tagIds, effectiveSelectedId, tagMap, width, height, siteTimezone, onCursorChange]);
+  }, [tagIds, effectiveSelectedId, tagMap, height, siteTimezone, onCursorChange, rebuildToken]);
 
   // ── Apply data updates without rebuilding uPlot ───────────────────────────
   // Cheap path: preserves the uPlot instance, all event listeners, and drag state.
@@ -350,7 +468,6 @@ export function TrendChart({
     if (!uplotRef.current || tagIds.length === 0) return;
     const { xs, ys } = seriesFromTrendData(data, tagIds);
     uplotRef.current.setData([xs, ...ys] as uPlot.AlignedData);
-    console.log(`[TrendChart] setData: ${xs.length} points (${activeTileCount ?? 0} active tiles)`);
   }, [data, tagIds]);
 
   // ── Post-swap coverage check — fires once per performSwap, not on every setData ──
@@ -365,8 +482,11 @@ export function TrendChart({
   }, [swapCounter]);
 
   // ── Imperative X-scale update — does NOT rebuild uPlot ───────────────────
+  // Skipped when lastIntent === 'zoom' or 'pan': uPlot already has the right
+  // scale from the gesture handler; firing here would overwrite it or cause jitter.
   useEffect(() => {
     if (!uplotRef.current || !xRange) return;
+    if (lastIntentRef.current === 'zoom' || lastIntentRef.current === 'pan') return;
     uplotRef.current.setScale('x', {
       min: Number(xRange.startMs) / 1000,
       max: Number(xRange.endMs) / 1000,
@@ -388,21 +508,29 @@ export function TrendChart({
         tagMap={tagMap}
         selectedTagId={effectiveSelectedId}
         cursorIdx={cursorState?.idx}
+        showLastWhenIdle={showLastWhenIdle}
         onSelect={setSelectedTagId}
         onRemove={tagId => onTagRemove?.(tagId)}
-        cursorTsMs={cursorState?.tsMs ?? null}
-        siteTimezone={siteTimezone}
       />
     ) : null
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  ), [tagIds, data, tagMap, effectiveSelectedId, cursorState?.idx, cursorState?.tsMs, onTagRemove, siteTimezone]);
+  ), [tagIds, data, tagMap, effectiveSelectedId, cursorState?.idx, onTagRemove, showLastWhenIdle]);
 
   return (
-    <div style={{ ...WRAPPER, width: width + 24 }} ref={canvasWrapRef}>
-      <div style={HEADER}>
-        <ResolutionIndicator data={data} />
+    <div style={WRAPPER}>
+      <div style={LEFT_COLUMN} ref={leftColRef}>
+        <div ref={containerRef} />
+        {footer && (
+          <div style={{
+            width: '100%',
+            boxSizing: 'border-box',
+            paddingLeft: plotInset.left,
+            paddingRight: plotInset.right,
+          }}>
+            {footer}
+          </div>
+        )}
       </div>
-      <div ref={containerRef} />
       {legend}
     </div>
   );

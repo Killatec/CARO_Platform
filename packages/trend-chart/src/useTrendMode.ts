@@ -10,18 +10,41 @@ const DEFAULT_SIZE_MS = 3_600_000n; // 1 hour default
 const LIVE_MODE_ENABLED = false;
 
 /**
+ * Tracks the most recent user action that changed the viewport, to drive
+ * preset-button highlight logic. Rules:
+ *   preset    — user clicked a span preset button
+ *   live      — user clicked Live, or viewportChanged fired (Step 11 placeholder)
+ *   endPicker — user committed an End value via the End picker
+ *   zoom      — user drag-zoomed or wheel-zoomed (zoomApplied dispatched by container)
+ *   pan       — user dragged the X axis (panApplied); span preserved, only End shifts
+ *   null      — initial state; no user action has fired yet
+ *
+ * Highlight rule (SpanPresets): (lastIntent === 'preset' || lastIntent === 'pan') && sizeMs === p.sizeMs
+ * Pan keeps sizeMs constant, so the preset highlight should stay lit after a pan.
+ * Tick preserves the existing lastIntent value (clock advance is not a user intent).
+ * viewportChanged is reserved for Step 11 live-tail; 'live' is the placeholder
+ * value and will be revisited when Step 11 lands.
+ */
+export type LastIntent = 'preset' | 'live' | 'endPicker' | 'zoom' | 'pan' | null;
+
+/**
  * Discriminated mode state. Fixed carries sizeMs to restore when returning to
  * tailing via liveClicked (spec §12.3 "preserving the prior sizeMs").
- * The spec §9.3 shows fixed without sizeMs but carry-through requires it.
+ * lastIntent tracks the most recent user action for preset highlighting.
  */
 export type ModeState =
-  | { mode: 'tailing'; sizeMs: bigint; nowMs: bigint }
-  | { mode: 'fixed'; from: bigint; to: bigint; sizeMs: bigint };
+  | { mode: 'tailing'; sizeMs: bigint; nowMs: bigint; lastIntent: LastIntent }
+  | { mode: 'fixed'; from: bigint; to: bigint; sizeMs: bigint; lastIntent: LastIntent };
 
 export type TrendModeAction =
   | { type: 'presetClicked'; sizeMs: bigint; nowMs: bigint }
   | { type: 'liveClicked'; nowMs: bigint }
-  | { type: 'customCommitted'; from: bigint; to: bigint; nowMs: bigint }
+  | { type: 'endPickerCommitted'; to: bigint; nowMs: bigint }
+  | { type: 'zoomApplied'; from: bigint; to: bigint; nowMs: bigint }
+  // Pan translates the viewport without changing span. Always lands in fixed
+  // mode — pan never enters tailing. To enter live mode the user must click
+  // Live or commit End ≈ now via the End picker.
+  | { type: 'panApplied'; from: bigint; to: bigint; nowMs: bigint }
   | { type: 'viewportChanged'; from: bigint; to: bigint; nowMs: bigint }
   | { type: 'tick'; nowMs: bigint };
 
@@ -29,32 +52,66 @@ export type TrendModeAction =
 export function trendModeReducer(state: ModeState, action: TrendModeAction): ModeState {
   switch (action.type) {
     case 'presetClicked':
-      return { mode: 'tailing', sizeMs: action.sizeMs, nowMs: action.nowMs };
+      // From fixed: stay fixed, preserve End (to), re-anchor Start = End - newSize.
+      // From tailing: stay tailing with new span anchored to now.
+      if (state.mode === 'fixed') {
+        return {
+          mode: 'fixed',
+          from: state.to - action.sizeMs,
+          to: state.to,
+          sizeMs: action.sizeMs,
+          lastIntent: 'preset',
+        };
+      }
+      return { mode: 'tailing', sizeMs: action.sizeMs, nowMs: action.nowMs, lastIntent: 'preset' };
 
     case 'liveClicked':
       if (state.mode === 'fixed') {
-        return { mode: 'tailing', sizeMs: state.sizeMs, nowMs: action.nowMs };
+        return { mode: 'tailing', sizeMs: state.sizeMs, nowMs: action.nowMs, lastIntent: 'live' };
       }
-      return { ...state, nowMs: action.nowMs };
+      return { ...state, nowMs: action.nowMs, lastIntent: 'live' };
 
-    case 'customCommitted': {
-      const { from, to, nowMs } = action;
-      if (to >= nowMs - NEAR_NOW_MS) {
-        return { mode: 'tailing', sizeMs: to - from, nowMs };
-      }
-      return { mode: 'fixed', from, to, sizeMs: state.sizeMs };
+    // End picker commits End only; always goes fixed — user clicks Live if they
+    // want tailing. Strict interpretation: no near-now → tailing auto-transition.
+    case 'endPickerCommitted': {
+      const { to } = action;
+      const { sizeMs } = state;
+      return { mode: 'fixed', from: to - sizeMs, to, sizeMs, lastIntent: 'endPicker' };
     }
 
+    // Zoom updates mode state so modeViewport stays in sync with dataViewport,
+    // keeping EndPicker's displayed End value correct after a zoom.
+    // Tailing is preserved only when the prior mode was already tailing AND the
+    // new `to` stays within NEAR_NOW_MS of now (zoom-out from tailing that keeps
+    // "now" in view). Zoom from fixed always stays fixed regardless of `to`.
+    case 'zoomApplied': {
+      const { from, to, nowMs } = action;
+      const sizeMs = to - from;
+      if (state.mode === 'tailing' && to >= nowMs - NEAR_NOW_MS) {
+        return { mode: 'tailing', sizeMs, nowMs, lastIntent: 'zoom' };
+      }
+      return { mode: 'fixed', from, to, sizeMs, lastIntent: 'zoom' };
+    }
+
+    case 'panApplied': {
+      const { from, to } = action;
+      const sizeMs = state.sizeMs;
+      return { mode: 'fixed', from, to, sizeMs, lastIntent: 'pan' };
+    }
+
+    // Reserved for Step 11 WS-driven viewport advance. lastIntent = 'live' as
+    // placeholder; will be revisited when Step 11 lands.
     case 'viewportChanged': {
       const { from, to, nowMs } = action;
       if (to >= nowMs - NEAR_NOW_MS) {
-        return { mode: 'tailing', sizeMs: to - from, nowMs };
+        return { mode: 'tailing', sizeMs: to - from, nowMs, lastIntent: 'live' };
       }
-      return { mode: 'fixed', from, to, sizeMs: state.sizeMs };
+      return { mode: 'fixed', from, to, sizeMs: state.sizeMs, lastIntent: 'live' };
     }
 
     case 'tick':
       if (state.mode === 'tailing') {
+        // Spread preserves lastIntent — advancing the clock is not a user intent.
         return { ...state, nowMs: action.nowMs };
       }
       return state;
@@ -81,6 +138,7 @@ export function useTrendMode(): UseTrendModeResult {
     mode: 'tailing' as const,
     sizeMs: DEFAULT_SIZE_MS,
     nowMs: BigInt(Date.now()),
+    lastIntent: null as LastIntent,
   }));
 
   useEffect(() => {

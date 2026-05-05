@@ -29,12 +29,13 @@ export interface RawTrendTile {
  * bucketCount for aligned requests, bucketCount+1 for unaligned.
  * source is 'mixed' when watermark fall-through stitched portions from multiple
  * sources (§4.3). Raw-as-aggregate fall-through also yields 'mixed'.
+ * bucketSMs is always an integer — derived as Math.round(spanMs / bucketCount).
  */
 export interface AggregateTrendTile {
   source: '1s_cagg' | '10s_cagg' | '1min_cagg' | '10min_cagg' | 'mixed';
   startTime: bigint;
   endTime: bigint;
-  bucketS: number;
+  bucketSMs: number;
   n: number;
   series: AggregateTrendSeries[];
 }
@@ -42,6 +43,7 @@ export interface AggregateTrendTile {
 export type TrendTile = RawTrendTile | AggregateTrendTile;
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
+
 
 function codeError(message: string, code: string): Error {
   const err = new Error(message);
@@ -217,7 +219,6 @@ async function querySegment(
   tagIds: number[],
   startTime: bigint,
   endTime: bigint,
-  bucketS: number,
   bucketSMs: number,
   cutoffMs: bigint,
 ): Promise<SegmentResult> {
@@ -231,7 +232,7 @@ async function querySegment(
       WITH gapfilled AS (
         SELECT s.tag_id,
                time_bucket_gapfill(
-                 make_interval(secs => $1::float8),
+                 $1::int * INTERVAL '1 millisecond',
                  s.ts,
                  to_timestamp($2::bigint / 1000.0),
                  to_timestamp($3::bigint / 1000.0)
@@ -266,7 +267,7 @@ async function querySegment(
       WITH gapfilled AS (
         SELECT s.tag_id,
                time_bucket_gapfill(
-                 make_interval(secs => $1::float8),
+                 $1::int * INTERVAL '1 millisecond',
                  s.bucket,
                  to_timestamp($2::bigint / 1000.0),
                  to_timestamp($3::bigint / 1000.0)
@@ -296,12 +297,12 @@ async function querySegment(
     `;
   }
 
-  const result = await timescalePool.query(sql, [bucketS, startTime, endTime, tagIds, cutoffMs]);
+  const result = await timescalePool.query(sql, [bucketSMs, startTime, endTime, tagIds, cutoffMs]);
 
   if (LOG_TILE_QUERIES) {
     console.log(
       `[trends] source=${sourceDisplayName(source)} tag_count=${tagIds.length}` +
-      ` bucket_s=${bucketS} start=${startTime} end=${endTime}` +
+      ` bucket_s=${bucketSMs / 1000} start=${startTime} end=${endTime}` +
       ` elapsed_ms=${(performance.now() - t0).toFixed(1)}`,
     );
   }
@@ -326,10 +327,10 @@ async function querySegment(
   // Compute the served bucket grid for this segment.
   //
   // All-absent fallback: when no tag has rows, gapfill emits nothing.
-  // Derive n from epoch-alignment math:
-  //   n = ceil(endMs / B) - floor(startMs / B)
-  // This equals (end - floor(start/B)*B) / B and correctly handles both
-  // aligned and unaligned startTime for the sub-range.
+  // Derive n from epoch-alignment math aligned to the Postgres epoch (2000-01-01),
+  // which is what TimescaleDB time_bucket() uses as its origin for sub-day intervals.
+  //   n = ceil((endMs - PG) / B) - floor((startMs - PG) / B)
+  // Math.floor handles negative offsets correctly (rounds toward -Infinity).
   const sMs = Number(startTime);
   const eMs = Number(endTime);
   let n: number;
@@ -341,8 +342,19 @@ async function querySegment(
     servedStart = firstBucketMs;
     servedEnd   = firstBucketMs + n * bucketSMs;
   } else {
-    const firstMs = Math.floor(sMs / bucketSMs) * bucketSMs;
-    n             = Math.ceil(eMs / bucketSMs) - Math.floor(sMs / bucketSMs);
+    // No rows: gapfill emits nothing when every tag has zero source rows.
+    // Derive the bucket grid via an actual time_bucket() query — the JS formula
+    // using POSTGRES_EPOCH_MS gives wrong alignment for interval-type buckets
+    // (TimescaleDB 2.26.3 does not align interval buckets to either epoch).
+    const alignResult = await timescalePool.query(
+      `SELECT extract(epoch from
+                time_bucket($1::int * INTERVAL '1 millisecond',
+                            to_timestamp($2::bigint / 1000.0))
+              ) * 1000 AS first_ms`,
+      [bucketSMs, startTime],
+    );
+    const firstMs = Number((alignResult.rows[0] as { first_ms: string | number }).first_ms);
+    n             = Math.ceil((eMs - firstMs) / bucketSMs);
     servedStart   = firstMs;
     servedEnd     = firstMs + n * bucketSMs;
   }
@@ -356,7 +368,7 @@ async function querySegment(
     } else if (arr.length !== n) {
       throw new Error(
         `querySegment: tag ${id} yielded ${arr.length} buckets but grid is ${n}` +
-        ` — gapfill output is inconsistent (source=${source}, bucketS=${bucketS})`,
+        ` — gapfill output is inconsistent (source=${source}, bucketSMs=${bucketSMs})`,
       );
     }
   }
@@ -379,7 +391,6 @@ async function queryRecursive(
   tagIds: number[],
   startTime: bigint,
   endTime: bigint,
-  bucketS: number,
   bucketSMs: number,
   cutoffMs: bigint,
 ): Promise<{ segments: SegmentResult[]; usedSources: Set<AggregateSource> }> {
@@ -389,30 +400,44 @@ async function queryRecursive(
   if (source === 'tag_samples' || endTimeMs <= watermarkMs) {
     // Full range is covered by this source — no fall-through.
     __test_lastUsedSources.current.add(source);
-    const seg = await querySegment(source, tagIds, startTime, endTime, bucketS, bucketSMs, cutoffMs);
+    const seg = await querySegment(source, tagIds, startTime, endTime, bucketSMs, cutoffMs);
     return { segments: [seg], usedSources: new Set([source]) };
   }
 
   // Fall-through needed. Compute the split point: the bucket boundary at or
   // below the watermark (so the CAG half only covers fully-materialized buckets).
-  const splitBoundaryMs = Math.floor(watermarkMs / bucketSMs) * bucketSMs;
+  // Query the actual time_bucket() result from TimescaleDB — TimescaleDB 2.26.3's
+  // interval-type buckets use a non-obvious alignment that does not match either
+  // the Unix or Postgres epoch, so a DB round-trip is required.
+  const splitResult = await timescalePool.query(
+    `SELECT extract(epoch from
+              time_bucket($1::int * INTERVAL '1 millisecond',
+                          to_timestamp($2::bigint / 1000.0))
+            ) * 1000 AS split_ms`,
+    [bucketSMs, BigInt(watermarkMs)],
+  );
+  const splitBoundaryMs = Number((splitResult.rows[0] as { split_ms: string | number }).split_ms);
 
   if (splitBoundaryMs <= Number(startTime)) {
     // Nothing in this source covers the requested range — fall through entirely.
     // This source contributed no data; do NOT add it to __test_lastUsedSources.
     const finer = nextFinerSource(source);
-    return queryRecursive(finer, tagIds, startTime, endTime, bucketS, bucketSMs, cutoffMs);
+    return queryRecursive(finer, tagIds, startTime, endTime, bucketSMs, cutoffMs);
   }
 
   // Split: CAG covers [startTime, splitBoundary); finer source covers [splitBoundary, endTime).
-  // Run both in parallel — independent DB round-trips.
   __test_lastUsedSources.current.add(source);
   const splitBoundary = BigInt(splitBoundaryMs);
   const finer         = nextFinerSource(source);
 
+  // Pass splitBoundary - 1n to the left segment's endTime so that gapfill's
+  // finish is 1 ms before the boundary bucket start. Since splitBoundaryMs is
+  // an exact bucket boundary (from time_bucket()), finish = boundary - 1 lands
+  // inside the PRIOR bucket, so gapfill does not emit the boundary bucket in
+  // the left half. The right half then owns that bucket exclusively.
   const [leftSeg, rightResult] = await Promise.all([
-    querySegment(source, tagIds, startTime, splitBoundary, bucketS, bucketSMs, cutoffMs),
-    queryRecursive(finer, tagIds, splitBoundary, endTime, bucketS, bucketSMs, cutoffMs),
+    querySegment(source, tagIds, startTime, splitBoundary - 1n, bucketSMs, cutoffMs),
+    queryRecursive(finer, tagIds, splitBoundary, endTime, bucketSMs, cutoffMs),
   ]);
 
   return {
@@ -454,7 +479,13 @@ export async function getTrendTile(
     throw codeError('bucketCount must be an integer in 1..2500', 'INVALID_BUCKET_COUNT');
   }
 
-  const bucketS = Number(endTime - startTime) / (bucketCount * 1000);
+  // Derive bucketSMs as an integer first; bucketS follows exactly from it.
+  // Computing bucketS = spanMs / (bucketCount * 1000) directly risks a fractional
+  // result — e.g., 1_555_250 ms / 250_000 = 6.221 which round-trips to
+  // bucketSMs = 6220.8 (float error). Computing integer ms first eliminates this.
+  const bucketSMs = Math.round(Number(endTime - startTime) / bucketCount);
+  const bucketS   = bucketSMs / 1000;
+
   if (bucketS <= 0 || bucketS > 14746) {
     throw codeError(
       `Derived bucketS ${bucketS} is outside the valid range (0, 14746]`,
@@ -476,8 +507,6 @@ export async function getTrendTile(
   else if (bucketS < 1600) dispatchSource = 'tag_samples_1min_cagg';
   else                     dispatchSource = 'tag_samples_10min_cagg';
 
-  const bucketSMs = Math.round(bucketS * 1000);
-
   // ── Data-extent cutoff ───────────────────────────────────────────────────────
   // Gapfill+LOCF propagates past the last real sample into future buckets.
   // Query MAX(ts) once and null out any gf_bucket beyond that point in each segment.
@@ -494,8 +523,25 @@ export async function getTrendTile(
 
   __test_lastUsedSources.current = new Set();
   const { segments, usedSources } = await queryRecursive(
-    dispatchSource, tagIds, startTime, endTime, bucketS, bucketSMs, cutoffMs,
+    dispatchSource, tagIds, startTime, endTime, bucketSMs, cutoffMs,
   );
+
+  // ── Remove seam duplicates ──────────────────────────────────────────────────
+  //
+  // time_bucket_gapfill generates one extra bucket past its finish argument:
+  // the bucket at time_bucket(finish) + bucket_width. When the left half's
+  // finish is splitBoundary - 1ms, this extra bucket lands exactly at
+  // splitBoundary — the same bucket the right half starts at. Drop it from the
+  // left half; the finer-source value from the right half is preferred.
+  for (let i = 0; i < segments.length - 1; i++) {
+    const left  = segments[i]!;
+    const right = segments[i + 1]!;
+    if (left.servedEnd - bucketSMs === right.servedStart) {
+      for (const arr of left.valuesByTag.values()) arr.pop();
+      left.n       -= 1;
+      left.servedEnd -= bucketSMs;
+    }
+  }
 
   // ── Merge segments ──────────────────────────────────────────────────────────
 
@@ -530,7 +576,11 @@ export async function getTrendTile(
       ? (sourceDisplayName(dispatchSource) as Exclude<AggregateTrendTile['source'], 'mixed'>)
       : 'mixed';
 
-  return { source, startTime: servedStartTime, endTime: servedEndTime, bucketS, n: totalN, series };
+  if (!Number.isInteger(bucketSMs)) {
+    throw new Error(`getTrendTile: bucketSMs must be integer ms, got ${bucketSMs}`);
+  }
+
+  return { source, startTime: servedStartTime, endTime: servedEndTime, bucketSMs, n: totalN, series };
 }
 
 // ── getTrendExtent ─────────────────────────────────────────────────────────────

@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { formatBucketS } from '../../src/render/formatBucketS.js';
+import { formatSpanMs } from '../../src/render/formatSpanMs.js';
 import { formatValue } from '../../src/render/formatValue.js';
-import { formatTimestamp, formatTickLabel } from '../../src/render/formatTimestamp.js';
+import { formatTickLabel } from '../../src/render/formatTickLabel.js';
 
 // ── formatBucketS ─────────────────────────────────────────────────────────────
 
@@ -65,81 +66,63 @@ describe('formatValue', () => {
   });
 });
 
-// ── formatTimestamp ────────────────────────────────────────────────────────────
-
-describe('formatTimestamp', () => {
-  const EPOCH_MS = 1_700_000_000_000; // a known timestamp
-
-  it('returns a non-empty string', () => {
-    expect(formatTimestamp(EPOCH_MS)).toBeTruthy();
-  });
-
-  it('accepts bigint ms input', () => {
-    const result = formatTimestamp(BigInt(EPOCH_MS));
-    expect(typeof result).toBe('string');
-    expect(result.length).toBeGreaterThan(0);
-  });
-
-  it('uses siteTimezone when valid', () => {
-    const chicago = formatTimestamp(EPOCH_MS, 'America/Chicago');
-    const nyc = formatTimestamp(EPOCH_MS, 'America/New_York');
-    // Chicago is UTC-6, NYC is UTC-5; they should produce different strings.
-    expect(chicago).not.toBe(nyc);
-  });
-
-  it('falls back to browser locale on invalid timezone', () => {
-    // Should not throw — falls back gracefully.
-    expect(() => formatTimestamp(EPOCH_MS, 'Not/AReal_Zone')).not.toThrow();
-  });
-});
-
 // ── formatTickLabel ───────────────────────────────────────────────────────────
 
 describe('formatTickLabel', () => {
   // 2023-11-14T22:13:20.000Z — a non-round timestamp to stress the formatter.
   const TS_MS = 1_700_000_000_000;
 
-  it('incrSec=30 (sub-minute) → HH:mm:ss only, no date', () => {
-    const result = formatTickLabel(TS_MS, 'UTC', 30);
-    // Must contain seconds component (colon-separated triple).
-    expect(result).toMatch(/^\d{2}:\d{2}:\d{2}$/);
+  it('incrSec=30 (second level) → HH:mm:ss', () => {
+    expect(formatTickLabel(TS_MS, 'UTC', 30)).toMatch(/^\d{2}:\d{2}:\d{2}$/);
   });
 
-  it('incrSec=600 (sub-hour) → HH:mm only, no seconds or date', () => {
-    const result = formatTickLabel(TS_MS, 'UTC', 600);
+  it('incrSec=600 (minute level) → HH:mm', () => {
+    expect(formatTickLabel(TS_MS, 'UTC', 600)).toMatch(/^\d{2}:\d{2}$/);
+  });
+
+  it('incrSec=3600 (hour level), first tick → dd-mmm HH:mm', () => {
+    const result = formatTickLabel(TS_MS, 'UTC', 3600);
+    // prevTsMs undefined → first tick → date prefix shown: "14-Nov 22:13"
+    expect(result).toMatch(/^\d{2}-[A-Z][a-z]{2} \d{2}:\d{2}$/);
+  });
+
+  it('incrSec=3600, same day as previous → HH:mm only', () => {
+    const prevMs = TS_MS - 3_600_000; // 1 hour earlier, same calendar day in UTC
+    const result = formatTickLabel(TS_MS, 'UTC', 3600, prevMs);
     expect(result).toMatch(/^\d{2}:\d{2}$/);
   });
 
-  it('incrSec=3600 (sub-day) → MM/DD HH:mm format', () => {
-    const result = formatTickLabel(TS_MS, 'UTC', 3600);
-    // en-US locale: "11/14, 22:13" (Intl inserts comma between date and time).
-    expect(result).toMatch(/^\d{2}\/\d{2},?\s\d{2}:\d{2}$/);
+  it('incrSec=3600, tick crosses midnight → dd-mmm HH:mm', () => {
+    // 2023-11-14T22:00:00Z prev; 2023-11-15T00:00:00Z current → day boundary
+    const prev = Date.UTC(2023, 10, 14, 22, 0, 0);
+    const curr = Date.UTC(2023, 10, 15, 0, 0, 0);
+    const result = formatTickLabel(curr, 'UTC', 3600, prev);
+    expect(result).toMatch(/^\d{2}-[A-Z][a-z]{2} \d{2}:\d{2}$/);
+    expect(result).toContain('15-Nov');
   });
 
-  it('incrSec=86400 (multi-day) → MM/DD only', () => {
-    const result = formatTickLabel(TS_MS, 'UTC', 86400);
-    expect(result).toMatch(/^\d{2}\/\d{2}$/);
+  it('incrSec=86400 (day level) → dd-mmm', () => {
+    expect(formatTickLabel(TS_MS, 'UTC', 86400)).toMatch(/^\d{2}-[A-Z][a-z]{2}$/);
+    expect(formatTickLabel(TS_MS, 'UTC', 86400)).toContain('14-Nov');
   });
 
-  it('incrSec=604800 (weekly, 1w–30d tier) → MMM DD', () => {
-    const result = formatTickLabel(TS_MS, 'UTC', 604800);
-    // en-US short month + 2-digit day: "Nov 14"
-    expect(result).toMatch(/^[A-Z][a-z]{2} \d{2}$/);
+  it('incrSec=604800 (day level, within month range) → dd-mmm', () => {
+    expect(formatTickLabel(TS_MS, 'UTC', 604800)).toMatch(/^\d{2}-[A-Z][a-z]{2}$/);
   });
 
-  it('incrSec=1209600 (14 days, 1w–30d tier) → MMM DD', () => {
-    const result = formatTickLabel(TS_MS, 'UTC', 1_209_600);
-    expect(result).toMatch(/^[A-Z][a-z]{2} \d{2}$/);
+  it('incrSec=2592000 (month level) → mmm-yyyy', () => {
+    const result = formatTickLabel(TS_MS, 'UTC', 2_592_000);
+    expect(result).toMatch(/^[A-Z][a-z]{2}-\d{4}$/);
+    expect(result).toContain('Nov-2023');
   });
 
-  it('incrSec=5184000 (60 days, 30d+ tier) → MMM YYYY', () => {
-    const result = formatTickLabel(TS_MS, 'UTC', 5_184_000);
-    // en-US short month + numeric year: "Nov 2023"
-    expect(result).toMatch(/^[A-Z][a-z]{2} \d{4}$/);
+  it('incrSec=31536000 (year level) → yyyy', () => {
+    const result = formatTickLabel(TS_MS, 'UTC', 31_536_000);
+    expect(result).toMatch(/^\d{4}$/);
+    expect(result).toBe('2023');
   });
 
-  it('timezone shifts the displayed hour', () => {
-    // UTC+0 vs UTC-5 (America/New_York in winter): hour should differ.
+  it('timezone shifts the displayed hour (minute level)', () => {
     const utc = formatTickLabel(TS_MS, 'UTC', 600);
     const nyc = formatTickLabel(TS_MS, 'America/New_York', 600);
     expect(utc).not.toBe(nyc);
@@ -147,5 +130,76 @@ describe('formatTickLabel', () => {
 
   it('undefined timezone does not throw', () => {
     expect(() => formatTickLabel(TS_MS, undefined, 600)).not.toThrow();
+  });
+});
+
+// ── formatSpanMs ──────────────────────────────────────────────────────────────
+
+describe('formatSpanMs', () => {
+  // Preset spans
+  it('900_000n ms (15 min) → "15 min"', () => {
+    expect(formatSpanMs(900_000n)).toBe('15 min');
+  });
+
+  it('3_600_000n ms (1 h) → "1 h"', () => {
+    expect(formatSpanMs(3_600_000n)).toBe('1 h');
+  });
+
+  it('14_400_000n ms (4 h) → "4 h"', () => {
+    expect(formatSpanMs(14_400_000n)).toBe('4 h');
+  });
+
+  it('86_400_000n ms (24 h) → "1 d"', () => {
+    expect(formatSpanMs(86_400_000n)).toBe('1 d');
+  });
+
+  it('604_800_000n ms (7 d) → "7 d"', () => {
+    expect(formatSpanMs(604_800_000n)).toBe('7 d');
+  });
+
+  it('1_209_600_000n ms (14 d) → "14 d"', () => {
+    expect(formatSpanMs(1_209_600_000n)).toBe('14 d');
+  });
+
+  // Fractional values (zoom-produced spans)
+  it('16_400n ms (16.4 s) → "16.4 s"', () => {
+    expect(formatSpanMs(16_400n)).toBe('16.4 s');
+  });
+
+  it('216_000_000n ms (2.5 d) → "2.5 d"', () => {
+    expect(formatSpanMs(216_000_000n)).toBe('2.5 d');
+  });
+
+  it('5_400_000n ms (1.5 h) → "1.5 h"', () => {
+    expect(formatSpanMs(5_400_000n)).toBe('1.5 h');
+  });
+
+  // Boundary: exactly at 60s threshold
+  it('60_000n ms (60 s) → "1 min"', () => {
+    expect(formatSpanMs(60_000n)).toBe('1 min');
+  });
+
+  // Boundary: exactly at 1h threshold
+  it('3_600_000n ms (3600 s) → "1 h" not "60 min"', () => {
+    expect(formatSpanMs(3_600_000n)).toBe('1 h');
+  });
+
+  // Boundary: exactly at 24h threshold
+  it('86_400_000n ms (86400 s) → "1 d" not hours', () => {
+    expect(formatSpanMs(86_400_000n)).toBe('1 d');
+  });
+
+  // Sub-second
+  it('500n ms (0.5 s) → "0.5 s"', () => {
+    expect(formatSpanMs(500n)).toBe('0.5 s');
+  });
+
+  // Trailing-zero stripping (the + trick)
+  it('no trailing zeros: 3_600_000n → "1 h" not "1.00 h"', () => {
+    expect(formatSpanMs(3_600_000n)).not.toContain('.00');
+  });
+
+  it('no trailing zeros: 1_209_600_000n → "14 d" not "14.00 d"', () => {
+    expect(formatSpanMs(1_209_600_000n)).not.toContain('.00');
   });
 });

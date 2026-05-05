@@ -18,7 +18,7 @@ export type TileApiResponse =
       source: '1s_cagg' | '10s_cagg' | '1min_cagg' | '10min_cagg' | 'mixed';
       startTime: number;
       endTime: number;
-      bucketS: number;
+      bucketSMs: number;
       n: number;
       series: Array<{ tagId: number; value: (number | null)[] }>;
     };
