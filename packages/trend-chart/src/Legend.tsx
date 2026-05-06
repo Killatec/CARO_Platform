@@ -161,6 +161,7 @@ function LegendEntry({ tagId, tag, isSelected, displayText, onSelect, onRemove }
     color: '#374151',
     fontFamily: 'monospace',
     marginLeft: 4,
+    flexGrow: 1,
   };
 
   const removeBtn: CSSProperties = {
@@ -171,7 +172,7 @@ function LegendEntry({ tagId, tag, isSelected, displayText, onSelect, onRemove }
     padding: '0 2px',
     fontSize: 14,
     lineHeight: 1,
-    marginLeft: 2,
+    flexShrink: 0,
   };
 
   return (
