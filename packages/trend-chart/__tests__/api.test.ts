@@ -35,6 +35,16 @@ const RAW_BODY: { ok: true; data: TileApiResponse } = {
     source: 'raw',
     startTime: 0,
     endTime: 3_600_000,
+    series: [{ tagId: 1, ts: [100, 200, 300], value: [1.0, 2.0, null], prev: { ts: -60_000, value: 0.5 } }],
+  },
+};
+
+const RAW_BODY_NO_PREV: { ok: true; data: TileApiResponse } = {
+  ok: true,
+  data: {
+    source: 'raw',
+    startTime: 0,
+    endTime: 3_600_000,
     series: [{ tagId: 1, ts: [100, 200, 300], value: [1.0, 2.0, null] }],
   },
 };
@@ -142,6 +152,30 @@ describe('fetchTile', () => {
     if (result.source === 'raw') {
       expect(result.series[0]!.ts).toEqual([100, 200, 300]);
       expect(result.series[0]!.value).toEqual([1.0, 2.0, null]);
+    }
+  });
+
+  it('raw response with prev: prev field round-trips as { ts: number, value: number | null }', async () => {
+    fetchSpy.mockResolvedValueOnce(mockResponse(RAW_BODY));
+
+    const result = await fetchTile({ tagIds: [1], startTime: 0n, endTime: 3_600_000n, bucketCount: 500 });
+
+    expect(result.source).toBe('raw');
+    if (result.source === 'raw') {
+      expect(result.series[0]!.prev).toBeDefined();
+      expect(result.series[0]!.prev!.ts).toBe(-60_000);
+      expect(result.series[0]!.prev!.value).toBe(0.5);
+    }
+  });
+
+  it('raw response without prev: prev field is absent (v0.8 cache compatibility)', async () => {
+    fetchSpy.mockResolvedValueOnce(mockResponse(RAW_BODY_NO_PREV));
+
+    const result = await fetchTile({ tagIds: [1], startTime: 0n, endTime: 3_600_000n, bucketCount: 500 });
+
+    expect(result.source).toBe('raw');
+    if (result.source === 'raw') {
+      expect(result.series[0]!.prev).toBeUndefined();
     }
   });
 });

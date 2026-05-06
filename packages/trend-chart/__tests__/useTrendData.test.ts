@@ -475,6 +475,46 @@ describe('useTrendData', () => {
     }
   });
 
+  it('assembleData: raw response with prev propagates prev to RawSeriesData', async () => {
+    const rawWithPrev: TileApiResponse = {
+      source: 'raw',
+      startTime: 0,
+      endTime: Number(ONE_HOUR),
+      series: [{ tagId: 1, ts: [100, 200, 300], value: [1.0, 2.0, null], prev: { ts: -60_000, value: 0.5 } }],
+    };
+    mockFetchTile.mockResolvedValue(rawWithPrev);
+
+    const { result } = renderHook(() =>
+      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
+    );
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    const data = result.current.data;
+    expect(data?.type).toBe('raw');
+    if (data?.type === 'raw') {
+      const entry = data.series.get(1)!;
+      expect(entry.prev).toBeDefined();
+      expect(entry.prev!.ts).toBe(-60_000n); // number ms → BigInt ms via BigInt()
+      expect(entry.prev!.value).toBe(0.5);
+    }
+  });
+
+  it('assembleData: raw response without prev (v0.8 cache) leaves prev undefined', async () => {
+    mockFetchTile.mockResolvedValue(makeRawResponse([1]));
+
+    const { result } = renderHook(() =>
+      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
+    );
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    const data = result.current.data;
+    expect(data?.type).toBe('raw');
+    if (data?.type === 'raw') {
+      const entry = data.series.get(1)!;
+      expect(entry.prev).toBeUndefined();
+    }
+  });
+
   // ── ensureCovered ─────────────────────────────────────────────────────────
 
   it('ensureCovered: range inside cached tiles fires no new fetches', async () => {

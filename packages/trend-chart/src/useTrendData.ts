@@ -20,6 +20,7 @@ interface CachedEntry {
   // Raw fields
   ts?:       bigint[];
   valueRaw?: (number | null)[];
+  prev?:     { ts: bigint; value: number | null };
 }
 
 function estimateCachedEntrySize(entry: CachedEntry): number {
@@ -83,6 +84,7 @@ function storeTileResult(
         source: 'raw',
         ts: s.ts.map(t => BigInt(t)),
         valueRaw: s.value,
+        ...(s.prev ? { prev: { ts: BigInt(s.prev.ts), value: s.prev.value } } : {}),
       });
     }
   } else {
@@ -127,10 +129,11 @@ function assembleData(
   }
 
   if (isRaw) {
-    const series = new Map<number, { ts: bigint[]; value: (number | null)[] }>();
+    const series = new Map<number, { ts: bigint[]; value: (number | null)[]; prev?: { ts: bigint; value: number | null } }>();
     for (const tagId of tagIds) {
       const ts: bigint[] = [];
       const value: (number | null)[] = [];
+      let prev: { ts: bigint; value: number | null } | undefined;
       for (const tile of tilesInOrder) {
         const entry = cache.get(
           makeTileCacheKey({ tagId, startTime: tile.startTime, endTime: tile.endTime, bucketCount: tile.bucketCount }),
@@ -138,9 +141,11 @@ function assembleData(
         if (entry?.ts && entry.valueRaw) {
           ts.push(...entry.ts);
           value.push(...entry.valueRaw);
+          // Use the leftmost tile's prev — it has the earliest preceding sample.
+          if (prev === undefined && entry.prev) prev = entry.prev;
         }
       }
-      series.set(tagId, { ts, value });
+      series.set(tagId, prev !== undefined ? { ts, value, prev } : { ts, value });
     }
     const result: RawSeriesData = {
       type: 'raw',

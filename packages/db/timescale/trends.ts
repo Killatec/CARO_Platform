@@ -8,6 +8,8 @@ export interface RawTrendSeries {
   tagId: number;
   ts: bigint[];
   value: (number | null)[];
+  /** Most recent sample in [startTime - 5 min, startTime) per §5.5 bounded-prev contract. */
+  prev?: { ts: bigint; value: number | null };
 }
 
 export interface AggregateTrendSeries {
@@ -154,23 +156,46 @@ async function queryRaw(
 ): Promise<RawTrendTile> {
   const t0 = LOG_TILE_QUERIES ? performance.now() : 0;
 
-  const result = await timescalePool.query(
-    `SELECT tag_id,
-            (extract(epoch from ts) * 1000)::bigint AS ts_ms,
-            value
-     FROM tag_samples
-     WHERE tag_id = ANY($1::int[])
-       AND ts >= to_timestamp($2::bigint / 1000.0)
-       AND ts <  to_timestamp($3::bigint / 1000.0)
-     ORDER BY tag_id, ts`,
-    [tagIds, startTime, endTime],
-  );
+  // Run the in-window query and the bounded-prev query in parallel (§5.5 contract).
+  // Bounded-prev: latest sample per tag in [startTime - 5 min, startTime).
+  // DISTINCT ON (tag_id) with ORDER BY tag_id, ts DESC returns the most recent row per tag.
+  const [result, prevResult] = await Promise.all([
+    timescalePool.query(
+      `SELECT tag_id,
+              (extract(epoch from ts) * 1000)::bigint AS ts_ms,
+              value
+       FROM tag_samples
+       WHERE tag_id = ANY($1::int[])
+         AND ts >= to_timestamp($2::bigint / 1000.0)
+         AND ts <  to_timestamp($3::bigint / 1000.0)
+       ORDER BY tag_id, ts`,
+      [tagIds, startTime, endTime],
+    ),
+    timescalePool.query(
+      `SELECT DISTINCT ON (tag_id)
+              tag_id,
+              (extract(epoch from ts) * 1000)::bigint AS ts_ms,
+              value
+       FROM tag_samples
+       WHERE tag_id = ANY($1::int[])
+         AND ts <  to_timestamp($2::bigint / 1000.0)
+         AND ts >= to_timestamp($2::bigint / 1000.0) - INTERVAL '5 minutes'
+       ORDER BY tag_id, ts DESC`,
+      [tagIds, startTime],
+    ),
+  ]);
 
   if (LOG_TILE_QUERIES) {
     console.log(
       `[trends] source=raw tag_count=${tagIds.length} bucket_s=0` +
       ` start=${startTime} end=${endTime} bucket_count=n/a elapsed_ms=${(performance.now() - t0).toFixed(1)}`,
     );
+  }
+
+  // Build prev map: tagId → most-recent prior sample within the 5-minute window.
+  const prevMap = new Map<number, { ts: bigint; value: number | null }>();
+  for (const row of prevResult.rows as { tag_id: number; ts_ms: bigint | string; value: number | null }[]) {
+    prevMap.set(row.tag_id, { ts: BigInt(row.ts_ms), value: row.value });
   }
 
   const seriesMap = new Map<number, RawTrendSeries>();
@@ -181,6 +206,20 @@ async function queryRaw(
     if (!series) continue;
     series.ts.push(BigInt(row.ts_ms));
     series.value.push(row.value);
+  }
+
+  // Attach prev to each series that has a prior sample.
+  for (const id of tagIds) {
+    const series = seriesMap.get(id)!;
+    const prev = prevMap.get(id);
+    if (prev) series.prev = prev;
+  }
+
+  if (LOG_TILE_QUERIES) {
+    for (const id of tagIds) {
+      const p = prevMap.get(id);
+      console.log(`[trends] raw prev tag=${id} ${p ? `ts=${p.ts} value=${p.value}` : 'none'}`);
+    }
   }
 
   return {

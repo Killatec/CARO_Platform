@@ -187,6 +187,46 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: RAW branch (buck
     expect(tile.series[0].ts[0]).toBe(START + 1_500n);
   });
 
+  it('bounded-prev: prev present when prior sample is within the 5-minute window', async () => {
+    // Write one sample 60 s before the window (within the 5-minute bound).
+    const prevTs = START - 60_000n;
+    await writeTestSamples([{ ts: prevTs, tagId: 1011, value: 42.0 }]);
+    const tile = await getTrendTile([1011], START, END, COUNT) as RawTrendTile;
+    expect(tile.series[0].prev).toBeDefined();
+    expect(tile.series[0].prev!.ts).toBe(prevTs);
+    expect(tile.series[0].prev!.value).toBe(42.0);
+  });
+
+  it('bounded-prev: prev absent when prior sample is outside the 5-minute window', async () => {
+    // Write one sample 6 minutes before the window (outside the 5-minute bound).
+    const prevTs = START - 360_000n;
+    await writeTestSamples([{ ts: prevTs, tagId: 1012, value: 7.0 }]);
+    const tile = await getTrendTile([1012], START, END, COUNT) as RawTrendTile;
+    expect(tile.series[0].prev).toBeUndefined();
+  });
+
+  it('bounded-prev: prev absent when no samples exist before the window at all', async () => {
+    // Write only one in-window sample — nothing before startTime.
+    await writeTestSamples([{ ts: START + 10_000n, tagId: 1013, value: 3.0 }]);
+    const tile = await getTrendTile([1013], START, END, COUNT) as RawTrendTile;
+    expect(tile.series[0].prev).toBeUndefined();
+  });
+
+  it('bounded-prev: independent per tag — some with prev, some without', async () => {
+    // Tag 1014: has prior sample within 5 min.
+    // Tag 1015: prior sample exists but is outside 5 min — no prev.
+    await writeTestSamples([
+      { ts: START - 30_000n, tagId: 1014, value: 11.0 },  // 30s before → within bound
+      { ts: START - 360_000n, tagId: 1015, value: 22.0 }, // 6 min before → outside bound
+    ]);
+    const tile = await getTrendTile([1014, 1015], START, END, COUNT) as RawTrendTile;
+    const s14 = tile.series.find(s => s.tagId === 1014)!;
+    const s15 = tile.series.find(s => s.tagId === 1015)!;
+    expect(s14.prev).toBeDefined();
+    expect(s14.prev!.value).toBe(11.0);
+    expect(s15.prev).toBeUndefined();
+  });
+
   it('raw path: startTime and endTime match the request exactly regardless of alignment', async () => {
     // Raw path (bucketS < 1.0) must never mutate the requested range.
     const unalignedStart = START + 123n;

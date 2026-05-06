@@ -50,10 +50,13 @@ export function bandsFromTrendData(data: TrendData, tagIds: number[]): BandArray
   }
 
   // Raw path: forward-fill per-tag values on the union timestamp grid.
+  // prev.ts (up to 5 min before startTime) is included so the forward-fill seed
+  // is visible from the left edge — uPlot clips the rendered line to the viewport.
   const allTsSet = new Set<bigint>();
   for (const tagId of tagIds) {
     const s = data.series.get(tagId);
     if (s) {
+      if (s.prev) allTsSet.add(s.prev.ts);
       for (const t of s.ts) allTsSet.add(t);
     }
   }
@@ -73,6 +76,8 @@ export function bandsFromTrendData(data: TrendData, tagIds: number[]): BandArray
     if (!s) return new Array<number | null>(sortedTs.length).fill(null);
 
     const valueAtTs = new Map<bigint, number | null>();
+    // Seed with bounded-prev so the line starts from the left edge of the viewport.
+    if (s.prev) valueAtTs.set(s.prev.ts, s.prev.value);
     for (let i = 0; i < s.ts.length; i++) {
       valueAtTs.set(s.ts[i]!, s.value[i] ?? null);
     }
@@ -80,7 +85,7 @@ export function bandsFromTrendData(data: TrendData, tagIds: number[]): BandArray
     let lastValue: number | null = null;
     return sortedTs.map(t => {
       if (valueAtTs.has(t)) {
-        lastValue = valueAtTs.get(t)!;
+        lastValue = valueAtTs.get(t) ?? null;
       }
       return lastValue;
     });

@@ -27,6 +27,7 @@ function serializeTile(tile: TrendTile): unknown {
         tagId:  s.tagId,
         ts:     s.ts.map(t => Number(t)),
         value:  s.value,
+        ...(s.prev ? { prev: { ts: Number(s.prev.ts), value: s.prev.value } } : {}),
       })),
     };
   }

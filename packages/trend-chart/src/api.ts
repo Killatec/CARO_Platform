@@ -12,7 +12,13 @@ export type TileApiResponse =
       source: 'raw';
       startTime: number;
       endTime: number;
-      series: Array<{ tagId: number; ts: number[]; value: (number | null)[] }>;
+      series: Array<{
+        tagId: number;
+        ts: number[];
+        value: (number | null)[];
+        /** Most recent sample before startTime (§5.5 bounded-prev, v0.9+). */
+        prev?: { ts: number; value: number | null };
+      }>;
     }
   | {
       source: '1s_cagg' | '10s_cagg' | '1min_cagg' | '10min_cagg' | 'mixed';

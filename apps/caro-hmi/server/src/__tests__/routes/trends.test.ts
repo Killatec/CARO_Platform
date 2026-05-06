@@ -54,10 +54,17 @@ function buildGzipApp() {
   return app;
 }
 
-// v0.5 fixture: raw tile with bigint startTime/endTime and bigint ts entries.
+// v0.9 fixture: raw tile with bigint startTime/endTime, bigint ts entries, and prev.
 // The route serialises bigints to numbers via serializeTile() before res.json(),
 // so res.body will contain plain numbers — not bigints.
 const RAW_TILE: RawTrendTile = {
+  source: 'raw',
+  startTime: 3_600_000n,
+  endTime:   3_840_000n,
+  series: [{ tagId: 1, ts: [3_601_000n, 3_602_000n], value: [1.5, 2.0], prev: { ts: 3_540_000n, value: 0.5 } }],
+};
+
+const RAW_TILE_NO_PREV: RawTrendTile = {
   source: 'raw',
   startTime: 3_600_000n,
   endTime:   3_840_000n,
@@ -134,6 +141,34 @@ describe('GET /api/v1/trends/tile — unit (mocked)', () => {
     const keys = Object.keys(res.body.data.series[0]);
     expect(keys).not.toContain('min');
     expect(keys).not.toContain('max');
+  });
+
+  it('raw response includes prev with bigint ts serialised to number when present', async () => {
+    mockGet.mockResolvedValueOnce(RAW_TILE);
+    const res = await request(app)
+      .get('/api/v1/trends/tile?tag_ids=1&start_time=3600000&end_time=3840000&bucket_count=250');
+    expect(res.status).toBe(200);
+    const s = res.body.data.series[0];
+    expect(s.prev).toBeDefined();
+    expect(s.prev.ts).toBe(3_540_000);
+    expect(s.prev.value).toBe(0.5);
+    expect(typeof s.prev.ts).toBe('number');
+  });
+
+  it('raw response has no prev key when series entry has no prev (v0.8 cache)', async () => {
+    mockGet.mockResolvedValueOnce(RAW_TILE_NO_PREV);
+    const res = await request(app)
+      .get('/api/v1/trends/tile?tag_ids=1&start_time=3600000&end_time=3840000&bucket_count=250');
+    expect(res.status).toBe(200);
+    expect(res.body.data.series[0].prev).toBeUndefined();
+  });
+
+  it('aggregate response has no prev field on series (discriminated-union regression check)', async () => {
+    mockGet.mockResolvedValueOnce(AGG_TILE);
+    const res = await request(app)
+      .get('/api/v1/trends/tile?tag_ids=1&start_time=7200000&end_time=10800000&bucket_count=250');
+    expect(res.status).toBe(200);
+    expect(res.body.data.series[0].prev).toBeUndefined();
   });
 
   it('bigint ts entries in raw response are serialised to JSON numbers', async () => {

@@ -36,8 +36,13 @@ export interface RawSeriesData {
   source: 'raw';
   startTime: bigint;
   endTime: bigint;
-  /** tagId → irregular change-of-value arrays. */
-  series: Map<number, { ts: bigint[]; value: (number | null)[] }>;
+  /** tagId → irregular change-of-value arrays with optional bounded-prev seed. */
+  series: Map<number, {
+    ts: bigint[];
+    value: (number | null)[];
+    /** Most recent sample before startTime (§5.5 bounded-prev, v0.9+). */
+    prev?: { ts: bigint; value: number | null };
+  }>;
 }
 
 export type TrendData = AggregateSeriesData | RawSeriesData;

@@ -177,3 +177,57 @@ describe('bandsFromTrendData — raw', () => {
     expect(result.mins[0]).toEqual([1, 2, 3]);
   });
 });
+
+// ── Raw path — bounded-prev seeding ───────────────────────────────────────────
+
+describe('bandsFromTrendData — raw with bounded-prev', () => {
+  it('prev.ts appears in xs and seeds forward-fill from the left edge', () => {
+    // prev at -1000ms, one in-window sample at 1000ms.
+    const data: RawSeriesData = {
+      type: 'raw', source: 'raw', startTime: 0n, endTime: 2_000n,
+      series: new Map([[1, { ts: [1000n], value: [99.0], prev: { ts: -1000n, value: 42.0 } }]]),
+    };
+    const result = bandsFromTrendData(data, [1]);
+    expect(result.xs).toEqual([-1, 1]);
+    expect(result.mins[0]).toEqual([42.0, 99.0]);
+  });
+
+  it('prev seeds the line when the viewport has no in-window samples (flatlined tag)', () => {
+    const data: RawSeriesData = {
+      type: 'raw', source: 'raw', startTime: 5_000n, endTime: 10_000n,
+      series: new Map([[1, { ts: [], value: [], prev: { ts: 2_000n, value: 77.0 } }]]),
+    };
+    const result = bandsFromTrendData(data, [1]);
+    expect(result.xs).toEqual([2]);
+    expect(result.mins[0]).toEqual([77.0]);
+  });
+
+  it('prev null value seeds forward-fill as null (bad-quality sentinel)', () => {
+    const data: RawSeriesData = {
+      type: 'raw', source: 'raw', startTime: 0n, endTime: 2_000n,
+      series: new Map([[1, { ts: [1000n], value: [5.0], prev: { ts: -500n, value: null } }]]),
+    };
+    const result = bandsFromTrendData(data, [1]);
+    expect(result.xs).toEqual([-0.5, 1]);
+    expect(result.mins[0]).toEqual([null, 5.0]);
+  });
+
+  it('without prev: tag with no in-window samples returns empty (existing behaviour preserved)', () => {
+    const data: RawSeriesData = {
+      type: 'raw', source: 'raw', startTime: 0n, endTime: 2_000n,
+      series: new Map([[1, { ts: [], value: [] }]]),
+    };
+    const result = bandsFromTrendData(data, [1]);
+    expect(result.xs).toHaveLength(0);
+    expect(result.mins[0]).toHaveLength(0);
+  });
+
+  it('mins === maxs (zero-area band) still holds when prev is present', () => {
+    const data: RawSeriesData = {
+      type: 'raw', source: 'raw', startTime: 0n, endTime: 2_000n,
+      series: new Map([[1, { ts: [1000n], value: [3.0], prev: { ts: -500n, value: 1.0 } }]]),
+    };
+    const result = bandsFromTrendData(data, [1]);
+    expect(result.mins[0]).toBe(result.maxs[0]);
+  });
+});
