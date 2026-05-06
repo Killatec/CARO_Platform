@@ -72,7 +72,7 @@ export function TrendChartContainer({
   });
 
   // ── Data fetch (driven by explicit dataViewport) ──────────────────────────
-  const { data, isLoading, ensureCovered, swapCounter, activeTileCount } = useTrendData({ viewport: dataViewport, tagIds });
+  const { data, isLoading, ensureCovered, swapCounter, activeTileCount, lastFetchMs } = useTrendData({ viewport: dataViewport, tagIds });
 
   // ── xRange: passes the live mode viewport to TrendChart for imperative
   //    setScale — updated every tick in tailing, or on preset/EndPicker/zoom. ──
@@ -190,7 +190,7 @@ export function TrendChartContainer({
       <div style={FOOTER}>
         <div style={FOOTER_LEFT}>
           <SpanPresets state={modeState} onPreset={handlePreset} />
-          <SpanBucketIndicator spanMs={viewportSpanMs} bucketSMs={bucketSMs} />
+          <SpanBucketIndicator spanMs={viewportSpanMs} bucketSMs={bucketSMs} lastFetchMs={lastFetchMs} />
         </div>
         <div style={FOOTER_RIGHT}>
           <EndPicker

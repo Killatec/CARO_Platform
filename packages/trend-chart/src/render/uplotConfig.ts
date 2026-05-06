@@ -35,7 +35,8 @@ function hexToRgba(hex: string, alpha: number): string {
  * Raw mode: mins[i] === maxs[i] (same value array) → zero-area band; only the
  *   max-series 1px stroke is visible, rendering the stepped COV line.
  *
- * Selected trace: fill α=0.5, stroke α=0.8. Non-selected: fill α=0.15, stroke α=0.4.
+ * Selected trace: fill α=0.6, stroke α=0.8, width 2. Non-selected: fill α=0.25, stroke α=0.4, width 1.5.
+ * Both min and max series draw the same stroke so both band edges are visible.
  * This contrast applies uniformly to both aggregate bands and raw stepped lines.
  */
 export function buildUplotConfig(opts: BuildUplotConfigOpts): uPlot.Options {
@@ -91,31 +92,33 @@ export function buildUplotConfig(opts: BuildUplotConfigOpts): uPlot.Options {
   tagIds.forEach((tagId, i) => {
     const color = colorAssign(tagId);
     const isSelected = tagId === selectedTagId;
-    const fillAlpha   = isSelected ? 0.5  : 0.15;
+    const fillAlpha   = isSelected ? 0.6  : 0.25;
     const strokeAlpha = isSelected ? 0.8  : 0.4;
+    const strokeWidth = isSelected ? 2    : 1.5;
 
     // series[0] is X placeholder; min is at 1 + i*2, max is at 1 + i*2 + 1.
     const minSeriesIdx = 1 + i * 2;
     const maxSeriesIdx = 1 + i * 2 + 1;
 
-    // Min series: bottom edge — no visible stroke.
-    bandSeriesArr.push({
-      scale: `y_${tagId}`,
-      stroke: 'transparent',
-      fill: 'transparent',
-      width: 0,
-      points: { show: false },
-      spanGaps: false,
-      paths: uPlot.paths.stepped!({ align: 1 }),
-    } satisfies uPlot.Series);
-
-    // Max series: top edge — 1px stroke renders the line when band is zero-area (raw).
+    // Min series: bottom edge — same stroke as max so both band edges are visible.
+    // NOTE: width must NOT be 0. uPlot skips _paths computation for zero-width
+    // series, which prevents _paths.band from being generated. The band fill
+    // polygon requires both referenced series to have computed paths.
     bandSeriesArr.push({
       scale: `y_${tagId}`,
       stroke: hexToRgba(color, strokeAlpha),
       fill: 'transparent',
-      width: 1,
-      points: { show: false },
+      width: strokeWidth,
+      spanGaps: false,
+      paths: uPlot.paths.stepped!({ align: 1 }),
+    } satisfies uPlot.Series);
+
+    // Max series: top edge — stroke renders the line when band is zero-area (raw).
+    bandSeriesArr.push({
+      scale: `y_${tagId}`,
+      stroke: hexToRgba(color, strokeAlpha),
+      fill: 'transparent',
+      width: strokeWidth,
       spanGaps: false,
       paths: uPlot.paths.stepped!({ align: 1 }),
     } satisfies uPlot.Series);

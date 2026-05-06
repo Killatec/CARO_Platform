@@ -89,13 +89,14 @@ describe('buildUplotConfig', () => {
     }
   });
 
-  it('min series has transparent stroke; max series has a visible stroke string', () => {
+  it('both min and max series have the same stroke color and width — both band edges are visible', () => {
     const config = buildUplotConfig(baseOpts);
     const minSeries = config.series![1]!; // min for tag 1
     const maxSeries = config.series![2]!; // max for tag 1
-    expect(minSeries.stroke).toBe('transparent');
-    expect(maxSeries.stroke).not.toBe('transparent');
-    expect(typeof maxSeries.stroke).toBe('string');
+    expect(minSeries.stroke).toBe(maxSeries.stroke);
+    expect(minSeries.width).toBe(maxSeries.width);
+    expect(typeof minSeries.stroke).toBe('string');
+    expect((minSeries.stroke as string)).not.toBe('transparent');
   });
 
   it('selected band fill has higher alpha than non-selected', () => {
@@ -103,8 +104,8 @@ describe('buildUplotConfig', () => {
     // tag 1 = selected (band[0]); tag 2 = non-selected (band[1])
     const selectedFill = config.bands![0]!.fill as string;
     const otherFill    = config.bands![1]!.fill as string;
-    expect(selectedFill).toContain('0.5');
-    expect(otherFill).toContain('0.15');
+    expect(selectedFill).toContain('0.6');
+    expect(otherFill).toContain('0.25');
   });
 
   it('selected max-series stroke has higher alpha than non-selected max-series stroke', () => {
@@ -147,5 +148,64 @@ describe('buildUplotConfig', () => {
     expect(config.scales).toHaveProperty('y_1');
     expect(config.scales).toHaveProperty('y_2');
     expect(config.scales).toHaveProperty('y_3');
+  });
+
+  // ── Band render-correctness guards ───────────────────────────────────────────
+  // These catch regressions where band fill silently becomes transparent or series
+  // paths are omitted, both of which produce no visible fill in uPlot.
+
+  it('band fill is a non-transparent rgba string (not transparent/null/undefined)', () => {
+    const config = buildUplotConfig(baseOpts);
+    for (const band of config.bands!) {
+      const fill = band.fill;
+      expect(fill).toBeTruthy();
+      expect(fill).not.toBe('transparent');
+      // Must be an rgba() string so uPlot renders a visible fill.
+      expect(typeof fill === 'string' && fill.startsWith('rgba(')).toBe(true);
+    }
+  });
+
+  it('both series referenced by each band have paths functions (not undefined)', () => {
+    const config = buildUplotConfig(baseOpts);
+    for (const band of config.bands!) {
+      const upper = config.series![band.series[0]]!;
+      const lower = config.series![band.series[1]]!;
+      // uPlot uses _paths.band from the lower series to clip the fill from the upper.
+      // If either paths function is missing, uPlot falls back to linearPath which may
+      // not generate the expected clip geometry.
+      expect(upper.paths).toBeDefined();
+      expect(lower.paths).toBeDefined();
+    }
+  });
+
+  it('both series in each band share the same y-scale key', () => {
+    const config = buildUplotConfig(baseOpts);
+    for (const band of config.bands!) {
+      const upper = config.series![band.series[0]]!;
+      const lower = config.series![band.series[1]]!;
+      expect(upper.scale).toBe(lower.scale);
+    }
+  });
+
+  it('lower series (series[1] of band) has a visible stroke matching the upper series', () => {
+    const config = buildUplotConfig(baseOpts);
+    for (const band of config.bands!) {
+      const upper = config.series![band.series[0]]!;
+      const lower = config.series![band.series[1]]!;
+      expect(lower.stroke).toBe(upper.stroke);
+      expect(lower.stroke).not.toBe('transparent');
+    }
+  });
+
+  it('lower (min) series does NOT have width: 0 — uPlot skips _paths for zero-width series, breaking band fill', () => {
+    // Regression guard: setting width: 0 on the min series causes uPlot to skip
+    // _paths computation entirely, so _paths.band is never built and the band fill
+    // polygon is never rendered. The stroke stays invisible via stroke: 'transparent';
+    // width must stay at the default (1) so uPlot computes the path.
+    const config = buildUplotConfig(baseOpts);
+    for (const band of config.bands!) {
+      const lower = config.series![band.series[1]]!;
+      expect(lower.width).not.toBe(0);
+    }
   });
 });
