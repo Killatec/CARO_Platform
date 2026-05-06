@@ -27,20 +27,39 @@ const STRIP: CSSProperties = {
   flexShrink: 0,
 };
 
-/** Format `min – max unit`. Either bound may be null (shows '—'). */
-function formatBand(min: number | null, max: number | null, unit: string | null | undefined): string {
-  if (min === null && max === null) return '—';
-  const fmt = (v: number) => parseFloat(v.toPrecision(4)).toString();
-  const fMin = min !== null ? fmt(min) : '—';
-  const fMax = max !== null ? fmt(max) : '—';
-  const range = `${fMin} – ${fMax}`;
-  return unit ? `${range} ${unit}` : range;
+const HEADER_STYLE: CSSProperties = {
+  fontSize: 11,
+  color: '#6b7280',
+  fontFamily: 'monospace',
+  paddingLeft: 4,
+  paddingBottom: 2,
+};
+
+/**
+ * Returns the contextual header text for the legend value column.
+ * Always rendered — communicates what the per-trace number represents.
+ */
+export function deriveLegendContext(
+  dataType: TrendData['type'],
+  cursorIdx: number | undefined,
+  showLastWhenIdle: boolean,
+): { headerText: string } {
+  const hasCursor = cursorIdx !== undefined;
+  if (dataType === 'aggregate') {
+    if (hasCursor) return { headerText: 'Value: Max @ Cursor' };
+    if (showLastWhenIdle) return { headerText: 'Value: Last Sample' };
+    return { headerText: 'Value: N/A' };
+  }
+  // raw
+  if (hasCursor) return { headerText: 'Value: @ Cursor' };
+  if (showLastWhenIdle) return { headerText: 'Value: Last Sample' };
+  return { headerText: 'Value: N/A' };
 }
 
 /**
  * Returns the pre-formatted display text for a legend entry.
  *
- * Aggregate + v0.8 bands: "min – max unit"
+ * Aggregate + v0.8 bands: max value at cursor/last bucket
  * Aggregate + v0.7 cache (no bands): falls back to single value (backward compat)
  * Raw: single value
  * Idle (showLastWhenIdle=false, no cursor): "—"
@@ -69,14 +88,14 @@ function getLegendDisplayText(
       return formatValue(vals[idx] ?? null, tag?.unit, isBoolean);
     }
 
-    // v0.8: min–max display.
-    const n = entry.min.length;
-    if (n === 0) return '—';
+    // v0.8: show max only — spread is already conveyed by the visible band height.
+    const maxArr = entry.max;
+    if (maxArr.length === 0) return '—';
     const idx = cursorIdx !== undefined
-      ? Math.min(cursorIdx, n - 1)
-      : showLastWhenIdle ? n - 1 : -1;
+      ? Math.min(cursorIdx, maxArr.length - 1)
+      : showLastWhenIdle ? maxArr.length - 1 : -1;
     if (idx < 0) return '—';
-    return formatBand(entry.min[idx] ?? null, entry.max[idx] ?? null, tag?.unit);
+    return formatValue(maxArr[idx] ?? null, tag?.unit, isBoolean);
   }
 
   // Raw path: single value.
@@ -172,8 +191,10 @@ function LegendEntry({ tagId, tag, isSelected, displayText, onSelect, onRemove }
 }
 
 export function Legend({ tagIds, data, tagMap, selectedTagId, cursorIdx, showLastWhenIdle, onSelect, onRemove }: LegendProps) {
+  const { headerText } = deriveLegendContext(data.type, cursorIdx, showLastWhenIdle);
   return (
     <div style={STRIP}>
+      <div style={HEADER_STYLE}>{headerText}</div>
       {tagIds.map(tagId => {
         const tag = tagMap.get(tagId);
         return (

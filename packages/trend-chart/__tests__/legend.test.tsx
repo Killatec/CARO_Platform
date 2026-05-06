@@ -127,13 +127,13 @@ describe('Legend — aggregate v0.7 (no min/max) — single-value fallback', () 
   });
 });
 
-// ── v0.8 aggregate: min – max display ────────────────────────────────────────
+// ── v0.8 aggregate: max-only display ─────────────────────────────────────────
 
 describe('Legend — aggregate v0.8 (with min/max bands)', () => {
-  it('showLastWhenIdle=true → shows last-bucket min – max with unit', () => {
+  it('showLastWhenIdle=true → shows last-bucket max with unit', () => {
     renderLegend([1], makeDataV8(), vi.fn(), { showLastWhenIdle: true });
-    // Last bucket: min=48, max=52 → "48 – 52 °C"
-    expect(screen.getByText('48 – 52 °C')).toBeTruthy();
+    // Last bucket: max[4]=52 → "52 °C"
+    expect(screen.getByText('52 °C')).toBeTruthy();
   });
 
   it('showLastWhenIdle=false → shows em-dash placeholder', () => {
@@ -141,10 +141,10 @@ describe('Legend — aggregate v0.8 (with min/max bands)', () => {
     expect(screen.getByText('—')).toBeTruthy();
   });
 
-  it('cursorIdx defined → shows min – max at that bucket', () => {
-    // min[1]=18, max[1]=22 → "18 – 22 °C"
+  it('cursorIdx defined → shows max at that bucket', () => {
+    // max[1]=22 → "22 °C"
     renderLegend([1], makeDataV8(), vi.fn(), { cursorIdx: 1, showLastWhenIdle: false });
-    expect(screen.getByText('18 – 22 °C')).toBeTruthy();
+    expect(screen.getByText('22 °C')).toBeTruthy();
   });
 
   it('both bounds null → shows em-dash', () => {
@@ -161,7 +161,7 @@ describe('Legend — aggregate v0.8 (with min/max bands)', () => {
     expect(screen.getByText('—')).toBeTruthy();
   });
 
-  it('collapsed band (min === max) shows the same value for both bounds', () => {
+  it('collapsed band (min === max) — max naturally collapses to the single value', () => {
     const data: AggregateSeriesData = {
       type: 'aggregate',
       source: '1min_cagg',
@@ -172,7 +172,41 @@ describe('Legend — aggregate v0.8 (with min/max bands)', () => {
       series: new Map([[1, { value: [5], min: [5], max: [5] }]]),
     };
     renderLegend([1], data, vi.fn(), { showLastWhenIdle: true });
-    expect(screen.getByText('5 – 5 °C')).toBeTruthy();
+    expect(screen.getByText('5 °C')).toBeTruthy();
+  });
+});
+
+// ── Contextual header text — six-state table ──────────────────────────────────
+
+describe('Legend — contextual header text', () => {
+  it('aggregate + cursor present → header reads "Value: Max @ Cursor"', () => {
+    renderLegend([1], makeDataV8(), vi.fn(), { cursorIdx: 1, showLastWhenIdle: false });
+    expect(screen.getByText('Value: Max @ Cursor')).toBeTruthy();
+  });
+
+  it('aggregate + idle + tailing → header reads "Value: Last Sample"', () => {
+    renderLegend([1], makeDataV8(), vi.fn(), { showLastWhenIdle: true });
+    expect(screen.getByText('Value: Last Sample')).toBeTruthy();
+  });
+
+  it('aggregate + idle + fixed → header reads "Value: N/A"', () => {
+    renderLegend([1], makeDataV8(), vi.fn(), { showLastWhenIdle: false });
+    expect(screen.getByText('Value: N/A')).toBeTruthy();
+  });
+
+  it('raw + cursor present → header reads "Value: @ Cursor"', () => {
+    renderLegend([1], makeRawData(), vi.fn(), { cursorIdx: 2, showLastWhenIdle: false });
+    expect(screen.getByText('Value: @ Cursor')).toBeTruthy();
+  });
+
+  it('raw + idle + tailing → header reads "Value: Last Sample"', () => {
+    renderLegend([1], makeRawData(), vi.fn(), { showLastWhenIdle: true });
+    expect(screen.getByText('Value: Last Sample')).toBeTruthy();
+  });
+
+  it('raw + idle + fixed → header reads "Value: N/A"', () => {
+    renderLegend([1], makeRawData(), vi.fn(), { showLastWhenIdle: false });
+    expect(screen.getByText('Value: N/A')).toBeTruthy();
   });
 });
 
