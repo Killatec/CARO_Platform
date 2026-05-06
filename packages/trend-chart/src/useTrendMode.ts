@@ -19,8 +19,9 @@ const LIVE_MODE_ENABLED = false;
  *   pan       — user dragged the X axis (panApplied); span preserved, only End shifts
  *   null      — initial state; no user action has fired yet
  *
- * Highlight rule (SpanPresets): (lastIntent === 'preset' || lastIntent === 'pan') && sizeMs === p.sizeMs
- * Pan keeps sizeMs constant, so the preset highlight should stay lit after a pan.
+ * Highlight rule (SpanPresets): lastIntent !== null && lastIntent !== 'zoom' && sizeMs === p.sizeMs
+ * All intents except 'zoom' either set or preserve sizeMs from a preset, so the highlight
+ * survives pan, liveClicked, and endPickerCommitted. null excluded for initial-state cleanliness.
  * Tick preserves the existing lastIntent value (clock advance is not a user intent).
  * viewportChanged is reserved for Step 11 live-tail; 'live' is the placeholder
  * value and will be revisited when Step 11 lands.

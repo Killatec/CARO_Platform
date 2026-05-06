@@ -254,17 +254,17 @@ describe('TrendChartContainer', () => {
     expect(cursorEl.compareDocumentPosition(firstPreset) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it('subsequent zoomApplied dispatch clears preset highlight', () => {
+  it('endPickerCommitted preserves preset highlight when sizeMs is unchanged', () => {
     renderContainer([1]);
     // Click a preset to set lastIntent = 'preset'.
     fireEvent.click(screen.getByText('4h'));
     expect(screen.getByText('4h').style.background).toBe('rgb(37, 99, 235)');
 
     // Commit a far-past End via the hidden picker input → endPickerCommitted sets
-    // lastIntent = 'endPicker', clearing the preset highlight.
+    // lastIntent = 'endPicker' while preserving sizeMs = 4h, so highlight stays.
     const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
     fireEvent.change(input, { target: { value: '2020-06-15T10:00:00' } });
-    expect(screen.getByText('4h').style.background).not.toBe('rgb(37, 99, 235)');
+    expect(screen.getByText('4h').style.background).toBe('rgb(37, 99, 235)');
   });
 
   it('onXRangeChange clears preset highlight and updates span without a CAG-level switch', () => {

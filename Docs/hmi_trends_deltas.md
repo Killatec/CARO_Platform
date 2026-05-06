@@ -5,3 +5,4 @@
 ---
 
 - Legend per-trace shows max only in aggregate (not min – max); contextual header `Value: Max @ Cursor / Last Sample / N/A` (aggregate) or `Value: @ Cursor / Last Sample / N/A` (raw); both tailing-idle headers unified to `Last Sample`.
+- Preset highlight rule extended: was `(lastIntent==='preset'||'pan')`, now `lastIntent !== null && lastIntent !== 'zoom'` — covers liveClicked, endPickerCommitted, and any future size-preserving intents.
