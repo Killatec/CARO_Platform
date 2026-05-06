@@ -1,6 +1,6 @@
 # CARO_HMI Trend Viewer — Design Specification
-**Date:** 2026-05-04
-**Status:** Phase A Steps 1–10 complete. Step 11 (Live tail) and Step 12 (Tag picker) pending.
+**Date:** 2026-05-05
+**Status:** Phase A Steps 1–10 complete; v0.8 min/max bands complete (feature/trends-min-max-bands → dev). Step 11 (Live tail) and Step 12 (Tag picker) pending.
 **Companion Documents**
 
 CARO_Trending_Reference | hmi_functional_spec | hmi_API_spec | hmi_widget_spec | CARO_DB_Spec | DB_Config_Usage_And_Perf | platform_handoff
@@ -11,6 +11,8 @@ CARO_Trending_Reference | hmi_functional_spec | hmi_API_spec | hmi_widget_spec |
 
 | Version | Date | Author | Summary |
 |---|---|---|---|
+| 1.2 | 2026-05-05 | PM / Claude | v0.8 min/max bands complete. §6.2 aggregate response gains `min`/`max` arrays per-series (v0.8 example). §6.5 rewritten: three-case rule (mixed-null → null; empty-bucket → collapse to LOCF'd last × 3; normal → `last`/`bucket_min`/`bucket_max`). §8.7 added: always-band 2-series render architecture (2 series per tag + `bands[]`; raw mode passes `mins[i] === maxs[i]` for zero-area band; no uPlot rebuild on mode flip; `width: 0` regression guard). §9.5 added: defensive guards (`bucketSMs === 0n` in `level.ts`; `newStart >= 1n` clamp in `useZoomState.ts`). §17.1 step A.5 added; §17.2 bands item removed. Divergences from upgrade doc: 2-series always-band (not 3-series with rebuild); CAG uses `min(s.min)`/`max(s.max)` (not `last()`); DB interval uses integer-ms syntax. SpanBucketIndicator gains `lastFetchMs` prop (Last Fetch timing line); `formatFetchMs` helper added. |
+| 1.1 | 2026-05-01 | PM / Claude | Phase A.5 UI refinements: `TrendChartContainer` mode-state tightening; `bucketSMs` invariant enforcement; `SpanBucketIndicator` renamed from `ResolutionIndicator`; footer layout consolidated. |
 | 1.0 | 2026-05-01 | PM / Claude | Phase A Steps 1–10 complete. Inline amendments: §7.1 (actual file layout, TrendChartContainer rename); §8.5 (cursor-time in Legend, no floating tooltip); §9.1/9.2 (hit-zone gating replaces shift-key modifier; X-pan visual-only; drag-zoom on plot area; zoom-level threshold 1.5×); §9.3 (pan/zoom no longer trigger mode transitions — time-range-bar actions only); §9.4 added sizeMs note; §10.4 (TS_BUCKET_ORIGIN_MS alignment); §10.5 (ensureCovered edge-anchoring); §5.5 (MAX(ts) LOCF cutoff); §12.2 (Intl.DateTimeFormat); §17.1.1 (Step 10 marked done). Feature-flag note updated (INTERACTIONS_ENABLED + TOOLTIP_ENABLED deleted; LIVE_MODE_ENABLED dormant). |
 | 0.9.1 | 2026-04-29 | PM / Claude | Editorial: align Tag Registry field references to actual `TagDef` type — `engineering_min`/`engineering_max`/`units` → `eng_min`/`eng_max`/`unit` in §8.1.1 and §8.1.3. No contract change. |
 | 0.9 | 2026-04-29 | PM / Claude | Tile geometry pivot. Visible tiles per window 4→2, bucket_count per tile 250→500, plus 1 prefetch tile each side fired async (not render-blocking). Empirically driven by perf-page sweep showing "4×250 vs 1×1000" perf gap was ~0–10% with high variance, not the 51% the spec previously claimed. New justification is time-to-first-render (slowest-of-2 vs slowest-of-4) plus halved DB concurrency pressure plus decoupled prefetch. Trend viewer client locks to bucketCount=500, visibleTilesPerWindow=2, overfetchPerSide=1; server still accepts 1..2500. Cache reuse during pan/zoom unchanged. `packages/trend-chart/` scaffold (Step 7) ships with these defaults. Section §10 rewritten to match. |
@@ -41,7 +43,7 @@ Document owner: Product Manager.
 
 The trend viewer provides: a single chart displaying up to 20 overlaid traces; live (tailing) and historical (fixed) viewing modes; pan, zoom, and tag selection interactions; a tag picker; quick-preset and custom time range selection; saved views (deferred to Phase B); correct null rendering as visual gaps (never bridged); and multi-client independence.
 
-Out of scope for MVP: saved views, min/max aggregate bands, shared views, mobile/touch optimization, keyboard accessibility polish, CSV export, statistical annotations, threshold overlays, cursor measurement mode, and a second Y axis. These are enumerated in §18 and allocated to later phases.
+Out of scope for MVP: saved views, shared views, mobile/touch optimization, keyboard accessibility polish, CSV export, statistical annotations, threshold overlays, cursor measurement mode, and a second Y axis. These are enumerated in §18 and allocated to later phases.
 
 ---
 
@@ -70,7 +72,7 @@ All other layers (Node/Express, WebSocket, `@caro/db`, `@caro/hmi-context`, `@ca
 | `getTrendTile()` | `packages/db/src/timescale/trends.ts` (new file) | Single named function: `getTrendTile(tagIds, startTime, endTime, bucketCount)`. Derives `bucketS = Number(endTime - startTime) / (bucketCount * 1000)` internally, then dispatches on `bucketS` per §6.3: `bucketS < 1.0` → raw `tag_samples`; `1.0 ≤ bucketS < 16` → `1s_cagg`; `16 ≤ bucketS < 160` → `10s_cagg`; `160 ≤ bucketS < 1600` → `1min_cagg`; `≥ 1600` → `10min_cagg`. Returns the actual natural epoch-aligned bucket grid: for aligned requests this matches `(startTime, endTime)` with exactly `bucketCount` rows; for unaligned requests `startTime` and `endTime` in the response reflect the served grid boundary and `n` is `bucketCount + 1` (§6.2). **Watermark-aware fall-through (§4.3):** any query whose `endTime > source.watermark_ts` is split — materialized portion served from the chosen source, trailing portion from the next-finer source (CAG or raw). **Multi-tag batching:** one DB round-trip across all requested tag IDs using `WHERE tag_id = ANY($tagIds)`; results split by `tag_id` into the `series` array. **Per-query tag cap N ≤ 8** (§6.6) — the server rejects requests above this; charts with more tags fan out at the client. Platform rule forbids raw SQL in apps — all queries live here. |
 | `packages/trend-chart/` | New workspace package | Full client-side feature: chart component, data hooks, cache, tag picker, time range bar, legend, saved-views dropdown (Phase B). Owns all window/level math, tile fan-out across the 2-tile parallel pattern (§10.2), and the N≤8 tag fan-out (§10.4). |
 
-**Phase A migrations:** `T001_create_tag_samples.sql` (raw hypertable, already applied), plus four CAG migrations — `T005_create_cag_1s.sql` (already applied but **must be re-migrated**, see Open Questions §18 and `Docs/platform_todo.md`), `T00X_create_cag_10s.sql`, `T00X_create_cag_1min.sql`, `T00X_create_cag_10min.sql` (numbering TBD). Each CAG materializes `last(value ORDER BY ts)`, `null_count`, `min(value)`, `max(value)` (§3.2 of `DB_Config_Usage_And_Perf.md`). The `null_count` column is non-negotiable — it carries the null-as-gap signal through aggregation (§5.4). The `min`/`max` columns are pre-shipped so Phase B bands don't require re-migrating populated CAGs.
+**Phase A migrations:** `T001_create_tag_samples.sql` (raw hypertable, already applied), plus four CAG migrations — `T005_create_cag_1s.sql` (already applied but **must be re-migrated**, see Open Questions §18 and `Docs/platform_todo.md`), `T00X_create_cag_10s.sql`, `T00X_create_cag_1min.sql`, `T00X_create_cag_10min.sql` (numbering TBD). Each CAG materializes `last(value ORDER BY ts)`, `null_count`, `min(value)`, `max(value)` (§3.2 of `DB_Config_Usage_And_Perf.md`). The `null_count` column is non-negotiable — it carries the null-as-gap signal through aggregation (§5.4). The `min`/`max` columns are consumed by the v0.8 read path (§6.2, §6.5) — surfaced as per-series `min`/`max` arrays in the aggregate tile response and rendered as filled bands by `@caro/trend-chart`.
 
 ### 4.2 Request Flow — Historical Fetch (one range)
 
@@ -277,7 +279,7 @@ The response shape is a discriminated union on `source`:
 
 Raw responses carry per-sample timestamps (COV samples are irregular). `ts[]` and `value[]` are parallel arrays of equal length.
 
-**Aggregate response (`bucketS ≥ 1.0`):**
+**Aggregate response (`bucketS ≥ 1.0`) — v0.8:**
 
 ```jsonc
 {
@@ -289,12 +291,24 @@ Raw responses carry per-sample timestamps (COV samples are irregular). `ts[]` an
     "bucketSMs": 1920,
     "n": 500,
     "series": [
-      { "tagId": 42, "value": [1.9, 1.8, null, 2.0, 2.0] },
-      { "tagId": 87, "value": [0.0, 0.0, 0.0, 0.1] }
+      {
+        "tagId": 42,
+        "value": [1.9, 1.8, null, 2.0, 2.0],
+        "min":   [1.7, 1.6, null, 2.0, 2.0],
+        "max":   [2.1, 1.9, null, 2.0, 2.0]
+      },
+      {
+        "tagId": 87,
+        "value": [0.0, 0.0, 0.0, 0.1],
+        "min":   [0.0, 0.0, 0.0, 0.1],
+        "max":   [0.0, 0.0, 0.0, 0.1]
+      }
     ]
   }
 }
 ```
+
+`min[i]` and `max[i]` are aligned 1:1 with `value[i]`. All three arrays have length `n`. For empty buckets (gapfilled, no source rows), `min[i] === max[i] === value[i]` — band collapses to zero area since the value was provably constant (COV semantics). For mixed-null buckets, all three are `null`. Raw responses (`source: 'raw'`) do NOT carry `min` or `max`; the discriminated union enforces this. See §6.5 for the full three-case rule.
 
 `source` is one of `'1s_cagg'`, `'10s_cagg'`, `'1min_cagg'`, `'10min_cagg'`, or `'mixed'`. `source: 'mixed'` appears when watermark fall-through (§4.3) stitched portions from multiple sources. `bucketSMs` is the bucket size in integer milliseconds, returned for client rendering; the server derives it as `Math.round((endTime - startTime) / bucketCount)`.
 
@@ -361,16 +375,30 @@ The server applies **no clamping**. The DB returns whatever data is available fo
 
 The client emits a `console.info` when a request's `endTime` falls before the chosen source's retention edge, purely for developer visibility.
 
-### 6.5 Shape Decision — Why Not Include min/max/first/count?
+### 6.5 Min/Max Bands — v0.8 (Shipped)
 
-The aggregate response carries `value` (the LOCF-filled `last`) only. The CAG **storage layer** materializes `last`, `null_count`, `min`, and `max` from day one (§3.2 of `DB_Config_Usage_And_Perf.md`), but only `last` and `null_count` are consumed by the current API:
+The aggregate response carries `value`, `min`, and `max` per series (v0.8). The CAG storage layer materializes `last`, `null_count`, `min`, and `max` from day one; the read path consumes all four:
 
 - `last` → emitted as `value` (or `null` when `null_count > 0`).
-- `null_count` → consumed at the server to decide whether to emit `null`; never reaches the client.
-- `min`, `max` → materialized but not yet exposed in the API. Reserved for Phase B min/max bands. Storing them now avoids re-migrating populated CAGs later.
+- `null_count` → consumed server-side to decide whether to emit `null`; never reaches the client.
+- `min`, `max` → emitted alongside `value`; the band fill on the chart collapses to zero area for flat/empty buckets and renders a visible spread for normal buckets.
 - `first`, `count` → not materialized; no proposed consumer.
 
-Phase B will add `min` and `max` to the aggregate tile response when bands ship. The response shape is extensible — additional optional fields per series do not break existing clients.
+**Three-case rule.** The server classifies every bucket using the pair `(null_count, bucket_min)`:
+
+| `null_count` | `bucket_min` | Case | Wire (`value`, `min`, `max`) | Renders as |
+|---|---|---|---|---|
+| `> 0` | any | Mixed-null | `null, null, null` | Band gap |
+| `0` | `IS NULL` | Empty (gapfilled) | `LOCF'd last × 3` | Line (band collapsed) |
+| `0` | `NOT NULL` | Normal | `last, bucket_min, bucket_max` | Band from min to max |
+
+Empty buckets collapse `min` and `max` to the LOCF'd `last` because COV semantics guarantee the value was constant during that bucket — carrying forward the prior bucket's measured spread would assert variance that did not occur. This collapse happens in JS (the server's `querySegment` post-pass), not in SQL, so it shares the same `null_count` conditional path that already enforces null-as-gap.
+
+**CAG aggregator.** The re-aggregation CTE uses `min(s.min)` / `max(s.max)` (not `last()`) so that Div > 1 outer re-aggregation spans the full range of source sub-buckets. `last` uses `locf(last(s.last, s.bucket))` as before. `bucket_min` and `bucket_max` have no LOCF wrapper — empty sub-buckets surface as NULL and the JS post-pass handles them via the empty-bucket rule.
+
+**Raw path.** `source: 'raw'` responses never carry `min` or `max`. Raw is COV-driven with no bucket aggregation; min/max do not apply. The discriminated union enforces this at the type level — raw series carry only `ts[]` and `value[]`.
+
+**Backward compatibility.** The v0.8 change is purely additive. Clients reading only `series[].value` continue to work correctly; the new fields are additional parallel arrays.
 
 ### 6.6 Max Tag Count
 
@@ -419,8 +447,7 @@ packages/trend-chart/
     TrendChart.tsx                # uPlot canvas wrapper; rebuild lifecycle, X-scale
                                   # preservation, per-trace Y-scale overrides, wheel/drag
     TrendChartContainer.tsx       # stateful wiring layer (renamed from TrendChartProvider)
-    SpanBucketIndicator.tsx       # footer: viewport span + bucket size display (replaces
-                                  # ResolutionIndicator — shows both, not just bucket size)
+    SpanBucketIndicator.tsx       # footer: viewport span + bucket size + last-fetch duration
     SpanPresets.tsx               # footer: 8-preset strip (1m/5m/15m/1h/4h/24h/7d/14d)
     EndPicker.tsx                 # footer: End datetime picker button + Live/Go Live button
     Legend.tsx                    # vertical column on the right side of the chart
@@ -431,10 +458,13 @@ packages/trend-chart/
       uplotConfig.ts
       yScales.ts
       seriesFromTrendData.ts
+      bandsFromTrendData.ts       # per-tag {mins, maxs} extraction; raw path returns same array
+                                  # reference for zero-area band collapse
       formatBucketS.ts            # bucket size → human-readable (e.g. "3.8 min buckets")
       formatValue.ts              # tag value formatting
       formatTickLabel.ts          # X-axis tick label formatting
       formatSpanMs.ts             # viewport span → human-readable (e.g. "1 h")
+      formatFetchMs.ts            # last-fetch duration → human-readable (e.g. "234 ms", "1.23 s")
 
   package.json
   tsconfig.json
@@ -517,11 +547,24 @@ Format: full date + time via `Intl.DateTimeFormat` with the `timeZone` option (e
 
 The Legend's per-tag rows display each trace's value at the cursor index when the cursor is over the plot, and fall back to the idle-value rule (§8.4) when it is not. A separate floating cursor overlay is a Phase B UX decision. The `Tooltip.tsx` component file is preserved in the package but is not wired in Phase A.
 
-### 8.6 Span and Bucket Indicator
+### 8.6 Span, Bucket, and Fetch Indicator
 
 > **Implementation note (v1.0):** `ResolutionIndicator` was replaced by `SpanBucketIndicator`. The new component shows two values in the footer row: the current viewport span (e.g. `Span: 4 h`) and the current bucket size (e.g. `Bucket Size: 3.8 min`). This exposes more context than bucket size alone and lives in the footer alongside `SpanPresets` and `EndPicker` rather than in the chart header.
 
-`SpanBucketIndicator` shows the current viewport span and the current `bucketSMs` in human-readable form. Tells operators the time window they are viewing and the aggregation resolution. Low real estate cost, high diagnostic value — especially once min/max bands ship in Phase B.
+`SpanBucketIndicator` shows three values in the footer: the current viewport span (e.g. `Span: 4 h`), the current `bucketSMs` in human-readable form (e.g. `Bucket Size: 3.8 min`), and the wall-clock duration of the most recent viewport-change batch (e.g. `Last Fetch: 234 ms`). The Last Fetch line is null-displayed (`—`) until the first fetch completes. Low real estate cost, high diagnostic value for correlation with band render quality.
+
+### 8.7 Always-Band Render Architecture
+
+Two uPlot series are registered per tag — a min (lower edge) and a max (upper edge) — plus a `bands[]` entry filling between them. This static 2-series shape is registered once at uPlot init and never changes on mode flip or data swap.
+
+- **Aggregate mode.** `bandsFromTrendData` returns distinct `min`/`max` arrays. Normal buckets have `mins[i] < maxs[i]` → visible filled band. Empty buckets have `mins[i] === maxs[i] === value[i]` → zero-area band (COV flatline collapse per §6.5). Mixed-null buckets have `null` at both indices → band gap.
+- **Raw mode.** `bandsFromTrendData` passes the same JS array reference for both min and max (`mins[i] === maxs[i]` for every i) → zero-area band; only the per-edge stroke is visible, rendering the stepped COV line.
+
+Visual contrast: selected trace uses fill α=0.6, stroke α=0.8, stroke width 2; non-selected uses fill α=0.25, stroke α=0.4, width 1.5. Both the min and max series draw the same colored stroke so the band is visually framed on both edges.
+
+**No `data.type` in uPlot rebuild deps.** Mode flips from raw to aggregate or back are handled by `useTrendData` calling `u.setData(newUplotData)` — no uPlot destroy-and-recreate fires. The static always-band shape is what makes this possible; there is nothing structurally different between raw and aggregate configurations.
+
+**`width: 0` regression guard.** Setting `width: 0` on a uPlot series causes the engine to skip `_paths` computation for that series entirely. Since `_paths.band` is built inside the paths function, a zero-width series never produces the clip geometry needed for band fill rendering — the fill silently disappears. The min series must have a non-zero width. Guarded by a dedicated test in `__tests__/render/uplotConfig.test.ts`.
 
 ---
 
@@ -599,6 +642,14 @@ Exactly one trace is "selected" at any time. Selection is:
 - Persisted in saved views (Phase B).
 
 The Y axis on the left of the plot area displays the selected trace's scale and color.
+
+### 9.5 Defensive Guards
+
+Two edge-case guards added during the bands implementation:
+
+- **`bucketSMs === 0n` guard in `level.ts` (`tilesForViewport`).** If the derived `bucketSMs` is zero (can happen on sub-millisecond viewports or arithmetic edge cases), `tilesForViewport` returns an empty tile set rather than dividing by zero. Prevents a crash that would otherwise surface as a NaN tile-range and an unhandled rejection in `useTrendData`.
+
+- **`newStart >= 1n` clamp in `useZoomState.ts` (`handleZoomLevelSwitch`).** When zooming in on a viewport very close to epoch 0, the computed `newStart` can be zero or negative. The clamp ensures `newStart` is at least `1n` (ms) before the tile request is issued. A zero or negative `start_time` would reach the server as an `INVALID_RANGE` error; the clamp silently corrects it at the client.
 
 ---
 
@@ -1037,7 +1088,8 @@ Non-binding, but each step is landable independently and its tests pass in isola
 | 7 | **`packages/trend-chart/` scaffold**: workspace package, `level.ts` (`alignedTilesInRange` primitive; `tilesForViewport` composite returning `{visible, prefetch}` with `bucketCount=500` / `visibleTilesPerWindow=2` / `overfetchPerSide=1` defaults; `deriveBucketSMs` helper), `tileCache.ts` (LRU keyed by `(tagId, startTime, endTime, bucketCount)`, 50 MB cap, generic byte-size accounting), `colorAssign.ts` (`schemeTableau10` cycled to 20 entries). Pure unit tests (41 passing), no React. | 5 (types only) | client-side range math, cache eviction, palette determinism |
 | 8 | **`useTrendData` hook**: range-aligned fetch orchestration, 2-tile parallelism (visible) + 2 async prefetch tiles, ⌈N/8⌉ tag-group fan-out, single-tag exception for tag-add (§10.4), stale-generation guard. ✓ Done — 62 total passing at step completion. | 7 | fetch coordination, cache population, fan-out correctness |
 | 9 | **`TrendChart` static rendering**: uPlot wrapper, `spanGaps: false`, stepped interpolation, per-trace Y-scale defaults (§8.1.1), Legend component with `unit` and cursor-time field (§8.4, §8.5), resolution indicator (§8.6). Dev test page at `/dev/trend-chart-test`. ✓ Done — 106 total passing in @caro/trend-chart. Pan/zoom and time-range controls deferred to Step 10. | 8 | render path, null-as-gap, color/legend/cursor-time |
-| 10 | **Mode state machine + time range UI**: tailing / fixed transitions (§9.3), preset strip (§12.1), custom range picker (§12.2), Live button (§12.3), pan/zoom interactions (§9.1–9.2). Still no WS. ✓ Done — 254 total passing in @caro/trend-chart. | 9 | interaction model, mode correctness |
+| 10 | **Mode state machine + time range UI**: tailing / fixed transitions (§9.3), preset strip (§12.1), custom range picker (§12.2), Live button (§12.3), pan/zoom interactions (§9.1–9.2). Still no WS. ✓ Done. | 9 | interaction model, mode correctness |
+| A.5 | **v0.8 min/max bands (feature/trends-min-max-bands).** DB aggregate path returns `min`/`max` per series; three-case JS post-pass (§6.5); REST v0.8 serializes both arrays; `@caro/trend-chart` always-band 2-series render (§8.7); `bandsFromTrendData` helper; `bucketSMs === 0n` + `newStart >= 1n` defensive guards (§9.5); SpanBucketIndicator `lastFetchMs` / Last Fetch line. ✓ Done — `@caro/db` 102 passing, HMI server 233 passing, `@caro/trend-chart` 424 passing. | 1–10 | full band pipeline, defensive guards |
 | 11 | **Live tail**: WS subscription wiring via `@caro/hmi-context`, client-side bucket accumulator (§10.6), per-tag subscription lifecycle (§10.7), reconnect/backoff (§14.4). | 10 | live stitching, subscription correctness |
 | 12 | **Tag picker drawer**: tree + search (§11.2), multi-select commit (§11.3), trendable filter (§11.4). | 11 | picker UX, trendable filtering |
 | 13 | **Connection pool resize and monitoring**: bump `@caro/db` Timescale pool from 10 to 20–30; add NULL `prev` rate monitoring per `DB_Config_Usage_And_Perf.md` §8.1; add per-CAG latency dashboards. | runs alongside production rollout | pool sufficiency, writer-cadence monitoring |
@@ -1054,7 +1106,6 @@ Items below were originally scheduled in §17.1.1 build steps 5 and 13 but were 
 - **Connection pool sizing measurement and bump (§15):** Increase `@caro/db` Timescale pool from `max = 10` to 20–30 with empirical validation per `Docs/DB_Config_Usage_And_Perf.md` §10.5. Recommended before multi-operator production rollout.
 - **EXPLAIN-plan validation gate (§5.5):** One-shot milestone check — run `EXPLAIN (BUFFERS, ANALYZE)` on a representative bounded-prev query against the production-state Timescale and confirm ≤ 2 chunks in the prev SubPlan ChunkAppend, planning time < 5 ms. Run once `tag_samples` has ≥ ~100 chunks (~4 days of production writes); not ongoing CI.
 - Saved views (personal only, `hmi_trend_views` table, dropdown UX)
-- Min/max aggregate bands (API `min`+`max` fields exposed; CAG storage already carries them; render as shaded region around the line)
 - Additional CAG (e.g. hourly) if the 10min CAG's worst-case (Div ≈ 24.58 at 85+ d windows) measures over budget once that much history accumulates
 - Shared views with role-based edit (waits on HMI auth/role work)
 - Mobile/touch optimization (pinch zoom, touch pan, drawer gesture)

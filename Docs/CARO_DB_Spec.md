@@ -576,9 +576,36 @@ Hypertable configuration:
 - Compression: `timescaledb.compress`, `timescaledb.compress_segmentby = 'tag_id'`; compression policy: compress chunks older than 12 hours
 - Retention policy: drop chunks older than 14 days
 
-Migrations live in `db/timescale/migrations/` (prefix `T00N_*`). Applied by `runTimescaleMigrations()` from `@caro/db` at HMI server startup. Tracked in a `schema_migrations` table on the Timescale instance (same convention as the main Postgres runner). Current migration: `T001_create_tag_samples.sql`.
+Migrations live in `db/timescale/migrations/` (prefix `T00N_*`). Applied by `runTimescaleMigrations()` from `@caro/db` at HMI server startup. Tracked in a `schema_migrations` table on the Timescale instance (same convention as the main Postgres runner). Current migrations: `T001_create_tag_samples.sql`, `T004_tighten_compression_policy.sql`, `T006_create_cag_1s.sql` through `T009_create_cag_10min.sql`.
 
 > *NOTE: `docker-compose.timescale.yml` at the repo root starts the TimescaleDB container. Development database: `caro_timescale` on port 5433. The HMI server writes via `TimescaleDbWriter`; falls back silently to `NullDbWriter` if Timescale is unreachable at boot. Restart required to promote from `NullDbWriter` to `TimescaleDbWriter` (periodic reconnect is on the backlog).*
+
+**9.2 Continuous Aggregate Views (CAGs)**
+
+Four CAGs materialize off `tag_samples` (flat topology — each reads raw directly, no chained CAGs):
+
+| View | Bucket | Retention | Refresh |
+|---|---|---|---|
+| `tag_samples_1s_cagg` | 1 s | 14 d | 1 min |
+| `tag_samples_10s_cagg` | 10 s | 90 d | 1 min |
+| `tag_samples_1min_cagg` | 1 min | 1 y | 1 min |
+| `tag_samples_10min_cagg` | 10 min | indefinite | 1 min (start_offset 1 h) |
+
+Each CAG materializes four columns per bucket: `last` (LOCF source, `last(value ORDER BY ts)`), `null_count` (`count(*) FILTER (WHERE value IS NULL)`), `min` (`min(value)`), `max` (`max(value)`).
+
+**9.3 `getTrendTile()` — Trend Read Entry Point**
+
+`getTrendTile(tagIds, startTime, endTime, bucketCount)` in `packages/db/timescale/trends.ts` is the single named read function for trend data. It derives `bucketS = (endTime - startTime) / (bucketCount × 1000)` internally and dispatches:
+
+- `bucketS < 1.0` → raw `tag_samples` (COV samples, no aggregation)
+- `1.0 ≤ bucketS < 16` → `tag_samples_1s_cagg`
+- `16 ≤ bucketS < 160` → `tag_samples_10s_cagg`
+- `160 ≤ bucketS < 1600` → `tag_samples_1min_cagg`
+- `≥ 1600` → `tag_samples_10min_cagg`
+
+Watermark-aware fall-through splits any query whose `endTime > watermark_ts` — the trailing portion falls through to the next-finer source recursively. `source: 'mixed'` in the response when stitching occurred.
+
+**Min/max aggregate response (v0.8).** The aggregate path returns per-series `{ value, min, max }` arrays. The re-aggregation CTE uses `min(s.min)` / `max(s.max)` (not `last()`) so Div > 1 outer re-aggregation spans the full range of source sub-buckets. The JS post-pass applies the three-case rule: `null_count > 0` → all three null; `bucket_min IS NULL` (empty/gapfilled bucket) → all three collapse to LOCF'd `last`; otherwise → `last`, `bucket_min`, `bucket_max`. Raw path returns only `ts`/`value` — no min/max. See `Docs/hmi_trend_viewer_spec.md` §6.5 for the full three-case rule.
 
 **10. Audit Log**
 
