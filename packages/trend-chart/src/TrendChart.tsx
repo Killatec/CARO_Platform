@@ -11,9 +11,7 @@ import {
   isInYAxisHitZone,
   panYScale,
   zoomYScale,
-  panThresholdCheck,
   isInXAxisHitZone,
-  panXScale,
   zoomXScale,
   checkAndExtendXCoverage,
 } from './axisInteractions.js';
@@ -486,7 +484,7 @@ export function TrendChart({
   // swapCounter increments only when useTrendData installs a new active tile set.
   // This handles the case where the user kept zooming past the level-switch threshold,
   // leaving xRange wider than the new active set. Pan-driven setData events do NOT
-  // increment swapCounter, so panThresholdCheck in onXMove handles those instead.
+  // increment swapCounter, so checkAndExtendXCoverage in onXMove handles those instead.
   useEffect(() => {
     if (uplotRef.current && ensureCoveredRef.current) {
       checkAndExtendXCoverage(uplotRef.current, ensureCoveredRef.current);

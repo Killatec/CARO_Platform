@@ -258,6 +258,29 @@ Probably some combination of (2) and (1): a watchdog contract guarantee for the 
 
 ---
 
+## Unify raw bounded-prev into a single query
+
+**Context.** The raw path's bounded-prev (v0.8 → v0.9, added to fix intermittent gaps on flatlined tags at narrow viewports) runs as a **separate query** parallel to the in-window query via `Promise.all`, returning prev as a `series[i].prev` field on the response. The CAG path's bounded-prev runs **inline** as a correlated subquery inside `locf()`, consumed server-side and never surfaced.
+
+**Asymmetry cost.** Raw uses 2 connections per tile (parallel queries) where CAG uses 1. This was originally suspected as the cause of CAG perf regression during the LOCF-cutoff investigation; the actual cause was the unbounded `MAX(ts)` cutoff query (since removed). The 2-connection cost on raw is functionally fine today but represents an unnecessary pool-pressure delta vs CAG at high tag counts or polling rates.
+
+**Refactor sketch.** Combine the in-window query and bounded-prev into a single SQL via `UNION ALL` with a discriminant column:
+
+```sql
+SELECT tag_id, ts, value, true AS is_in_window
+FROM tag_samples WHERE tag_id = ANY($1) AND ts >= $2 AND ts < $3
+UNION ALL
+SELECT DISTINCT ON (tag_id) tag_id, ts, value, false AS is_in_window
+FROM tag_samples WHERE tag_id = ANY($1) AND ts < $2 AND ts >= $2 - INTERVAL '5 minutes'
+ORDER BY tag_id, ts DESC
+```
+
+JS layer splits rows by `is_in_window` into `series[i]` (in-window) and `series[i].prev` (bounded-prev). One round-trip, one connection per tile.
+
+**Trade-off.** Adds modest SQL complexity in `queryRaw` for unified execution. Worth doing if pool concurrency becomes a concern, or as a hygiene pass to mirror the CAG inline-subquery pattern. Not urgent.
+
+---
+
 ## 10. What Comes Next
 
 > **Note:** `@caro/trend-chart` ships from `dist/`. After editing source, run `npm run build --workspace=packages/trend-chart` before testing in the browser. Tests run against source directly.

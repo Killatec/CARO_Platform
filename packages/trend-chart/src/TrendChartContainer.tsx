@@ -142,16 +142,13 @@ export function TrendChartContainer({
     [dispatch],
   );
 
-  // Wrap drag-zoom: call useZoomState handler first, then sync modeState to the
-  // resulting dataViewport so EndPicker always shows the correct post-zoom End.
+  // Dispatch zoomApplied with the raw selection bounds: modeViewport reflects
+  // the user's intended range, while dataViewport (set by _handleDragZoom below)
+  // tracks the snapped tile-aligned range. The two are intentionally distinct —
+  // EndPicker shows the intended end, fetches use the snapped range.
   const handleDragZoom = useCallback(
     (selectionStartMs: bigint, selectionEndMs: bigint) => {
       _handleDragZoom(selectionStartMs, selectionEndMs);
-      // dataViewport update is async (setState), so derive the new viewport from
-      // the same computation that useZoomState performs.
-      // We dispatch zoomApplied with the raw selection center anchored to selectionEnd
-      // so the reducer sets modeViewport = dataViewport after the next render.
-      // The selection end is the user's intended End.
       dispatch({
         type: 'zoomApplied',
         from: selectionStartMs,
