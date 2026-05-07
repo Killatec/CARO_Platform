@@ -1,12 +1,14 @@
-import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import {
   getTrendTile,
   getTrendExtent,
   __test_watermarkOverride,
   __test_lastUsedSources,
   __test_getWatermarkMs,
+  __test_clearWatermarkCache,
 } from '../../timescale/trends.js';
 import type { RawTrendTile, AggregateTrendTile } from '../../timescale/trends.js';
+import timescalePool from '../../timescale/pool.js';
 
 // ── Guard: skip all integration tests if TimescaleDB is not configured ─────────
 
@@ -675,10 +677,12 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — watermark fall-through', asyn
     // Ensure production watermark is NOT used by any test in this block.
     // Each test sets its own override; this guards against override leak.
     __test_watermarkOverride.current = null;
+    __test_clearWatermarkCache();
   });
 
   afterEach(async () => {
     __test_watermarkOverride.current = null;
+    __test_clearWatermarkCache();
     await resetTestRange();
     await refreshTestCagg('1s_cagg');
   });
@@ -687,6 +691,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — watermark fall-through', asyn
     await resetTestRange();
     await refreshTestCagg('1s_cagg');
     __test_watermarkOverride.current = null;
+    __test_clearWatermarkCache();
   });
 
   // ── Test 1: watermark past endTime — no fall-through ─────────────────────────
@@ -919,10 +924,12 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — seam regression: non-Postgres
     await resetTestRangeExpectClean();
     await refreshTestCagg('1s_cagg');
     __test_watermarkOverride.current = null;
+    __test_clearWatermarkCache();
   });
 
   afterEach(async () => {
     __test_watermarkOverride.current = null;
+    __test_clearWatermarkCache();
     await resetTestRange();
     await refreshTestCagg('1s_cagg');
   });
@@ -931,6 +938,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — seam regression: non-Postgres
     await resetTestRange();
     await refreshTestCagg('1s_cagg');
     __test_watermarkOverride.current = null;
+    __test_clearWatermarkCache();
   });
 
   it('split at non-Postgres-epoch-aligned boundary: n is COUNT or COUNT+1, bucketSMs is integer', async () => {
@@ -1036,3 +1044,100 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendExtent — direct query', async () => 
 // tag_samples (251 chunks × 8 tag_ids → catalog enumeration). LOCF now runs unbounded
 // past MAX(ts) — trailing empty buckets carry the last known value forward. Dead-tag
 // detection is deferred; see "Dead-tag detection" TODO in Docs/hmi_trend_viewer_handoff.md.
+
+// ── Watermark memoization — unit tests (no DB required) ──────────────────────
+//
+// These tests spy on timescalePool.query to assert call counts without a real DB.
+// Each test starts with a clean cache via __test_clearWatermarkCache() and restores
+// the spy in afterEach. __test_watermarkOverride is kept null throughout so the
+// production cache path is exercised.
+
+describe('getWatermarkMs — memoization', () => {
+  // Fake DB response: wm_us = "1700000000000000" → 1700000000000 ms
+  const FAKE_WM_US = '1700000000000000';
+  const FAKE_WM_MS = 1_700_000_000_000;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let querySpy: any;
+
+  beforeEach(() => {
+    __test_watermarkOverride.current = null;
+    __test_clearWatermarkCache();
+    querySpy = vi.spyOn(timescalePool, 'query').mockResolvedValue({
+      rows: [{ wm_us: FAKE_WM_US }],
+      rowCount: 1, command: 'SELECT', oid: 0, fields: [],
+    } as never);
+  });
+
+  afterEach(() => {
+    querySpy.mockRestore();
+    __test_clearWatermarkCache();
+    __test_watermarkOverride.current = null;
+  });
+
+  // 1. Cache hit — second call must not issue a second DB query.
+  it('cache hit: second call returns cached value without issuing a new DB query', async () => {
+    const first  = await __test_getWatermarkMs('tag_samples_1s_cagg');
+    const second = await __test_getWatermarkMs('tag_samples_1s_cagg');
+    expect(first).toBe(FAKE_WM_MS);
+    expect(second).toBe(FAKE_WM_MS);
+    expect(querySpy).toHaveBeenCalledTimes(1);
+  });
+
+  // 2. TTL expiry — call after 30s must re-issue the DB query.
+  it('TTL expiry: call after 30s re-issues the DB query', async () => {
+    vi.useFakeTimers();
+    try {
+      await __test_getWatermarkMs('tag_samples_1s_cagg');
+      expect(querySpy).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(30_001);
+
+      await __test_getWatermarkMs('tag_samples_1s_cagg');
+      expect(querySpy).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // 3. In-flight dedup — two concurrent calls share one DB round-trip.
+  it('in-flight dedup: two concurrent calls share one DB round-trip', async () => {
+    let resolveQuery!: (v: unknown) => void;
+    querySpy.mockImplementation(
+      () => new Promise(resolve => { resolveQuery = resolve; }),
+    );
+
+    const p1 = __test_getWatermarkMs('tag_samples_1s_cagg');
+    const p2 = __test_getWatermarkMs('tag_samples_1s_cagg');
+
+    // Only one DB call should have been made so far (the second saw the in-flight promise).
+    expect(querySpy).toHaveBeenCalledTimes(1);
+
+    // Resolve the single DB promise.
+    resolveQuery({ rows: [{ wm_us: FAKE_WM_US }], rowCount: 1, command: 'SELECT', oid: 0, fields: [] });
+
+    const [r1, r2] = await Promise.all([p1, p2]);
+    expect(r1).toBe(FAKE_WM_MS);
+    expect(r2).toBe(FAKE_WM_MS);
+    expect(querySpy).toHaveBeenCalledTimes(1);
+  });
+
+  // 4. Test override bypasses cache — DB is never called.
+  it('test override bypasses cache: no DB query fires when override is set', async () => {
+    __test_watermarkOverride.current = new Map([['tag_samples_1s_cagg', 999_999]]);
+    const result = await __test_getWatermarkMs('tag_samples_1s_cagg');
+    expect(result).toBe(999_999);
+    expect(querySpy).not.toHaveBeenCalled();
+  });
+
+  // 5. __test_clearWatermarkCache clears state — next call re-issues the DB query.
+  it('__test_clearWatermarkCache clears state: next call re-issues DB query', async () => {
+    await __test_getWatermarkMs('tag_samples_1s_cagg');
+    expect(querySpy).toHaveBeenCalledTimes(1);
+
+    __test_clearWatermarkCache();
+
+    await __test_getWatermarkMs('tag_samples_1s_cagg');
+    expect(querySpy).toHaveBeenCalledTimes(2);
+  });
+});

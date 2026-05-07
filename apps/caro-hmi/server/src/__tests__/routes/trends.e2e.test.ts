@@ -9,6 +9,7 @@ import {
   writeTagSamples,
   timescalePool,
   __test_watermarkOverride,
+  __test_clearWatermarkCache,
 } from '@caro/db';
 
 // ── Guard: skip all integration tests if TimescaleDB is not configured ─────────
@@ -318,10 +319,12 @@ describe.skipIf(!HAVE_TIMESCALE)('GET /api/v1/trends/tile — E2E (real DB, no m
       await refreshTestCagg('1s_cagg');
       await refreshTestCagg('10s_cagg');
       __test_watermarkOverride.current = null;
+      __test_clearWatermarkCache();
     });
 
     afterEach(async () => {
       __test_watermarkOverride.current = null;
+      __test_clearWatermarkCache();
       await resetTestRange();
       await refreshTestCagg('1s_cagg');
       await refreshTestCagg('10s_cagg');

@@ -86,6 +86,22 @@ function sourceDisplayName(s: AggregateSource): '1s_cagg' | '10s_cagg' | '1min_c
   return s.replace('tag_samples_', '') as '1s_cagg' | '10s_cagg' | '1min_cagg' | '10min_cagg';
 }
 
+// ── Watermark memo cache ──────────────────────────────────────────────────────
+//
+// cagg_watermark() costs 130-300 ms cold (catalog cache miss) and <5 ms warm.
+// Parallel tiles in the same boundary-crossing batch would each pay the cold
+// cost independently; memoizing per-source with a 30-second TTL collapses the
+// batch to one catalog round-trip. The in-flight deduplicator prevents the
+// "thundering herd" on the very first cold query.
+//
+// At worst a cached value causes fall-through one extra bucket past the true
+// watermark — no visible UX impact.
+
+const WATERMARK_TTL_MS = 30_000;
+type WatermarkCacheEntry = { value: number; expiresAt: number };
+const watermarkCache    = new Map<AggregateSource, WatermarkCacheEntry>();
+const watermarkInFlight = new Map<AggregateSource, Promise<number>>();
+
 // ── Test seams ─────────────────────────────────────────────────────────────────
 //
 // __test_watermarkOverride: production leaves null. Tests set current to a
@@ -98,6 +114,8 @@ function sourceDisplayName(s: AggregateSource): '1s_cagg' | '10s_cagg' | '1min_c
 //
 // __test_getWatermarkMs: direct access to the watermark catalog query so tests
 // can assert the live path without going through getTrendTile.
+//
+// __test_clearWatermarkCache: resets the module-level memo cache between tests.
 
 export const __test_watermarkOverride: { current: Map<string, number> | null } = {
   current: null,
@@ -107,6 +125,11 @@ export const __test_lastUsedSources: { current: Set<string> } = { current: new S
 
 export async function __test_getWatermarkMs(source: string): Promise<number> {
   return getWatermarkMs(source as AggregateSource);
+}
+
+export function __test_clearWatermarkCache(): void {
+  watermarkCache.clear();
+  watermarkInFlight.clear();
 }
 
 // ── Watermark lookup ──────────────────────────────────────────────────────────
@@ -119,28 +142,46 @@ export async function __test_getWatermarkMs(source: string): Promise<number> {
 // It takes mat_hypertable_id (from _timescaledb_catalog.continuous_agg) and
 // returns microseconds as bigint. Divide by 1000n for ms.
 //
-// Cost: <1 ms per call. Not cached — query once per request per level reached.
+// See watermarkCache / watermarkInFlight above for caching behaviour.
 
 async function getWatermarkMs(source: AggregateSource): Promise<number> {
   if (source === 'tag_samples') return Infinity;
 
+  // Test override takes precedence — bypasses cache so test seams work.
   if (__test_watermarkOverride.current !== null) {
     const v = __test_watermarkOverride.current.get(source);
     if (v !== undefined) return v;
   }
 
-  const result = await timescalePool.query(
-    `SELECT _timescaledb_internal.cagg_watermark(ca.mat_hypertable_id) AS wm_us
-     FROM _timescaledb_catalog.continuous_agg ca
-     WHERE ca.user_view_schema = 'public'
-       AND ca.user_view_name = $1`,
-    [source],
-  );
+  // Cache hit — fresh watermark.
+  const cached = watermarkCache.get(source);
+  if (cached && Date.now() < cached.expiresAt) return cached.value;
 
-  const wmUs: string | null =
-    (result.rows[0] as { wm_us: string | null } | undefined)?.wm_us ?? null;
-  if (wmUs === null) return 0; // never refreshed — fall through entirely
-  return Number(BigInt(wmUs) / 1000n);
+  // In-flight dedup — concurrent tiles share one DB round-trip.
+  const inflight = watermarkInFlight.get(source);
+  if (inflight) return inflight;
+
+  const promise = (async () => {
+    try {
+      const result = await timescalePool.query(
+        `SELECT _timescaledb_internal.cagg_watermark(ca.mat_hypertable_id) AS wm_us
+         FROM _timescaledb_catalog.continuous_agg ca
+         WHERE ca.user_view_schema = 'public'
+           AND ca.user_view_name = $1`,
+        [source],
+      );
+      const wmUs =
+        (result.rows[0] as { wm_us: string | null } | undefined)?.wm_us ?? null;
+      const ms = wmUs === null ? 0 : Number(BigInt(wmUs) / 1000n);
+      watermarkCache.set(source, { value: ms, expiresAt: Date.now() + WATERMARK_TTL_MS });
+      return ms;
+    } finally {
+      watermarkInFlight.delete(source);
+    }
+  })();
+
+  watermarkInFlight.set(source, promise);
+  return promise;
 }
 
 // ── Raw query ──────────────────────────────────────────────────────────────────
