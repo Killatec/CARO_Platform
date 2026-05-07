@@ -411,8 +411,8 @@ describe.skipIf(!HAVE_TIMESCALE)('GET /api/v1/trends/tile — E2E (real DB, no m
     it('empty bucket: min === max === value (LOCF collapse, COV semantics)', async () => {
       // Bucket 0 has data (5.0). Bucket 5 is empty → LOCF'd to 5.0.
       // Guard sample in bucket 6 pushes the 1s_cagg watermark to 7287000ms,
-      // which is ≥ bucket 5's gf_bucket (7272000ms), so the past-extent CASE
-      // does not null bucket 5 out.
+      // which is ≥ bucket 5's gf_bucket (7272000ms). LOCF cutoff removed — bucket 5
+      // is within the data range so carries the real LOCF'd value regardless.
       await writeTestSamples([
         { ts: AGG_START + 1_000n,                          tagId: 7012, value: 5.0  },
         { ts: AGG_START + BigInt(6 * BUCKET_MS) + 1_000n, tagId: 7012, value: 99.0 },

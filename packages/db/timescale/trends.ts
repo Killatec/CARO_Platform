@@ -267,7 +267,6 @@ async function querySegment(
   startTime: bigint,
   endTime: bigint,
   bucketSMs: number,
-  cutoffMs: bigint,
 ): Promise<SegmentResult> {
   const t0 = LOG_TILE_QUERIES ? performance.now() : 0;
 
@@ -276,83 +275,65 @@ async function querySegment(
     // Raw-as-aggregate: gapfill+locf on raw tag_samples.
     // Distinct from queryRaw() — returns bucketed values, not COV samples.
     sql = `
-      WITH gapfilled AS (
-        SELECT s.tag_id,
-               time_bucket_gapfill(
-                 $1::int * INTERVAL '1 millisecond',
-                 s.ts,
-                 to_timestamp($2::bigint / 1000.0),
-                 to_timestamp($3::bigint / 1000.0)
-               ) AS gf_bucket,
-               locf(
-                 last(s.value, s.ts),
-                 prev => (SELECT value FROM tag_samples
-                           WHERE tag_id = s.tag_id
-                             AND ts <  to_timestamp($2::bigint / 1000.0)
-                             AND ts >= to_timestamp($2::bigint / 1000.0) - INTERVAL '5 minutes'
-                           ORDER BY ts DESC
-                           LIMIT 1)
-               ) AS val,
-               min(s.value) AS bucket_min,
-               max(s.value) AS bucket_max,
-               count(*) FILTER (WHERE s.value IS NULL) AS bucket_null_count
-        FROM tag_samples s
-        WHERE s.tag_id = ANY($4::int[])
-          AND s.ts >= to_timestamp($2::bigint / 1000.0)
-          AND s.ts <  to_timestamp($3::bigint / 1000.0)
-        GROUP BY s.tag_id, gf_bucket
-      )
-      SELECT tag_id,
-             gf_bucket,
-             CASE WHEN gf_bucket > to_timestamp($5::bigint / 1000.0) THEN NULL ELSE val        END AS val,
-             CASE WHEN gf_bucket > to_timestamp($5::bigint / 1000.0) THEN NULL ELSE bucket_min END AS bucket_min,
-             CASE WHEN gf_bucket > to_timestamp($5::bigint / 1000.0) THEN NULL ELSE bucket_max END AS bucket_max,
-             bucket_null_count
-      FROM gapfilled
-      ORDER BY tag_id, gf_bucket
+      SELECT s.tag_id,
+             time_bucket_gapfill(
+               $1::int * INTERVAL '1 millisecond',
+               s.ts,
+               to_timestamp($2::bigint / 1000.0),
+               to_timestamp($3::bigint / 1000.0)
+             ) AS gf_bucket,
+             locf(
+               last(s.value, s.ts),
+               prev => (SELECT value FROM tag_samples
+                         WHERE tag_id = s.tag_id
+                           AND ts <  to_timestamp($2::bigint / 1000.0)
+                           AND ts >= to_timestamp($2::bigint / 1000.0) - INTERVAL '5 minutes'
+                         ORDER BY ts DESC
+                         LIMIT 1)
+             ) AS val,
+             min(s.value) AS bucket_min,
+             max(s.value) AS bucket_max,
+             count(*) FILTER (WHERE s.value IS NULL) AS bucket_null_count
+      FROM tag_samples s
+      WHERE s.tag_id = ANY($4::int[])
+        AND s.ts >= to_timestamp($2::bigint / 1000.0)
+        AND s.ts <  to_timestamp($3::bigint / 1000.0)
+      GROUP BY s.tag_id, gf_bucket
+      ORDER BY s.tag_id, gf_bucket
     `;
   } else {
     // CAG source: uses bucket/last/null_count columns.
     // Source table is a closed literal from CaggSource — never from user input.
     sql = `
-      WITH gapfilled AS (
-        SELECT s.tag_id,
-               time_bucket_gapfill(
-                 $1::int * INTERVAL '1 millisecond',
-                 s.bucket,
-                 to_timestamp($2::bigint / 1000.0),
-                 to_timestamp($3::bigint / 1000.0)
-               ) AS gf_bucket,
-               locf(
-                 last(s.last, s.bucket),
-                 prev => (SELECT last FROM ${source}
-                           WHERE tag_id = s.tag_id
-                             AND bucket <  to_timestamp($2::bigint / 1000.0)
-                             AND bucket >= to_timestamp($2::bigint / 1000.0) - INTERVAL '5 minutes'
-                           ORDER BY bucket DESC
-                           LIMIT 1)
-               ) AS val,
-               min(s.min) AS bucket_min,
-               max(s.max) AS bucket_max,
-               sum(s.null_count) AS bucket_null_count
-        FROM ${source} s
-        WHERE s.tag_id = ANY($4::int[])
-          AND s.bucket >= to_timestamp($2::bigint / 1000.0)
-          AND s.bucket <  to_timestamp($3::bigint / 1000.0)
-        GROUP BY s.tag_id, gf_bucket
-      )
-      SELECT tag_id,
-             gf_bucket,
-             CASE WHEN gf_bucket > to_timestamp($5::bigint / 1000.0) THEN NULL ELSE val        END AS val,
-             CASE WHEN gf_bucket > to_timestamp($5::bigint / 1000.0) THEN NULL ELSE bucket_min END AS bucket_min,
-             CASE WHEN gf_bucket > to_timestamp($5::bigint / 1000.0) THEN NULL ELSE bucket_max END AS bucket_max,
-             bucket_null_count
-      FROM gapfilled
-      ORDER BY tag_id, gf_bucket
+      SELECT s.tag_id,
+             time_bucket_gapfill(
+               $1::int * INTERVAL '1 millisecond',
+               s.bucket,
+               to_timestamp($2::bigint / 1000.0),
+               to_timestamp($3::bigint / 1000.0)
+             ) AS gf_bucket,
+             locf(
+               last(s.last, s.bucket),
+               prev => (SELECT last FROM ${source}
+                         WHERE tag_id = s.tag_id
+                           AND bucket <  to_timestamp($2::bigint / 1000.0)
+                           AND bucket >= to_timestamp($2::bigint / 1000.0) - INTERVAL '5 minutes'
+                         ORDER BY bucket DESC
+                         LIMIT 1)
+             ) AS val,
+             min(s.min) AS bucket_min,
+             max(s.max) AS bucket_max,
+             sum(s.null_count) AS bucket_null_count
+      FROM ${source} s
+      WHERE s.tag_id = ANY($4::int[])
+        AND s.bucket >= to_timestamp($2::bigint / 1000.0)
+        AND s.bucket <  to_timestamp($3::bigint / 1000.0)
+      GROUP BY s.tag_id, gf_bucket
+      ORDER BY s.tag_id, gf_bucket
     `;
   }
 
-  const result = await timescalePool.query(sql, [bucketSMs, startTime, endTime, tagIds, cutoffMs]);
+  const result = await timescalePool.query(sql, [bucketSMs, startTime, endTime, tagIds]);
 
   if (LOG_TILE_QUERIES) {
     console.log(
@@ -475,7 +456,6 @@ async function queryRecursive(
   startTime: bigint,
   endTime: bigint,
   bucketSMs: number,
-  cutoffMs: bigint,
 ): Promise<{ segments: SegmentResult[]; usedSources: Set<AggregateSource> }> {
   const watermarkMs = await getWatermarkMs(source);
   const endTimeMs   = Number(endTime);
@@ -483,7 +463,7 @@ async function queryRecursive(
   if (source === 'tag_samples' || endTimeMs <= watermarkMs) {
     // Full range is covered by this source — no fall-through.
     __test_lastUsedSources.current.add(source);
-    const seg = await querySegment(source, tagIds, startTime, endTime, bucketSMs, cutoffMs);
+    const seg = await querySegment(source, tagIds, startTime, endTime, bucketSMs);
     return { segments: [seg], usedSources: new Set([source]) };
   }
 
@@ -505,7 +485,7 @@ async function queryRecursive(
     // Nothing in this source covers the requested range — fall through entirely.
     // This source contributed no data; do NOT add it to __test_lastUsedSources.
     const finer = nextFinerSource(source);
-    return queryRecursive(finer, tagIds, startTime, endTime, bucketSMs, cutoffMs);
+    return queryRecursive(finer, tagIds, startTime, endTime, bucketSMs);
   }
 
   // Split: CAG covers [startTime, splitBoundary); finer source covers [splitBoundary, endTime).
@@ -519,8 +499,8 @@ async function queryRecursive(
   // inside the PRIOR bucket, so gapfill does not emit the boundary bucket in
   // the left half. The right half then owns that bucket exclusively.
   const [leftSeg, rightResult] = await Promise.all([
-    querySegment(source, tagIds, startTime, splitBoundary - 1n, bucketSMs, cutoffMs),
-    queryRecursive(finer, tagIds, splitBoundary, endTime, bucketSMs, cutoffMs),
+    querySegment(source, tagIds, startTime, splitBoundary - 1n, bucketSMs),
+    queryRecursive(finer, tagIds, splitBoundary, endTime, bucketSMs),
   ]);
 
   return {
@@ -590,23 +570,9 @@ export async function getTrendTile(
   else if (bucketS < 1600) dispatchSource = 'tag_samples_1min_cagg';
   else                     dispatchSource = 'tag_samples_10min_cagg';
 
-  // ── Data-extent cutoff ───────────────────────────────────────────────────────
-  // Gapfill+LOCF propagates past the last real sample into future buckets.
-  // Query MAX(ts) once and null out any gf_bucket beyond that point in each segment.
-  const cutoffResult = await timescalePool.query(
-    `SELECT EXTRACT(EPOCH FROM COALESCE(MAX(ts), 'infinity'::timestamptz)) * 1000 AS cutoff_ms
-     FROM tag_samples
-     WHERE tag_id = ANY($1)`,
-    [tagIds],
-  );
-  const rawCutoffMs = Number(cutoffResult.rows[0].cutoff_ms);
-  const cutoffMs: bigint = Number.isFinite(rawCutoffMs)
-    ? BigInt(Math.floor(rawCutoffMs))
-    : 9_999_999_999_999n; // no data → far-future sentinel, CASE never fires
-
   __test_lastUsedSources.current = new Set();
   const { segments, usedSources } = await queryRecursive(
-    dispatchSource, tagIds, startTime, endTime, bucketSMs, cutoffMs,
+    dispatchSource, tagIds, startTime, endTime, bucketSMs,
   );
 
   // ── Remove seam duplicates ──────────────────────────────────────────────────

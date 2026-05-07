@@ -334,8 +334,8 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (b
     const { value } = tile.series[0];
     // Left edge buckets (before inTs) should carry the prev value 55.5.
     expect(value[0]).toBe(55.5);
-    // inTs is ~bucket 243; buckets past inTs are past max(ts) → cutoff nulls them.
-    expect(value[COUNT - 1]).toBeNull();
+    // Buckets past inTs are empty → LOCF carries 99.0 forward (no cutoff).
+    expect(value[COUNT - 1]).toBe(99.0);
   });
 
   it('bounded prev returns null when no prior sample exists within 5 minutes', async () => {
@@ -347,7 +347,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (b
     const tile = await getTrendTile([2006], START, END, COUNT) as AggregateTrendTile;
     const { value, min, max } = tile.series[0];
     expect(value[0]).toBeNull(); // left edge: no prev
-    expect(value[COUNT - 1]).toBeNull(); // inTs is ~bucket 125; buckets past inTs are past max(ts) → cutoff
+    expect(value[COUNT - 1]).toBe(7.0); // inTs is ~bucket 125; LOCF carries 7.0 forward unbounded (no cutoff)
     // Leading-edge null: empty bucket with null LOCF → collapse to null/null/null.
     expect(min[0]).toBeNull();
     expect(max[0]).toBeNull();
@@ -436,7 +436,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (b
   it('three-case: normal bucket — measured spread (value=last, min=true-min, max=true-max)', async () => {
     // Three samples in outer bucket 5 ([START+72000ms, START+86400ms)):
     //   ts +72100 → 1.0   ts +72200 → 3.0   ts +72300 → 2.0 (latest → last=2.0)
-    // No guard needed: bucket 5's gf_bucket (7272000ms) < max(ts) (7272300ms) so cutoff won't fire.
+    // No guard needed — LOCF cutoff removed; bucket 5 carries real data.
     const B5 = START + 72_000n; // start of outer bucket 5 (14400ms × 5 = 72000ms past START)
     await writeTestSamples([
       { ts: B5 + 100n, tagId: 2100, value: 1.0 },
@@ -452,8 +452,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (b
   });
 
   it('three-case: single-sample bucket — degenerate band (value === min === max)', async () => {
-    // One sample in outer bucket 3; no guard needed: cutoff = max(ts) = B3+100ms is
-    // after gf_bucket (B3), so bucket 3 is not past-cutoff.
+    // One sample in outer bucket 3.
     const B3 = START + 43_200n; // start of outer bucket 3 (14400ms × 3 = 43200ms past START)
     await writeTestSamples([
       { ts: B3 + 100n, tagId: 2101, value: 5.0 },
@@ -491,7 +490,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (b
   it('three-case: mixed-null bucket — all three fields null (band gap)', async () => {
     // Write samples across three separate 1s sub-buckets inside outer bucket 5.
     // One sample is null → null_count=1 in the 1s CAG → outer sum(null_count)>0 → band gap.
-    // No guard: gf_bucket(7272000ms) < max(ts)(7274100ms) so cutoff won't fire.
+    // LOCF cutoff removed — bucket 5 has real data so this is fine regardless.
     const B5 = START + 72_000n;
     await writeTestSamples([
       { ts: B5 + 100n,   tagId: 2103, value: 1.0  },  // 1s sub-bucket 7272000ms
@@ -705,9 +704,9 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — watermark fall-through', asyn
     expect(tile.source).toBe('1s_cagg');   // NOT 'mixed'
     expect(tile.n).toBe(COUNT);
     expect(tile.series[0].value).toHaveLength(COUNT);
-    // Bucket 0 has the real sample; all later buckets are past max(ts) → cutoff nulls them.
+    // Bucket 0 has the real sample; later buckets are empty → LOCF carries 7.5 forward.
     expect(tile.series[0].value[0]).toBe(7.5);
-    expect(tile.series[0].value[COUNT - 1]).toBeNull();
+    expect(tile.series[0].value[COUNT - 1]).toBe(7.5);
   });
 
   // ── Test 2: watermark mid-range → fall-through to next-finer CAG ─────────────
@@ -1032,85 +1031,8 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendExtent — direct query', async () => 
   });
 });
 
-describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — LOCF data-extent cutoff', async () => {
-  const {
-    writeTestSamples, resetTestRange, resetTestRangeExpectClean, refreshTestCagg,
-  } = await import('../helpers/trends-test-range.js');
-
-  // T = 1970-01-11T00:00:00Z — divisible by 720s and 60s, well inside sandbox epoch range.
-  const TAG  = 7001;
-  const T    = 864_000_000n; // ms
-  const B    = 720_000n;     // one 720s bucket in ms → dispatches to 1min_cagg (720 ∈ [160,1600))
-  const VIEW = '1min_cagg' as const;
-
-  beforeEach(async () => {
-    await resetTestRangeExpectClean();
-    await refreshTestCagg(VIEW);
-  });
-  afterEach(async () => {
-    await resetTestRange();
-    await refreshTestCagg(VIEW);
-  });
-  afterAll(async () => {
-    await resetTestRange();
-    await refreshTestCagg(VIEW);
-  });
-
-  it('buckets past max(ts) are null; buckets at or before max(ts) carry LOCF values', async () => {
-    await writeTestSamples([
-      { tagId: TAG, ts: T - 2n * B, value: 5.0 },
-      { tagId: TAG, ts: T,           value: 10.0 },
-    ]);
-    await refreshTestCagg(VIEW);
-    // Range [T-2B, T+2B], 4 buckets × 720s → bucketS=720 → 1min_cagg
-    const tile = await getTrendTile([TAG], T - 2n * B, T + 2n * B, 4) as AggregateTrendTile;
-    expect(tile.source).toBe('1min_cagg');
-    const { value: vals, min: mins, max: maxs } = tile.series[0]!;
-    expect(vals).toHaveLength(4);
-    expect(vals[0]).toBe(5.0);   // bucket T-2B: actual sample
-    expect(vals[1]).toBe(5.0);   // bucket T-B:  LOCF from T-2B (gap within range → fills)
-    expect(vals[2]).toBe(10.0);  // bucket T:    actual sample
-    expect(vals[3]).toBeNull();  // bucket T+B:  past max(ts) → cutoff
-    // Past-extent cutoff must null all three fields, not just value.
-    expect(mins[3]).toBeNull();
-    expect(maxs[3]).toBeNull();
-  });
-
-  it('query range entirely past max(ts) — all buckets null in all three fields', async () => {
-    await writeTestSamples([{ tagId: TAG, ts: T, value: 10.0 }]);
-    await refreshTestCagg(VIEW);
-    // Range [T+2B, T+7B]: all 5 buckets start after T → all null
-    const tile = await getTrendTile([TAG], T + 2n * B, T + 7n * B, 5) as AggregateTrendTile;
-    expect(tile.source).toBe('1min_cagg');
-    const { value: vals, min: mins, max: maxs } = tile.series[0]!;
-    expect(vals).toHaveLength(5);
-    expect(vals.every(v => v === null)).toBe(true);
-    expect(mins.every(m => m === null)).toBe(true);
-    expect(maxs.every(m => m === null)).toBe(true);
-  });
-
-  it('gap in data before max(ts) — LOCF fills gap, only post-extent bucket is null in all three', async () => {
-    await writeTestSamples([
-      { tagId: TAG, ts: T - 4n * B, value: 5.0 },
-      { tagId: TAG, ts: T,           value: 10.0 },
-    ]);
-    await refreshTestCagg(VIEW);
-    // Range [T-4B, T+2B], 6 buckets × 720s → bucketS=720 → 1min_cagg
-    const tile = await getTrendTile([TAG], T - 4n * B, T + 2n * B, 6) as AggregateTrendTile;
-    expect(tile.source).toBe('1min_cagg');
-    const { value: vals, min: mins, max: maxs } = tile.series[0]!;
-    expect(vals).toHaveLength(6);
-    expect(vals[0]).toBe(5.0);   // T-4B: actual sample
-    expect(vals[1]).toBe(5.0);   // T-3B: LOCF from T-4B
-    expect(vals[2]).toBe(5.0);   // T-2B: LOCF
-    expect(vals[3]).toBe(5.0);   // T-B:  LOCF
-    expect(vals[4]).toBe(10.0);  // T:    actual sample
-    expect(vals[5]).toBeNull();  // T+B:  past max(ts) → cutoff
-    // LOCF'd buckets (1–3): empty bucket collapse — min === max === LOCF'd value.
-    expect(mins[1]).toBe(5.0);
-    expect(maxs[1]).toBe(5.0);
-    // Past-extent cutoff must null all three fields.
-    expect(mins[5]).toBeNull();
-    expect(maxs[5]).toBeNull();
-  });
-});
+// NOTE: The LOCF data-extent cutoff (MAX(ts) query + past-extent CASE wrapper) was removed
+// for performance. It paid 814ms of planning time per CAG request on production-scale
+// tag_samples (251 chunks × 8 tag_ids → catalog enumeration). LOCF now runs unbounded
+// past MAX(ts) — trailing empty buckets carry the last known value forward. Dead-tag
+// detection is deferred; see "Dead-tag detection" TODO in Docs/hmi_trend_viewer_handoff.md.
