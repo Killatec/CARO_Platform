@@ -16,6 +16,7 @@ vi.mock('uplot', () => {
       redraw: vi.fn(),
       setScale: vi.fn(),
       scales: { x: { min: 0, max: 3600 } },
+      data: [[]] as unknown[][],
       over,
     };
   });
@@ -246,5 +247,70 @@ describe('TrendChart', () => {
     // uPlot constructor must NOT be called again — setData handles the mode flip.
     const callsAfterSwitch = (MockUPlot as ReturnType<typeof vi.fn>).mock.calls.length;
     expect(callsAfterSwitch).toBe(callsAfterFirst);
+  });
+
+  // ── X-axis zone wheel → onXRangeChange (every tick exits tailing) ───────────
+  //
+  // inXZone is set by mousemove calling isInXAxisHitZone(u, clientX, clientY).
+  // u.over.getBoundingClientRect() returns all zeros in jsdom (detached element), so:
+  //   clientY=1 > r.bottom=0  → above condition true
+  //   clientY=1 ≤ r.bottom+100=100 → within 100px strip  → inXZone=true
+  // Wheel events on the canvas (clientY=0, i.e. NOT > r.bottom=0) leave inXZone=false.
+
+  it('wheel on canvas (no prior X-zone mousemove) does NOT fire onXRangeChange', () => {
+    const onXRangeChange = vi.fn();
+    const { container: root } = render(
+      <MockHmiProvider tagDefs={TAG_DEFS}>
+        <TrendChart
+          data={makeData([1])}
+          tagIds={[1]}
+          siteTimezone="UTC"
+          height={400}
+          onXRangeChange={onXRangeChange}
+        />
+      </MockHmiProvider>,
+    );
+    const containerDiv = root.firstElementChild!.firstElementChild!.firstElementChild as HTMLElement;
+    // No mousemove → inXZone stays false → handler returns early.
+    fireEvent.wheel(containerDiv, { clientX: 0, clientY: 0, deltaY: 100 });
+    expect(onXRangeChange).not.toHaveBeenCalled();
+  });
+
+  it('wheel in X-axis zone (zoom-in, sub-threshold) fires onXRangeChange', () => {
+    const onXRangeChange = vi.fn();
+    const { container: root } = render(
+      <MockHmiProvider tagDefs={TAG_DEFS}>
+        <TrendChart
+          data={makeData([1])}
+          tagIds={[1]}
+          siteTimezone="UTC"
+          height={400}
+          onXRangeChange={onXRangeChange}
+        />
+      </MockHmiProvider>,
+    );
+    const containerDiv = root.firstElementChild!.firstElementChild!.firstElementChild as HTMLElement;
+    fireEvent.mouseMove(containerDiv, { clientX: 0, clientY: 1 }); // sets inXZone=true
+    fireEvent.wheel(containerDiv, { clientX: 0, clientY: 1, deltaY: -100 }); // zoom-in
+    expect(onXRangeChange).toHaveBeenCalled();
+  });
+
+  it('wheel in X-axis zone (zoom-out, sub-threshold) fires onXRangeChange', () => {
+    const onXRangeChange = vi.fn();
+    const { container: root } = render(
+      <MockHmiProvider tagDefs={TAG_DEFS}>
+        <TrendChart
+          data={makeData([1])}
+          tagIds={[1]}
+          siteTimezone="UTC"
+          height={400}
+          onXRangeChange={onXRangeChange}
+        />
+      </MockHmiProvider>,
+    );
+    const containerDiv = root.firstElementChild!.firstElementChild!.firstElementChild as HTMLElement;
+    fireEvent.mouseMove(containerDiv, { clientX: 0, clientY: 1 }); // sets inXZone=true
+    fireEvent.wheel(containerDiv, { clientX: 0, clientY: 1, deltaY: 100 }); // zoom-out
+    expect(onXRangeChange).toHaveBeenCalled();
   });
 });

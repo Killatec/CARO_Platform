@@ -162,26 +162,15 @@ export function TrendChartContainer({
     [_handleDragZoom, dispatch],
   );
 
-  // Wrap zoom-level switch: same pattern — sync mode state after zoom.
+  // Wrap zoom-level switch: update data-fetch state (bucketSMs, dataViewport, zoomAnchorSpan).
+  // zoomApplied is NOT dispatched here — onXRangeChange fires on every X-scale mutation
+  // (including level-switch ticks) and handleXRangeChange dispatches it via RAF, covering
+  // all cases (sub-threshold, zoom-out, level-switch) through a single path.
   const handleZoomLevelSwitch = useCallback(
     (direction: 'in' | 'out', cursorTimeMs: bigint) => {
       _handleZoomLevelSwitch(direction, cursorTimeMs);
-      // Derive the new viewport the same way useZoomState does, then dispatch.
-      const newBucketSMs = direction === 'out'
-        ? (dataViewport.end - dataViewport.start) / BigInt(VISIBLE_TILES_PER_WINDOW * BUCKET_COUNT) * 2n
-        : (dataViewport.end - dataViewport.start) / BigInt(VISIBLE_TILES_PER_WINDOW * BUCKET_COUNT) / 2n;
-      if (newBucketSMs <= 0n) return;
-      const newSpan = newBucketSMs * BigInt(VISIBLE_TILES_PER_WINDOW * BUCKET_COUNT);
-      const newStart = cursorTimeMs - newSpan / 2n;
-      const newEnd = newStart + newSpan;
-      dispatch({
-        type: 'zoomApplied',
-        from: newStart,
-        to: newEnd,
-        nowMs: BigInt(Date.now()),
-      });
     },
-    [_handleZoomLevelSwitch, dispatch, dataViewport],
+    [_handleZoomLevelSwitch],
   );
 
   const footerJsx = (
