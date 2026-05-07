@@ -11,6 +11,7 @@ CARO_Trending_Reference | hmi_functional_spec | hmi_API_spec | hmi_widget_spec |
 
 | Version | Date | Author | Summary |
 |---|---|---|---|
+| 1.4 | 2026-05-07 | PM / Claude | Mode rule: `zoomApplied` always → fixed (was: tailing if `to ≥ nowMs − NEAR_NOW_MS`). Zoom is exploratory; tailing now requires deliberate `liveClicked` or `presetClicked`-from-tailing. §9.3 transition diagram and action table updated. `NEAR_NOW_MS` retained for `viewportChanged` (Step 11). |
 | 1.3 | 2026-05-07 | PM / Claude | Removed LOCF cutoff query (`MAX(ts)`) and past-extent CASE wrapper from `getTrendTile`. §5.5 updated: LOCF now runs unbounded past MAX(ts); dead-tag detection deferred (TODO in handoff). CAG perf restored to 100-200ms baseline (814ms planning regression from the cutoff query on 251-chunk production table eliminated). |
 | 1.2 | 2026-05-05 | PM / Claude | v0.8 min/max bands complete. §6.2 aggregate response gains `min`/`max` arrays per-series (v0.8 example). §6.5 rewritten: three-case rule (mixed-null → null; empty-bucket → collapse to LOCF'd last × 3; normal → `last`/`bucket_min`/`bucket_max`). §8.7 added: always-band 2-series render architecture (2 series per tag + `bands[]`; raw mode passes `mins[i] === maxs[i]` for zero-area band; no uPlot rebuild on mode flip; `width: 0` regression guard). §9.5 added: defensive guards (`bucketSMs === 0n` in `level.ts`; `newStart >= 1n` clamp in `useZoomState.ts`). §17.1 step A.5 added; §17.2 bands item removed. Divergences from upgrade doc: 2-series always-band (not 3-series with rebuild); CAG uses `min(s.min)`/`max(s.max)` (not `last()`); DB interval uses integer-ms syntax. SpanBucketIndicator gains `lastFetchMs` prop (Last Fetch timing line); `formatFetchMs` helper added. |
 | 1.1 | 2026-05-01 | PM / Claude | Phase A.5 UI refinements: `TrendChartContainer` mode-state tightening; `bucketSMs` invariant enforcement; `SpanBucketIndicator` renamed from `ResolutionIndicator`; footer layout consolidated. |
@@ -588,22 +589,21 @@ Zoom is gated by hovering over the relevant axis margin for wheel events, or by 
 - **Vertical wheel-zoom.** Hover over the Y-axis margin → wheel up/down → zooms the **selected trace's** Y-scale around the cursor data-Y. Other traces unaffected. No mode transition occurs.
 - **Drag-zoom on plot area.** Left-click-drag on the plot area produces a uPlot drag-selection rectangle (`cursor.drag.x: true, setScale: false`). On mouse-up, the `setSelect` hook applies the selection as the new visual X range and calls `onDragZoom(startMs, endMs)`. The container's `handleDragZoom` snaps to the nearest discrete level via `computeDragZoomViewport` and updates `dataViewport` and `bucketSMs` accordingly. `cursor.bind.dblclick: () => null` disables uPlot's built-in fit-to-data reset, which would break tile alignment.
 
-  > **Implementation note (v1.0):** All X-scale mutations dispatch `zoomApplied { from, to, nowMs }` via `onXRangeChange` → `handleXRangeChange` (RAF-coalesced). This keeps `modeViewport`, `SpanBucketIndicator`, preset highlight, and the `EndPicker`'s End display in sync with the visible window. `zoomApplied` from fixed always stays fixed. `zoomApplied` from tailing stays tailing only when `to ≥ nowMs − NEAR_NOW_MS`; otherwise → fixed. See §9.3 for full transition rules.
+  > **Implementation note (v1.4):** All X-scale mutations dispatch `zoomApplied { from, to, nowMs }` via `onXRangeChange` → `handleXRangeChange` (RAF-coalesced). This keeps `modeViewport`, `SpanBucketIndicator`, preset highlight, and the `EndPicker`'s End display in sync with the visible window. `zoomApplied` always → fixed regardless of prior mode or the value of `to`. See §9.3 for full transition rules.
 
 ### 9.3 Mode State Machine
 
 Two modes only. No explicit Pause or Resume buttons.
 
 ```
-          panApplied / endPickerCommitted /
-          zoomApplied (to < now − NEAR_NOW_MS or prior mode was fixed)
+          panApplied / endPickerCommitted / zoomApplied
 tailing ──────────────────────────────────────────────────────────────▶ fixed
                                                                          │
                              liveClicked only                            │
                        ◀──────────────────────────────────────────────── ┘
 ```
 
-`presetClicked` and `zoomApplied` (from tailing, `to ≈ now`) stay in the current mode.
+`presetClicked` stays in the current mode (tailing→tailing, fixed→fixed).
 
 **State type:**
 
@@ -622,14 +622,14 @@ Both branches carry `sizeMs` — required so `liveClicked` can restore the prior
 - `presetClicked { sizeMs, nowMs }` — stays in current mode. From tailing: updates `sizeMs` and `nowMs`. From fixed: preserves `to`, re-anchors `from = to - sizeMs`.
 - `liveClicked { nowMs }` — **sole entry to tailing from fixed**. Always → tailing, `sizeMs` preserved from prior state.
 - `endPickerCommitted { to, nowMs }` — always → fixed, `from = to - sizeMs` (sizeMs from prior state). No near-now branch; user clicks Live to re-enter tailing after an End pick.
-- `zoomApplied { from, to, nowMs }` — stays tailing only when prior state was already tailing AND `to ≥ nowMs − NEAR_NOW_MS` (zoom-out from tailing that keeps "now" in view). Otherwise → fixed. `sizeMs = to - from`.
+- `zoomApplied { from, to, nowMs }` — **always → fixed** from any prior mode. Zoom is an exploratory action; staying tailing because the right edge happens to land near "now" hides intent. Tailing requires a deliberate `liveClicked` or `presetClicked`-from-tailing after any zoom. `sizeMs = to - from`.
 - `panApplied { from, to, nowMs }` — always → fixed. `sizeMs` preserved from prior state (not derived from `to - from`). Pan can never enter tailing.
-- `viewportChanged { from, to, nowMs }` — reserved for Step 11. Applies near-now heuristic.
+- `viewportChanged { from, to, nowMs }` — reserved for Step 11. Applies near-now heuristic (`NEAR_NOW_MS`).
 - `tick { nowMs }` — advances `nowMs` in tailing only. Preserves `lastIntent` (clock advance is not a user intent). Dormant while `LIVE_MODE_ENABLED = false`.
 
 **`lastIntent` and preset highlight rule.** `lastIntent` tracks the most recent user action. `SpanPresets` highlights the active preset when `(lastIntent === 'preset' || lastIntent === 'pan') && sizeMs === preset.sizeMs`. Pan preserves `sizeMs`, so the preset stays highlighted after a pan gesture. `tick` spreads the existing `lastIntent`.
 
-**`NEAR_NOW_MS = 60_000n`** (1 minute).
+**`NEAR_NOW_MS = 60_000n`** (1 minute) — reserved for `viewportChanged` (Step 11). No longer used by `zoomApplied`.
 
 Tailing enables the WebSocket subscription; fixed disables it. One WebSocket connection, lifecycle managed by mode.
 

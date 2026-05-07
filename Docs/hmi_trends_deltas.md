@@ -8,3 +8,4 @@
 - Preset highlight rule extended: was `(lastIntent==='preset'||'pan')`, now `lastIntent !== null && lastIntent !== 'zoom'` — covers liveClicked, endPickerCommitted, and any future size-preserving intents.
 - Raw path adds bounded `prev` (5-minute window before startTime), v0.8→v0.9, fixes intermittent gaps on flatlined tags at narrow viewports.
 - Removed LOCF cutoff query and past-extent CASE wrapper — was paying 814ms planning per CAG request on production-scale tag_samples. LOCF now runs unbounded past MAX(ts). Trailing-edge dead-tag detection deferred to follow-up TODO in handoff (replacement options noted).
+- Mode rule: `zoomApplied` always → fixed (was: tailing if `to ≥ nowMs − NEAR_NOW_MS`). Tailing now requires explicit `liveClicked` or preset-from-tailing.

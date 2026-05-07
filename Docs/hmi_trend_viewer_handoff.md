@@ -126,14 +126,14 @@ Both branches carry `sizeMs` — required so `liveClicked` can restore the prior
 | `presetClicked { sizeMs, nowMs }` | Stays in current mode | Tailing: updates sizeMs/nowMs. Fixed: preserves `to`, re-anchors `from = to - sizeMs`. |
 | `liveClicked { nowMs }` | Always → tailing | **Sole entry to tailing from fixed.** Preserves sizeMs. |
 | `endPickerCommitted { to, nowMs }` | Always → fixed | `from = to - sizeMs`. No near-now branch. |
-| `zoomApplied { from, to, nowMs }` | Tailing if prior=tailing AND `to ≥ nowMs - NEAR_NOW_MS`; else fixed | `sizeMs = to - from`. Zoom from fixed always stays fixed. |
+| `zoomApplied { from, to, nowMs }` | **Always → fixed** | `sizeMs = to - from`. Zoom is exploratory; tailing requires deliberate `liveClicked` or `presetClicked`-from-tailing after any zoom. |
 | `panApplied { from, to, nowMs }` | Always → fixed | Preserves `sizeMs` from state (not `to - from`). Pan can never enter tailing. |
 | `viewportChanged { from, to, nowMs }` | Near-now heuristic | Reserved for Step 11. |
 | `tick { nowMs }` | Advances `nowMs` in tailing only | Preserves `lastIntent`. Dormant while `LIVE_MODE_ENABLED = false`. |
 
 **`lastIntent` and preset highlight rule.** `lastIntent` tracks the most recent user action and drives the `SpanPresets` active-button highlight: `(lastIntent === 'preset' || lastIntent === 'pan') && sizeMs === preset.sizeMs`. Pan preserves `sizeMs`, so the active preset stays highlighted after a pan gesture. `tick` spreads the existing `lastIntent`.
 
-**`NEAR_NOW_MS = 60_000n`** (1 minute).
+**`NEAR_NOW_MS = 60_000n`** (1 minute) — reserved for `viewportChanged` (Step 11). No longer used by `zoomApplied`.
 
 `modeToViewport(state)` derives `Viewport { start: bigint; end: bigint }`:
 - Tailing: `{ start: nowMs - sizeMs, end: nowMs }`
