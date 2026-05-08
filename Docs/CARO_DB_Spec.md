@@ -603,7 +603,7 @@ Each CAG materializes four columns per bucket: `last` (LOCF source, `last(value 
 - `160 ≤ bucketS < 1600` → `tag_samples_1min_cagg`
 - `≥ 1600` → `tag_samples_10min_cagg`
 
-Watermark-aware fall-through splits any query whose `endTime > watermark_ts` — the trailing portion falls through to the next-finer source recursively. `source: 'mixed'` in the response when stitching occurred.
+Watermark-aware fall-through splits any query whose `endTime > watermark_ts` — the trailing portion falls through to the next-finer source recursively. `source: 'mixed'` in the response when stitching occurred. Watermark lookups are memoized per-source with a 30-second TTL and in-flight Promise deduplication (`watermarkCache` / `watermarkInFlight` in `trends.ts`); cold `_timescaledb_internal.cagg_watermark()` catalog queries cost 130–300 ms at production data scale and are absorbed into one call per source per 30s regardless of concurrent tile fetches.
 
 **Min/max aggregate response (v0.8).** The aggregate path returns per-series `{ value, min, max }` arrays. The re-aggregation CTE uses `min(s.min)` / `max(s.max)` (not `last()`) so Div > 1 outer re-aggregation spans the full range of source sub-buckets. The JS post-pass applies the three-case rule: `null_count > 0` → all three null; `bucket_min IS NULL` (empty/gapfilled bucket) → all three collapse to LOCF'd `last`; otherwise → `last`, `bucket_min`, `bucket_max`. Raw path returns only `ts`/`value` — no min/max. See `Docs/hmi_trend_viewer_spec.md` §6.5 for the full three-case rule.
 
