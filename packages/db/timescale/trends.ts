@@ -197,70 +197,65 @@ async function queryRaw(
 ): Promise<RawTrendTile> {
   const t0 = LOG_TILE_QUERIES ? performance.now() : 0;
 
-  // Run the in-window query and the bounded-prev query in parallel (§5.5 contract).
-  // Bounded-prev: latest sample per tag in [startTime - 5 min, startTime).
-  // DISTINCT ON (tag_id) with ORDER BY tag_id, ts DESC returns the most recent row per tag.
-  const [result, prevResult] = await Promise.all([
-    timescalePool.query(
-      `SELECT tag_id,
-              (extract(epoch from ts) * 1000)::bigint AS ts_ms,
-              value
+  // Single query: in-window samples + bounded-prev (one per tag, [startTime-5min, startTime))
+  // unified via UNION ALL with is_in_window discriminant. One connection per tile.
+  // ORDER BY tag_id, ts_ms ensures in-window rows arrive in chronological order per tag.
+  const result = await timescalePool.query(
+    `WITH in_window AS (
+       SELECT tag_id, ts, value
        FROM tag_samples
        WHERE tag_id = ANY($1::int[])
          AND ts >= to_timestamp($2::bigint / 1000.0)
          AND ts <  to_timestamp($3::bigint / 1000.0)
-       ORDER BY tag_id, ts`,
-      [tagIds, startTime, endTime],
-    ),
-    timescalePool.query(
-      `SELECT DISTINCT ON (tag_id)
-              tag_id,
-              (extract(epoch from ts) * 1000)::bigint AS ts_ms,
-              value
+     ),
+     prev_lookup AS (
+       SELECT DISTINCT ON (tag_id) tag_id, ts, value
        FROM tag_samples
        WHERE tag_id = ANY($1::int[])
          AND ts <  to_timestamp($2::bigint / 1000.0)
          AND ts >= to_timestamp($2::bigint / 1000.0) - INTERVAL '5 minutes'
-       ORDER BY tag_id, ts DESC`,
-      [tagIds, startTime],
-    ),
-  ]);
+       ORDER BY tag_id, ts DESC
+     )
+     SELECT tag_id,
+            (extract(epoch from ts) * 1000)::bigint AS ts_ms,
+            value,
+            true AS is_in_window
+     FROM in_window
+     UNION ALL
+     SELECT tag_id,
+            (extract(epoch from ts) * 1000)::bigint AS ts_ms,
+            value,
+            false AS is_in_window
+     FROM prev_lookup
+     ORDER BY tag_id, ts_ms`,
+    [tagIds, startTime, endTime],
+  );
+
+  const seriesMap = new Map<number, RawTrendSeries>();
+  for (const id of tagIds) {
+    seriesMap.set(id, { tagId: id, ts: [], value: [] });
+  }
+
+  let prevCount = 0;
+  for (const row of result.rows as { tag_id: number; ts_ms: bigint | string; value: number | null; is_in_window: boolean }[]) {
+    const series = seriesMap.get(row.tag_id);
+    if (!series) continue;
+    if (row.is_in_window) {
+      series.ts.push(BigInt(row.ts_ms));
+      series.value.push(row.value);
+    } else {
+      series.prev = { ts: BigInt(row.ts_ms), value: row.value };
+      prevCount += 1;
+    }
+  }
 
   if (LOG_TILE_QUERIES) {
     console.log(
       `[trends] source=raw tag_count=${tagIds.length} bucket_s=0` +
-      ` start=${startTime} end=${endTime} bucket_count=n/a elapsed_ms=${(performance.now() - t0).toFixed(1)}`,
+      ` start=${startTime} end=${endTime} bucket_count=n/a` +
+      ` rows=${result.rows.length} prev=${prevCount}` +
+      ` elapsed_ms=${(performance.now() - t0).toFixed(1)}`,
     );
-  }
-
-  // Build prev map: tagId → most-recent prior sample within the 5-minute window.
-  const prevMap = new Map<number, { ts: bigint; value: number | null }>();
-  for (const row of prevResult.rows as { tag_id: number; ts_ms: bigint | string; value: number | null }[]) {
-    prevMap.set(row.tag_id, { ts: BigInt(row.ts_ms), value: row.value });
-  }
-
-  const seriesMap = new Map<number, RawTrendSeries>();
-  for (const id of tagIds) seriesMap.set(id, { tagId: id, ts: [], value: [] });
-
-  for (const row of result.rows as { tag_id: number; ts_ms: bigint | string; value: number | null }[]) {
-    const series = seriesMap.get(row.tag_id);
-    if (!series) continue;
-    series.ts.push(BigInt(row.ts_ms));
-    series.value.push(row.value);
-  }
-
-  // Attach prev to each series that has a prior sample.
-  for (const id of tagIds) {
-    const series = seriesMap.get(id)!;
-    const prev = prevMap.get(id);
-    if (prev) series.prev = prev;
-  }
-
-  if (LOG_TILE_QUERIES) {
-    for (const id of tagIds) {
-      const p = prevMap.get(id);
-      console.log(`[trends] raw prev tag=${id} ${p ? `ts=${p.ts} value=${p.value}` : 'none'}`);
-    }
   }
 
   return {

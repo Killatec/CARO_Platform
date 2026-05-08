@@ -229,6 +229,39 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: RAW branch (buck
     expect(s15.prev).toBeUndefined();
   });
 
+  it('unified query sanity: 3-tag mixed prev — prev set/unset independently, in-window rows ordered', async () => {
+    // Tag 1016: prev within 5 min → prev defined, with in-window samples.
+    // Tag 1017: prev outside 5 min → no prev.
+    // Tag 1018: no prior samples at all → no prev, only in-window.
+    await writeTestSamples([
+      { ts: START - 45_000n, tagId: 1016, value: 5.5 },   // 45s before → within bound
+      { ts: START - 360_000n, tagId: 1017, value: 9.0 },  // 6 min before → outside bound
+      { ts: START + 1_000n,   tagId: 1016, value: 10.0 }, // in-window
+      { ts: START + 2_000n,   tagId: 1016, value: 20.0 }, // in-window
+      { ts: START + 3_000n,   tagId: 1018, value: 30.0 }, // in-window, no prev
+    ]);
+    const tile = await getTrendTile([1016, 1017, 1018], START, END, COUNT) as RawTrendTile;
+    const s16 = tile.series.find(s => s.tagId === 1016)!;
+    const s17 = tile.series.find(s => s.tagId === 1017)!;
+    const s18 = tile.series.find(s => s.tagId === 1018)!;
+
+    // Prev correctness.
+    expect(s16.prev).toBeDefined();
+    expect(s16.prev!.value).toBe(5.5);
+    expect(s17.prev).toBeUndefined();
+    expect(s18.prev).toBeUndefined();
+
+    // In-window rows for tag 1016 must arrive in chronological order.
+    expect(s16.ts).toHaveLength(2);
+    expect(s16.ts[0]).toBe(START + 1_000n);
+    expect(s16.ts[1]).toBe(START + 2_000n);
+    expect(s16.value).toEqual([10.0, 20.0]);
+
+    // Tag 1018 has no prev but has one in-window sample.
+    expect(s18.ts).toHaveLength(1);
+    expect(s18.value).toEqual([30.0]);
+  });
+
   it('raw path: startTime and endTime match the request exactly regardless of alignment', async () => {
     // Raw path (bucketS < 1.0) must never mutate the requested range.
     const unalignedStart = START + 123n;
