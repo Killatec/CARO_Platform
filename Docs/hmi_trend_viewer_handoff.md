@@ -20,7 +20,7 @@ Phase A Steps 1–10 are complete. Steps 1–6 delivered the server-side trends 
 | 9 | `TrendChart` static rendering: uPlot wrapper, per-trace Y-scales, legend (vertical right column), cursor display | ✅ Done |
 | 10 | Mode state machine + time-range UI: tailing/fixed transitions, 8-preset strip, End picker (End-only), Live button, pan/zoom interactions | ✅ Done |
 
-**Test coverage (2026-05-04):** 349 passing in `@caro/trend-chart` (19 test files), 97 in `@caro/db`, 226 in the HMI server, 33 in the HMI client.
+**Test coverage (2026-05-07):** 445 passing in `@caro/trend-chart` (21 test files), 109 in `@caro/db`, 236 in the HMI server, 33 in the HMI client.
 
 ---
 
@@ -126,14 +126,14 @@ Both branches carry `sizeMs` — required so `liveClicked` can restore the prior
 | `presetClicked { sizeMs, nowMs }` | Stays in current mode | Tailing: updates sizeMs/nowMs. Fixed: preserves `to`, re-anchors `from = to - sizeMs`. |
 | `liveClicked { nowMs }` | Always → tailing | **Sole entry to tailing from fixed.** Preserves sizeMs. |
 | `endPickerCommitted { to, nowMs }` | Always → fixed | `from = to - sizeMs`. No near-now branch. |
-| `zoomApplied { from, to, nowMs }` | Tailing if prior=tailing AND `to ≥ nowMs - NEAR_NOW_MS`; else fixed | `sizeMs = to - from`. Zoom from fixed always stays fixed. |
+| `zoomApplied { from, to, nowMs }` | **Always → fixed** | `sizeMs = to - from`. Zoom is exploratory; tailing requires deliberate `liveClicked` or `presetClicked`-from-tailing after any zoom. |
 | `panApplied { from, to, nowMs }` | Always → fixed | Preserves `sizeMs` from state (not `to - from`). Pan can never enter tailing. |
 | `viewportChanged { from, to, nowMs }` | Near-now heuristic | Reserved for Step 11. |
 | `tick { nowMs }` | Advances `nowMs` in tailing only | Preserves `lastIntent`. Dormant while `LIVE_MODE_ENABLED = false`. |
 
 **`lastIntent` and preset highlight rule.** `lastIntent` tracks the most recent user action and drives the `SpanPresets` active-button highlight: `(lastIntent === 'preset' || lastIntent === 'pan') && sizeMs === preset.sizeMs`. Pan preserves `sizeMs`, so the active preset stays highlighted after a pan gesture. `tick` spreads the existing `lastIntent`.
 
-**`NEAR_NOW_MS = 60_000n`** (1 minute).
+**`NEAR_NOW_MS = 60_000n`** (1 minute) — reserved for `viewportChanged` (Step 11). No longer used by `zoomApplied`.
 
 `modeToViewport(state)` derives `Viewport { start: bigint; end: bigint }`:
 - Tailing: `{ start: nowMs - sizeMs, end: nowMs }`
@@ -236,11 +236,53 @@ Spec was updated (v1.1) to reflect all items below — this list is for historic
 9. **TimescaleDB alignment** — `splitBoundaryMs` and all-absent `firstMs` computed via `time_bucket()` SQL query, not JavaScript epoch arithmetic. `POSTGRES_EPOCH_MS` removed entirely.
 10. **Tile alignment origin = `TS_BUCKET_ORIGIN_MS = 946_857_600_000n`** (2000-01-03 UTC) — TimescaleDB's actual `time_bucket()` default origin.
 11. **`ensureCovered` anchors to active-set edges** — does not re-derive from `TS_BUCKET_ORIGIN_MS`; `floorDiv`/`ceilDiv`/`TS_BUCKET_ORIGIN_MS` removed from `useTrendData.ts`.
-12. **`getTrendTile` LOCF cutoff at `MAX(ts)`** — outer CASE expression nulls any gapfill bucket past the data extent.
+12. ~~**`getTrendTile` LOCF cutoff at `MAX(ts)`** — outer CASE expression nulls any gapfill bucket past the data extent.~~ **Removed (v1.3)** — see "Dead-tag detection" TODO below.
+13. **Watermark memoization (v1.5)** — `getWatermarkMs` caches each source's watermark in process memory with a 30-second TTL and an in-flight Promise deduplicator. Cold `_timescaledb_internal.cagg_watermark()` catalog queries paid 130–300 ms at production data scale; all tiles in a parallel boundary-crossing batch now share a single catalog round-trip. `__test_clearWatermarkCache` seam added for test isolation. See §4.3.
+14. **Raw path unified into a single SQL query (v1.5)** — in-window samples and bounded-prev now run as one UNION ALL query with an `is_in_window` discriminant column, not two parallel queries via `Promise.all`. One connection per raw tile (was 2). Per-tag prev log lines collapsed into a `prev=N` summary count on the single log line.
 
 ---
 
-## 10. What Comes Next
+## Dead-tag detection — replacement for removed LOCF cutoff
+
+**Context.** The LOCF cutoff query (`SELECT MAX(ts) FROM tag_samples WHERE tag_id = ANY(...)`) and its associated past-extent CASE wrapper were removed because they paid **814ms of planning time per CAG request** on the production-scale `tag_samples` table (251 chunks × 8 tag_ids → catalog enumeration). The cost was the dominant per-request overhead and CAG perf had regressed 5-10x from the spec's gate-test baseline as data accumulated.
+
+**What was lost.** With the cutoff removed, LOCF carries the last known value forward through all empty trailing buckets in any aggregate query. A recently-stopped tag will show a flat line at its last value extending through the full requested window. Interior dead periods and multi-tag mixed live/dead queries were already not handled by the cutoff and are unchanged.
+
+**What still works.** Watchdog NULLs (when the watchdog writes continuous NULLs while telemetry is silent) still produce gap rendering via §5.4 null-as-gap. For tags with reliable continuous-NULL watchdogs, dead periods render correctly today.
+
+**Replacement options to evaluate:**
+
+1. **Per-tag freshness lookup alongside the tile response** — a `freshness` field (last sample timestamp per tag) returned in the aggregate tile; client-side legend renders a "stale" indicator or dims the line beyond the last fresh sample.
+2. **Watchdog contract guarantee** — confirm that the current watchdog reliably writes continuous NULLs while telemetry is silent, and document this as the guaranteed mechanism. For tags with compliant watchdogs no UI change is needed.
+3. **Per-tag freshness tag** (`Trend_Info`-style) — a separate tag tracking per-tag last-write time, queried client-side at chart-load and periodically refreshed.
+
+Probably some combination of (2) and (1): a watchdog contract guarantee for the common case, plus an optional freshness indicator for tags whose modules went silent without triggering the watchdog.
+
+---
+
+## 10. Gotchas
+
+Hard-won lessons from the min/max upgrade and perf engineering work.
+
+**uPlot `width: 0` disables `_paths.band` computation.** A series with `width: 0` is treated by uPlot as "nothing to draw," and the renderer skips path generation for it — including the band path geometry. Bands referencing such a series produce no visible fill regardless of fill color or alpha. Use `stroke: 'transparent'` (with default `width: 1`) to hide a stroke while keeping the path computed for band participation.
+
+**uPlot `bands[].series` is directional.** The array is `[upperSeriesIdx, lowerSeriesIdx]` — fill is drawn from the upper edge downward, clipped by the lower. Inverting the order produces an empty intersection. Code comment at `render/uplotConfig.ts` near the bands registration documents this in-line.
+
+**dotenv import order matters.** `import 'dotenv/config'` must execute before ANY module that reads `process.env` at the top level. Top-level `const X = process.env.Y === '1'` lines capture the env state at module-load time. The `@caro/hmi-server` `index.ts` puts `import 'dotenv/config'` at line 1 for this reason. The `LOG_TILE_QUERIES` constant in `packages/db/timescale/trends.ts` is the canonical example of this pattern.
+
+**Workspace packages ship from `dist/`.** `@caro/db` and `@caro/trend-chart` are TypeScript workspace packages that build to `dist/`. Source changes don't reach the running HMI server (which imports from `dist`) without `npm run build --workspace=<package>`. Restart and hard-refresh after a rebuild. Always run both builds before testing a server-side change end-to-end.
+
+**PostgreSQL planning cost grows with chunk count for unbounded `tag_id = ANY(...)` queries.** A `MAX(ts) WHERE tag_id = ANY(...)` over `tag_samples` paid 814ms of planning time at 251 chunks (2008 plan-time chunk evaluations against the catalog). Always bound such queries by time (`AND ts >= now() - INTERVAL 'X minutes'`) so the planner can prune via `_ts_meta_max` constraints to ≤2 chunks. The bounded-prev pattern in §5.5 demonstrates this.
+
+**TimescaleDB `cagg_watermark()` has cold-cache cost.** First call to `_timescaledb_internal.cagg_watermark()` on a fresh process pays 130–300ms at production data scale (catalog enumeration). Subsequent calls are <1ms. Always memoize watermarks in process memory if you call them per-request — the watermark advances slowly (refresh cadence) so a 30s TTL stays well within freshness.
+
+**Pool starvation looks identical to slow SQL at the wall-clock level.** When diagnosing perf, use `TIMESCALE_LOG_TILE_QUERIES=1` to compare DB-side `elapsed_ms` against client-side wall-clock. Large gap with small DB time = queueing or app-layer overhead. Roughly equal = SQL itself is the cost.
+
+**Multi-VM Hyper-V contention.** When TimescaleDB runs in Docker on Windows, `docker-desktop` and any user WSL distros are separate Hyper-V VMs that compete for CPU/memory/network scheduling (visible as `Vmmem` in Task Manager). Doesn't break anything but adds noise to perf measurements — close idle WSL instances before running gate tests.
+
+---
+
+## 11. What Comes Next
 
 > **Note:** `@caro/trend-chart` ships from `dist/`. After editing source, run `npm run build --workspace=packages/trend-chart` before testing in the browser. Tests run against source directly.
 

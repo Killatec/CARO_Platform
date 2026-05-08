@@ -21,8 +21,13 @@ export interface AggregateSeriesData {
   n: number;
   /** Bucket width in milliseconds; for the resolution indicator. */
   bucketSMs: number;
-  /** tagId → value array of length n. */
-  series: Map<number, (number | null)[]>;
+  /** tagId → per-bucket arrays of length n. min/max are undefined only when a
+   *  v0.7 cache entry (no bands) is present; renderers guard `if (entry.min)`. */
+  series: Map<number, {
+    value: (number | null)[];
+    min?:  (number | null)[];
+    max?:  (number | null)[];
+  }>;
 }
 
 /** Assembled data for the raw (COV) path. */
@@ -31,8 +36,13 @@ export interface RawSeriesData {
   source: 'raw';
   startTime: bigint;
   endTime: bigint;
-  /** tagId → irregular change-of-value arrays. */
-  series: Map<number, { ts: bigint[]; value: (number | null)[] }>;
+  /** tagId → irregular change-of-value arrays with optional bounded-prev seed. */
+  series: Map<number, {
+    ts: bigint[];
+    value: (number | null)[];
+    /** Most recent sample before startTime (§5.5 bounded-prev, v0.9+). */
+    prev?: { ts: bigint; value: number | null };
+  }>;
 }
 
 export type TrendData = AggregateSeriesData | RawSeriesData;

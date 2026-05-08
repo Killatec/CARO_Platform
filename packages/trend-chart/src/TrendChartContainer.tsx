@@ -72,7 +72,7 @@ export function TrendChartContainer({
   });
 
   // ── Data fetch (driven by explicit dataViewport) ──────────────────────────
-  const { data, isLoading, ensureCovered, swapCounter, activeTileCount } = useTrendData({ viewport: dataViewport, tagIds });
+  const { data, isLoading, ensureCovered, swapCounter, activeTileCount, lastFetchMs } = useTrendData({ viewport: dataViewport, tagIds });
 
   // ── xRange: passes the live mode viewport to TrendChart for imperative
   //    setScale — updated every tick in tailing, or on preset/EndPicker/zoom. ──
@@ -142,16 +142,13 @@ export function TrendChartContainer({
     [dispatch],
   );
 
-  // Wrap drag-zoom: call useZoomState handler first, then sync modeState to the
-  // resulting dataViewport so EndPicker always shows the correct post-zoom End.
+  // Dispatch zoomApplied with the raw selection bounds: modeViewport reflects
+  // the user's intended range, while dataViewport (set by _handleDragZoom below)
+  // tracks the snapped tile-aligned range. The two are intentionally distinct —
+  // EndPicker shows the intended end, fetches use the snapped range.
   const handleDragZoom = useCallback(
     (selectionStartMs: bigint, selectionEndMs: bigint) => {
       _handleDragZoom(selectionStartMs, selectionEndMs);
-      // dataViewport update is async (setState), so derive the new viewport from
-      // the same computation that useZoomState performs.
-      // We dispatch zoomApplied with the raw selection center anchored to selectionEnd
-      // so the reducer sets modeViewport = dataViewport after the next render.
-      // The selection end is the user's intended End.
       dispatch({
         type: 'zoomApplied',
         from: selectionStartMs,
@@ -162,26 +159,15 @@ export function TrendChartContainer({
     [_handleDragZoom, dispatch],
   );
 
-  // Wrap zoom-level switch: same pattern — sync mode state after zoom.
+  // Wrap zoom-level switch: update data-fetch state (bucketSMs, dataViewport, zoomAnchorSpan).
+  // zoomApplied is NOT dispatched here — onXRangeChange fires on every X-scale mutation
+  // (including level-switch ticks) and handleXRangeChange dispatches it via RAF, covering
+  // all cases (sub-threshold, zoom-out, level-switch) through a single path.
   const handleZoomLevelSwitch = useCallback(
     (direction: 'in' | 'out', cursorTimeMs: bigint) => {
       _handleZoomLevelSwitch(direction, cursorTimeMs);
-      // Derive the new viewport the same way useZoomState does, then dispatch.
-      const newBucketSMs = direction === 'out'
-        ? (dataViewport.end - dataViewport.start) / BigInt(VISIBLE_TILES_PER_WINDOW * BUCKET_COUNT) * 2n
-        : (dataViewport.end - dataViewport.start) / BigInt(VISIBLE_TILES_PER_WINDOW * BUCKET_COUNT) / 2n;
-      if (newBucketSMs <= 0n) return;
-      const newSpan = newBucketSMs * BigInt(VISIBLE_TILES_PER_WINDOW * BUCKET_COUNT);
-      const newStart = cursorTimeMs - newSpan / 2n;
-      const newEnd = newStart + newSpan;
-      dispatch({
-        type: 'zoomApplied',
-        from: newStart,
-        to: newEnd,
-        nowMs: BigInt(Date.now()),
-      });
     },
-    [_handleZoomLevelSwitch, dispatch, dataViewport],
+    [_handleZoomLevelSwitch],
   );
 
   const footerJsx = (
@@ -190,7 +176,7 @@ export function TrendChartContainer({
       <div style={FOOTER}>
         <div style={FOOTER_LEFT}>
           <SpanPresets state={modeState} onPreset={handlePreset} />
-          <SpanBucketIndicator spanMs={viewportSpanMs} bucketSMs={bucketSMs} />
+          <SpanBucketIndicator spanMs={viewportSpanMs} bucketSMs={bucketSMs} lastFetchMs={lastFetchMs} />
         </div>
         <div style={FOOTER_RIGHT}>
           <EndPicker

@@ -1,12 +1,14 @@
-import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import {
   getTrendTile,
   getTrendExtent,
   __test_watermarkOverride,
   __test_lastUsedSources,
   __test_getWatermarkMs,
+  __test_clearWatermarkCache,
 } from '../../timescale/trends.js';
 import type { RawTrendTile, AggregateTrendTile } from '../../timescale/trends.js';
+import timescalePool from '../../timescale/pool.js';
 
 // ── Guard: skip all integration tests if TimescaleDB is not configured ─────────
 
@@ -187,6 +189,79 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: RAW branch (buck
     expect(tile.series[0].ts[0]).toBe(START + 1_500n);
   });
 
+  it('bounded-prev: prev present when prior sample is within the 5-minute window', async () => {
+    // Write one sample 60 s before the window (within the 5-minute bound).
+    const prevTs = START - 60_000n;
+    await writeTestSamples([{ ts: prevTs, tagId: 1011, value: 42.0 }]);
+    const tile = await getTrendTile([1011], START, END, COUNT) as RawTrendTile;
+    expect(tile.series[0].prev).toBeDefined();
+    expect(tile.series[0].prev!.ts).toBe(prevTs);
+    expect(tile.series[0].prev!.value).toBe(42.0);
+  });
+
+  it('bounded-prev: prev absent when prior sample is outside the 5-minute window', async () => {
+    // Write one sample 6 minutes before the window (outside the 5-minute bound).
+    const prevTs = START - 360_000n;
+    await writeTestSamples([{ ts: prevTs, tagId: 1012, value: 7.0 }]);
+    const tile = await getTrendTile([1012], START, END, COUNT) as RawTrendTile;
+    expect(tile.series[0].prev).toBeUndefined();
+  });
+
+  it('bounded-prev: prev absent when no samples exist before the window at all', async () => {
+    // Write only one in-window sample — nothing before startTime.
+    await writeTestSamples([{ ts: START + 10_000n, tagId: 1013, value: 3.0 }]);
+    const tile = await getTrendTile([1013], START, END, COUNT) as RawTrendTile;
+    expect(tile.series[0].prev).toBeUndefined();
+  });
+
+  it('bounded-prev: independent per tag — some with prev, some without', async () => {
+    // Tag 1014: has prior sample within 5 min.
+    // Tag 1015: prior sample exists but is outside 5 min — no prev.
+    await writeTestSamples([
+      { ts: START - 30_000n, tagId: 1014, value: 11.0 },  // 30s before → within bound
+      { ts: START - 360_000n, tagId: 1015, value: 22.0 }, // 6 min before → outside bound
+    ]);
+    const tile = await getTrendTile([1014, 1015], START, END, COUNT) as RawTrendTile;
+    const s14 = tile.series.find(s => s.tagId === 1014)!;
+    const s15 = tile.series.find(s => s.tagId === 1015)!;
+    expect(s14.prev).toBeDefined();
+    expect(s14.prev!.value).toBe(11.0);
+    expect(s15.prev).toBeUndefined();
+  });
+
+  it('unified query sanity: 3-tag mixed prev — prev set/unset independently, in-window rows ordered', async () => {
+    // Tag 1016: prev within 5 min → prev defined, with in-window samples.
+    // Tag 1017: prev outside 5 min → no prev.
+    // Tag 1018: no prior samples at all → no prev, only in-window.
+    await writeTestSamples([
+      { ts: START - 45_000n, tagId: 1016, value: 5.5 },   // 45s before → within bound
+      { ts: START - 360_000n, tagId: 1017, value: 9.0 },  // 6 min before → outside bound
+      { ts: START + 1_000n,   tagId: 1016, value: 10.0 }, // in-window
+      { ts: START + 2_000n,   tagId: 1016, value: 20.0 }, // in-window
+      { ts: START + 3_000n,   tagId: 1018, value: 30.0 }, // in-window, no prev
+    ]);
+    const tile = await getTrendTile([1016, 1017, 1018], START, END, COUNT) as RawTrendTile;
+    const s16 = tile.series.find(s => s.tagId === 1016)!;
+    const s17 = tile.series.find(s => s.tagId === 1017)!;
+    const s18 = tile.series.find(s => s.tagId === 1018)!;
+
+    // Prev correctness.
+    expect(s16.prev).toBeDefined();
+    expect(s16.prev!.value).toBe(5.5);
+    expect(s17.prev).toBeUndefined();
+    expect(s18.prev).toBeUndefined();
+
+    // In-window rows for tag 1016 must arrive in chronological order.
+    expect(s16.ts).toHaveLength(2);
+    expect(s16.ts[0]).toBe(START + 1_000n);
+    expect(s16.ts[1]).toBe(START + 2_000n);
+    expect(s16.value).toEqual([10.0, 20.0]);
+
+    // Tag 1018 has no prev but has one in-window sample.
+    expect(s18.ts).toHaveLength(1);
+    expect(s18.value).toEqual([30.0]);
+  });
+
   it('raw path: startTime and endTime match the request exactly regardless of alignment', async () => {
     // Raw path (bucketS < 1.0) must never mutate the requested range.
     const unalignedStart = START + 123n;
@@ -233,12 +308,14 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (b
     expect(tile.source).toBe('1s_cagg');
   });
 
-  it('aggregate response has n === bucketCount', async () => {
+  it('aggregate response has n === bucketCount, all three series arrays have same length', async () => {
     await writeTestSamples([{ ts: START + 1_000n, tagId: 2002, value: 1.0 }]);
     await refreshTestCagg(VIEW);
     const tile = await getTrendTile([2002], START, END, COUNT) as AggregateTrendTile;
     expect(tile.n).toBe(COUNT);
     expect(tile.series[0].value).toHaveLength(COUNT);
+    expect(tile.series[0].min).toHaveLength(COUNT);
+    expect(tile.series[0].max).toHaveLength(COUNT);
   });
 
   it('LOCF carries forward across empty buckets', async () => {
@@ -246,11 +323,16 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (b
     await writeTestSamples([{ ts: START + 500n, tagId: 2003, value: 42.0 }]);
     await refreshTestCagg(VIEW);
     const tile = await getTrendTile([2003], START, END, COUNT) as AggregateTrendTile;
-    const { value } = tile.series[0];
+    const { value, min, max } = tile.series[0];
     // First bucket should contain 42.0; all subsequent buckets carry it forward.
     expect(value[0]).toBe(42.0);
     expect(value[COUNT - 1]).toBe(42.0);
     expect(value.every(v => v === 42.0)).toBe(true);
+    // Empty buckets must collapse min/max to the LOCF'd value — no phantom spread.
+    expect(min[0]).toBe(42.0);
+    expect(max[0]).toBe(42.0);
+    expect(min.every(m => m === 42.0)).toBe(true);
+    expect(max.every(m => m === 42.0)).toBe(true);
   });
 
   it('bucket containing a NULL sample emits null in value array regardless of LOCF', async () => {
@@ -264,9 +346,11 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (b
     ]);
     await refreshTestCagg(VIEW);
     const tile = await getTrendTile([2004], START, END, COUNT) as AggregateTrendTile;
-    const { value } = tile.series[0];
-    // bucket 5 must be null
+    const { value, min, max } = tile.series[0];
+    // bucket 5 must be null — mixed-null rule nulls all three arrays
     expect(value[5]).toBeNull();
+    expect(min[5]).toBeNull();
+    expect(max[5]).toBeNull();
     // bucket 10 should be 20
     expect(value[10]).toBe(20.0);
   });
@@ -285,27 +369,34 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (b
     const { value } = tile.series[0];
     // Left edge buckets (before inTs) should carry the prev value 55.5.
     expect(value[0]).toBe(55.5);
-    // inTs is ~bucket 243; buckets past inTs are past max(ts) → cutoff nulls them.
-    expect(value[COUNT - 1]).toBeNull();
+    // Buckets past inTs are empty → LOCF carries 99.0 forward (no cutoff).
+    expect(value[COUNT - 1]).toBe(99.0);
   });
 
   it('bounded prev returns null when no prior sample exists within 5 minutes', async () => {
     // Write ONLY one in-window sample with nothing in the pre-window.
-    // Left-edge buckets before it must be null.
+    // Left-edge buckets before it must be null (leading-edge NULL prev case).
     const inTs = START + 1_800_000n; // 30 min into the window (bucket ~125)
     await writeTestSamples([{ ts: inTs, tagId: 2006, value: 7.0 }]);
     await refreshTestCagg(VIEW);
     const tile = await getTrendTile([2006], START, END, COUNT) as AggregateTrendTile;
-    const { value } = tile.series[0];
+    const { value, min, max } = tile.series[0];
     expect(value[0]).toBeNull(); // left edge: no prev
-    expect(value[COUNT - 1]).toBeNull(); // inTs is ~bucket 125; buckets past inTs are past max(ts) → cutoff
+    expect(value[COUNT - 1]).toBe(7.0); // inTs is ~bucket 125; LOCF carries 7.0 forward unbounded (no cutoff)
+    // Leading-edge null: empty bucket with null LOCF → collapse to null/null/null.
+    expect(min[0]).toBeNull();
+    expect(max[0]).toBeNull();
   });
 
-  it('empty range: tag with no CAG data returns value:[null]*n', async () => {
+  it('empty range: tag with no CAG data returns value/min/max:[null]*n', async () => {
     // No samples written; CAG has nothing for this tag.
     const tile = await getTrendTile([2007], START, END, COUNT) as AggregateTrendTile;
     expect(tile.series[0].value).toHaveLength(COUNT);
     expect(tile.series[0].value.every(v => v === null)).toBe(true);
+    expect(tile.series[0].min).toHaveLength(COUNT);
+    expect(tile.series[0].min.every(m => m === null)).toBe(true);
+    expect(tile.series[0].max).toHaveLength(COUNT);
+    expect(tile.series[0].max.every(m => m === null)).toBe(true);
   });
 
   it('startTime and endTime are returned as bigint', async () => {
@@ -367,7 +458,112 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (b
     expect(tile.series).toHaveLength(3);
     for (const s of tile.series) {
       expect(s.value).toHaveLength(tile.n);
+      expect(s.min).toHaveLength(tile.n);
+      expect(s.max).toHaveLength(tile.n);
     }
+  });
+
+  // ── min/max bands — three-case rule ───────────────────────────────────────────
+  // Tag IDs 2100–2119 reserved for this block.
+  // All tests use the 1s_cagg dispatch zone: START=7_200_000n, END=10_800_000n,
+  // bucketSMs=14400ms.
+
+  it('three-case: normal bucket — measured spread (value=last, min=true-min, max=true-max)', async () => {
+    // Three samples in outer bucket 5 ([START+72000ms, START+86400ms)):
+    //   ts +72100 → 1.0   ts +72200 → 3.0   ts +72300 → 2.0 (latest → last=2.0)
+    // No guard needed — LOCF cutoff removed; bucket 5 carries real data.
+    const B5 = START + 72_000n; // start of outer bucket 5 (14400ms × 5 = 72000ms past START)
+    await writeTestSamples([
+      { ts: B5 + 100n, tagId: 2100, value: 1.0 },
+      { ts: B5 + 200n, tagId: 2100, value: 3.0 },
+      { ts: B5 + 300n, tagId: 2100, value: 2.0 },
+    ]);
+    await refreshTestCagg(VIEW);
+    const tile = await getTrendTile([2100], START, END, COUNT) as AggregateTrendTile;
+    const { value, min, max } = tile.series[0];
+    expect(value[5]).toBe(2.0);  // last by ts within bucket 5
+    expect(min[5]).toBe(1.0);    // true minimum across all samples in bucket 5
+    expect(max[5]).toBe(3.0);    // true maximum
+  });
+
+  it('three-case: single-sample bucket — degenerate band (value === min === max)', async () => {
+    // One sample in outer bucket 3.
+    const B3 = START + 43_200n; // start of outer bucket 3 (14400ms × 3 = 43200ms past START)
+    await writeTestSamples([
+      { ts: B3 + 100n, tagId: 2101, value: 5.0 },
+    ]);
+    await refreshTestCagg(VIEW);
+    const tile = await getTrendTile([2101], START, END, COUNT) as AggregateTrendTile;
+    const { value, min, max } = tile.series[0];
+    expect(value[3]).toBe(5.0);
+    expect(min[3]).toBe(5.0);  // degenerate: min === value
+    expect(max[3]).toBe(5.0);  // degenerate: max === value
+  });
+
+  it('three-case: empty bucket LOCF collapse — min/max equal LOCF value, not prior spread', async () => {
+    // Sample at bucket 0: value=7.0.  Sample at bucket 10: value=99.0.
+    // Buckets 1–9 are empty (gapfilled) between these two real samples.
+    // Their LOCF'd value is 7.0. min/max must collapse to 7.0, not carry prior spread.
+    const B10 = START + BigInt(10 * 14_400); // start of outer bucket 10
+    await writeTestSamples([
+      { ts: START + 100n, tagId: 2102, value: 7.0 },
+      { ts: B10 + 100n,   tagId: 2102, value: 99.0 },
+    ]);
+    await refreshTestCagg(VIEW);
+    const tile = await getTrendTile([2102], START, END, COUNT) as AggregateTrendTile;
+    const { value, min, max } = tile.series[0];
+    // Bucket 5 is empty — LOCF'd from bucket 0's last = 7.0.
+    expect(value[5]).toBe(7.0);
+    expect(min[5]).toBe(7.0);   // collapsed, not null and not a spread
+    expect(max[5]).toBe(7.0);   // collapsed
+    // Bucket 10 has the real sample.
+    expect(value[10]).toBe(99.0);
+    expect(min[10]).toBe(99.0); // single sample
+    expect(max[10]).toBe(99.0);
+  });
+
+  it('three-case: mixed-null bucket — all three fields null (band gap)', async () => {
+    // Write samples across three separate 1s sub-buckets inside outer bucket 5.
+    // One sample is null → null_count=1 in the 1s CAG → outer sum(null_count)>0 → band gap.
+    // LOCF cutoff removed — bucket 5 has real data so this is fine regardless.
+    const B5 = START + 72_000n;
+    await writeTestSamples([
+      { ts: B5 + 100n,   tagId: 2103, value: 1.0  },  // 1s sub-bucket 7272000ms
+      { ts: B5 + 1_100n, tagId: 2103, value: null },  // 1s sub-bucket 7273000ms → null_count=1
+      { ts: B5 + 2_100n, tagId: 2103, value: 2.0  },  // 1s sub-bucket 7274000ms
+    ]);
+    await refreshTestCagg(VIEW);
+    const tile = await getTrendTile([2103], START, END, COUNT) as AggregateTrendTile;
+    const { value, min, max } = tile.series[0];
+    // Bucket 5: sum(null_count)=1 → mixed-null case → all three must be null.
+    expect(value[5]).toBeNull();
+    expect(min[5]).toBeNull();
+    expect(max[5]).toBeNull();
+  });
+
+  // ── Aggregator correction spot-check (Div=8) ──────────────────────────────────
+  // Verifies min(s.min) / max(s.max) — not last(s.min, s.bucket) / last(s.max, s.bucket).
+  // With bucketSMs=8000ms the dispatch stays 1s_cagg (8.0s < 16s).
+  // 4 samples occupy different 1s sub-buckets within outer bucket 0.
+  // The *last* 1s sub-bucket by time (at +7000ms) has value=35.0 — NOT the global min/max.
+  // Correct:   min=5.0  max=50.0   (min/max across all four sub-buckets)
+  // Wrong doc: min=35.0 max=35.0   (min/max of the last sub-bucket only)
+
+  it('aggregator correction (Div=8): min(s.min)/max(s.max) spans all sub-buckets, not just the last', async () => {
+    const COUNT_8 = 450; // bucketSMs = round(3_600_000 / 450) = 8000ms
+    await writeTestSamples([
+      { ts: START +   500n, tagId: 2104, value:  5.0 }, // global min  — 1s sub-bucket 0
+      { ts: START + 1_500n, tagId: 2104, value: 50.0 }, // global max  — 1s sub-bucket 1
+      { ts: START + 2_500n, tagId: 2104, value: 20.0 }, //              1s sub-bucket 2
+      { ts: START + 7_000n, tagId: 2104, value: 35.0 }, // LAST by time — 1s sub-bucket 7
+    ]);
+    await refreshTestCagg(VIEW);
+    const tile = await getTrendTile([2104], START, END, COUNT_8) as AggregateTrendTile;
+    const { value, min, max } = tile.series[0];
+    expect(value[0]).toBe(35.0);  // last by ts in bucket 0
+    // Correct aggregation: min/max span all four sub-buckets.
+    expect(min[0]).toBe(5.0);   // true minimum — would be 35.0 with last(s.min, s.bucket)
+    expect(max[0]).toBe(50.0);  // true maximum — would be 35.0 with last(s.max, s.bucket)
   });
 });
 
@@ -514,10 +710,12 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — watermark fall-through', asyn
     // Ensure production watermark is NOT used by any test in this block.
     // Each test sets its own override; this guards against override leak.
     __test_watermarkOverride.current = null;
+    __test_clearWatermarkCache();
   });
 
   afterEach(async () => {
     __test_watermarkOverride.current = null;
+    __test_clearWatermarkCache();
     await resetTestRange();
     await refreshTestCagg('1s_cagg');
   });
@@ -526,6 +724,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — watermark fall-through', asyn
     await resetTestRange();
     await refreshTestCagg('1s_cagg');
     __test_watermarkOverride.current = null;
+    __test_clearWatermarkCache();
   });
 
   // ── Test 1: watermark past endTime — no fall-through ─────────────────────────
@@ -543,9 +742,9 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — watermark fall-through', asyn
     expect(tile.source).toBe('1s_cagg');   // NOT 'mixed'
     expect(tile.n).toBe(COUNT);
     expect(tile.series[0].value).toHaveLength(COUNT);
-    // Bucket 0 has the real sample; all later buckets are past max(ts) → cutoff nulls them.
+    // Bucket 0 has the real sample; later buckets are empty → LOCF carries 7.5 forward.
     expect(tile.series[0].value[0]).toBe(7.5);
-    expect(tile.series[0].value[COUNT - 1]).toBeNull();
+    expect(tile.series[0].value[COUNT - 1]).toBe(7.5);
   });
 
   // ── Test 2: watermark mid-range → fall-through to next-finer CAG ─────────────
@@ -573,6 +772,9 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — watermark fall-through', asyn
     expect(tile.source).toBe('mixed');
     expect(tile.n).toBe(COUNT);
     expect(tile.series[0].value).toHaveLength(COUNT);
+    // min/max must stitch correctly across the source seam — same length as value.
+    expect(tile.series[0].min).toHaveLength(COUNT);
+    expect(tile.series[0].max).toHaveLength(COUNT);
   });
 
   // ── Test 3: watermark before startTime → entire range falls through ──────────
@@ -755,10 +957,12 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — seam regression: non-Postgres
     await resetTestRangeExpectClean();
     await refreshTestCagg('1s_cagg');
     __test_watermarkOverride.current = null;
+    __test_clearWatermarkCache();
   });
 
   afterEach(async () => {
     __test_watermarkOverride.current = null;
+    __test_clearWatermarkCache();
     await resetTestRange();
     await refreshTestCagg('1s_cagg');
   });
@@ -767,6 +971,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — seam regression: non-Postgres
     await resetTestRange();
     await refreshTestCagg('1s_cagg');
     __test_watermarkOverride.current = null;
+    __test_clearWatermarkCache();
   });
 
   it('split at non-Postgres-epoch-aligned boundary: n is COUNT or COUNT+1, bucketSMs is integer', async () => {
@@ -867,74 +1072,105 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendExtent — direct query', async () => 
   });
 });
 
-describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — LOCF data-extent cutoff', async () => {
-  const {
-    writeTestSamples, resetTestRange, resetTestRangeExpectClean, refreshTestCagg,
-  } = await import('../helpers/trends-test-range.js');
+// NOTE: The LOCF data-extent cutoff (MAX(ts) query + past-extent CASE wrapper) was removed
+// for performance. It paid 814ms of planning time per CAG request on production-scale
+// tag_samples (251 chunks × 8 tag_ids → catalog enumeration). LOCF now runs unbounded
+// past MAX(ts) — trailing empty buckets carry the last known value forward. Dead-tag
+// detection is deferred; see "Dead-tag detection" TODO in Docs/hmi_trend_viewer_handoff.md.
 
-  // T = 1970-01-11T00:00:00Z — divisible by 720s and 60s, well inside sandbox epoch range.
-  const TAG  = 7001;
-  const T    = 864_000_000n; // ms
-  const B    = 720_000n;     // one 720s bucket in ms → dispatches to 1min_cagg (720 ∈ [160,1600))
-  const VIEW = '1min_cagg' as const;
+// ── Watermark memoization — unit tests (no DB required) ──────────────────────
+//
+// These tests spy on timescalePool.query to assert call counts without a real DB.
+// Each test starts with a clean cache via __test_clearWatermarkCache() and restores
+// the spy in afterEach. __test_watermarkOverride is kept null throughout so the
+// production cache path is exercised.
 
-  beforeEach(async () => {
-    await resetTestRangeExpectClean();
-    await refreshTestCagg(VIEW);
-  });
-  afterEach(async () => {
-    await resetTestRange();
-    await refreshTestCagg(VIEW);
-  });
-  afterAll(async () => {
-    await resetTestRange();
-    await refreshTestCagg(VIEW);
-  });
+describe('getWatermarkMs — memoization', () => {
+  // Fake DB response: wm_us = "1700000000000000" → 1700000000000 ms
+  const FAKE_WM_US = '1700000000000000';
+  const FAKE_WM_MS = 1_700_000_000_000;
 
-  it('buckets past max(ts) are null; buckets at or before max(ts) carry LOCF values', async () => {
-    await writeTestSamples([
-      { tagId: TAG, ts: T - 2n * B, value: 5.0 },
-      { tagId: TAG, ts: T,           value: 10.0 },
-    ]);
-    await refreshTestCagg(VIEW);
-    // Range [T-2B, T+2B], 4 buckets × 720s → bucketS=720 → 1min_cagg
-    const tile = await getTrendTile([TAG], T - 2n * B, T + 2n * B, 4) as AggregateTrendTile;
-    expect(tile.source).toBe('1min_cagg');
-    const vals = tile.series[0]!.value;
-    expect(vals).toHaveLength(4);
-    expect(vals[0]).toBe(5.0);   // bucket T-2B: actual sample
-    expect(vals[1]).toBe(5.0);   // bucket T-B:  LOCF from T-2B (gap within range → fills)
-    expect(vals[2]).toBe(10.0);  // bucket T:    actual sample
-    expect(vals[3]).toBeNull();  // bucket T+B:  past max(ts) → cutoff
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let querySpy: any;
+
+  beforeEach(() => {
+    __test_watermarkOverride.current = null;
+    __test_clearWatermarkCache();
+    querySpy = vi.spyOn(timescalePool, 'query').mockResolvedValue({
+      rows: [{ wm_us: FAKE_WM_US }],
+      rowCount: 1, command: 'SELECT', oid: 0, fields: [],
+    } as never);
   });
 
-  it('query range entirely past max(ts) — all buckets null', async () => {
-    await writeTestSamples([{ tagId: TAG, ts: T, value: 10.0 }]);
-    await refreshTestCagg(VIEW);
-    // Range [T+2B, T+7B]: all 5 buckets start after T → all null
-    const tile = await getTrendTile([TAG], T + 2n * B, T + 7n * B, 5) as AggregateTrendTile;
-    expect(tile.source).toBe('1min_cagg');
-    const vals = tile.series[0]!.value;
-    expect(vals).toHaveLength(5);
-    expect(vals.every(v => v === null)).toBe(true);
+  afterEach(() => {
+    querySpy.mockRestore();
+    __test_clearWatermarkCache();
+    __test_watermarkOverride.current = null;
   });
 
-  it('gap in data before max(ts) — LOCF fills gap, only post-extent bucket is null', async () => {
-    await writeTestSamples([
-      { tagId: TAG, ts: T - 4n * B, value: 5.0 },
-      { tagId: TAG, ts: T,           value: 10.0 },
-    ]);
-    await refreshTestCagg(VIEW);
-    // Range [T-4B, T+2B], 6 buckets × 720s → bucketS=720 → 1min_cagg
-    const tile = await getTrendTile([TAG], T - 4n * B, T + 2n * B, 6) as AggregateTrendTile;
-    expect(tile.source).toBe('1min_cagg');
-    const vals = tile.series[0]!.value;
-    expect(vals).toHaveLength(6);
-    expect(vals[0]).toBe(5.0);   // T-4B: actual sample
-    expect(vals[1]).toBe(5.0);   // T-3B: LOCF from T-4B
-    expect(vals[2]).toBe(5.0);   // T-2B: LOCF
-    expect(vals[3]).toBe(5.0);   // T-B:  LOCF
-    expect(vals[4]).toBe(10.0);  // T:    actual sample
-    expect(vals[5]).toBeNull();  // T+B:  past max(ts) → cutoff
+  // 1. Cache hit — second call must not issue a second DB query.
+  it('cache hit: second call returns cached value without issuing a new DB query', async () => {
+    const first  = await __test_getWatermarkMs('tag_samples_1s_cagg');
+    const second = await __test_getWatermarkMs('tag_samples_1s_cagg');
+    expect(first).toBe(FAKE_WM_MS);
+    expect(second).toBe(FAKE_WM_MS);
+    expect(querySpy).toHaveBeenCalledTimes(1);
+  });
+
+  // 2. TTL expiry — call after 30s must re-issue the DB query.
+  it('TTL expiry: call after 30s re-issues the DB query', async () => {
+    vi.useFakeTimers();
+    try {
+      await __test_getWatermarkMs('tag_samples_1s_cagg');
+      expect(querySpy).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(30_001);
+
+      await __test_getWatermarkMs('tag_samples_1s_cagg');
+      expect(querySpy).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // 3. In-flight dedup — two concurrent calls share one DB round-trip.
+  it('in-flight dedup: two concurrent calls share one DB round-trip', async () => {
+    let resolveQuery!: (v: unknown) => void;
+    querySpy.mockImplementation(
+      () => new Promise(resolve => { resolveQuery = resolve; }),
+    );
+
+    const p1 = __test_getWatermarkMs('tag_samples_1s_cagg');
+    const p2 = __test_getWatermarkMs('tag_samples_1s_cagg');
+
+    // Only one DB call should have been made so far (the second saw the in-flight promise).
+    expect(querySpy).toHaveBeenCalledTimes(1);
+
+    // Resolve the single DB promise.
+    resolveQuery({ rows: [{ wm_us: FAKE_WM_US }], rowCount: 1, command: 'SELECT', oid: 0, fields: [] });
+
+    const [r1, r2] = await Promise.all([p1, p2]);
+    expect(r1).toBe(FAKE_WM_MS);
+    expect(r2).toBe(FAKE_WM_MS);
+    expect(querySpy).toHaveBeenCalledTimes(1);
+  });
+
+  // 4. Test override bypasses cache — DB is never called.
+  it('test override bypasses cache: no DB query fires when override is set', async () => {
+    __test_watermarkOverride.current = new Map([['tag_samples_1s_cagg', 999_999]]);
+    const result = await __test_getWatermarkMs('tag_samples_1s_cagg');
+    expect(result).toBe(999_999);
+    expect(querySpy).not.toHaveBeenCalled();
+  });
+
+  // 5. __test_clearWatermarkCache clears state — next call re-issues the DB query.
+  it('__test_clearWatermarkCache clears state: next call re-issues DB query', async () => {
+    await __test_getWatermarkMs('tag_samples_1s_cagg');
+    expect(querySpy).toHaveBeenCalledTimes(1);
+
+    __test_clearWatermarkCache();
+
+    await __test_getWatermarkMs('tag_samples_1s_cagg');
+    expect(querySpy).toHaveBeenCalledTimes(2);
   });
 });

@@ -11,14 +11,12 @@ import {
   isInYAxisHitZone,
   panYScale,
   zoomYScale,
-  panThresholdCheck,
   isInXAxisHitZone,
-  panXScale,
   zoomXScale,
   checkAndExtendXCoverage,
 } from './axisInteractions.js';
 import { buildUplotConfig } from './render/uplotConfig.js';
-import { seriesFromTrendData } from './render/seriesFromTrendData.js';
+import { bandsFromTrendData } from './render/bandsFromTrendData.js';
 import { computeZoomLevelTransition } from './level.js';
 
 export interface TrendChartProps {
@@ -240,8 +238,15 @@ export function TrendChart({
       return;
     }
 
-    const { xs, ys } = seriesFromTrendData(data, tagIds);
-    const uplotData: uPlot.AlignedData = [xs, ...ys] as uPlot.AlignedData;
+    // Always-band shape: [xs, mins0, maxs0, mins1, maxs1, ...].
+    // Aggregate: real bucket extremes. Raw: mins[i] === maxs[i] (shared ref, zero-area band).
+    const { xs, mins, maxs } = bandsFromTrendData(data, tagIds);
+    const interleaved: (number | null)[][] = [];
+    for (let i = 0; i < tagIds.length; i++) {
+      interleaved.push(mins[i]!);
+      interleaved.push(maxs[i]!);
+    }
+    const uplotData: uPlot.AlignedData = [xs, ...interleaved] as uPlot.AlignedData;
 
     const config = buildUplotConfig({
       tagIds,
@@ -466,15 +471,20 @@ export function TrendChart({
   // uplotRef.current is always the current instance when this runs.
   useEffect(() => {
     if (!uplotRef.current || tagIds.length === 0) return;
-    const { xs, ys } = seriesFromTrendData(data, tagIds);
-    uplotRef.current.setData([xs, ...ys] as uPlot.AlignedData);
+    const { xs, mins, maxs } = bandsFromTrendData(data, tagIds);
+    const interleaved: (number | null)[][] = [];
+    for (let i = 0; i < tagIds.length; i++) {
+      interleaved.push(mins[i]!);
+      interleaved.push(maxs[i]!);
+    }
+    uplotRef.current.setData([xs, ...interleaved] as uPlot.AlignedData);
   }, [data, tagIds]);
 
   // ── Post-swap coverage check — fires once per performSwap, not on every setData ──
   // swapCounter increments only when useTrendData installs a new active tile set.
   // This handles the case where the user kept zooming past the level-switch threshold,
   // leaving xRange wider than the new active set. Pan-driven setData events do NOT
-  // increment swapCounter, so panThresholdCheck in onXMove handles those instead.
+  // increment swapCounter, so checkAndExtendXCoverage in onXMove handles those instead.
   useEffect(() => {
     if (uplotRef.current && ensureCoveredRef.current) {
       checkAndExtendXCoverage(uplotRef.current, ensureCoveredRef.current);

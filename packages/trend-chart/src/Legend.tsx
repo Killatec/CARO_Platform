@@ -27,38 +27,100 @@ const STRIP: CSSProperties = {
   flexShrink: 0,
 };
 
-function getCurrentValue(
+const HEADER_STYLE: CSSProperties = {
+  fontSize: 11,
+  color: '#6b7280',
+  fontFamily: 'monospace',
+  paddingLeft: 4,
+  paddingBottom: 2,
+};
+
+/**
+ * Returns the contextual header text for the legend value column.
+ * Always rendered — communicates what the per-trace number represents.
+ */
+export function deriveLegendContext(
+  dataType: TrendData['type'],
+  cursorIdx: number | undefined,
+  showLastWhenIdle: boolean,
+): { headerText: string } {
+  const hasCursor = cursorIdx !== undefined;
+  if (dataType === 'aggregate') {
+    if (hasCursor) return { headerText: 'Value: Max @ Cursor' };
+    if (showLastWhenIdle) return { headerText: 'Value: Last Sample' };
+    return { headerText: 'Value: N/A' };
+  }
+  // raw
+  if (hasCursor) return { headerText: 'Value: @ Cursor' };
+  if (showLastWhenIdle) return { headerText: 'Value: Last Sample' };
+  return { headerText: 'Value: N/A' };
+}
+
+/**
+ * Returns the pre-formatted display text for a legend entry.
+ *
+ * Aggregate + v0.8 bands: max value at cursor/last bucket
+ * Aggregate + v0.7 cache (no bands): falls back to single value (backward compat)
+ * Raw: single value
+ * Idle (showLastWhenIdle=false, no cursor): "—"
+ */
+function getLegendDisplayText(
   data: TrendData,
+  tag: TagDef | undefined,
   tagId: number,
   cursorIdx: number | undefined,
   showLastWhenIdle: boolean,
-): number | null {
+): string {
   if (data.type === 'aggregate') {
-    const vals = data.series.get(tagId);
-    if (!vals) return null;
-    if (cursorIdx !== undefined) return vals[Math.min(cursorIdx, vals.length - 1)] ?? null;
-    return showLastWhenIdle ? (vals[vals.length - 1] ?? null) : null;
+    const entry = data.series.get(tagId);
+    if (!entry) return '—';
+
+    const isBoolean = tag?.data_type === 'bool';
+
+    // v0.7 cache fallback: no bands — show single value.
+    if (!entry.min || !entry.max) {
+      const vals = entry.value;
+      if (vals.length === 0) return '—';
+      const idx = cursorIdx !== undefined
+        ? Math.min(cursorIdx, vals.length - 1)
+        : showLastWhenIdle ? vals.length - 1 : -1;
+      if (idx < 0) return '—';
+      return formatValue(vals[idx] ?? null, tag?.unit, isBoolean);
+    }
+
+    // v0.8: show max only — spread is already conveyed by the visible band height.
+    const maxArr = entry.max;
+    if (maxArr.length === 0) return '—';
+    const idx = cursorIdx !== undefined
+      ? Math.min(cursorIdx, maxArr.length - 1)
+      : showLastWhenIdle ? maxArr.length - 1 : -1;
+    if (idx < 0) return '—';
+    return formatValue(maxArr[idx] ?? null, tag?.unit, isBoolean);
   }
-  // Raw
+
+  // Raw path: single value.
   const s = data.series.get(tagId);
-  if (!s || s.value.length === 0) return null;
-  if (cursorIdx !== undefined) return s.value[Math.min(cursorIdx, s.value.length - 1)] ?? null;
-  return showLastWhenIdle ? (s.value[s.value.length - 1] ?? null) : null;
+  if (!s || s.value.length === 0) return '—';
+  const isBoolean = tag?.data_type === 'bool';
+  if (cursorIdx !== undefined) {
+    return formatValue(s.value[Math.min(cursorIdx, s.value.length - 1)] ?? null, tag?.unit, isBoolean);
+  }
+  return showLastWhenIdle
+    ? formatValue(s.value[s.value.length - 1] ?? null, tag?.unit, isBoolean)
+    : '—';
 }
 
 interface EntryProps {
   tagId: number;
   tag: TagDef | undefined;
   isSelected: boolean;
-  value: number | null;
+  displayText: string;
   onSelect: () => void;
   onRemove: () => void;
 }
 
-function LegendEntry({ tagId, tag, isSelected, value, onSelect, onRemove }: EntryProps) {
+function LegendEntry({ tagId, tag, isSelected, displayText, onSelect, onRemove }: EntryProps) {
   const color = colorAssign(tagId);
-  const isBoolean = tag?.data_type === 'bool';
-  const formatted = formatValue(value, tag?.unit, isBoolean);
   const tagName = tag?.tag_path.split('.').pop() ?? String(tagId);
 
   const entry: CSSProperties = {
@@ -99,6 +161,7 @@ function LegendEntry({ tagId, tag, isSelected, value, onSelect, onRemove }: Entr
     color: '#374151',
     fontFamily: 'monospace',
     marginLeft: 4,
+    flexGrow: 1,
   };
 
   const removeBtn: CSSProperties = {
@@ -109,14 +172,14 @@ function LegendEntry({ tagId, tag, isSelected, value, onSelect, onRemove }: Entr
     padding: '0 2px',
     fontSize: 14,
     lineHeight: 1,
-    marginLeft: 2,
+    flexShrink: 0,
   };
 
   return (
     <div style={entry} onClick={onSelect} title={tag?.tag_path ?? String(tagId)}>
       <div style={swatch} />
       <span style={nameStyle}>{tagName}</span>
-      <span style={valueStyle}>{formatted}</span>
+      <span style={valueStyle}>{displayText}</span>
       <button
         style={removeBtn}
         onClick={e => { e.stopPropagation(); onRemove(); }}
@@ -129,19 +192,24 @@ function LegendEntry({ tagId, tag, isSelected, value, onSelect, onRemove }: Entr
 }
 
 export function Legend({ tagIds, data, tagMap, selectedTagId, cursorIdx, showLastWhenIdle, onSelect, onRemove }: LegendProps) {
+  const { headerText } = deriveLegendContext(data.type, cursorIdx, showLastWhenIdle);
   return (
     <div style={STRIP}>
-      {tagIds.map(tagId => (
-        <LegendEntry
-          key={tagId}
-          tagId={tagId}
-          tag={tagMap.get(tagId)}
-          isSelected={tagId === selectedTagId}
-          value={getCurrentValue(data, tagId, cursorIdx, showLastWhenIdle)}
-          onSelect={() => onSelect(tagId)}
-          onRemove={() => onRemove(tagId)}
-        />
-      ))}
+      <div style={HEADER_STYLE}>{headerText}</div>
+      {tagIds.map(tagId => {
+        const tag = tagMap.get(tagId);
+        return (
+          <LegendEntry
+            key={tagId}
+            tagId={tagId}
+            tag={tag}
+            isSelected={tagId === selectedTagId}
+            displayText={getLegendDisplayText(data, tag, tagId, cursorIdx, showLastWhenIdle)}
+            onSelect={() => onSelect(tagId)}
+            onRemove={() => onRemove(tagId)}
+          />
+        );
+      })}
     </div>
   );
 }

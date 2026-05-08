@@ -1,10 +1,13 @@
 import type { CSSProperties } from 'react';
 import { formatSpanMs } from './render/formatSpanMs.js';
+import { formatFetchMs } from './render/formatFetchMs.js';
 
 export interface SpanBucketIndicatorProps {
   spanMs: bigint;
   /** Bucket width in ms; null when no data or raw mode — shows "--". */
   bucketSMs: bigint | null;
+  /** Wall-clock ms of the most recent viewport-change batch; null until first batch. */
+  lastFetchMs: number | null;
 }
 
 const CONTAINER: CSSProperties = {
@@ -23,11 +26,12 @@ function formatBucket(ms: bigint): string {
   return `${+(s / 3600).toFixed(2)} h`;
 }
 
-export function SpanBucketIndicator({ spanMs, bucketSMs }: SpanBucketIndicatorProps) {
+export function SpanBucketIndicator({ spanMs, bucketSMs, lastFetchMs }: SpanBucketIndicatorProps) {
   return (
     <div style={CONTAINER}>
       <span>Span: {formatSpanMs(spanMs)}</span>
-      <span>Bucket Size: {bucketSMs == null ? '--' : formatBucket(bucketSMs)}</span>
+      <span>Bucket Size: {bucketSMs == null ? '—' : formatBucket(bucketSMs)}</span>
+      <span>Last Fetch: {lastFetchMs == null ? '—' : formatFetchMs(lastFetchMs)}</span>
     </div>
   );
 }

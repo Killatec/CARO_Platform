@@ -44,14 +44,16 @@ export interface SpanPresetsProps {
 
 /**
  * Horizontal strip of span-preset buttons. Highlight rule:
- *   (lastIntent === 'preset' || lastIntent === 'pan') && state.sizeMs === preset.sizeMs
- * Pan preserves sizeMs, so a preset stays lit through a pan gesture.
+ *   lastIntent !== null && lastIntent !== 'zoom' && state.sizeMs === preset.sizeMs
+ * Covers all size-preserving intents (preset, pan, live, endPicker). Only 'zoom'
+ * derives sizeMs from a drag/wheel target rather than a preset, so it is the sole
+ * excluded value. null is excluded to suppress the highlight at initial state.
  */
 export function SpanPresets({ state, onPreset }: SpanPresetsProps) {
   return (
     <div style={ROW}>
       {PRESETS.map(p => {
-        const active = (state.lastIntent === 'preset' || state.lastIntent === 'pan') && state.sizeMs === p.sizeMs;
+        const active = state.lastIntent !== null && state.lastIntent !== 'zoom' && state.sizeMs === p.sizeMs;
         return (
           <button
             key={p.label}

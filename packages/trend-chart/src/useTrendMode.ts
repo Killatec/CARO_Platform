@@ -2,6 +2,8 @@ import { useEffect, useReducer } from 'react';
 import type { Dispatch } from 'react';
 import type { Viewport } from './types.js';
 
+// Reserved for Step 11 viewportChanged (WS-driven live-tick advance).
+// No longer used by zoomApplied — zoom always exits tailing unconditionally.
 export const NEAR_NOW_MS = 60_000n;
 const DEFAULT_SIZE_MS = 3_600_000n; // 1 hour default
 
@@ -19,8 +21,9 @@ const LIVE_MODE_ENABLED = false;
  *   pan       — user dragged the X axis (panApplied); span preserved, only End shifts
  *   null      — initial state; no user action has fired yet
  *
- * Highlight rule (SpanPresets): (lastIntent === 'preset' || lastIntent === 'pan') && sizeMs === p.sizeMs
- * Pan keeps sizeMs constant, so the preset highlight should stay lit after a pan.
+ * Highlight rule (SpanPresets): lastIntent !== null && lastIntent !== 'zoom' && sizeMs === p.sizeMs
+ * All intents except 'zoom' either set or preserve sizeMs from a preset, so the highlight
+ * survives pan, liveClicked, and endPickerCommitted. null excluded for initial-state cleanliness.
  * Tick preserves the existing lastIntent value (clock advance is not a user intent).
  * viewportChanged is reserved for Step 11 live-tail; 'live' is the placeholder
  * value and will be revisited when Step 11 lands.
@@ -79,17 +82,13 @@ export function trendModeReducer(state: ModeState, action: TrendModeAction): Mod
       return { mode: 'fixed', from: to - sizeMs, to, sizeMs, lastIntent: 'endPicker' };
     }
 
-    // Zoom updates mode state so modeViewport stays in sync with dataViewport,
-    // keeping EndPicker's displayed End value correct after a zoom.
-    // Tailing is preserved only when the prior mode was already tailing AND the
-    // new `to` stays within NEAR_NOW_MS of now (zoom-out from tailing that keeps
-    // "now" in view). Zoom from fixed always stays fixed regardless of `to`.
+    // Zoom always exits tailing. Zoom is an exploratory action — the operator
+    // wants to inspect a specific time region. Staying tailing because the right
+    // edge happens to land near "now" hides intent. Tailing requires a deliberate
+    // liveClicked or preset-from-tailing after any zoom.
     case 'zoomApplied': {
-      const { from, to, nowMs } = action;
+      const { from, to } = action;
       const sizeMs = to - from;
-      if (state.mode === 'tailing' && to >= nowMs - NEAR_NOW_MS) {
-        return { mode: 'tailing', sizeMs, nowMs, lastIntent: 'zoom' };
-      }
       return { mode: 'fixed', from, to, sizeMs, lastIntent: 'zoom' };
     }
 

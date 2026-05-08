@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import http from 'http';
 import { ping, runMigrations, getActiveTags, pingTimescale, runTimescaleMigrations } from '@caro/db';
 import { config } from './config.js';

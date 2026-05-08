@@ -8,11 +8,15 @@ export interface RawTrendSeries {
   tagId: number;
   ts: bigint[];
   value: (number | null)[];
+  /** Most recent sample in [startTime - 5 min, startTime) per §5.5 bounded-prev contract. */
+  prev?: { ts: bigint; value: number | null };
 }
 
 export interface AggregateTrendSeries {
   tagId: number;
   value: (number | null)[];
+  min:   (number | null)[];
+  max:   (number | null)[];
 }
 
 export interface RawTrendTile {
@@ -82,6 +86,22 @@ function sourceDisplayName(s: AggregateSource): '1s_cagg' | '10s_cagg' | '1min_c
   return s.replace('tag_samples_', '') as '1s_cagg' | '10s_cagg' | '1min_cagg' | '10min_cagg';
 }
 
+// ── Watermark memo cache ──────────────────────────────────────────────────────
+//
+// cagg_watermark() costs 130-300 ms cold (catalog cache miss) and <5 ms warm.
+// Parallel tiles in the same boundary-crossing batch would each pay the cold
+// cost independently; memoizing per-source with a 30-second TTL collapses the
+// batch to one catalog round-trip. The in-flight deduplicator prevents the
+// "thundering herd" on the very first cold query.
+//
+// At worst a cached value causes fall-through one extra bucket past the true
+// watermark — no visible UX impact.
+
+const WATERMARK_TTL_MS = 30_000;
+type WatermarkCacheEntry = { value: number; expiresAt: number };
+const watermarkCache    = new Map<AggregateSource, WatermarkCacheEntry>();
+const watermarkInFlight = new Map<AggregateSource, Promise<number>>();
+
 // ── Test seams ─────────────────────────────────────────────────────────────────
 //
 // __test_watermarkOverride: production leaves null. Tests set current to a
@@ -94,6 +114,8 @@ function sourceDisplayName(s: AggregateSource): '1s_cagg' | '10s_cagg' | '1min_c
 //
 // __test_getWatermarkMs: direct access to the watermark catalog query so tests
 // can assert the live path without going through getTrendTile.
+//
+// __test_clearWatermarkCache: resets the module-level memo cache between tests.
 
 export const __test_watermarkOverride: { current: Map<string, number> | null } = {
   current: null,
@@ -103,6 +125,11 @@ export const __test_lastUsedSources: { current: Set<string> } = { current: new S
 
 export async function __test_getWatermarkMs(source: string): Promise<number> {
   return getWatermarkMs(source as AggregateSource);
+}
+
+export function __test_clearWatermarkCache(): void {
+  watermarkCache.clear();
+  watermarkInFlight.clear();
 }
 
 // ── Watermark lookup ──────────────────────────────────────────────────────────
@@ -115,28 +142,46 @@ export async function __test_getWatermarkMs(source: string): Promise<number> {
 // It takes mat_hypertable_id (from _timescaledb_catalog.continuous_agg) and
 // returns microseconds as bigint. Divide by 1000n for ms.
 //
-// Cost: <1 ms per call. Not cached — query once per request per level reached.
+// See watermarkCache / watermarkInFlight above for caching behaviour.
 
 async function getWatermarkMs(source: AggregateSource): Promise<number> {
   if (source === 'tag_samples') return Infinity;
 
+  // Test override takes precedence — bypasses cache so test seams work.
   if (__test_watermarkOverride.current !== null) {
     const v = __test_watermarkOverride.current.get(source);
     if (v !== undefined) return v;
   }
 
-  const result = await timescalePool.query(
-    `SELECT _timescaledb_internal.cagg_watermark(ca.mat_hypertable_id) AS wm_us
-     FROM _timescaledb_catalog.continuous_agg ca
-     WHERE ca.user_view_schema = 'public'
-       AND ca.user_view_name = $1`,
-    [source],
-  );
+  // Cache hit — fresh watermark.
+  const cached = watermarkCache.get(source);
+  if (cached && Date.now() < cached.expiresAt) return cached.value;
 
-  const wmUs: string | null =
-    (result.rows[0] as { wm_us: string | null } | undefined)?.wm_us ?? null;
-  if (wmUs === null) return 0; // never refreshed — fall through entirely
-  return Number(BigInt(wmUs) / 1000n);
+  // In-flight dedup — concurrent tiles share one DB round-trip.
+  const inflight = watermarkInFlight.get(source);
+  if (inflight) return inflight;
+
+  const promise = (async () => {
+    try {
+      const result = await timescalePool.query(
+        `SELECT _timescaledb_internal.cagg_watermark(ca.mat_hypertable_id) AS wm_us
+         FROM _timescaledb_catalog.continuous_agg ca
+         WHERE ca.user_view_schema = 'public'
+           AND ca.user_view_name = $1`,
+        [source],
+      );
+      const wmUs =
+        (result.rows[0] as { wm_us: string | null } | undefined)?.wm_us ?? null;
+      const ms = wmUs === null ? 0 : Number(BigInt(wmUs) / 1000n);
+      watermarkCache.set(source, { value: ms, expiresAt: Date.now() + WATERMARK_TTL_MS });
+      return ms;
+    } finally {
+      watermarkInFlight.delete(source);
+    }
+  })();
+
+  watermarkInFlight.set(source, promise);
+  return promise;
 }
 
 // ── Raw query ──────────────────────────────────────────────────────────────────
@@ -152,33 +197,65 @@ async function queryRaw(
 ): Promise<RawTrendTile> {
   const t0 = LOG_TILE_QUERIES ? performance.now() : 0;
 
+  // Single query: in-window samples + bounded-prev (one per tag, [startTime-5min, startTime))
+  // unified via UNION ALL with is_in_window discriminant. One connection per tile.
+  // ORDER BY tag_id, ts_ms ensures in-window rows arrive in chronological order per tag.
   const result = await timescalePool.query(
-    `SELECT tag_id,
+    `WITH in_window AS (
+       SELECT tag_id, ts, value
+       FROM tag_samples
+       WHERE tag_id = ANY($1::int[])
+         AND ts >= to_timestamp($2::bigint / 1000.0)
+         AND ts <  to_timestamp($3::bigint / 1000.0)
+     ),
+     prev_lookup AS (
+       SELECT DISTINCT ON (tag_id) tag_id, ts, value
+       FROM tag_samples
+       WHERE tag_id = ANY($1::int[])
+         AND ts <  to_timestamp($2::bigint / 1000.0)
+         AND ts >= to_timestamp($2::bigint / 1000.0) - INTERVAL '5 minutes'
+       ORDER BY tag_id, ts DESC
+     )
+     SELECT tag_id,
             (extract(epoch from ts) * 1000)::bigint AS ts_ms,
-            value
-     FROM tag_samples
-     WHERE tag_id = ANY($1::int[])
-       AND ts >= to_timestamp($2::bigint / 1000.0)
-       AND ts <  to_timestamp($3::bigint / 1000.0)
-     ORDER BY tag_id, ts`,
+            value,
+            true AS is_in_window
+     FROM in_window
+     UNION ALL
+     SELECT tag_id,
+            (extract(epoch from ts) * 1000)::bigint AS ts_ms,
+            value,
+            false AS is_in_window
+     FROM prev_lookup
+     ORDER BY tag_id, ts_ms`,
     [tagIds, startTime, endTime],
   );
+
+  const seriesMap = new Map<number, RawTrendSeries>();
+  for (const id of tagIds) {
+    seriesMap.set(id, { tagId: id, ts: [], value: [] });
+  }
+
+  let prevCount = 0;
+  for (const row of result.rows as { tag_id: number; ts_ms: bigint | string; value: number | null; is_in_window: boolean }[]) {
+    const series = seriesMap.get(row.tag_id);
+    if (!series) continue;
+    if (row.is_in_window) {
+      series.ts.push(BigInt(row.ts_ms));
+      series.value.push(row.value);
+    } else {
+      series.prev = { ts: BigInt(row.ts_ms), value: row.value };
+      prevCount += 1;
+    }
+  }
 
   if (LOG_TILE_QUERIES) {
     console.log(
       `[trends] source=raw tag_count=${tagIds.length} bucket_s=0` +
-      ` start=${startTime} end=${endTime} bucket_count=n/a elapsed_ms=${(performance.now() - t0).toFixed(1)}`,
+      ` start=${startTime} end=${endTime} bucket_count=n/a` +
+      ` rows=${result.rows.length} prev=${prevCount}` +
+      ` elapsed_ms=${(performance.now() - t0).toFixed(1)}`,
     );
-  }
-
-  const seriesMap = new Map<number, RawTrendSeries>();
-  for (const id of tagIds) seriesMap.set(id, { tagId: id, ts: [], value: [] });
-
-  for (const row of result.rows as { tag_id: number; ts_ms: bigint | string; value: number | null }[]) {
-    const series = seriesMap.get(row.tag_id);
-    if (!series) continue;
-    series.ts.push(BigInt(row.ts_ms));
-    series.value.push(row.value);
   }
 
   return {
@@ -192,10 +269,14 @@ async function queryRaw(
 // ── Segment result ─────────────────────────────────────────────────────────────
 
 interface SegmentResult {
-  servedStart: number;                          // ms — start of first bucket
-  servedEnd: number;                            // ms — end of last bucket
-  n: number;                                    // bucket count in this segment
-  valuesByTag: Map<number, (number | null)[]>;  // n values per tag
+  servedStart: number;  // ms — start of first bucket
+  servedEnd: number;    // ms — end of last bucket
+  n: number;            // bucket count in this segment
+  valuesByTag: Map<number, {
+    value: (number | null)[];
+    min:   (number | null)[];
+    max:   (number | null)[];
+  }>;
 }
 
 // ── AggRow (shared by both SQL templates) ──────────────────────────────────────
@@ -204,6 +285,8 @@ type AggRow = {
   tag_id: number;
   gf_bucket: Date;  // node-postgres returns TimescaleDB timestamps as Date objects
   val: number | null;
+  bucket_min: number | null;
+  bucket_max: number | null;
   bucket_null_count: string | number | null;
 };
 
@@ -220,7 +303,6 @@ async function querySegment(
   startTime: bigint,
   endTime: bigint,
   bucketSMs: number,
-  cutoffMs: bigint,
 ): Promise<SegmentResult> {
   const t0 = LOG_TILE_QUERIES ? performance.now() : 0;
 
@@ -229,75 +311,65 @@ async function querySegment(
     // Raw-as-aggregate: gapfill+locf on raw tag_samples.
     // Distinct from queryRaw() — returns bucketed values, not COV samples.
     sql = `
-      WITH gapfilled AS (
-        SELECT s.tag_id,
-               time_bucket_gapfill(
-                 $1::int * INTERVAL '1 millisecond',
-                 s.ts,
-                 to_timestamp($2::bigint / 1000.0),
-                 to_timestamp($3::bigint / 1000.0)
-               ) AS gf_bucket,
-               locf(
-                 last(s.value, s.ts),
-                 prev => (SELECT value FROM tag_samples
-                           WHERE tag_id = s.tag_id
-                             AND ts <  to_timestamp($2::bigint / 1000.0)
-                             AND ts >= to_timestamp($2::bigint / 1000.0) - INTERVAL '5 minutes'
-                           ORDER BY ts DESC
-                           LIMIT 1)
-               ) AS val,
-               count(*) FILTER (WHERE s.value IS NULL) AS bucket_null_count
-        FROM tag_samples s
-        WHERE s.tag_id = ANY($4::int[])
-          AND s.ts >= to_timestamp($2::bigint / 1000.0)
-          AND s.ts <  to_timestamp($3::bigint / 1000.0)
-        GROUP BY s.tag_id, gf_bucket
-      )
-      SELECT tag_id,
-             gf_bucket,
-             CASE WHEN gf_bucket > to_timestamp($5::bigint / 1000.0) THEN NULL ELSE val END AS val,
-             bucket_null_count
-      FROM gapfilled
-      ORDER BY tag_id, gf_bucket
+      SELECT s.tag_id,
+             time_bucket_gapfill(
+               $1::int * INTERVAL '1 millisecond',
+               s.ts,
+               to_timestamp($2::bigint / 1000.0),
+               to_timestamp($3::bigint / 1000.0)
+             ) AS gf_bucket,
+             locf(
+               last(s.value, s.ts),
+               prev => (SELECT value FROM tag_samples
+                         WHERE tag_id = s.tag_id
+                           AND ts <  to_timestamp($2::bigint / 1000.0)
+                           AND ts >= to_timestamp($2::bigint / 1000.0) - INTERVAL '5 minutes'
+                         ORDER BY ts DESC
+                         LIMIT 1)
+             ) AS val,
+             min(s.value) AS bucket_min,
+             max(s.value) AS bucket_max,
+             count(*) FILTER (WHERE s.value IS NULL) AS bucket_null_count
+      FROM tag_samples s
+      WHERE s.tag_id = ANY($4::int[])
+        AND s.ts >= to_timestamp($2::bigint / 1000.0)
+        AND s.ts <  to_timestamp($3::bigint / 1000.0)
+      GROUP BY s.tag_id, gf_bucket
+      ORDER BY s.tag_id, gf_bucket
     `;
   } else {
     // CAG source: uses bucket/last/null_count columns.
     // Source table is a closed literal from CaggSource — never from user input.
     sql = `
-      WITH gapfilled AS (
-        SELECT s.tag_id,
-               time_bucket_gapfill(
-                 $1::int * INTERVAL '1 millisecond',
-                 s.bucket,
-                 to_timestamp($2::bigint / 1000.0),
-                 to_timestamp($3::bigint / 1000.0)
-               ) AS gf_bucket,
-               locf(
-                 last(s.last, s.bucket),
-                 prev => (SELECT last FROM ${source}
-                           WHERE tag_id = s.tag_id
-                             AND bucket <  to_timestamp($2::bigint / 1000.0)
-                             AND bucket >= to_timestamp($2::bigint / 1000.0) - INTERVAL '5 minutes'
-                           ORDER BY bucket DESC
-                           LIMIT 1)
-               ) AS val,
-               sum(s.null_count) AS bucket_null_count
-        FROM ${source} s
-        WHERE s.tag_id = ANY($4::int[])
-          AND s.bucket >= to_timestamp($2::bigint / 1000.0)
-          AND s.bucket <  to_timestamp($3::bigint / 1000.0)
-        GROUP BY s.tag_id, gf_bucket
-      )
-      SELECT tag_id,
-             gf_bucket,
-             CASE WHEN gf_bucket > to_timestamp($5::bigint / 1000.0) THEN NULL ELSE val END AS val,
-             bucket_null_count
-      FROM gapfilled
-      ORDER BY tag_id, gf_bucket
+      SELECT s.tag_id,
+             time_bucket_gapfill(
+               $1::int * INTERVAL '1 millisecond',
+               s.bucket,
+               to_timestamp($2::bigint / 1000.0),
+               to_timestamp($3::bigint / 1000.0)
+             ) AS gf_bucket,
+             locf(
+               last(s.last, s.bucket),
+               prev => (SELECT last FROM ${source}
+                         WHERE tag_id = s.tag_id
+                           AND bucket <  to_timestamp($2::bigint / 1000.0)
+                           AND bucket >= to_timestamp($2::bigint / 1000.0) - INTERVAL '5 minutes'
+                         ORDER BY bucket DESC
+                         LIMIT 1)
+             ) AS val,
+             min(s.min) AS bucket_min,
+             max(s.max) AS bucket_max,
+             sum(s.null_count) AS bucket_null_count
+      FROM ${source} s
+      WHERE s.tag_id = ANY($4::int[])
+        AND s.bucket >= to_timestamp($2::bigint / 1000.0)
+        AND s.bucket <  to_timestamp($3::bigint / 1000.0)
+      GROUP BY s.tag_id, gf_bucket
+      ORDER BY s.tag_id, gf_bucket
     `;
   }
 
-  const result = await timescalePool.query(sql, [bucketSMs, startTime, endTime, tagIds, cutoffMs]);
+  const result = await timescalePool.query(sql, [bucketSMs, startTime, endTime, tagIds]);
 
   if (LOG_TILE_QUERIES) {
     console.log(
@@ -307,21 +379,44 @@ async function querySegment(
     );
   }
 
-  // Collect per-tag value arrays and track the first/last bucket timestamp.
-  const valuesByTag = new Map<number, (number | null)[]>();
-  for (const id of tagIds) valuesByTag.set(id, []);
+  // Collect per-tag arrays (value/min/max) and track the first/last bucket timestamp.
+  const valuesByTag = new Map<number, {
+    value: (number | null)[];
+    min:   (number | null)[];
+    max:   (number | null)[];
+  }>();
+  for (const id of tagIds) valuesByTag.set(id, { value: [], min: [], max: [] });
 
   let firstBucketMs: number | null = null;
   let lastBucketMs:  number | null = null;
 
   for (const row of result.rows as AggRow[]) {
-    const arr = valuesByTag.get(row.tag_id);
-    if (!arr) continue;
+    const arrs = valuesByTag.get(row.tag_id);
+    if (!arrs) continue;
     const bucketMs = row.gf_bucket.getTime();
     if (firstBucketMs === null || bucketMs < firstBucketMs) firstBucketMs = bucketMs;
     if (lastBucketMs  === null || bucketMs > lastBucketMs)  lastBucketMs  = bucketMs;
+
     const nullCount = row.bucket_null_count != null ? Number(row.bucket_null_count) : 0;
-    arr.push(nullCount > 0 ? null : row.val);
+
+    if (nullCount > 0) {
+      // Mixed-null bucket — null-as-gap rule (§2.1).
+      arrs.value.push(null);
+      arrs.min.push(null);
+      arrs.max.push(null);
+    } else if (row.bucket_min === null) {
+      // Empty (gapfilled) bucket — COV semantics: value held constant.
+      // Band collapses to the LOCF'd last. May itself be null at the leading
+      // edge if the bounded prev lookup returned NULL; that's correct.
+      arrs.value.push(row.val);
+      arrs.min.push(row.val);
+      arrs.max.push(row.val);
+    } else {
+      // Normal bucket — measured spread.
+      arrs.value.push(row.val);
+      arrs.min.push(row.bucket_min);
+      arrs.max.push(row.bucket_max);
+    }
   }
 
   // Compute the served bucket grid for this segment.
@@ -360,14 +455,19 @@ async function querySegment(
   }
 
   // Tags completely absent from this segment get null×n to fill the grid.
-  // Tags with rows must match n exactly (gapfill invariant).
+  // Tags with rows must match n exactly (gapfill invariant; check value length — all
+  // three arrays are built in lockstep so one check suffices).
   for (const id of tagIds) {
-    const arr = valuesByTag.get(id)!;
-    if (arr.length === 0) {
-      valuesByTag.set(id, new Array<number | null>(n).fill(null));
-    } else if (arr.length !== n) {
+    const arrs = valuesByTag.get(id)!;
+    if (arrs.value.length === 0) {
+      valuesByTag.set(id, {
+        value: new Array<number | null>(n).fill(null),
+        min:   new Array<number | null>(n).fill(null),
+        max:   new Array<number | null>(n).fill(null),
+      });
+    } else if (arrs.value.length !== n) {
       throw new Error(
-        `querySegment: tag ${id} yielded ${arr.length} buckets but grid is ${n}` +
+        `querySegment: tag ${id} yielded ${arrs.value.length} buckets but grid is ${n}` +
         ` — gapfill output is inconsistent (source=${source}, bucketSMs=${bucketSMs})`,
       );
     }
@@ -392,7 +492,6 @@ async function queryRecursive(
   startTime: bigint,
   endTime: bigint,
   bucketSMs: number,
-  cutoffMs: bigint,
 ): Promise<{ segments: SegmentResult[]; usedSources: Set<AggregateSource> }> {
   const watermarkMs = await getWatermarkMs(source);
   const endTimeMs   = Number(endTime);
@@ -400,7 +499,7 @@ async function queryRecursive(
   if (source === 'tag_samples' || endTimeMs <= watermarkMs) {
     // Full range is covered by this source — no fall-through.
     __test_lastUsedSources.current.add(source);
-    const seg = await querySegment(source, tagIds, startTime, endTime, bucketSMs, cutoffMs);
+    const seg = await querySegment(source, tagIds, startTime, endTime, bucketSMs);
     return { segments: [seg], usedSources: new Set([source]) };
   }
 
@@ -422,7 +521,7 @@ async function queryRecursive(
     // Nothing in this source covers the requested range — fall through entirely.
     // This source contributed no data; do NOT add it to __test_lastUsedSources.
     const finer = nextFinerSource(source);
-    return queryRecursive(finer, tagIds, startTime, endTime, bucketSMs, cutoffMs);
+    return queryRecursive(finer, tagIds, startTime, endTime, bucketSMs);
   }
 
   // Split: CAG covers [startTime, splitBoundary); finer source covers [splitBoundary, endTime).
@@ -436,8 +535,8 @@ async function queryRecursive(
   // inside the PRIOR bucket, so gapfill does not emit the boundary bucket in
   // the left half. The right half then owns that bucket exclusively.
   const [leftSeg, rightResult] = await Promise.all([
-    querySegment(source, tagIds, startTime, splitBoundary - 1n, bucketSMs, cutoffMs),
-    queryRecursive(finer, tagIds, splitBoundary, endTime, bucketSMs, cutoffMs),
+    querySegment(source, tagIds, startTime, splitBoundary - 1n, bucketSMs),
+    queryRecursive(finer, tagIds, splitBoundary, endTime, bucketSMs),
   ]);
 
   return {
@@ -507,23 +606,9 @@ export async function getTrendTile(
   else if (bucketS < 1600) dispatchSource = 'tag_samples_1min_cagg';
   else                     dispatchSource = 'tag_samples_10min_cagg';
 
-  // ── Data-extent cutoff ───────────────────────────────────────────────────────
-  // Gapfill+LOCF propagates past the last real sample into future buckets.
-  // Query MAX(ts) once and null out any gf_bucket beyond that point in each segment.
-  const cutoffResult = await timescalePool.query(
-    `SELECT EXTRACT(EPOCH FROM COALESCE(MAX(ts), 'infinity'::timestamptz)) * 1000 AS cutoff_ms
-     FROM tag_samples
-     WHERE tag_id = ANY($1)`,
-    [tagIds],
-  );
-  const rawCutoffMs = Number(cutoffResult.rows[0].cutoff_ms);
-  const cutoffMs: bigint = Number.isFinite(rawCutoffMs)
-    ? BigInt(Math.floor(rawCutoffMs))
-    : 9_999_999_999_999n; // no data → far-future sentinel, CASE never fires
-
   __test_lastUsedSources.current = new Set();
   const { segments, usedSources } = await queryRecursive(
-    dispatchSource, tagIds, startTime, endTime, bucketSMs, cutoffMs,
+    dispatchSource, tagIds, startTime, endTime, bucketSMs,
   );
 
   // ── Remove seam duplicates ──────────────────────────────────────────────────
@@ -537,7 +622,11 @@ export async function getTrendTile(
     const left  = segments[i]!;
     const right = segments[i + 1]!;
     if (left.servedEnd - bucketSMs === right.servedStart) {
-      for (const arr of left.valuesByTag.values()) arr.pop();
+      for (const arrs of left.valuesByTag.values()) {
+        arrs.value.pop();
+        arrs.min.pop();
+        arrs.max.pop();
+      }
       left.n       -= 1;
       left.servedEnd -= bucketSMs;
     }
@@ -559,12 +648,22 @@ export async function getTrendTile(
   }
 
   const series: AggregateTrendSeries[] = tagIds.map(id => {
-    const values: (number | null)[] = [];
+    const value: (number | null)[] = [];
+    const min:   (number | null)[] = [];
+    const max:   (number | null)[] = [];
     for (const seg of segments) {
-      const segValues = seg.valuesByTag.get(id) ?? new Array<number | null>(seg.n).fill(null);
-      values.push(...segValues);
+      const segArrs = seg.valuesByTag.get(id);
+      if (segArrs) {
+        value.push(...segArrs.value);
+        min.push(...segArrs.min);
+        max.push(...segArrs.max);
+      } else {
+        value.push(...new Array<number | null>(seg.n).fill(null));
+        min.push(...new Array<number | null>(seg.n).fill(null));
+        max.push(...new Array<number | null>(seg.n).fill(null));
+      }
     }
-    return { tagId: id, value: values };
+    return { tagId: id, value, min, max };
   });
 
   // ── Source label ─────────────────────────────────────────────────────────────

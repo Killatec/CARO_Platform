@@ -172,12 +172,14 @@ describe('zoomApplied', () => {
     expect(next.lastIntent).toBe('zoom');
   });
 
-  it('from tailing: to ≈ now → stays tailing (zoom-out keeps "now" in view)', () => {
+  it('from tailing: to ≈ now → fixed (zoom always exits tailing)', () => {
     const from = NOW - 1_800_000n; // wider window
-    const to = NOW - 30_000n; // to still near now
+    const to = NOW - 30_000n; // near now, but zoom unconditionally → fixed
     const next = dispatch(TAILING_1H, { type: 'zoomApplied', from, to, nowMs: NOW });
-    expect(next.mode).toBe('tailing');
-    if (next.mode !== 'tailing') return;
+    expect(next.mode).toBe('fixed');
+    if (next.mode !== 'fixed') return;
+    expect(next.from).toBe(from);
+    expect(next.to).toBe(to);
     expect(next.sizeMs).toBe(to - from);
     expect(next.lastIntent).toBe('zoom');
   });
@@ -206,14 +208,14 @@ describe('zoomApplied', () => {
     expect(next.lastIntent).toBe('zoom');
   });
 
-  it('from tailing: to at NEAR_NOW_MS boundary → stays tailing', () => {
+  it('from tailing: to at NEAR_NOW_MS boundary → fixed (NEAR_NOW_MS no longer gates zoom)', () => {
     const to = NOW - NEAR_NOW_MS;
     const from = to - 1_800_000n;
     const next = dispatch(TAILING_1H, { type: 'zoomApplied', from, to, nowMs: NOW });
-    expect(next.mode).toBe('tailing');
+    expect(next.mode).toBe('fixed');
   });
 
-  it('from tailing: to just past NEAR_NOW_MS → goes fixed', () => {
+  it('from tailing: to just past NEAR_NOW_MS → fixed (unchanged)', () => {
     const to = NOW - NEAR_NOW_MS - 1n;
     const from = to - 1_800_000n;
     const next = dispatch(TAILING_1H, { type: 'zoomApplied', from, to, nowMs: NOW });

@@ -27,6 +27,7 @@ function serializeTile(tile: TrendTile): unknown {
         tagId:  s.tagId,
         ts:     s.ts.map(t => Number(t)),
         value:  s.value,
+        ...(s.prev ? { prev: { ts: Number(s.prev.ts), value: s.prev.value } } : {}),
       })),
     };
   }
@@ -36,7 +37,12 @@ function serializeTile(tile: TrendTile): unknown {
     endTime:   Number(tile.endTime),
     bucketSMs: tile.bucketSMs,
     n:         tile.n,
-    series: tile.series.map(s => ({ tagId: s.tagId, value: s.value })),
+    series: tile.series.map(s => ({
+      tagId: s.tagId,
+      value: s.value,
+      min:   s.min,
+      max:   s.max,
+    })),
   };
 }
 

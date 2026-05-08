@@ -3,7 +3,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { MockHmiProvider } from '@caro/hmi-context';
 import type { TagDef } from '@caro/hmi-context';
 import { TrendChart } from '../src/TrendChart.js';
-import type { AggregateSeriesData } from '../src/types.js';
+import type { AggregateSeriesData, RawSeriesData } from '../src/types.js';
 
 // ── uPlot mock (canvas not available in jsdom) ────────────────────────────────
 
@@ -16,6 +16,7 @@ vi.mock('uplot', () => {
       redraw: vi.fn(),
       setScale: vi.fn(),
       scales: { x: { min: 0, max: 3600 } },
+      data: [[]] as unknown[][],
       over,
     };
   });
@@ -41,6 +42,7 @@ const TAG_DEFS: Record<number, TagDef> = {
        module_id: 'M', module_type: 'MQTT', eng_min: 0, eng_max: 50, unit: 'bar', meta: [] },
 };
 
+// v0.7-style aggregate data (no min/max) — triggers v0.7 legend fallback.
 function makeData(tagIds: number[] = [1, 2, 3, 4]): AggregateSeriesData {
   const n = 10;
   return {
@@ -50,7 +52,35 @@ function makeData(tagIds: number[] = [1, 2, 3, 4]): AggregateSeriesData {
     endTime: BigInt(n * 1000),
     n,
     bucketSMs: 1000,
-    series: new Map(tagIds.map(id => [id, new Array(n).fill(id * 1.0)])),
+    series: new Map(tagIds.map(id => [id, { value: new Array(n).fill(id * 1.0) }])),
+  };
+}
+
+// v0.8-style aggregate data with min/max bands.
+function makeDataWithBands(tagIds: number[] = [1, 2]): AggregateSeriesData {
+  const n = 5;
+  return {
+    type: 'aggregate',
+    source: '1min_cagg',
+    startTime: 0n,
+    endTime: BigInt(n * 1000),
+    n,
+    bucketSMs: 1000,
+    series: new Map(tagIds.map(id => [id, {
+      value: new Array(n).fill(id * 1.0),
+      min:   new Array(n).fill(id * 1.0 - 0.5),
+      max:   new Array(n).fill(id * 1.0 + 0.5),
+    }])),
+  };
+}
+
+function makeRawData(tagIds: number[] = [1]): RawSeriesData {
+  return {
+    type: 'raw',
+    source: 'raw',
+    startTime: 0n,
+    endTime: 3_000n,
+    series: new Map(tagIds.map(id => [id, { ts: [0n, 1000n, 2000n], value: [1.0, 2.0, null] }])),
   };
 }
 
@@ -77,7 +107,6 @@ describe('TrendChart', () => {
 
   it('renders 4 legend entries when given 4 tagIds', () => {
     renderChart();
-    // Each tag's short name (last segment of tag_path) appears in legend.
     expect(screen.getByText('Temp')).toBeTruthy();
     expect(screen.getByText('Power')).toBeTruthy();
     expect(screen.getByText('Valve')).toBeTruthy();
@@ -87,7 +116,6 @@ describe('TrendChart', () => {
   it('first tag is selected by default (legend entry is bolded)', () => {
     renderChart([1, 2]);
     const tempEntry = screen.getByText('Temp');
-    // The name span for the selected entry has fontWeight 700.
     expect(tempEntry.style.fontWeight).toBe('700');
     const powerEntry = screen.getByText('Power');
     expect(powerEntry.style.fontWeight).not.toBe('700');
@@ -96,9 +124,7 @@ describe('TrendChart', () => {
   it('clicking a legend entry changes selection', () => {
     renderChart([1, 2]);
     const powerEntry = screen.getByText('Power');
-    // Click the whole entry row (parent of the name span).
     fireEvent.click(powerEntry.parentElement!);
-    // Now Power entry's name span should be bold.
     expect(powerEntry.style.fontWeight).toBe('700');
   });
 
@@ -106,16 +132,15 @@ describe('TrendChart', () => {
     const onTagRemove = vi.fn();
     renderChart([1, 2], makeData([1, 2]), onTagRemove);
     const removeButtons = screen.getAllByTitle('Remove trace');
-    // Remove the first tag (Temp = tag 1).
     fireEvent.click(removeButtons[0]!);
     expect(onTagRemove).toHaveBeenCalledWith(1);
   });
 
-  it('boolean tag current value formats as "0" or "1" in legend', () => {
-    // Tag 3 is bool, value 3.0 → isBoolean → "1"
+  it('boolean tag current value formats as "0" or "1" in legend (v0.7 fallback)', () => {
+    // Tag 3 is bool, no min/max → v0.7 fallback shows single value.
+    // value=3.0 (truthy) → "1"
     const data = makeData([3]);
     renderChart([3], data);
-    // The value in the legend entry should be "1" (since value=3.0 which is truthy→"1").
     expect(screen.getByText('1')).toBeTruthy();
   });
 
@@ -133,13 +158,29 @@ describe('TrendChart', () => {
     );
     const footer = screen.getByTestId('chart-footer');
     expect(footer).toBeTruthy();
-    // Footer is inside LEFT_COLUMN; Legend strip is a sibling of LEFT_COLUMN.
-    // So Remove-trace buttons are NOT inside footer's parent.
     const [removeBtn] = screen.getAllByTitle('Remove trace');
     expect(footer.parentElement?.contains(removeBtn!)).toBe(false);
   });
 
-  it('null values in series array are passed to uPlot data as-is (null preserved)', async () => {
+  // ── Band rendering (aggregate) ────────────────────────────────────────────
+
+  it('aggregate v0.8: uPlot receives interleaved min/max arrays (not value arrays)', async () => {
+    const { default: MockUPlot } = await import('uplot');
+    const data = makeDataWithBands([1]);
+    renderChart([1], data);
+
+    const calls = (MockUPlot as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.length).toBeGreaterThan(0);
+    const uplotData = calls[calls.length - 1]![1] as unknown[][];
+
+    // uplotData[1] = mins[0], uplotData[2] = maxs[0]
+    const mins = uplotData[1] as (number | null)[];
+    const maxs = uplotData[2] as (number | null)[];
+    expect(mins).toEqual(new Array(5).fill(0.5));   // id*1.0 - 0.5 = 0.5 for id=1
+    expect(maxs).toEqual(new Array(5).fill(1.5));   // id*1.0 + 0.5 = 1.5 for id=1
+  });
+
+  it('aggregate v0.8: null values in min/max bands are passed through to uPlot', async () => {
     const { default: MockUPlot } = await import('uplot');
     const dataWithNulls: AggregateSeriesData = {
       type: 'aggregate',
@@ -148,15 +189,128 @@ describe('TrendChart', () => {
       endTime: 3_000n,
       n: 3,
       bucketSMs: 1000,
-      series: new Map([[1, [1.0, null, 3.0]]]),
+      series: new Map([[1, { value: [1.0, null, 3.0], min: [0.5, null, 2.5], max: [1.5, null, 3.5] }]]),
     };
     renderChart([1], dataWithNulls);
-    // uPlot constructor should have been called; the data passed should contain null.
     const calls = (MockUPlot as ReturnType<typeof vi.fn>).mock.calls;
-    expect(calls.length).toBeGreaterThan(0);
     const uplotData = calls[calls.length - 1]![1] as unknown[][];
-    // ys[0] = data for tag 1; should include null.
-    const ySeries = uplotData[1] as (number | null)[];
-    expect(ySeries).toContain(null);
+    const mins = uplotData[1] as (number | null)[];
+    expect(mins).toContain(null);
+  });
+
+  it('aggregate v0.7 (no min/max): band arrays are null-filled', async () => {
+    const { default: MockUPlot } = await import('uplot');
+    const data = makeData([1]);  // no min/max
+    renderChart([1], data);
+    const calls = (MockUPlot as ReturnType<typeof vi.fn>).mock.calls;
+    const uplotData = calls[calls.length - 1]![1] as unknown[][];
+    // mins[0] should be all-null (mixed-cache guard)
+    const mins = uplotData[1] as (number | null)[];
+    expect(mins.every(v => v === null)).toBe(true);
+  });
+
+  it('raw mode: uPlot receives mins === maxs (same reference) — zero-area band', async () => {
+    const { default: MockUPlot } = await import('uplot');
+    const rawData = makeRawData([1]);
+    renderChart([1], rawData);
+    const calls = (MockUPlot as ReturnType<typeof vi.fn>).mock.calls;
+    const uplotData = calls[calls.length - 1]![1] as unknown[][];
+    // Raw always-band: uplotData[1] = mins[0], uplotData[2] = maxs[0].
+    // They are the same array reference (zero-area band).
+    const mins = uplotData[1] as (number | null)[];
+    const maxs = uplotData[2] as (number | null)[];
+    expect(mins).toBe(maxs); // same reference
+    // ts=[0n,1000n,2000n], value=[1.0,2.0,null] — forward-filled values
+    expect(mins).toEqual([1.0, 2.0, null]);
+  });
+
+  it('data.type flip (aggregate → raw) does NOT trigger uPlot destroy/recreate', async () => {
+    const { default: MockUPlot } = await import('uplot');
+    const aggData = makeDataWithBands([1]);
+    // Stable tagIds reference — avoids rebuild from tagIds reference-equality change.
+    const stableTagIds = [1];
+    const { rerender } = render(
+      <MockHmiProvider tagDefs={TAG_DEFS}>
+        <TrendChart data={aggData} tagIds={stableTagIds} siteTimezone="UTC" height={400} />
+      </MockHmiProvider>,
+    );
+    const callsAfterFirst = (MockUPlot as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    // Switch to raw data (data.type: 'aggregate' → 'raw'), tagIds unchanged.
+    const rawData = makeRawData([1]);
+    rerender(
+      <MockHmiProvider tagDefs={TAG_DEFS}>
+        <TrendChart data={rawData} tagIds={stableTagIds} siteTimezone="UTC" height={400} />
+      </MockHmiProvider>,
+    );
+
+    // uPlot constructor must NOT be called again — setData handles the mode flip.
+    const callsAfterSwitch = (MockUPlot as ReturnType<typeof vi.fn>).mock.calls.length;
+    expect(callsAfterSwitch).toBe(callsAfterFirst);
+  });
+
+  // ── X-axis zone wheel → onXRangeChange (every tick exits tailing) ───────────
+  //
+  // inXZone is set by mousemove calling isInXAxisHitZone(u, clientX, clientY).
+  // u.over.getBoundingClientRect() returns all zeros in jsdom (detached element), so:
+  //   clientY=1 > r.bottom=0  → above condition true
+  //   clientY=1 ≤ r.bottom+100=100 → within 100px strip  → inXZone=true
+  // Wheel events on the canvas (clientY=0, i.e. NOT > r.bottom=0) leave inXZone=false.
+
+  it('wheel on canvas (no prior X-zone mousemove) does NOT fire onXRangeChange', () => {
+    const onXRangeChange = vi.fn();
+    const { container: root } = render(
+      <MockHmiProvider tagDefs={TAG_DEFS}>
+        <TrendChart
+          data={makeData([1])}
+          tagIds={[1]}
+          siteTimezone="UTC"
+          height={400}
+          onXRangeChange={onXRangeChange}
+        />
+      </MockHmiProvider>,
+    );
+    const containerDiv = root.firstElementChild!.firstElementChild!.firstElementChild as HTMLElement;
+    // No mousemove → inXZone stays false → handler returns early.
+    fireEvent.wheel(containerDiv, { clientX: 0, clientY: 0, deltaY: 100 });
+    expect(onXRangeChange).not.toHaveBeenCalled();
+  });
+
+  it('wheel in X-axis zone (zoom-in, sub-threshold) fires onXRangeChange', () => {
+    const onXRangeChange = vi.fn();
+    const { container: root } = render(
+      <MockHmiProvider tagDefs={TAG_DEFS}>
+        <TrendChart
+          data={makeData([1])}
+          tagIds={[1]}
+          siteTimezone="UTC"
+          height={400}
+          onXRangeChange={onXRangeChange}
+        />
+      </MockHmiProvider>,
+    );
+    const containerDiv = root.firstElementChild!.firstElementChild!.firstElementChild as HTMLElement;
+    fireEvent.mouseMove(containerDiv, { clientX: 0, clientY: 1 }); // sets inXZone=true
+    fireEvent.wheel(containerDiv, { clientX: 0, clientY: 1, deltaY: -100 }); // zoom-in
+    expect(onXRangeChange).toHaveBeenCalled();
+  });
+
+  it('wheel in X-axis zone (zoom-out, sub-threshold) fires onXRangeChange', () => {
+    const onXRangeChange = vi.fn();
+    const { container: root } = render(
+      <MockHmiProvider tagDefs={TAG_DEFS}>
+        <TrendChart
+          data={makeData([1])}
+          tagIds={[1]}
+          siteTimezone="UTC"
+          height={400}
+          onXRangeChange={onXRangeChange}
+        />
+      </MockHmiProvider>,
+    );
+    const containerDiv = root.firstElementChild!.firstElementChild!.firstElementChild as HTMLElement;
+    fireEvent.mouseMove(containerDiv, { clientX: 0, clientY: 1 }); // sets inXZone=true
+    fireEvent.wheel(containerDiv, { clientX: 0, clientY: 1, deltaY: 100 }); // zoom-out
+    expect(onXRangeChange).toHaveBeenCalled();
   });
 });

@@ -46,7 +46,7 @@ const SWATCH: CSSProperties = {
 
 function getValueAtIdx(data: TrendData, tagId: number, idx: number): number | null {
   if (data.type === 'aggregate') {
-    return data.series.get(tagId)?.[idx] ?? null;
+    return data.series.get(tagId)?.value[idx] ?? null;
   }
   // Raw: idx maps to the sorted-union timestamp position — not directly usable here.
   // For the raw tooltip, we read from the raw series by position too (seriesFromTrendData order).

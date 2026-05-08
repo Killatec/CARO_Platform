@@ -97,21 +97,33 @@ describe('SpanPresets', () => {
     expect(screen.getByText('4h').style.background).not.toBe('rgb(37, 99, 235)');
   });
 
-  it('clears highlight when lastIntent is "zoom"', () => {
-    const state: ModeState = { ...TAILING_1H, lastIntent: 'zoom' };
-    render(<SpanPresets state={state} onPreset={vi.fn()} />);
-    const btn1h = screen.getByText('1h');
-    expect(btn1h.style.background).not.toBe('rgb(37, 99, 235)');
-  });
-
-  it('clears highlight when lastIntent is "live"', () => {
-    const state: ModeState = { ...TAILING_1H, lastIntent: 'live' };
+  it('clears highlight when lastIntent is "zoom" (zoom derives size from drag, not a preset)', () => {
+    // Even if sizeMs coincidentally matches a preset, zoom must not highlight.
+    const state: ModeState = { ...TAILING_1H, lastIntent: 'zoom' }; // sizeMs = 1h
     render(<SpanPresets state={state} onPreset={vi.fn()} />);
     expect(screen.getByText('1h').style.background).not.toBe('rgb(37, 99, 235)');
   });
 
-  it('clears highlight when lastIntent is "endPicker"', () => {
-    const state: ModeState = { ...TAILING_1H, lastIntent: 'endPicker' };
+  it('highlights when lastIntent is "live" and sizeMs matches (Live button preserves sizeMs)', () => {
+    const state: ModeState = { ...TAILING_1H, lastIntent: 'live' }; // sizeMs = 1h
+    render(<SpanPresets state={state} onPreset={vi.fn()} />);
+    expect(screen.getByText('1h').style.background).toBe('rgb(37, 99, 235)');
+  });
+
+  it('does not highlight "live" when sizeMs does not match any preset', () => {
+    const state: ModeState = { ...TAILING_1H, sizeMs: 999_999n, lastIntent: 'live' };
+    render(<SpanPresets state={state} onPreset={vi.fn()} />);
+    expect(screen.getByText('1h').style.background).not.toBe('rgb(37, 99, 235)');
+  });
+
+  it('highlights when lastIntent is "endPicker" and sizeMs is preserved from a prior preset', () => {
+    const state: ModeState = { ...FIXED_1H, lastIntent: 'endPicker' }; // sizeMs = 1h
+    render(<SpanPresets state={state} onPreset={vi.fn()} />);
+    expect(screen.getByText('1h').style.background).toBe('rgb(37, 99, 235)');
+  });
+
+  it('does not highlight "endPicker" when sizeMs does not match any preset', () => {
+    const state: ModeState = { ...FIXED_1H, sizeMs: 999_999n, lastIntent: 'endPicker' };
     render(<SpanPresets state={state} onPreset={vi.fn()} />);
     expect(screen.getByText('1h').style.background).not.toBe('rgb(37, 99, 235)');
   });

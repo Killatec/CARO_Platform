@@ -149,6 +149,9 @@ export function tilesForViewport(opts: {
 
   // bucketSMs is exact for all standard preset spans (7d/2/500 = 604800ms etc.).
   const bucketSMs = tileSpanMs / BigInt(bucketCount);
+  // Defensive: tileSpanMs > 0 but < bucketCount causes bigint division to yield 0n,
+  // which would crash ceilDiv (division by zero). Sub-millisecond viewports are nonsensical.
+  if (bucketSMs === 0n) return { visible: [], prefetch: [] };
 
   // Right-anchor on the bucket grid: last visible end is the first bucket
   // boundary at or after viewport.end. firstVisibleStart steps back by the

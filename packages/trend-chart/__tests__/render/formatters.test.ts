@@ -3,6 +3,7 @@ import { formatBucketS } from '../../src/render/formatBucketS.js';
 import { formatSpanMs } from '../../src/render/formatSpanMs.js';
 import { formatValue } from '../../src/render/formatValue.js';
 import { formatTickLabel } from '../../src/render/formatTickLabel.js';
+import { formatFetchMs } from '../../src/render/formatFetchMs.js';
 
 // ── formatBucketS ─────────────────────────────────────────────────────────────
 
@@ -201,5 +202,65 @@ describe('formatSpanMs', () => {
 
   it('no trailing zeros: 1_209_600_000n → "14 d" not "14.00 d"', () => {
     expect(formatSpanMs(1_209_600_000n)).not.toContain('.00');
+  });
+});
+
+// ── formatFetchMs ─────────────────────────────────────────────────────────────
+
+describe('formatFetchMs', () => {
+  // < 1000 ms → integer ms
+  it('0 ms → "0 ms"', () => {
+    expect(formatFetchMs(0)).toBe('0 ms');
+  });
+
+  it('234 ms → "234 ms"', () => {
+    expect(formatFetchMs(234)).toBe('234 ms');
+  });
+
+  it('999 ms → "999 ms" (boundary: still integer ms)', () => {
+    expect(formatFetchMs(999)).toBe('999 ms');
+  });
+
+  it('999.9 ms rounds to integer: "1000 ms"', () => {
+    expect(formatFetchMs(999.9)).toBe('1000 ms');
+  });
+
+  // 1 000 – 9 999 ms → 2-decimal seconds
+  it('1000 ms → "1.00 s"', () => {
+    expect(formatFetchMs(1000)).toBe('1.00 s');
+  });
+
+  it('1230 ms → "1.23 s"', () => {
+    expect(formatFetchMs(1230)).toBe('1.23 s');
+  });
+
+  it('9999 ms → "10.00 s" (boundary: just below 10 000)', () => {
+    expect(formatFetchMs(9999)).toBe('10.00 s');
+  });
+
+  // 10 000 – 59 999 ms → 1-decimal seconds
+  it('10_000 ms → "10.0 s"', () => {
+    expect(formatFetchMs(10_000)).toBe('10.0 s');
+  });
+
+  it('12_300 ms → "12.3 s"', () => {
+    expect(formatFetchMs(12_300)).toBe('12.3 s');
+  });
+
+  it('59_999 ms → "60.0 s" (boundary: just below 60 000)', () => {
+    expect(formatFetchMs(59_999)).toBe('60.0 s');
+  });
+
+  // ≥ 60 000 ms → 1-decimal minutes
+  it('60_000 ms → "1.0 min"', () => {
+    expect(formatFetchMs(60_000)).toBe('1.0 min');
+  });
+
+  it('90_000 ms → "1.5 min"', () => {
+    expect(formatFetchMs(90_000)).toBe('1.5 min');
+  });
+
+  it('120_000 ms → "2.0 min"', () => {
+    expect(formatFetchMs(120_000)).toBe('2.0 min');
   });
 });

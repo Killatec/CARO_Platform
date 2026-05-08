@@ -27,7 +27,12 @@ function makeAggResponse(tagIds: number[], opts: { n?: number; bucketSMs?: numbe
     endTime: Number(ONE_HOUR),
     bucketSMs,
     n,
-    series: tagIds.map(id => ({ tagId: id, value: new Array(n).fill(1.0) })),
+    series: tagIds.map(id => ({
+      tagId: id,
+      value: new Array(n).fill(1.0),
+      min:   new Array(n).fill(0.9),
+      max:   new Array(n).fill(1.1),
+    })),
   };
 }
 
@@ -342,7 +347,7 @@ describe('useTrendData', () => {
     const data = result.current.data;
     expect(data?.type).toBe('aggregate');
     if (data?.type === 'aggregate') {
-      const values = data.series.get(1)!;
+      const values = data.series.get(1)!.value;
       // Assembly includes prefetch tiles: 4 tiles × 500 = 2000 buckets.
       // Order: prefetch-before (1.0), visible[0] (1.0), visible[1] (null-fill), prefetch-after (1.0).
       expect(values).toHaveLength(2000);
@@ -423,6 +428,93 @@ describe('useTrendData', () => {
     expect(aggResult.current.data?.type).toBe('aggregate');
   });
 
+  it('assembleData: v0.8 server — series entry carries min and max arrays', async () => {
+    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
+
+    const { result } = renderHook(() =>
+      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
+    );
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    const data = result.current.data;
+    expect(data?.type).toBe('aggregate');
+    if (data?.type === 'aggregate') {
+      const entry = data.series.get(1)!;
+      expect(entry.min).toBeDefined();
+      expect(entry.max).toBeDefined();
+      expect(entry.min!.length).toBe(entry.value.length);
+      expect(entry.max!.length).toBe(entry.value.length);
+    }
+  });
+
+  it('assembleData: v0.7 cache entry (no min/max) leaves min and max undefined', async () => {
+    // Simulate a v0.7 server response — aggregate shape but without min/max fields.
+    // The cast bypasses the updated type so the test can simulate an older server.
+    const v7Response = {
+      source: '1min_cagg' as const,
+      startTime: 0,
+      endTime: Number(ONE_HOUR),
+      bucketSMs: 3_600,
+      n: 500,
+      series: [{ tagId: 1, value: new Array(500).fill(1.0) }],
+    } as unknown as TileApiResponse;
+    mockFetchTile.mockResolvedValue(v7Response);
+
+    const { result } = renderHook(() =>
+      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
+    );
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    const data = result.current.data;
+    expect(data?.type).toBe('aggregate');
+    if (data?.type === 'aggregate') {
+      const entry = data.series.get(1)!;
+      expect(entry.value.length).toBeGreaterThan(0);
+      expect(entry.min).toBeUndefined();
+      expect(entry.max).toBeUndefined();
+    }
+  });
+
+  it('assembleData: raw response with prev propagates prev to RawSeriesData', async () => {
+    const rawWithPrev: TileApiResponse = {
+      source: 'raw',
+      startTime: 0,
+      endTime: Number(ONE_HOUR),
+      series: [{ tagId: 1, ts: [100, 200, 300], value: [1.0, 2.0, null], prev: { ts: -60_000, value: 0.5 } }],
+    };
+    mockFetchTile.mockResolvedValue(rawWithPrev);
+
+    const { result } = renderHook(() =>
+      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
+    );
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    const data = result.current.data;
+    expect(data?.type).toBe('raw');
+    if (data?.type === 'raw') {
+      const entry = data.series.get(1)!;
+      expect(entry.prev).toBeDefined();
+      expect(entry.prev!.ts).toBe(-60_000n); // number ms → BigInt ms via BigInt()
+      expect(entry.prev!.value).toBe(0.5);
+    }
+  });
+
+  it('assembleData: raw response without prev (v0.8 cache) leaves prev undefined', async () => {
+    mockFetchTile.mockResolvedValue(makeRawResponse([1]));
+
+    const { result } = renderHook(() =>
+      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
+    );
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    const data = result.current.data;
+    expect(data?.type).toBe('raw');
+    if (data?.type === 'raw') {
+      const entry = data.series.get(1)!;
+      expect(entry.prev).toBeUndefined();
+    }
+  });
+
   // ── ensureCovered ─────────────────────────────────────────────────────────
 
   it('ensureCovered: range inside cached tiles fires no new fetches', async () => {
@@ -467,7 +559,7 @@ describe('useTrendData', () => {
       const data = result.current.data;
       expect(data?.type).toBe('aggregate');
       if (data?.type === 'aggregate') {
-        expect(data.series.get(1)!.length).toBe(2500);
+        expect(data.series.get(1)!.value.length).toBe(2500);
       }
     });
   });
@@ -518,7 +610,7 @@ describe('useTrendData', () => {
         const data = result.current.data;
         if (data?.type === 'aggregate') {
           // Bounded at 8 tiles × 500 buckets max.
-          expect(data.series.get(1)!.length).toBe(expected);
+          expect(data.series.get(1)!.value.length).toBe(expected);
         }
       });
     }
@@ -671,7 +763,12 @@ describe('useTrendData', () => {
         endTime: Number(p.endTime),
         bucketSMs: 360,
         n: 500,
-        series: p.tagIds.map(id => ({ tagId: id, value: new Array(500).fill(fill) })),
+        series: p.tagIds.map(id => ({
+        tagId: id,
+        value: new Array(500).fill(fill),
+        min:   new Array(500).fill(fill),
+        max:   new Array(500).fill(fill),
+      })),
       };
     });
 
@@ -684,7 +781,7 @@ describe('useTrendData', () => {
     const data = result.current.data;
     expect(data?.type).toBe('aggregate');
     if (data?.type === 'aggregate') {
-      const values = data.series.get(1)!;
+      const values = data.series.get(1)!.value;
       // Assembly now includes prefetch tiles: 4 tiles × 500 = 2000 buckets.
       // Order: prefetch-before (fill 0.0), visible[0] (fill 1.0), visible[1] (fill 2.0), prefetch-after (fill 0.0).
       expect(values).toHaveLength(2000);
@@ -743,7 +840,12 @@ describe('useTrendData', () => {
         endTime: Number(p.endTime),
         bucketSMs: 3_600,
         n: 500,
-        series: p.tagIds.map(id => ({ tagId: id, value: new Array(500).fill(1.0) })),
+        series: p.tagIds.map(id => ({
+          tagId: id,
+          value: new Array(500).fill(1.0),
+          min:   new Array(500).fill(0.9),
+          max:   new Array(500).fill(1.1),
+        })),
       };
     });
 
@@ -877,6 +979,110 @@ describe('useTrendData — zoom-level switch', () => {
 
     // ensureCovered must fire a fetch for the out-of-active-set tile.
     expect(mockFetchTile.mock.calls.length).toBeGreaterThan(callsAfterSwap);
+
+    dateSpy.mockRestore();
+  });
+});
+
+// ── lastFetchMs ───────────────────────────────────────────────────────────────
+
+describe('useTrendData — lastFetchMs', () => {
+  it('null before any batch completes', () => {
+    // Stall all fetches so no batch settles.
+    mockFetchTile.mockImplementation(() => new Promise(() => {}));
+
+    const { result } = renderHook(() =>
+      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
+    );
+
+    expect(result.current.lastFetchMs).toBeNull();
+  });
+
+  it('set to a non-negative integer after successful batch', async () => {
+    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
+
+    const { result } = renderHook(() =>
+      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
+    );
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    expect(result.current.lastFetchMs).not.toBeNull();
+    expect(typeof result.current.lastFetchMs).toBe('number');
+    expect(result.current.lastFetchMs).toBeGreaterThanOrEqual(0);
+    expect(Number.isInteger(result.current.lastFetchMs)).toBe(true);
+  });
+
+  it('set after a failed batch (includes failure elapsed)', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    // Both visible tiles fail; prefetch can succeed.
+    mockFetchTile
+      .mockRejectedValueOnce(new Error('fail')) // visible[0]
+      .mockRejectedValueOnce(new Error('fail')) // visible[1]
+      .mockResolvedValue(makeAggResponse([1]));  // prefetch
+
+    const { result } = renderHook(() =>
+      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
+    );
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    // performSwap fires after all visible tiles settle (both failed here).
+    expect(result.current.lastFetchMs).not.toBeNull();
+    expect(typeof result.current.lastFetchMs).toBe('number');
+    expect(result.current.lastFetchMs).toBeGreaterThanOrEqual(0);
+
+    errorSpy.mockRestore();
+  });
+
+  it('updates on each new viewport-change batch', async () => {
+    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
+
+    const { result, rerender } = renderHook(
+      (props: { viewport: Viewport }) => useTrendData({ ...props, tagIds: [1] }),
+      { initialProps: { viewport: defaultViewport } },
+    );
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    const firstFetchMs = result.current.lastFetchMs;
+    expect(firstFetchMs).not.toBeNull();
+
+    // Change viewport — triggers a new batch.
+    rerender({ viewport: { start: ONE_HOUR * 5n, end: ONE_HOUR * 6n } });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    // Value is still a valid elapsed (may or may not differ from first).
+    expect(result.current.lastFetchMs).not.toBeNull();
+    expect(Number.isInteger(result.current.lastFetchMs)).toBe(true);
+  });
+
+  it('ensureCovered DOES update lastFetchMs after each tile resolves', async () => {
+    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
+
+    const { result } = renderHook(() =>
+      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
+    );
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    const fetchMsAfterBatch = result.current.lastFetchMs;
+    expect(fetchMsAfterBatch).not.toBeNull();
+
+    // Mock Date.now far into the future so future-tile filter doesn't suppress the fetch.
+    const dateSpy = vi.spyOn(Date, 'now').mockReturnValue(Number(ONE_HOUR * 100n));
+
+    // ensureCovered fires a real fetch for a tile outside the active set.
+    const cachedEnd = ONE_HOUR + HALF_HOUR;
+    act(() => {
+      result.current.ensureCovered(cachedEnd, cachedEnd + HALF_HOUR);
+    });
+
+    // Wait for the ensureCovered fetch to resolve and activeTileCount to increase.
+    await waitFor(() => expect(result.current.activeTileCount).toBeGreaterThan(4));
+
+    // lastFetchMs must have been updated by the ensureCovered tile fetch.
+    expect(result.current.lastFetchMs).not.toBeNull();
+    expect(Number.isInteger(result.current.lastFetchMs)).toBe(true);
 
     dateSpy.mockRestore();
   });

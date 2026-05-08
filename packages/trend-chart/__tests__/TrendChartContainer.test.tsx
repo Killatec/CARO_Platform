@@ -11,11 +11,12 @@ import type { UseTrendDataResult } from '../src/useTrendData.js';
 
 // ── TrendChart mock ───────────────────────────────────────────────────────────
 // Renders the footer prop (so all footer-based assertions still work) and stub
-// remove buttons (so the onTagRemove test still works). Captures onXRangeChange
-// for the X-range-change integration test.
+// remove buttons (so the onTagRemove test still works). Captures onXRangeChange,
+// onXPan, and onDragZoom for dispatch-path integration tests.
 
 let capturedOnXRangeChange: ((min: bigint, max: bigint) => void) | undefined;
 let capturedOnXPan: ((min: bigint, max: bigint) => void) | undefined;
+let capturedOnDragZoom: ((startMs: bigint, endMs: bigint) => void) | undefined;
 
 vi.mock('../src/TrendChart.js', () => ({
   TrendChart: (props: {
@@ -24,10 +25,12 @@ vi.mock('../src/TrendChart.js', () => ({
     onTagRemove?: (id: number) => void;
     onXRangeChange?: (min: bigint, max: bigint) => void;
     onXPan?: (min: bigint, max: bigint) => void;
+    onDragZoom?: (startMs: bigint, endMs: bigint) => void;
     showLastWhenIdle?: boolean;
   }) => {
     capturedOnXRangeChange = props.onXRangeChange;
     capturedOnXPan = props.onXPan;
+    capturedOnDragZoom = props.onDragZoom;
     return (
       <div>
         {props.tagIds.map(id => (
@@ -97,6 +100,7 @@ describe('TrendChartContainer', () => {
     vi.useFakeTimers();
     capturedOnXRangeChange = undefined;
     capturedOnXPan = undefined;
+    capturedOnDragZoom = undefined;
     mockUseTrendData.mockReturnValue(makeResult([1, 2]));
     // EndPicker calls showPicker() on the hidden input; jsdom doesn't implement it.
     Object.defineProperty(HTMLInputElement.prototype, 'showPicker', {
@@ -254,17 +258,17 @@ describe('TrendChartContainer', () => {
     expect(cursorEl.compareDocumentPosition(firstPreset) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it('subsequent zoomApplied dispatch clears preset highlight', () => {
+  it('endPickerCommitted preserves preset highlight when sizeMs is unchanged', () => {
     renderContainer([1]);
     // Click a preset to set lastIntent = 'preset'.
     fireEvent.click(screen.getByText('4h'));
     expect(screen.getByText('4h').style.background).toBe('rgb(37, 99, 235)');
 
     // Commit a far-past End via the hidden picker input → endPickerCommitted sets
-    // lastIntent = 'endPicker', clearing the preset highlight.
+    // lastIntent = 'endPicker' while preserving sizeMs = 4h, so highlight stays.
     const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
     fireEvent.change(input, { target: { value: '2020-06-15T10:00:00' } });
-    expect(screen.getByText('4h').style.background).not.toBe('rgb(37, 99, 235)');
+    expect(screen.getByText('4h').style.background).toBe('rgb(37, 99, 235)');
   });
 
   it('onXRangeChange clears preset highlight and updates span without a CAG-level switch', () => {
@@ -318,6 +322,26 @@ describe('TrendChartContainer', () => {
     // Display button should show the committed end in dd-mmm-yyyy HH:mm:ss format.
     const displayBtn = screen.getByRole('button', { name: /pick end time/i });
     expect(displayBtn.textContent).toContain('15-Mar-2021');
+  });
+
+  it('drag-zoom exits tailing and clears preset highlight (lastIntent becomes zoom)', () => {
+    renderContainer([1]);
+    // Set a known preset so the highlight is lit.
+    fireEvent.click(screen.getByText('1h'));
+    expect(screen.getByText('1h').style.background).toBe('rgb(37, 99, 235)');
+
+    // Simulate drag-zoom: 30-min selection well in the past (different span from 1h preset).
+    const farPastEnd = 1_700_000_000_000n;
+    const farPastStart = farPastEnd - 1_800_000n;
+    act(() => {
+      // zoomApplied dispatches synchronously inside handleDragZoom — no RAF flush needed.
+      capturedOnDragZoom?.(farPastStart, farPastEnd);
+    });
+
+    // Mode flips to fixed → "Go Live" appears.
+    expect(screen.getByText('Go Live')).toBeTruthy();
+    // Preset highlight clears: lastIntent = 'zoom' and sizeMs no longer matches 1h.
+    expect(screen.getByText('1h').style.background).not.toBe('rgb(37, 99, 235)');
   });
 });
 

@@ -38,30 +38,45 @@ const START_MS = 1_700_000_000_000n; // arbitrary fixed epoch
 const END_MS = START_MS + BigInt(N) * BigInt(BUCKET_MS);
 
 function buildAggregateSeries(): AggregateSeriesData {
-  const tag1: (number | null)[] = [];
-  const tag2: (number | null)[] = [];
-  const tag3: (number | null)[] = [];
-  const tag4: (number | null)[] = [];
+  const tag1v: (number | null)[] = [];
+  const tag1min: (number | null)[] = [];
+  const tag1max: (number | null)[] = [];
+
+  const tag2v: (number | null)[] = [];
+  const tag2min: (number | null)[] = [];
+  const tag2max: (number | null)[] = [];
+
+  const tag3v: (number | null)[] = [];
+  const tag3min: (number | null)[] = [];
+  const tag3max: (number | null)[] = [];
+
+  const tag4v: (number | null)[] = [];
+  const tag4min: (number | null)[] = [];
+  const tag4max: (number | null)[] = [];
 
   for (let k = 0; k < N; k++) {
-    // Tag 1: sinusoidal temperature 20–80 °C, with a few nulls
+    // Tag 1: sinusoidal temperature 20–80 °C, with a few nulls; ±5 °C band
     if (k === 40 || k === 41 || k === 120) {
-      tag1.push(null);
+      tag1v.push(null); tag1min.push(null); tag1max.push(null);
     } else {
-      tag1.push(50 + 30 * Math.sin((k / N) * 2 * Math.PI));
+      const v = 50 + 30 * Math.sin((k / N) * 2 * Math.PI);
+      tag1v.push(v); tag1min.push(v - 5); tag1max.push(v + 5);
     }
 
-    // Tag 2: autoscale — random walk around 5 kW
-    tag2.push(k === 0 ? 5.0 : Math.max(0, (tag2[k - 1] ?? 5) + (Math.random() - 0.5) * 0.4));
+    // Tag 2: autoscale — random walk around 5 kW; ±0.3 kW band
+    const v2 = k === 0 ? 5.0 : Math.max(0, (tag2v[k - 1] ?? 5) + (Math.random() - 0.5) * 0.4);
+    tag2v.push(v2); tag2min.push(v2 - 0.3); tag2max.push(v2 + 0.3);
 
-    // Tag 3: boolean toggling every 30 buckets
-    tag3.push(Math.floor(k / 30) % 2 === 0 ? 1 : 0);
+    // Tag 3: boolean toggling every 30 buckets; no meaningful band (collapse to value)
+    const v3 = Math.floor(k / 30) % 2 === 0 ? 1 : 0;
+    tag3v.push(v3); tag3min.push(v3); tag3max.push(v3);
 
-    // Tag 4: sawtooth 0–50 bar, with a null gap
+    // Tag 4: sawtooth 0–50 bar, with a null gap; ±2 bar band
     if (k >= 100 && k <= 110) {
-      tag4.push(null);
+      tag4v.push(null); tag4min.push(null); tag4max.push(null);
     } else {
-      tag4.push(((k % 50) / 50) * 50);
+      const v4 = ((k % 50) / 50) * 50;
+      tag4v.push(v4); tag4min.push(v4 - 2); tag4max.push(v4 + 2);
     }
   }
 
@@ -73,10 +88,10 @@ function buildAggregateSeries(): AggregateSeriesData {
     n: N,
     bucketSMs: BUCKET_MS,
     series: new Map([
-      [1, tag1],
-      [2, tag2],
-      [3, tag3],
-      [4, tag4],
+      [1, { value: tag1v, min: tag1min, max: tag1max }],
+      [2, { value: tag2v, min: tag2min, max: tag2max }],
+      [3, { value: tag3v, min: tag3min, max: tag3max }],
+      [4, { value: tag4v, min: tag4min, max: tag4max }],
     ]),
   };
 }
@@ -161,6 +176,7 @@ export function TrendChartTestPage() {
           Tag 3 (Valve Open): boolean, toggles every 30 buckets, Y-scale [-0.5, 1.5]<br />
           Tag 4 (Pressure): sawtooth 0–50 bar, engineering range 0–50, null gap at buckets 100–110
         </div>
+
       </div>
     </MockHmiProvider>
   );
