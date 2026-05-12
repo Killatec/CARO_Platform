@@ -676,13 +676,15 @@ Two edge-case guards added during the bands implementation:
 
 ### 10.1 Model
 
-The client cache is keyed by `(tagId, startTime, endTime, bucketCount)` — keyed on the **request** values, not the served grid. The trend viewer client policy is to align `startTime` to integer multiples of `tileSpanMs` from epoch and to use `bucketCount=500` with 2 visible + 2 prefetch tiles per viewport (§10.4). This ensures that `n === bucketCount`, the response's `startTime`/`endTime` match the request's exactly (§6.2, aligned case), and two requests for the same logical tile from different clients produce identical wire values and share the cache key without a separate coordination layer.
+The client cache is keyed by `(tagId, startTime, endTime, bucketCount)` — keyed on the **request** values, not the served grid. The trend viewer client policy is to align `startTime` to integer multiples of `tileSpanMs` from epoch and to use `bucketCount=500` with `visibleTilesPerWindow=2` and `overfetchPerSide=1` (§10.2). This ensures that `n === bucketCount`, the response's `startTime`/`endTime` match the request's exactly (§6.2, aligned case), and two requests for the same logical tile from different clients produce identical wire values and share the cache key without a separate coordination layer.
+
+The overfetch geometry is **configurable asymmetrically**: `tilesForViewport` accepts optional `overfetchLeftCount` and `overfetchRightCount` parameters that override `overfetchPerSide` for a given call. The live-exit refetch (live→fixed transition) calls `tilesForViewport` with `overfetchRightCount: 0`, producing 2 visible + 1 left-prefetch tiles — no right-side prefetch, because the user has just panned backward in time and a future-side prefetch tile would be wasted.
 
 Cache entries form disjoint namespaces per `bucketCount` value per tag. Raw entries (`bucketS < 1.0`) never collide with aggregate entries, and entries at different `bucketS` values never collide with each other. Bucket-size transitions (zoom across a §6.3 dispatch threshold) discard nothing — the new level's ranges are fetched while the old level's ranges remain cached until evicted by LRU.
 
-### 10.2 Tile Geometry — 500 Buckets, 2 Visible + 2 Prefetch
+### 10.2 Tile Geometry
 
-**Trend viewer client policy: `bucketCount=500`, `visibleTilesPerWindow=2`, `overfetchPerSide=1`.**
+**Default trend viewer client policy: `bucketCount=500`, `visibleTilesPerWindow=2`, `overfetchPerSide=1`.** The live-exit refetch overrides the right-side count to 0, producing 2 visible + 1 left-prefetch tiles for that specific call.
 
 Each tile is one rendered unit: 500 buckets at the viewport's bucket width. The two visible tiles together cover the full viewport and are the only tiles that gate chart render. One prefetch tile on each side fires concurrently with the visible fetches but does NOT block render — it populates the LRU cache asynchronously so that the next pan in that direction hits the cache instantly.
 
@@ -725,6 +727,8 @@ prefetch[after]  = tile immediately after visible[visibleTilesPerWindow - 1]
 
 All timestamp arithmetic is bigint to avoid float drift. Visible tiles are fired via `Promise.all` and awaited before chart render. Prefetch tiles fire concurrently but their resolution does NOT gate render.
 
+> **Scope: history mode only.** The tile-alignment rule above applies exclusively to history-mode fetches routed through `tilesForViewport`. The **live-spine path** in `useTrendData` constructs its tile directly from `viewport.start`/`viewport.end` with `bucketCount = visibleTilesPerWindow × bucketCount` (1000 by default), bypassing `tilesForViewport` entirely. Tile-grid alignment is a cache-stability concern — identical logical windows must produce identical wire requests so the LRU key matches across clients. Live mode writes to no cache; therefore tile-grid alignment is neither necessary nor applied.
+
 > **Implementation note (v1.0):** Tile boundaries are aligned to `TS_BUCKET_ORIGIN_MS = 946_857_600_000n` (2000-01-03T00:00:00Z UTC) — TimescaleDB's actual `time_bucket()` default origin for fixed-width intervals. Aligning to Unix epoch (0) produces boundaries that do not match TimescaleDB's natural bucket grid, which caused 502 errors on 7d/14d windows when the derived `bucketS` crossed a CAG dispatch threshold. The exported constant was renamed from `PG_EPOCH_MS` to `TS_BUCKET_ORIGIN_MS` to reflect this. `alignedTilesInRange` and `tilesForViewport` in `level.ts` both use this origin.
 
 Tiles already in the cache are skipped. This ensures:
@@ -752,27 +756,39 @@ The N ≤ 8 cap derives from the heap-scatter cliff (§6.6) and is enforced serv
 
 > **Implementation note (v1.0):** `ensureCovered` (the function called by `TrendChart`'s wheel/pan handlers to request additional tiles for the new viewport) anchors candidate tile computation to the *active-set edges* (`cachedStart`/`cachedEnd`) and walks outward from them, rather than re-deriving from the `TS_BUCKET_ORIGIN_MS` grid. This avoids a dependency on the origin constant inside `useTrendData.ts` and ensures candidates are contiguous with what's already cached regardless of how `viewport` was derived. `TS_BUCKET_ORIGIN_MS`, `floorDiv`, and `ceilDiv` are not imported by `useTrendData.ts`.
 
+> **Implementation note (pan-threshold fix):** The `checkAndExtendXCoverage` function in `axisInteractions.ts` — called on every X-scale move to decide whether to fire `ensureCovered` — reads the cached extent via `getActiveRange()` (a stable callback on `UseTrendDataResult` that reads `activeTilesRef.current`) rather than from `u.data[0]`. In raw mode, `u.data[0]` contains actual COV sample timestamps, which can end many seconds before the tile's true right boundary when the device has data gaps. Using sample timestamps as the cached-extent proxy caused spurious right-extension requests (always filtered as future tiles) and suppressed left-extension triggers until the user panned much further than expected. `getActiveRange()` returns `activeTilesRef.current[last].endTime`, which is always the true tile boundary. It returns `null` in live mode (activeTilesRef stays empty on the live path), and `checkAndExtendXCoverage` early-returns in that case — live mode drives rendering from the WS buffer, not tile cache.
+
+> **Asymmetric overfetch.** `tilesForViewport` accepts optional `overfetchLeftCount` and `overfetchRightCount` parameters. When omitted they default to `overfetchPerSide` (default 1). The live-exit refetch passes `overfetchRightCount: 0` — 2 visible tiles + 1 left-prefetch, no right — because the user is panning backward in time and a right-side prefetch tile would cover a window range the user just left.
+
 ### 10.6 Live Tail Architecture
 
-**`useLiveSubscription` hook.** The live tail is owned by `useLiveSubscription`, a dedicated hook that manages the `SUBSCRIBE_TREND`/`UNSUBSCRIBE_TREND` lifecycle and the client-side accumulator. It is active only while `isTailing === true`. On tailing entry it issues `SUBSCRIBE_TREND` for all current `tagIds`; on tailing exit (via `commitAndDrain`) it issues `UNSUBSCRIBE_TREND`, flushes the in-progress bucket/buffer state to a `{ start, end }` range, and returns that range to the caller so the container can evict it from the LRU cache.
+**Cache-bypass for live mode.** Live mode does not go through the history fetch path. `useTrendData` has a dedicated **live-spine branch** that fires when `isTailing === true` and `dataViewport` changes. It fetches a single spine tile spanning the full viewport with `bucketCount = visibleTilesPerWindow × bucketCount` (1000 by default). The result is written directly into `hookResult.data` via `assembleLiveSpine` — **the LRU cache is neither read nor written**. `activeTilesRef.current` stays `[]` throughout live mode.
+
+**Spine tile sizing.** One tile: `startTime = viewport.start`, `endTime = viewport.end`, `bucketCount = visibleTilesPerWindow × bucketCount`. No tile-grid alignment (see §10.4 — alignment is a cache-stability concern; live mode doesn't cache). The spine fetch uses `bucketCount=1000` by default (2 visible tiles × 500 buckets), matching the total resolution the historical path would deliver across its two visible tiles.
+
+**Single-fetch guarantee.** `spineLoadedRef` and `spineFetchInFlightRef` together gate re-entry into the live branch: `spineLoadedRef` prevents refetching when the spine is already loaded for the current span, and `spineFetchInFlightRef` prevents 4 Hz `tick`-driven effect re-fires from launching duplicate spine requests. `isTailing` is read via `isTailingRef.current` inside the effect body rather than declared as an effect dependency — the effect fires only when `dataViewport` actually changes, not on every `isTailing` flip. This produces exactly 1 spine fetch on fixed→live transition, even under React StrictMode and the ~4 Hz `nowMs` cadence from the trend channel.
+
+**`useLiveSubscription` hook.** The live tail is owned by `useLiveSubscription`, a dedicated hook that manages the `SUBSCRIBE_TREND`/`UNSUBSCRIBE_TREND` lifecycle and the client-side accumulator. It is active only while `isTailing === true`. On tailing entry it issues `SUBSCRIBE_TREND` for all current `tagIds`; on tailing exit (via `commitAndDrain`) it issues `UNSUBSCRIBE_TREND`, flushes the in-progress bucket/buffer state to a `{ start, end }` range, and returns that range to the caller.
 
 **Aggregate tail (bucketS ≥ 1.0).** One FIFO per tag (capacity `TREND_FIFO_CAPACITY = 100` entries — at 4 Hz flush cadence this holds tens of seconds of history, sufficient to bridge any fetch-resolve gap). Each sample from a `TREND_DELTA` frame is appended to the tag's FIFO. A bucket accumulator closes a bucket whenever `moduleTs` crosses a `bucketSMs` boundary; it emits `{ ts, value, min, max, null_count }` matching the server's three-case rule (§6.5). `seedFromCachedTile` initializes the FIFO's `lastKnownValue` from the last entry in the cached tile so that the first live bucket's LOCF seeds correctly. The FIFO is trimmed by `trimThreshold` (= `responseTailTs - 1000`) when it advances — entries older than the threshold are pruned. **`rawBuffersRef` is never trimmed on `trimThreshold` advance** (see below).
 
 **Raw tail (bucketS < 1.0).** One raw buffer per tag (a plain `{ moduleTs, value }[]`). Samples are pushed directly; no bucketing occurs. Raw buffers are bounded to `2 × viewportSpanMs` in wall-clock coverage: on every WS push, entries older than `latestTs - 2 × viewportSpanMs` are dropped. The `rawBuffersRef` is **not** trimmed by `trimThreshold`. Trimming it would advance `minLiveTs` in `mergeRaw`, allowing LOCF gapfill from newly-fetched after-prefetch tiles to leak through the cached-drop filter as a flatline gap at each tile-boundary crossing. Raw buffers are cleared only on tailing exit via `commitAndDrain`.
 
-**`mergeTrendData(cachedData, liveTail, isTailing)`.** Merges the cached tile set with the live accumulator's tail. In tailing mode:
-- Aggregate: cached series arrays are clipped to `liveEndIndex` (the last cached bucket before live data begins) so LOCF gapfill from after-prefetch tiles cannot overwrite real live data.
+**`mergeTrendData(cachedData, liveTail, isTailing)`.** Merges the spine tile (in `cachedData`) with the live accumulator's tail. In tailing mode:
+- Aggregate: cached series arrays are clipped to `liveEndIndex` (the last cached bucket before live data begins) so no LOCF gapfill can overwrite real live data.
 - Raw: cached entries with `ts >= minLiveTs` (the first raw buffer entry's `moduleTs`) are dropped; live data wins for the overlap region.
 
-In fixed mode `isTailing === false`: `mergeTrendData` returns the cached data unchanged.
-
-**`isTailing` tile-fetch suppression in `useTrendData`.** While `isTailing === true`, the viewport span has not changed, and the active tile set is non-empty, `useTrendData` skips tile fetches — the live buffer drives rendering. Tile fetches still fire on: initial tailing entry (active set empty), preset switch (span change), or re-entry after eviction. This eliminates the class of merge bugs caused by tiles fetched during tailing (no new cached tiles means no LOCF gapfill can contaminate the live view during a session).
-
-**`tilesForViewport` alignment.** Right-anchor uses the tile grid (`tileSpanMs`) rather than the bucket grid (`bucketSMs`). This prevents the rightmost tile from refetching on every bucket boundary as viewport.end advances during tailing. Prefetch filter allows one tile of look-ahead (`startTime < nowMs + tileSpanMs`) to avoid constant fetch→evict cycles on the after-prefetch tile.
+In fixed mode `isTailing === false`: `mergeTrendData` returns the cached data unchanged. The tailing-mode clip/drop branches are kept as defensive code; in the new architecture the spine has no data past its `endTime` so they are effectively no-ops, but they protect against future regressions.
 
 **`tick` dispatch.** `onDataReceived(maxModuleTs)` in `useLiveSubscription` fires unconditionally on every `TREND_DELTA` frame regardless of `isTailing`. `TrendChartContainer.handleDataReceived` guards on `modeStateRef.current.mode !== 'tailing'` before dispatching `tick { nowMs: maxModuleTs }` — keeps the viewport advancing in tailing without affecting fixed mode.
 
-**`dispatchModeAction` wrapper.** `TrendChartContainer` wraps all mode transitions that can exit tailing (zoom, pan, endPicker) in `dispatchModeAction`: it pre-computes the next state, and if it detects a tailing→fixed transition, calls `commitAndDrain()` then `evictRange()` before dispatching. This ensures atomic cleanup — no live tail data leaks into the fixed view.
+**`dispatchModeAction` wrapper.** `TrendChartContainer` wraps all mode transitions that can exit tailing (zoom, pan, endPicker) in `dispatchModeAction`. It pre-computes the next state, and if it detects a tailing→fixed transition, calls three things synchronously before dispatching:
+
+1. `liveSubRef.current.commitAndDrain()` — issues `UNSUBSCRIBE_TREND`, clears WS accumulator state, and returns the live tail's covered range (informational; no longer consumed for cache eviction).
+2. `syncDataViewport(modeToViewport(next))` — forces `dataViewport` to the post-transition modeViewport, bypassing `useZoomState`'s reset-effect `lastIntent` skip. Necessary because drag-zoom-out-of-live and end-picker commits have bounds genuinely different from the live-mode viewport; without this the main fetch effect would not fire.
+3. `trendDataRef.current.refetchHistory()` — bumps `historyRefetchVersion` and sets `liveExitRefetchPendingRef`. The main effect's history branch then runs with `overfetchRightCount: 0`, producing 2 visible + 1 left-prefetch = 3 tiles. Cache is **not** evicted on this transition — the live path never wrote to the LRU cache, so there is nothing to evict. Any history tiles from a prior fixed-mode session that survived LRU may be reused via cache hits on the new fetch; stale ones are displaced naturally by LRU as new tiles arrive.
+
+Fixed → tailing: `dispatchModeAction` dispatches the action directly with no pre-transition cleanup. The live-spine fetch overwrites `hookResult.data` on the first effective `dataViewport` change after the transition. Existing history tiles in the LRU cache survive the transition and remain available for reuse if the user returns to fixed mode.
 
 ### 10.7 Per-Tag Subscription Lifecycle
 
@@ -782,7 +798,7 @@ In fixed mode `isTailing === false`: `mergeTrendData` returns the cached data un
 
 **Remove tag while tailing.** `useLiveSubscription` sends `UNSUBSCRIBE_TREND` and prunes the FIFO/rawBuffer for the removed tag. Cached tiles age out via LRU.
 
-**Tailing → fixed.** `commitAndDrain()` is called synchronously via `dispatchModeAction` before the mode transition dispatches. It issues `UNSUBSCRIBE_TREND` for all current tags, returns a `{ start, end }` range covering the live tail's extent, and clears all internal buffers. `evictRange(start, end)` then removes those tiles from the LRU cache so the fixed view fetches clean historical data for the same window.
+**Tailing → fixed.** `commitAndDrain()` is called synchronously via `dispatchModeAction` before the mode transition dispatches. It issues `UNSUBSCRIBE_TREND` for all current tags, returns a `{ start, end }` range covering the live tail's extent, and clears all internal buffers. The returned range is currently informational — `evictRange` is **not** called. The live path never wrote to the LRU cache, so there is nothing to evict. `syncDataViewport` and `refetchHistory` drive the subsequent fixed-mode fetch directly (see §10.6).
 
 ---
 
