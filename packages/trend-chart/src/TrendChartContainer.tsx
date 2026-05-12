@@ -167,8 +167,18 @@ export function TrendChartContainer({
   // ── dispatchModeAction: live drain before dispatch ────────────────────────
   // Used for all actions that can change the tailing/fixed mode boundary.
   const dispatchModeAction = useCallback((action: TrendModeAction) => {
+    console.log('[DIAG-live] dispatchModeAction',
+      'action.type=', action.type,
+      'curMode=', modeStateRef.current.mode,
+      'nowMs=', BigInt(Date.now()).toString());
     const cur  = modeStateRef.current;
     const next = trendModeReducer(cur, action);
+    console.log('[DIAG-live] mode transition',
+      'cur.mode=', cur.mode,
+      'next.mode=', next.mode,
+      'next.from=', next.mode === 'fixed' ? next.from.toString() : 'n/a',
+      'next.to=', next.mode === 'fixed' ? next.to.toString() : 'n/a',
+      'next.sizeMs=', next.sizeMs.toString());
 
     // Tailing → fixed: drain the live buffer so accumulated FIFO/accumulator
     // coverage is committed. No cache eviction needed — live mode never writes

@@ -477,6 +477,11 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     //   • levelTransitionPendingRef is never set in this branch; it lives
     //     exclusively in the history path below.
     if (isTailing) {
+      console.log('[DIAG-live] effect fired',
+        'isTailing=', isTailing,
+        'viewport.start=', currentViewport.start.toString(),
+        'viewport.end=', currentViewport.end.toString(),
+        'tagIdsKey=', tagIdsKey);
       if (!spanChanged && spineLoadedRef.current) return;
       spineLoadedRef.current = false;
       // Clear any history-mode residue so ensureCovered stays a no-op.
@@ -499,12 +504,27 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
       const batchT0 = performance.now();
       setHookResult(prev => ({ ...prev, isLoading: true }));
 
+      console.log('[DIAG-live] spine fetch start',
+        'viewport.start=', currentViewport.start.toString(),
+        'viewport.end=', currentViewport.end.toString(),
+        'span(ms)=', (currentViewport.end - currentViewport.start).toString(),
+        'spineLoadedRef=', spineLoadedRef.current,
+        'spanChanged=', spanChanged,
+        'prevSpan=', prevSpanRef.current?.toString() ?? 'null');
+
       Promise.all(
         chunkArray(tagIds, 8).map(group =>
           fetchTile({ tagIds: group, startTime: spineTile.startTime, endTime: spineTile.endTime, bucketCount: spineTile.bucketCount }),
         ),
       ).then(responses => {
         if (generationRef.current !== generation) return;
+        console.log('[DIAG-live] spine fetch settled',
+          'generation=', generation,
+          'currentGen=', generationRef.current,
+          'response[0].startTime=', responses[0]?.startTime,
+          'response[0].endTime=', responses[0]?.endTime,
+          'response[0].source=', responses[0]?.source,
+          'response[0].n=', (responses[0] as { n?: number } | undefined)?.n);
         const data = assembleLiveSpine(responses, spineTile, tagIds);
         setHookResult({ data, isLoading: false, error: null });
         setSwapCounter(c => c + 1);
