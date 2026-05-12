@@ -1,6 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { CSSProperties } from 'react';
 
+// Keep in sync with TREND_VIEWER_DEFAULTS.bucketCount in packages/trend-chart/src/level.ts
+const DEFAULT_BUCKET_COUNT = 500;
+
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 interface TrendExtent {
@@ -271,7 +274,7 @@ function isLoaded<T>(s: LoadState<T>): s is T {
 export function TrendsPerfTestPage() {
   const [extent,       setExtent]       = useState<LoadState<TrendExtent>>('loading');
   const [tagList,      setTagList]      = useState<LoadState<TrendableTag[]>>('loading');
-  const [inputs,       setInputs]       = useState<Inputs>({ pointsPerTile: 250, pointsPerWindow: 1000, tagCount: 8 });
+  const [inputs,       setInputs]       = useState<Inputs>({ pointsPerTile: DEFAULT_BUCKET_COUNT, pointsPerWindow: DEFAULT_BUCKET_COUNT * 4, tagCount: 8 });
   const [results,      setResults]      = useState<Map<string, RowResult>>(initResultMap);
   const [sweepRunning, setSweepRunning] = useState(false);
   const [runStamp,     setRunStamp]     = useState<string | null>(null);
@@ -424,12 +427,12 @@ export function TrendsPerfTestPage() {
               type="number"
               min={1}
               value={inputs.pointsPerTile}
-              onChange={e => setInputs(p => ({ ...p, pointsPerTile: Math.max(1, parseInt(e.target.value, 10) || 250) }))}
+              onChange={e => setInputs(p => ({ ...p, pointsPerTile: Math.max(1, parseInt(e.target.value, 10) || DEFAULT_BUCKET_COUNT) }))}
             />
-            {inputs.pointsPerTile !== 250 && (
-              <span style={{ fontSize: 11, color: '#d97706' }}>client policy is 250</span>
+            {inputs.pointsPerTile !== DEFAULT_BUCKET_COUNT && (
+              <span style={{ fontSize: 11, color: '#d97706' }}>differs from client default ({DEFAULT_BUCKET_COUNT})</span>
             )}
-            <span style={{ fontSize: 11, color: '#6b7280' }}>(server contract: 250)</span>
+            <span style={{ fontSize: 11, color: '#6b7280' }}>(range: 1–2500)</span>
           </label>
 
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
