@@ -211,7 +211,7 @@ Current `max = 10`. One operator opening a 16-tag chart consumes 8 connections. 
 
 ## 7. Performance Validation
 
-All values from `historian_perf_battery_2026-04-24.md` and the three subsequent gate reports.
+All values from `perf-history/historian_perf_battery_2026-04-24.md` and the three subsequent gate reports.
 
 ### 7.1 The cliff
 
@@ -323,7 +323,7 @@ Each gate is measurement-driven. Resist building all four CAGs upfront.
 | Document | Purpose |
 |---|---|
 | `Trend_CAGs_Structure.md` | Design narrative, full window-to-CAG mapping table |
-| `historian_perf_battery_2026-04-24.md` | Original perf measurements (raw + gapfill grids, tile-split) |
+| `perf-history/historian_perf_battery_2026-04-24.md` | Original perf measurements (raw + gapfill grids, tile-split) |
 | `perf_gates_2026-04-27.md` | Gate run 1 (N=20, FAIL on Gate 2) |
 | `perf_gates_2026-04-27_v2.md` | Gate run 2 (N=8, prepared statement diagnostic) |
 | `perf_gates_prepared_2026-04-XX.md` | Prepared-statement experiment (disproved) |

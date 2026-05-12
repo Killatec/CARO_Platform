@@ -1,7 +1,8 @@
 # CARO_Platform — Trending Reference
 
 **From tag change to hypertable row — the HMI historian end-to-end.**
-**Version:** 1.0 — April 2026
+**Version:** 1.1 — May 2026
+*v1.1: T004 chunk policy reflected (1h chunks, compress_after=10min); §15.1 removed (read endpoint shipped); cross-ref to trend viewer spec/handoff for the read path.*
 *Internal technical reference.*
 
 ---
@@ -25,7 +26,7 @@ It complements two sibling docs:
 | 4 | Flush tick | `db-pipeline.ts` | Every `TIMESCALE_DB_TICK_MS` (default 500 ms): peek up to `TIMESCALE_DB_MAX_ENTRIES_PER_FLUSH`, call `writer.write()`, consume on success. |
 | 5 | Coerce | `timescale-writer.ts` | `bool → 1.0/0.0`, `number → number` (non-finite → null), `string → null + one-time warn`. |
 | 6 | Insert | `@caro/db.writeTagSamples` | Bulk insert via `unnest($1,$2,$3)` — one round-trip regardless of row count. |
-| 7 | Hypertable | `tag_samples` | Rows land in the current 12 h chunk; compression at 12 h; retention at 14 d. |
+| 7 | Hypertable | `tag_samples` | Rows land in the current 1 h chunk; compression at 10 min age; retention at 14 d. |
 | 8 | Observability | `hmi-tag-source.ts` | Seven `Trend_Info` tags updated every HMI publish tick and rendered by the `TrendStatusBox` widget. |
 
 ### 1.2 Design Principles
@@ -50,7 +51,7 @@ The set is computed once at boot by `loadTagMap()` and exposed as `trendableTagI
 
 In scope: write path, storage layout, observability, configuration.
 
-**Out of scope (for now):** a query/read endpoint. The write side is complete; the Trends READ endpoint is still a platform TODO. Consumers wanting historical data today must query `tag_samples` directly.
+This document covers the write path. The READ side (REST endpoint, continuous aggregates, tile-based queries) is documented in `Docs/hmi_trend_viewer_spec.md` and `Docs/hmi_trend_viewer_handoff.md`.
 
 ---
 
@@ -288,12 +289,12 @@ No per-row quality enum, no per-row source ID, no soft-delete column. Every piec
 SELECT create_hypertable(
   'tag_samples',
   'ts',
-  chunk_time_interval => INTERVAL '12 hours',
+  chunk_time_interval => INTERVAL '1 hour',
   if_not_exists       => TRUE
 );
 ```
 
-12-hour chunks are the unit of compression and retention. With a 10 Hz worst-case COV rate across 360 trendable tags the chunk hits ~1 GB uncompressed before the compression policy kicks in at the 12 h boundary.
+1-hour chunks are the unit of compression and retention. With a 10 Hz worst-case COV rate across 360 trendable tags a chunk reaches ~1.3 GB uncompressed before the compression policy fires at 10-minute age. Originally 12-hour chunks; tightened to 1-hour in T004 after perf testing identified an I/O amplification cliff on uncompressed chunks above ~1 GB.
 
 ### 6.3 Indexes
 
@@ -314,12 +315,14 @@ ALTER TABLE tag_samples
     timescaledb.compress_orderby   = 'ts DESC'
   );
 
-SELECT add_compression_policy('tag_samples', INTERVAL '12 hours', if_not_exists => TRUE);
+-- T004 overrides the initial 12h policy:
+SELECT add_compression_policy('tag_samples', INTERVAL '10 minutes', if_not_exists => TRUE,
+  schedule_interval => INTERVAL '5 minutes');
 ```
 
 - `segmentby = 'tag_id'` ensures per-tag scans on compressed chunks stay efficient — each tag becomes one compressed row group.
 - `orderby = 'ts DESC'` means the most recent samples within a segment are first — matches the dominant read direction.
-- Policy fires at 12 h age. Compression ratio is ~10× in practice. Range queries on compressed data stay fast; random point lookups by timestamp incur a small decompression overhead.
+- Policy fires at 10 min age (T004) and runs every 5 min schedule interval. Compression ratio is ~15× in practice (1278 MB uncompressed per 1 h chunk → ~82 MB compressed). The tight age threshold caps uncompressed footprint at ~1 h 15 min of data, well within typical PostgreSQL cache. Range queries on compressed data stay fast; random point lookups by timestamp incur a small decompression overhead.
 
 ### 6.5 Retention
 
@@ -664,12 +667,12 @@ Worst case: 360 trendable tags × 10 Hz COV × 14 days.
 
 - **Per-row footprint (uncompressed):** ~32 B (16 B for the row header + 8 B ts + 4 B tag_id + 8 B value, minus nullable optimization).
 - **Uncompressed daily:** 360 × 10 × 86 400 × 32 B ≈ **9.6 GB/day**. (Worst case — assumes every tag changes every tick, which is implausible in practice.)
-- **With compression (~10× ratio, applied at 12 h age):** ~1 GB/day after the first 12 h.
-- **14-day total:** one fresh 12 h chunk (uncompressed, ~5 GB) + 13 days of compressed data (~13 GB) ≈ **18 GB**.
+- **With compression (~15× ratio, applied at 10 min age):** roughly 82 MB/hour ≈ 2 GB/day ≈ 28 GB over 14-day retention.
+- **14-day worst-case total:** ~28 GB compressed + ~1.5 GB uncompressed rolling window ≈ **29.5 GB**.
 
-Realistic case (10% active COV): ~2 GB total, with headroom to 14 days.
+Realistic case (10% active COV): ~3 GB total.
 
-Even at pessimistic 100% COV, the 57.5 GB budget is not the binding constraint — the 14-day retention policy is. Relaxing retention (e.g. to 30 days) pushes the worst case to ~39 GB, still within budget. Relaxing to 90 days would require raising the budget or reducing the sample rate.
+Even at pessimistic 100% COV, the 57.5 GB budget is comfortably oversized for the current configuration. Relaxing retention to 30 days would push the worst case to ~60 GB, which approaches the budget ceiling — plan accordingly before extending retention.
 
 ---
 
@@ -719,27 +722,23 @@ Even at pessimistic 100% COV, the 57.5 GB budget is not the binding constraint �
 
 ## 15. Known Limitations & Future Work
 
-### 15.1 No Trends READ endpoint
-
-The write side is complete; the read side is not. Consumers wanting historical data today must query `tag_samples` directly via SQL. A proper endpoint (`GET /api/v1/trends?tag=...&from=...&to=...`) with join-to-registry, gap-aware interpolation hints, and compression-aware pagination is a platform TODO.
-
-### 15.2 NullDbWriter is terminal
+### 15.1 NullDbWriter is terminal
 
 If Timescale is unreachable at HMI boot, the pipeline runs with `NullDbWriter` until HMI is restarted. A periodic reconnect path (retry `pingTimescale()` every N minutes, swap in `TimescaleDbWriter` on success without restart) is a TODO.
 
-### 15.3 No firmware-level deadband
+### 15.2 No firmware-level deadband
 
 COV is computed against exact equality in `LkvCache.set()`. A value oscillating between 9.999 and 10.001 produces full-rate traffic. MQTT device firmware should eventually apply per-tag deadbands to filter sensor noise at the source; until then, the historian stores the noise.
 
-### 15.4 No per-tag sample-rate classes
+### 15.3 No per-tag sample-rate classes
 
 All trendable tags share one hypertable, one retention policy, one compression cadence. Slow-changing setpoints and fast-changing flow rates are treated identically. A future refinement could route different classes to different hypertables or apply different policies per `tag_id` range.
 
-### 15.5 No runtime reconfig
+### 15.4 No runtime reconfig
 
 Changing `TIMESCALE_DB_TICK_MS` or any tuning var requires HMI restart. Most operators prefer this — the HMI is not a high-uptime service and restarts are cheap — but a SIGHUP path could be added if needed.
 
-### 15.6 `queueLength` getter is test-only
+### 15.5 `queueLength` getter is test-only
 
 The public `DbPipeline` surface exposes `queueLength` (live) in addition to `queueDepth` (tick-held). Only tests read `queueLength` today. A future cleanup could make it `internal` or remove it and expose a `flush()` method for test convenience instead.
 
@@ -749,7 +748,7 @@ The public `DbPipeline` surface exposes `queueLength` (live) in addition to `que
 
 **COV (Change-of-Value).** The policy of only recording a sample when the value actually differs from the previous one. Implemented in `LkvCache.set()` via exact-equality comparison. Saves orders of magnitude of storage versus polling.
 
-**Chunk.** A time-bounded partition of a TimescaleDB hypertable. `tag_samples` uses 12 h chunks. Compression and retention operate at chunk granularity.
+**Chunk.** A time-bounded partition of a TimescaleDB hypertable. `tag_samples` uses 1 h chunks (T004). Compression and retention operate at chunk granularity.
 
 **Flush tick.** The `DbPipeline`'s async timer callback. Runs every `TIMESCALE_DB_TICK_MS`, attempts a batch write, updates tick-held metrics.
 
