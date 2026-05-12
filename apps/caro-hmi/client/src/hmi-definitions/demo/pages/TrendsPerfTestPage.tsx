@@ -3,6 +3,9 @@ import type { CSSProperties } from 'react';
 
 // Keep in sync with TREND_VIEWER_DEFAULTS.bucketCount in packages/trend-chart/src/level.ts
 const DEFAULT_BUCKET_COUNT = 500;
+// From TREND_VIEWER_DEFAULTS.visibleTilesPerWindow in packages/trend-chart/src/level.ts.
+// Inlined here because importing transitively pulls in uPlot and breaks the test shim's matchMedia mock.
+const DEFAULT_VISIBLE_TILES = 2;
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -32,7 +35,7 @@ interface RowResult {
 
 interface Inputs {
   pointsPerTile: number;
-  pointsPerWindow: number;
+  nTiles: number;
   tagCount: number;
 }
 
@@ -274,7 +277,7 @@ function isLoaded<T>(s: LoadState<T>): s is T {
 export function TrendsPerfTestPage() {
   const [extent,       setExtent]       = useState<LoadState<TrendExtent>>('loading');
   const [tagList,      setTagList]      = useState<LoadState<TrendableTag[]>>('loading');
-  const [inputs,       setInputs]       = useState<Inputs>({ pointsPerTile: DEFAULT_BUCKET_COUNT, pointsPerWindow: DEFAULT_BUCKET_COUNT * 4, tagCount: 8 });
+  const [inputs,       setInputs]       = useState<Inputs>({ pointsPerTile: DEFAULT_BUCKET_COUNT, nTiles: DEFAULT_VISIBLE_TILES, tagCount: 8 });
   const [results,      setResults]      = useState<Map<string, RowResult>>(initResultMap);
   const [sweepRunning, setSweepRunning] = useState(false);
   const [runStamp,     setRunStamp]     = useState<string | null>(null);
@@ -299,7 +302,7 @@ export function TrendsPerfTestPage() {
   const hasData      = extentReady && (extent as TrendExtent).oldestTs !== null;
   const canRun       = !sweepRunning && extentReady && tagsReady && tagCount > 0;
 
-  const nTiles       = Math.ceil(inputs.pointsPerWindow / inputs.pointsPerTile);
+  const nTiles       = inputs.nTiles;
   const nTagGroups   = Math.ceil(Math.min(inputs.tagCount, tagCount) / 8);
   const totalReqsCell = nTiles * nTagGroups;
 
@@ -436,14 +439,15 @@ export function TrendsPerfTestPage() {
           </label>
 
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <span style={{ fontWeight: 600 }}>pointsPerWindow</span>
+            <span style={{ fontWeight: 600 }}>nTiles</span>
             <input
               style={INPUT_STYLE}
               type="number"
-              min={inputs.pointsPerTile}
-              value={inputs.pointsPerWindow}
-              onChange={e => setInputs(p => ({ ...p, pointsPerWindow: Math.max(p.pointsPerTile, parseInt(e.target.value, 10) || 1000) }))}
+              min={1}
+              value={inputs.nTiles}
+              onChange={e => setInputs(p => ({ ...p, nTiles: Math.max(1, parseInt(e.target.value, 10) || DEFAULT_VISIBLE_TILES) }))}
             />
+            <span style={{ fontSize: 11, color: '#6b7280' }}>(visible tiles per window; default {DEFAULT_VISIBLE_TILES})</span>
           </label>
 
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -461,7 +465,6 @@ export function TrendsPerfTestPage() {
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <span style={{ fontWeight: 600 }}>Computed</span>
-            <span>n_tiles = {nTiles}</span>
             <span>n_tag_groups = {nTagGroups}</span>
             <span>reqs/cell = {totalReqsCell}</span>
           </div>
@@ -517,7 +520,7 @@ export function TrendsPerfTestPage() {
         <tbody>
           {ROWS.map(row => {
             const result     = results.get(row.label) ?? { live: { state: 'idle' as const }, historical: { state: 'idle' as const } };
-            const windowSec  = row.bucketS * inputs.pointsPerWindow;
+            const windowSec  = row.bucketS * inputs.pointsPerTile * inputs.nTiles;
             return (
               <tr key={row.label}>
                 <td style={{ ...TD, fontWeight: 500 }}>{row.label}</td>

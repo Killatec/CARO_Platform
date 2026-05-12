@@ -10,7 +10,7 @@ import {
 
 describe('formatDuration', () => {
   it.each([
-    // [input seconds, expected string]  — derived from ROWS with pointsPerWindow=1000
+    // [input seconds, expected string]  — derived from ROWS with pointsPerTile=500 × nTiles=2 (total 1000 points/window)
     // bucketS=0.5,   window=0.5*1000=500 s
     [500,       '500 s'],
     // bucketS=8,     window=8*1000=8000 s → 2.22 h
