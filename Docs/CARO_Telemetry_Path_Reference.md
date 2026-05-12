@@ -1,7 +1,8 @@
 # CARO_Platform — Telemetry Path Reference
 
 **From telemetry producer to screen pixel.**
-**Version:** 2.0 — April 2026
+**Version:** 2.1 — May 2026
+*v2.1: trend WS channel (Step 11) coverage added; cross-refs to trend viewer spec/handoff for the read side.*
 **Status:** Replaces `CARO_Telemetry_Path_Reference.docx` (v1.0, now obsolete).
 *Internal technical reference.*
 
@@ -27,6 +28,8 @@ The full path has nine stages. Stages 1a and 1b are alternative producers; both 
 | 7   | Client context              | `HmiContextProvider.tsx`      | Browser WS ingests `SNAPSHOT`/`DELTA`, updates `valuesRef`, fans out to subscriber callbacks |
 | 8   | Widget render               | `@caro/widgets`               | `useLiveValue` returns the new value; widget re-renders; `null` = bad quality renders `---` |
 
+**Parallel trend channel (Step 11).** The live-value path above is the only path for widget rendering. Trend chart live tail follows a parallel branch that diverges after Stage 3: `TelemetryIntake`'s `trendDeltaListener` fires on every COV write → `WsServer` appends the event to each subscribed client's per-tag `trendOutbox` → a separate `trendFlush` tick at `TREND_FLUSH_HZ` (default 4 Hz) drains the outbox and sends `TREND_DELTA` frames. This branch bypasses the LKV generation-diff model entirely: every intermediate sample is preserved, each sample carries its source `moduleTs`, and flatlined tags receive a synthetic heartbeat event on every flush. See §7.6 for the server-side mechanics and §8.7 for the client-side subscription management.
+
 Two architectural rules drive everything else:
 
 - **`TelemetryIntake` is the universal entry point.** `MqttBridge` and `HmiTagSource` are both adapters. Future transports (OPC-UA, REST pollers) plug in at the same seam.
@@ -41,6 +44,7 @@ Two architectural rules drive everything else:
 | LKV entry (§4)          | `{ value, generation }`                                                    | `value === null` ⇒ bad quality. Generation is a monotonic uint32. |
 | DB queue entry (§5)     | `{ moduleTs, tags: [{ tagId, value }] }`                                   | Module-level timestamp propagated from the source message. Array-valued tags excluded. |
 | WebSocket wire (§6)     | `{ type: 'SNAPSHOT' \| 'DELTA', values: { [tag_id]: value } }`             | Keys are stringified tag IDs. No timestamp, no generation, no quality enum. |
+| Trend WS wire (§7.6)    | `{ type: 'TREND_DELTA', samples: [{ moduleTs, tagId, value }, ...] }`      | Carries explicit `moduleTs` per sample; aggregates multiple per-tag events per flush window; value is numeric (booleans coerced to 1.0/0.0, null preserved). |
 | React state (§7–§8)     | `LiveValue = { value }`                                                    | `value === null` ⇒ bad quality. Drives widget re-render. |
 
 ---
@@ -389,6 +393,63 @@ Keys are stringified tag IDs. Values are raw (`number | boolean | string | null`
 | Timestamp comparison | Requires synchronized clocks. Timestamp must be stored per tag.                                              | No clock dependency. Generation is monotonic and local. |
 | Broadcast all        | Every client gets every tag on every tick. Wastes bandwidth.                                                 | Tailored per-client deltas. Only changed + subscribed tags sent. |
 
+### 7.6 Trend WebSocket Channel
+
+Step 11 added a parallel channel on the same WebSocket connection for historian-fidelity live tail rendering. The live-value channel (§7.1–7.5) coalesces at 8 Hz, carries no per-sample timestamp, and delivers only changed values — correct for widget rendering but harmful for the trend chart's live tail, which must stitch time-series data accurately into a cached tile mosaic. The trend channel was built to bypass all three limitations.
+
+#### Three live-value limitations bypassed
+
+| Limitation | Live-value channel | Trend channel |
+|---|---|---|
+| Coalescing | 8 Hz tick; fast-changing tags lose intermediate samples | Every COV event in the flush window is preserved in `samples[]` |
+| No moduleTs | DELTA carries no timestamp; client must infer time | Each sample carries `moduleTs` from the originating telemetry frame |
+| Only-changed | Flatlined tags produce no DELTA | Synthetic event on flush guarantees at least one sample per subscribed tag per window |
+
+#### Wire messages
+
+```jsonc
+// Client → server
+{ "type": "SUBSCRIBE_TREND",   "tagIds": [1, 2, 3] }
+{ "type": "UNSUBSCRIBE_TREND", "tagIds": [1] }
+
+// Server → client
+{
+  "type": "TREND_DELTA",
+  "samples": [
+    { "moduleTs": 1716543600000, "tagId": 1, "value": 85.47 },
+    { "moduleTs": 1716543600250, "tagId": 1, "value": 86.12 },
+    { "moduleTs": 1716543600000, "tagId": 2, "value": 12.03 }
+  ]
+}
+```
+
+Multiple samples for the same `tagId` within one frame are possible — the flush window accumulates every COV event. Values are numeric post-coercion (booleans become 1.0/0.0); `null` is preserved as a quality sentinel.
+
+#### Server-side mechanics
+
+Each connected client has two additional fields beyond the live-value state (§7.1):
+
+```ts
+interface WsClient {
+  // ... live-value fields (§7.1) ...
+  trendSubscriptions: Set<number>;            // tag_ids subscribed via SUBSCRIBE_TREND
+  trendOutbox:        Map<number, TrendEvent[]>;  // per-tag accumulated events since last flush
+}
+```
+
+`TelemetryIntake.setTrendDeltaListener(fn)` registers a single callback that fires after every `ingest()` call that produces COV events. `WsServer.handleTrendDelta(moduleTs, tagId, value)` is the registered listener: for each connected client whose `trendSubscriptions` includes `tagId`, it appends `{ moduleTs, tagId, value }` to that client's `trendOutbox`.
+
+The trendFlush tick runs at `TREND_FLUSH_HZ` (default 4 Hz, env-tunable 1–20). On each tick, for each client:
+
+1. **LKV deduplication:** each subscribed `tagId`'s current LKV value is read once and reused across all clients in the same tick — no repeated LKV lookups per client.
+2. **Synthetic-on-flush:** any subscribed `tagId` with zero real events in its outbox gets one synthetic `{ moduleTs: serverNow, tagId, value: lkvValue }`. Ensures the client receives a heartbeat for every subscribed tag every flush window, even on flatlined tags.
+3. **Drain outbox:** collect all accumulated events across all subscribed tags; emit as a single `TREND_DELTA` frame.
+4. Clear each tag's outbox for the next window.
+
+The trendFlush callback is wrapped in `dutyTracker.track()` and runs synchronously on the event loop. No new concurrency concerns arise beyond those described in §10.1.
+
+See `Docs/hmi_trend_viewer_spec.md` §4.4 and §10.6 for the trend viewer client's use of this channel.
+
 ---
 
 ## 8. Stage 7 — Client Context
@@ -502,6 +563,44 @@ export function useLiveValue(tagId: number): LiveValue {
 
 No redundant `setLiveValue` on mount — the `useState` initializer seeds the value, and `subscribeLiveValue` invokes the callback synchronously with the current `valuesRef` value at the moment of subscribe, reconciling any drift between render and effect. This matters on tag-dense pages: avoiding ~N extra state updates per page mount measurably reduces page-navigation INP.
 
+### 8.7 Trend Client Subscription
+
+`HmiContextProvider` manages SUBSCRIBE_TREND / UNSUBSCRIBE_TREND messages through a second level-triggered reconciler that mirrors the live-value reconciler (§8.5).
+
+#### Additional client state
+
+Two refs track desired vs. server-confirmed trend subscriptions:
+
+- `trendDesiredRef: Set<number>` — tag IDs at least one trend consumer currently wants. Derived from registered `subscribeTrend` callbacks.
+- `trendServerRef: Set<number>` — tag IDs the client has emitted SUBSCRIBE_TREND for on the wire.
+
+#### Wire emission order in `flush()`
+
+The single flush function handles both channels in a defined order to prevent retracting tags the server hasn't heard about yet:
+
+1. `SUBSCRIBE` — new live-value tag IDs
+2. `SUBSCRIBE_TREND` — new trend tag IDs
+3. `UNSUBSCRIBE` — retracted live-value tag IDs
+4. `UNSUBSCRIBE_TREND` — retracted trend tag IDs
+
+Same-tick subscribe + unsubscribe of the same trend tag ID produces zero wire messages, for the same reason as the live-value path (§8.5).
+
+#### Reconnect behavior
+
+On disconnect, `trendServerRef` is cleared (server state is lost). `trendDesiredRef` survives — it reflects consumer demand, not server state. The `onopen` handler schedules a flush; the reconciler diff naturally produces `SUBSCRIBE_TREND` for every currently desired tag, re-establishing the full subscription set with a single message.
+
+#### Consumer: `useLiveSubscription` in `@caro/trend-chart`
+
+`subscribeTrend(tagId, callback)` is the hook entry point consumed by `useLiveSubscription`. On each `TREND_DELTA` frame the provider routes each sample to the registered callback for that `tagId`. `useLiveSubscription` maintains:
+
+- **Per-tag FIFO** (capacity `TREND_FIFO_CAPACITY = 100`): accumulates received events between commits.
+- **Bucket accumulator** (aggregate mode): maps each event to its tile bucket, merging by last-write-wins within a bucket. Three-case rule: exact-bucket match (update in place), new bucket (append), out-of-order (discard).
+- **Raw buffer** (raw mode): per-tag ring trimmed to 2×`viewportSpanMs` to bound memory.
+
+On tailing exit, `commitAndDrain()` atomically moves the accumulator/buffer contents into the cached tile data before the mode transition completes, preventing a gap between the last live event and the first REST tile fetch.
+
+See `Docs/hmi_trend_viewer_handoff.md` §8 (Live Tail Runtime Architecture) for the full client-side hook architecture.
+
 ---
 
 ## 9. Stage 8 — Widget Render
@@ -559,6 +658,7 @@ In a multi-threaded design the LKV would need a read-write lock: MQTT writes, WS
 - **Rate-snapshot tick** — same. Reads counters, resets them.
 - **WS tick** — same. Reads `lkv.getGeneration()` and `lkv.getValue()`.
 - **DB flush timer** — same. Drains `dbPipeline.queue`.
+- **trendFlush tick** — same. Drains each subscribed client's `trendOutbox` and emits `TREND_DELTA` frames. Wrapped in `dutyTracker.track()` like every other hot-path callback.
 
 Each callback runs to completion before the next one starts. That's the Node.js concurrency guarantee: no preemption within the synchronous phase of a callback.
 
@@ -578,6 +678,7 @@ The only async operations are `ws.send()` / `mqtt.publish()` (both buffer intern
 | `WATCHDOG_TIMEOUT_MS`     | `1000`                 | `telemetry-intake.ts` | Time without telemetry before nulling the module's LKV entries. |
 | `HEARTBEAT_INTERVAL_MS`   | `1000`                 | `mqtt-bridge.ts`      | Heartbeat publish frequency on `caro/{module_id}/beat`. |
 | `HMI_PUBLISH_INTERVAL_MS` | `250`                  | `hmi-tag-source.ts`   | HmiTagSource emit interval; also the cadence at which `Telemetry_CPU` is refreshed. |
+| `TREND_FLUSH_HZ`          | `4`                    | `ws-server.ts`        | Trend channel flush cadence. Valid range 1–20. Higher values reduce live-tail latency at the cost of more small WS frames. |
 | `POSTGRES_HOST` / `POSTGRES_PORT` / `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DATABASE` | — | `@caro/db` | PostgreSQL connection for `runMigrations()` and tag-map load. |
 
 ---
@@ -590,6 +691,8 @@ The only async operations are `ws.send()` / `mqtt.publish()` (both buffer intern
 | HMI Functional Spec                      | `Docs/hmi_functional_spec.md`          |
 | HMI Widget Spec                          | `Docs/hmi_widget_spec.md`              |
 | HMI API Spec                             | `Docs/hmi_API_spec.md`                 |
+| HMI Trend Viewer Spec                    | `Docs/hmi_trend_viewer_spec.md`        |
+| HMI Trend Viewer Handoff                 | `Docs/hmi_trend_viewer_handoff.md`     |
 | MQTT Spec                                | `Docs/CARO_MQTT_Spec.md`               |
 | DB Spec                                  | `Docs/CARO_DB_Spec.md`                 |
 | Platform Handoff                         | `Docs/platform_handoff.md`             |
