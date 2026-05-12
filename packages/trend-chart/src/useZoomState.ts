@@ -43,6 +43,9 @@ export interface UseZoomStateOpts {
 export interface UseZoomStateResult {
   zoomAnchorSpan: bigint;
   dataViewport: Viewport;
+  /** Forces dataViewport to the given viewport, bypassing the lastIntent skip logic.
+   *  Used on live → fixed transition where the reset effect would otherwise skip. */
+  syncDataViewport: (v: Viewport) => void;
   handleDragZoom: (selectionStartMs: bigint, selectionEndMs: bigint) => void;
   handleZoomLevelSwitch: (direction: 'in' | 'out', cursorTimeMs: bigint) => void;
 }
@@ -113,5 +116,12 @@ export function useZoomState({
     [currentBucketSMs, visibleTilesPerWindow, bucketCount],
   );
 
-  return { zoomAnchorSpan, dataViewport, handleDragZoom, handleZoomLevelSwitch };
+  const syncDataViewport = useCallback((v: Viewport) => {
+    console.log('[DIAG-live] syncDataViewport called',
+      'start=', v.start.toString(),
+      'end=', v.end.toString());
+    setDataViewport({ start: v.start, end: v.end });
+  }, []);
+
+  return { zoomAnchorSpan, dataViewport, syncDataViewport, handleDragZoom, handleZoomLevelSwitch };
 }

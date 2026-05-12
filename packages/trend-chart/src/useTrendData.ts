@@ -449,6 +449,14 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
   // True once the live-spine fetch has settled for the current viewport span.
   // Parallel to the history path's `activeTilesRef.current.length > 0` skip guard.
   const spineLoadedRef = useRef<boolean>(false);
+  // True while a spine fetch is in-flight; prevents 4 Hz tick re-fires from
+  // launching duplicate requests before the first one settles.
+  const spineFetchInFlightRef = useRef<boolean>(false);
+  // Ref-tracked isTailing so the effect can read the current value without
+  // being in the dep array — mode flip and viewport cascade arrive in separate
+  // renders; putting isTailing in deps caused a stale-viewport fetch on entry.
+  const isTailingRef = useRef<boolean>(isTailing);
+  isTailingRef.current = isTailing;
 
   // Stable dep keys: tagIds array → joined string; Viewport object → component fields.
   const tagIdsKey = tagIds.join(',');
@@ -476,13 +484,13 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     //     (line ~644) — live mode never triggers pan-prefetch fetches.
     //   • levelTransitionPendingRef is never set in this branch; it lives
     //     exclusively in the history path below.
-    if (isTailing) {
+    if (isTailingRef.current) {
       console.log('[DIAG-live] effect fired',
-        'isTailing=', isTailing,
+        'isTailing=', isTailingRef.current,
         'viewport.start=', currentViewport.start.toString(),
         'viewport.end=', currentViewport.end.toString(),
         'tagIdsKey=', tagIdsKey);
-      if (!spanChanged && spineLoadedRef.current) return;
+      if (!spanChanged && (spineLoadedRef.current || spineFetchInFlightRef.current)) return;
       spineLoadedRef.current = false;
       // Clear any history-mode residue so ensureCovered stays a no-op.
       activeTilesRef.current = [];
@@ -512,12 +520,14 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
         'spanChanged=', spanChanged,
         'prevSpan=', prevSpanRef.current?.toString() ?? 'null');
 
+      spineFetchInFlightRef.current = true;
       Promise.all(
         chunkArray(tagIds, 8).map(group =>
           fetchTile({ tagIds: group, startTime: spineTile.startTime, endTime: spineTile.endTime, bucketCount: spineTile.bucketCount }),
         ),
       ).then(responses => {
         if (generationRef.current !== generation) return;
+        spineFetchInFlightRef.current = false;
         console.log('[DIAG-live] spine fetch settled',
           'generation=', generation,
           'currentGen=', generationRef.current,
@@ -534,6 +544,7 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
         spineLoadedRef.current = true;
       }).catch(e => {
         if (generationRef.current !== generation) return;
+        spineFetchInFlightRef.current = false;
         console.error('[useTrendData] live spine fetch failed', { tagIds, error: e });
         setHookResult({ data: null, isLoading: false, error: e instanceof Error ? e.message : String(e) });
       });
@@ -542,8 +553,14 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     }
 
     // ── History-mode path ─────────────────────────────────────────────────────
-    // Reset spine sentinel so a subsequent live entry always triggers a fresh fetch.
+    // Reset spine sentinels so a subsequent live entry always triggers a fresh fetch.
     spineLoadedRef.current = false;
+    spineFetchInFlightRef.current = false;
+
+    console.log('[DIAG-live] history branch entered',
+      'viewport.start=', currentViewport.start.toString(),
+      'viewport.end=', currentViewport.end.toString(),
+      'tagIdsKey=', tagIdsKey);
 
     const nowMs = BigInt(Date.now());
     const { visible, prefetch } = tilesForViewport({
@@ -553,6 +570,12 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
       overfetchPerSide,
       nowMs,
     });
+
+    console.log('[DIAG-live] history tiles computed',
+      'visible.length=', visible.length,
+      'prefetch.length=', prefetch.length,
+      'firstVisible=', visible[0] ? `[${visible[0].startTime},${visible[0].endTime}]` : 'none',
+      'lastVisible=', visible[visible.length - 1] ? `[${visible[visible.length - 1]!.startTime},${visible[visible.length - 1]!.endTime}]` : 'none');
 
     if (visible.length === 0) {
       setHookResult({ data: null, isLoading: false, error: null });
@@ -716,7 +739,7 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     return () => {
       finalizeRef.current = null;
     };
-  }, [tagIdsKey, viewportStart, viewportEnd, bucketCount, visibleTilesPerWindow, overfetchPerSide, cache, isTailing]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [tagIdsKey, viewportStart, viewportEnd, bucketCount, visibleTilesPerWindow, overfetchPerSide, cache]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const ensureCovered = useCallback((startMs: bigint, endMs: bigint) => {
     // Block during zoom-level transition; pan visually works but no tile fetches
@@ -854,6 +877,7 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     setActiveTileCount(0);
     setResponseTailTs(null);
     spineLoadedRef.current = false;
+    spineFetchInFlightRef.current = false;
   }, [cache]);
 
   return { ...hookResult, ensureCovered, evictRange, evictAll, swapCounter, activeTileCount, lastFetchMs, responseTailTs };
