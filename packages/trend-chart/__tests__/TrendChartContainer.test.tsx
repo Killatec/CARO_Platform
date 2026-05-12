@@ -115,6 +115,7 @@ function makeResult(tagIds: number[], opts: Partial<UseTrendDataResult> = {}): U
     ensureCovered: vi.fn(),
     evictRange: vi.fn(),
     evictAll: vi.fn(),
+    refetchHistory: vi.fn(),
     swapCounter: 0,
     activeTileCount: 0,
     lastFetchMs: null,
@@ -452,6 +453,7 @@ describe('TrendChartContainer', () => {
       });
 
       expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
+      expect(mockResult.refetchHistory).toHaveBeenCalledOnce();
       expect(mockResult.evictAll).not.toHaveBeenCalled();
       expect(mockResult.evictRange).not.toHaveBeenCalled();
       expect(screen.getByText('Go Live')).toBeTruthy();
@@ -468,6 +470,7 @@ describe('TrendChartContainer', () => {
       });
 
       expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
+      expect(mockResult.refetchHistory).toHaveBeenCalledOnce();
       expect(mockResult.evictAll).not.toHaveBeenCalled();
       expect(mockResult.evictRange).not.toHaveBeenCalled();
       expect(screen.getByText('Go Live')).toBeTruthy();
@@ -483,6 +486,7 @@ describe('TrendChartContainer', () => {
       });
 
       expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
+      expect(mockResult.refetchHistory).toHaveBeenCalledOnce();
       expect(mockResult.evictAll).not.toHaveBeenCalled();
       expect(mockResult.evictRange).not.toHaveBeenCalled();
       expect(screen.getByText('Go Live')).toBeTruthy();
@@ -495,6 +499,7 @@ describe('TrendChartContainer', () => {
       fireEvent.change(input, { target: { value: '2020-01-02T00:00:00' } });
 
       expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
+      expect(mockResult.refetchHistory).toHaveBeenCalledOnce();
       expect(mockResult.evictAll).not.toHaveBeenCalled();
       expect(mockResult.evictRange).not.toHaveBeenCalled();
       expect(screen.getByText('Go Live')).toBeTruthy();
@@ -519,7 +524,7 @@ describe('TrendChartContainer', () => {
       expect(mockResult.evictAll).not.toHaveBeenCalled();
     });
 
-    it('tailing→fixed: commitAndDrain fires regardless of drain range; evictAll never fires', () => {
+    it('tailing→fixed: commitAndDrain + refetchHistory fire; evictAll never fires', () => {
       // Previously evictAll was gated on drain result; now it is never called.
       liveHoisted.commitAndDrain.mockReturnValue({ start: 0n, end: 0n }); // empty drain
       renderContainer([1]);
@@ -532,6 +537,7 @@ describe('TrendChartContainer', () => {
       });
 
       expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
+      expect(mockResult.refetchHistory).toHaveBeenCalledOnce();
       expect(mockResult.evictAll).not.toHaveBeenCalled();
       expect(mockResult.evictRange).not.toHaveBeenCalled();
     });
@@ -551,12 +557,14 @@ describe('TrendChartContainer', () => {
 
       // Clear spies accumulated during the tailing→fixed transition.
       mockResult.evictAll.mockClear();
+      mockResult.refetchHistory.mockClear();
       liveHoisted.commitAndDrain.mockClear();
 
-      // Click Live: fixed → tailing → no evictAll, no commitAndDrain.
+      // Click Live: fixed → tailing → no evictAll, no commitAndDrain, no refetchHistory.
       fireEvent.click(screen.getByText('Go Live'));
 
       expect(mockResult.evictAll).not.toHaveBeenCalled();
+      expect(mockResult.refetchHistory).not.toHaveBeenCalled();
       expect(liveHoisted.commitAndDrain).not.toHaveBeenCalled();
       expect(screen.getByText('● Live')).toBeTruthy();
     });

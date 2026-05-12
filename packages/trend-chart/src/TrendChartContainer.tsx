@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, useMemo, useRef } from 'react';
 import type { CSSProperties } from 'react';
-import { useTrendMode, trendModeReducer } from './useTrendMode.js';
+import { useTrendMode, trendModeReducer, modeToViewport } from './useTrendMode.js';
 import type { TrendModeAction } from './useTrendMode.js';
 import { useTrendData } from './useTrendData.js';
 import type { UseTrendDataResult } from './useTrendData.js';
@@ -69,7 +69,7 @@ export function TrendChartContainer({
   const [cursorTsMs, setCursorTsMs] = useState<number | null>(null);
 
   // ── Zoom-level state ──────────────────────────────────────────────────────
-  const { zoomAnchorSpan, dataViewport, handleDragZoom: _handleDragZoom, handleZoomLevelSwitch: _handleZoomLevelSwitch } = useZoomState({
+  const { zoomAnchorSpan, dataViewport, syncDataViewport, handleDragZoom: _handleDragZoom, handleZoomLevelSwitch: _handleZoomLevelSwitch } = useZoomState({
     modeViewport,
     visibleTilesPerWindow: VISIBLE_TILES_PER_WINDOW,
     bucketCount: BUCKET_COUNT,
@@ -78,7 +78,7 @@ export function TrendChartContainer({
 
   // ── Data fetch (driven by explicit dataViewport) ──────────────────────────
   const trendData = useTrendData({ viewport: dataViewport, tagIds, isTailing: modeState.mode === 'tailing' });
-  const { data, isLoading, ensureCovered, swapCounter, activeTileCount, lastFetchMs } = trendData;
+  const { data, isLoading, ensureCovered, getActiveRange, swapCounter, activeTileCount, lastFetchMs } = trendData;
 
   // ── Stable refs for synchronous access from callbacks and cleanup ─────────
   // Updated synchronously during render so callbacks always see the latest values.
@@ -167,18 +167,8 @@ export function TrendChartContainer({
   // ── dispatchModeAction: live drain before dispatch ────────────────────────
   // Used for all actions that can change the tailing/fixed mode boundary.
   const dispatchModeAction = useCallback((action: TrendModeAction) => {
-    console.log('[DIAG-live] dispatchModeAction',
-      'action.type=', action.type,
-      'curMode=', modeStateRef.current.mode,
-      'nowMs=', BigInt(Date.now()).toString());
     const cur  = modeStateRef.current;
     const next = trendModeReducer(cur, action);
-    console.log('[DIAG-live] mode transition',
-      'cur.mode=', cur.mode,
-      'next.mode=', next.mode,
-      'next.from=', next.mode === 'fixed' ? next.from.toString() : 'n/a',
-      'next.to=', next.mode === 'fixed' ? next.to.toString() : 'n/a',
-      'next.sizeMs=', next.sizeMs.toString());
 
     // Tailing → fixed: drain the live buffer so accumulated FIFO/accumulator
     // coverage is committed. No cache eviction needed — live mode never writes
@@ -186,6 +176,17 @@ export function TrendChartContainer({
     // fresh against any stale tiles that remain (LRU displaces them naturally).
     if (cur.mode === 'tailing' && next.mode === 'fixed') {
       liveSubRef.current?.commitAndDrain();
+      // Force dataViewport to match the post-pan modeViewport so the main
+      // useTrendData effect fires and runs the history-fetch path.
+      // Without this, dataViewport stays stuck at the live-mode value
+      // (useZoomState's reset effect skips on lastIntent='pan'), and the
+      // empty activeTilesRef from live mode causes ensureCovered to no-op,
+      // leaving the chart with no data for the new pan position.
+      syncDataViewport(modeToViewport(next));
+      // Force the history fetch even when syncDataViewport's bounds equal the
+      // current dataViewport (pan-from-live: first panApplied carries live
+      // viewport bounds, so no state change would occur from syncDataViewport alone).
+      trendDataRef.current.refetchHistory();
     }
 
     // Fixed → tailing: the live-spine path never touches the cache, so existing
@@ -319,6 +320,7 @@ export function TrendChartContainer({
       xRange={xRange}
       onTagRemove={handleTagRemove}
       ensureCovered={ensureCovered}
+      getActiveRange={getActiveRange}
       zoomAnchorSpan={zoomAnchorSpan}
       onZoomLevelSwitch={handleZoomLevelSwitch}
       swapCounter={swapCounter}

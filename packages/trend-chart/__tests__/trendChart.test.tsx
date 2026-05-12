@@ -327,6 +327,7 @@ describe('TrendChart', () => {
     // to fire on every tick, triggering a constant fetch→evict loop. The fix keys on
     // bucketSMsKey instead — stable unless the CAG zoom level actually changes.
     const ensureCovered = vi.fn();
+    const getActiveRange = () => ({ startMs: 0n, endMs: 3_600_000n });
     const { rerender } = render(
       <MockHmiProvider tagDefs={TAG_DEFS}>
         <TrendChart
@@ -335,6 +336,7 @@ describe('TrendChart', () => {
           siteTimezone="UTC"
           height={400}
           ensureCovered={ensureCovered}
+          getActiveRange={getActiveRange}
           swapCounter={0}
         />
       </MockHmiProvider>,
@@ -350,6 +352,7 @@ describe('TrendChart', () => {
           siteTimezone="UTC"
           height={400}
           ensureCovered={ensureCovered}
+          getActiveRange={getActiveRange}
           swapCounter={1}            // changed — should NOT trigger coverage effect
         />
       </MockHmiProvider>,
@@ -366,6 +369,7 @@ describe('TrendChart', () => {
           siteTimezone="UTC"
           height={400}
           ensureCovered={ensureCovered}
+          getActiveRange={getActiveRange}
           swapCounter={1}
         />
       </MockHmiProvider>,

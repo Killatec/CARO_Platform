@@ -53,6 +53,9 @@ export interface TrendChartProps {
   onXPan?: (min: bigint, max: bigint) => void;
   /** When 'zoom' or 'pan', the imperative setScale effect is skipped so wheel/pan don't fight modeViewport updates. */
   lastIntent?: LastIntent;
+  /** Returns the time bounds of the current active tile set. Passed to checkAndExtendXCoverage
+   *  so the threshold check uses tile metadata rather than sparse u.data[0] sample timestamps. */
+  getActiveRange?: () => { startMs: bigint; endMs: bigint } | null;
 }
 
 const WRAPPER: CSSProperties = {
@@ -96,6 +99,7 @@ export function TrendChart({
   onXRangeChange,
   onXPan,
   lastIntent,
+  getActiveRange,
 }: TrendChartProps) {
   const tagMap = useTagMap();
 
@@ -145,6 +149,9 @@ export function TrendChart({
   // Stable ref so onXMove never stale-closes over ensureCovered.
   const ensureCoveredRef = useRef(ensureCovered);
   ensureCoveredRef.current = ensureCovered;
+
+  const getActiveRangeRef = useRef(getActiveRange);
+  getActiveRangeRef.current = getActiveRange;
 
   // Stable refs for zoom-level switch — updated each render so the wheel handler never stale-closes.
   const zoomAnchorSpanRef = useRef(zoomAnchorSpan);
@@ -384,7 +391,7 @@ export function TrendChart({
           );
         }
         // Prefetch check: fire ensureCovered when visible edge approaches cached extent.
-        checkAndExtendXCoverage(u, ensureCoveredRef.current);
+        checkAndExtendXCoverage(u, ensureCoveredRef.current, getActiveRangeRef.current);
       }
     };
 
@@ -437,7 +444,7 @@ export function TrendChart({
       }
 
       // No level transition: standard coverage check (Prompt 1 behavior).
-      checkAndExtendXCoverage(u, ensureCoveredRef.current);
+      checkAndExtendXCoverage(u, ensureCoveredRef.current, getActiveRangeRef.current);
     };
 
     wrap.addEventListener('mousemove', onYMove);
@@ -496,8 +503,8 @@ export function TrendChart({
   // triggering a constant fetch→evict→fetch loop.
   const bucketSMsKey = data?.type === 'aggregate' ? data.bucketSMs : null;
   useEffect(() => {
-    if (uplotRef.current && ensureCoveredRef.current) {
-      checkAndExtendXCoverage(uplotRef.current, ensureCoveredRef.current);
+    if (uplotRef.current && ensureCoveredRef.current && getActiveRangeRef.current) {
+      checkAndExtendXCoverage(uplotRef.current, ensureCoveredRef.current, getActiveRangeRef.current);
     }
   }, [bucketSMsKey]);
 
