@@ -151,8 +151,8 @@ export function TrendChartContainer({
 
   // ── Merged data for rendering ─────────────────────────────────────────────
   const mergedData = useMemo(
-    () => mergeTrendData(data, liveSub.tail, modeState.mode === 'tailing'),
-    [data, liveSub.tail, modeState.mode],
+    () => mergeTrendData(data, liveSub.tail),
+    [data, liveSub.tail],
   );
 
   // ── xRange: passes the live mode viewport to TrendChart for imperative

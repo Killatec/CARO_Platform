@@ -1,32 +1,47 @@
 import type { TrendData, AggregateSeriesData, RawSeriesData } from './types.js';
 import type { LiveTail, AggregateTail, RawTail } from './useLiveSubscription.js';
+import { closeBucketsFromRing } from './closeBucketsFromRing.js';
 
 /**
- * Concatenates cached tile data with a live tail extension.
+ * Combines cached tile data with a live tail using the unified coverage rule (§5.2):
  *
- * Rules:
- *   cached === null          → null  (no data yet)
- *   live === null            → cached unchanged
- *   aggregate + aggregate    → merged array; live overrides overlap, LOCF fills gap;
- *                              when isTailing, cached is clipped to liveEndIndex to
- *                              prevent LOCF gapfill from after-prefetch tiles from
- *                              overwriting real live data past live's coverage end.
- *   raw + raw                → concatenated with dedup of live entries ≤ max(cached.ts)
- *   type mismatch            → cached returned unchanged + console.warn
+ *   - cached === null          → null  (no data yet)
+ *   - live === null or empty   → cached unchanged (fast-path)
+ *   - aggregate mode: live's coverage = [liveStartBucketTs, liveEndBucketTs].
+ *     Within those bucket indices, live owns value/min/max (nulls included).
+ *     Cached is clipped at liveEndIndex unconditionally.
+ *   - raw mode: live's coverage = [minLiveTs, maxLiveTs].
+ *     Cached entries with ts ≥ minLiveTs are dropped; live entries are appended.
+ *   - type mismatch            → cached returned unchanged + console.warn
+ *
+ * No isTailing parameter — the rule is mode-agnostic. The fast-path handles
+ * fixed-mode steady state (empty/null live tail) with zero cost.
  */
 export function mergeTrendData(
   cached: TrendData | null,
   live: LiveTail,
-  isTailing = false,
 ): TrendData | null {
   if (cached === null) return null;
   if (live === null) return cached;
 
   if (cached.type === 'aggregate' && live.mode === 'aggregate') {
-    return mergeAggregate(cached, live, isTailing);
+    // Fast-path: empty live tail
+    let anyEntry = false;
+    for (const a of live.perTag.values()) {
+      if (a.value.length > 0) { anyEntry = true; break; }
+    }
+    if (!anyEntry) return cached;
+    return mergeAggregate(cached, live);
   }
+
   if (cached.type === 'raw' && live.mode === 'raw') {
-    return mergeRaw(cached, live, isTailing);
+    // Fast-path: empty live tail
+    let anyEntry = false;
+    for (const e of live.perTag.values()) {
+      if (e.ts.length > 0) { anyEntry = true; break; }
+    }
+    if (!anyEntry) return cached;
+    return mergeRaw(cached, live);
   }
 
   // Should not happen when the container derives tailMode from cached.type.
@@ -36,37 +51,57 @@ export function mergeTrendData(
 
 // ─── Aggregate merge ──────────────────────────────────────────────────────────
 
+const BIG_END = BigInt(Number.MAX_SAFE_INTEGER);
+
 function mergeAggregate(
   cached: AggregateSeriesData,
   live: AggregateTail,
-  isTailing: boolean,
 ): AggregateSeriesData {
-  // Index into cached's bucket array where live data begins.
+  // Cross-bucketSMs: re-bucket raw ring entries at cached.bucketSMs.
+  // Occurs when drag-zoom changes the viewport bucketSMs during live mode (§5.6).
+  let effectiveLiveStartMs = live.startMs;
+  let effectiveLivePerTag  = live.perTag;
+
+  if (cached.bucketSMs !== Number(live.bucketSMs)) {
+    const rebucketed = new Map<number, { value: (number | null)[]; min: (number | null)[]; max: (number | null)[] }>();
+    let earliestStart: bigint | null = null;
+
+    const allRawTagIds = new Set([...cached.series.keys(), ...live.rawEntries.keys()]);
+    for (const tagId of allRawTagIds) {
+      const raw = live.rawEntries.get(tagId) ?? [];
+      const closed = closeBucketsFromRing(raw, cached.bucketSMs, 0n, BIG_END);
+      rebucketed.set(tagId, { value: closed.value, min: closed.min, max: closed.max });
+      if (closed.ts.length > 0) {
+        const first = closed.ts[0]!;
+        if (earliestStart === null || first < earliestStart) earliestStart = first;
+      }
+    }
+
+    if (earliestStart === null) return cached; // no closed buckets after re-bucketing
+    effectiveLiveStartMs = earliestStart;
+    effectiveLivePerTag  = rebucketed;
+  }
+
+  // Index into cached's bucket array where live coverage begins.
   const liveStartIndex = Number(
-    (live.startMs - cached.startTime) / BigInt(cached.bucketSMs),
+    (effectiveLiveStartMs - cached.startTime) / BigInt(cached.bucketSMs),
   );
 
-  // Union of all tag IDs across cached and live.
-  const allTagIds = new Set([...cached.series.keys(), ...live.perTag.keys()]);
-
-  // Max live length across all tags — used for the tailing clip boundary.
   let maxLiveLen = 0;
-  for (const liveArrs of live.perTag.values()) {
+  for (const liveArrs of effectiveLivePerTag.values()) {
     if (liveArrs.value.length > maxLiveLen) maxLiveLen = liveArrs.value.length;
   }
   const liveEndIndex = liveStartIndex + maxLiveLen;
 
-  // In tailing mode, clip cached to liveEndIndex so LOCF gapfill from the
-  // after-prefetch tile (which covers future buckets the server backfilled at
-  // fetch time) does not replace real live data past live's coverage end.
-  // Guard: only clip when liveEndIndex > 0 (i.e. live has data that extends
-  // past cached.startTime); an empty live tail (liveEndIndex ≤ 0) is a no-op.
-  const effectiveCachedN = (isTailing && liveEndIndex > 0)
+  // Clip cached at liveEndIndex unconditionally — live wins on its coverage range.
+  // Guard: only clip when liveEndIndex > 0 (live has data that extends past cached.startTime).
+  const effectiveCachedN = liveEndIndex > 0
     ? Math.min(cached.n, Math.max(0, liveEndIndex))
     : cached.n;
 
-  // Total bucket count: effective cached extent or live extent, whichever is larger.
   const totalN = Math.max(effectiveCachedN, liveEndIndex);
+
+  const allTagIds = new Set([...cached.series.keys(), ...effectiveLivePerTag.keys()]);
 
   const newSeries = new Map<number, {
     value: (number | null)[];
@@ -76,9 +111,9 @@ function mergeAggregate(
 
   for (const tagId of allTagIds) {
     const cachedArrs = cached.series.get(tagId);
-    const liveArrs   = live.perTag.get(tagId) ?? { value: [], min: [], max: [] };
+    const liveArrs   = effectiveLivePerTag.get(tagId) ?? { value: [], min: [], max: [] };
 
-    // Last cached values — used as LOCF for any gap between effectiveCachedN and liveStartIndex.
+    // LOCF seed for gap between effectiveCachedN and liveStartIndex.
     const lastCachedV   = cachedArrs ? (cachedArrs.value[effectiveCachedN - 1] ?? null) : null;
     const lastCachedMin = cachedArrs?.min ? (cachedArrs.min[effectiveCachedN - 1] ?? null) : null;
     const lastCachedMax = cachedArrs?.max ? (cachedArrs.max[effectiveCachedN - 1] ?? null) : null;
@@ -88,7 +123,7 @@ function mergeAggregate(
     const max:   (number | null)[] = [];
 
     for (let i = 0; i < totalN; i++) {
-      const li = i - liveStartIndex;
+      const li     = i - liveStartIndex;
       const inLive = li >= 0 && li < liveArrs.value.length;
 
       if (inLive) {
@@ -121,10 +156,10 @@ function mergeAggregate(
 
 // ─── Raw merge ────────────────────────────────────────────────────────────────
 
-function mergeRaw(cached: RawSeriesData, live: RawTail, isTailing: boolean): RawSeriesData {
+function mergeRaw(cached: RawSeriesData, live: RawTail): RawSeriesData {
   const allTagIds = new Set([...cached.series.keys(), ...live.perTag.keys()]);
 
-  const newSeries = new Map<RawSeriesData['series'] extends Map<number, infer V> ? number : never, {
+  const newSeries = new Map<number, {
     ts: bigint[];
     value: (number | null)[];
     prev?: { ts: bigint; value: number | null };
@@ -141,10 +176,8 @@ function mergeRaw(cached: RawSeriesData, live: RawTail, isTailing: boolean): Raw
     let mergedTs: bigint[];
     let mergedValue: (number | null)[];
 
-    if (isTailing && minLiveTs !== null) {
-      // Tailing: live wins for the overlap region. Drop cached entries whose
-      // ts >= minLiveTs so future-fetched LOCF gapfill from a newly-loaded tile
-      // does not overwrite real live data.
+    if (minLiveTs !== null) {
+      // Live wins for ts ≥ minLiveTs: drop cached entries at/after minLiveTs.
       const cachedTsFiltered:    bigint[]          = [];
       const cachedValueFiltered: (number | null)[] = [];
       for (let i = 0; i < cachedEntry.ts.length; i++) {
@@ -156,22 +189,9 @@ function mergeRaw(cached: RawSeriesData, live: RawTail, isTailing: boolean): Raw
       mergedTs    = [...cachedTsFiltered,    ...liveEntry.ts];
       mergedValue = [...cachedValueFiltered, ...liveEntry.value.map(v => v ?? null)];
     } else {
-      // Fixed mode (or no live data): keep existing behaviour — dedup live
-      // entries that overlap cached's tail.
-      const maxCachedTs = cachedEntry.ts.length > 0
-        ? cachedEntry.ts[cachedEntry.ts.length - 1]!
-        : null;
-
-      const liveTsFiltered:    bigint[]          = [];
-      const liveValueFiltered: (number | null)[] = [];
-      for (let i = 0; i < liveEntry.ts.length; i++) {
-        if (maxCachedTs === null || liveEntry.ts[i]! > maxCachedTs) {
-          liveTsFiltered.push(liveEntry.ts[i]!);
-          liveValueFiltered.push(liveEntry.value[i] ?? null);
-        }
-      }
-      mergedTs    = [...cachedEntry.ts,    ...liveTsFiltered];
-      mergedValue = [...cachedEntry.value, ...liveValueFiltered];
+      // No live data for this tag: keep cached unchanged.
+      mergedTs    = [...cachedEntry.ts];
+      mergedValue = [...cachedEntry.value];
     }
 
     if (mergedTs.length > 0) {

@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { mergeTrendData } from '../src/mergeTrendData.js';
+import { TS_BUCKET_ORIGIN_MS } from '../src/level.js';
 import type { AggregateSeriesData, RawSeriesData } from '../src/types.js';
 import type { AggregateTail, RawTail } from '../src/useLiveSubscription.js';
 
@@ -43,10 +44,15 @@ function makeRaw(
   return { type: 'raw', source: 'raw', startTime, endTime, series };
 }
 
+/**
+ * Build an AggregateTail. rawEntries defaults to an empty Map — only needed for
+ * cross-bucketSMs tests.
+ */
 function makeAggTail(
   startMs: bigint,
   tagValues: Map<number, (number | null)[]>,
   bucketSMs = BigInt(BUCKET_SMS),
+  rawEntries: Map<number, { moduleTs: bigint; value: number | null }[]> = new Map(),
 ): AggregateTail {
   const perTag = new Map<number, { value: (number | null)[]; min: (number | null)[]; max: (number | null)[] }>();
   for (const [tagId, vals] of tagValues) {
@@ -56,7 +62,7 @@ function makeAggTail(
       max: vals.map(v => v !== null ? v + 0.1 : null),
     });
   }
-  return { mode: 'aggregate', startMs, bucketSMs, perTag };
+  return { mode: 'aggregate', startMs, bucketSMs, perTag, rawEntries };
 }
 
 function makeRawTail(
@@ -156,33 +162,32 @@ describe('mergeTrendData — aggregate happy path', () => {
   });
 });
 
-describe('mergeTrendData — raw happy path (fixed mode)', () => {
-  it('live entries concatenated after cached entries', () => {
+describe('mergeTrendData — raw merge', () => {
+  it('live entries concatenated after cached entries (no overlap)', () => {
     const cached = makeRaw(
       new Map([[1, { ts: [100n, 200n], value: [1, 2] }]]),
       0n, 200n,
     );
     const tail = makeRawTail(new Map([[1, { ts: [300n, 400n], value: [3, 4] }]]));
 
-    const result = mergeTrendData(cached, tail, false) as RawSeriesData;
+    const result = mergeTrendData(cached, tail) as RawSeriesData;
     const s = result.series.get(1)!;
     expect(s.ts).toEqual([100n, 200n, 300n, 400n]);
     expect(s.value).toEqual([1, 2, 3, 4]);
   });
 
-  it('live entries with ts ≤ max(cached.ts) are deduped', () => {
+  it('live wins at overlap: cached entries at ts ≥ minLiveTs are dropped', () => {
+    // cached: [100,200,300,400,500]; live starts at 300 → cached 300,400,500 dropped
     const cached = makeRaw(
-      new Map([[1, { ts: [100n, 300n], value: [1, 3] }]]),
-      0n, 300n,
+      new Map([[1, { ts: [100n, 200n, 300n, 400n, 500n], value: [1, 2, 3, 4, 5] }]]),
+      0n, 500n,
     );
-    // live has 300n (overlap) and 400n (new)
-    const tail = makeRawTail(new Map([[1, { ts: [300n, 400n], value: [3, 4] }]]));
+    const tail = makeRawTail(new Map([[1, { ts: [300n, 400n], value: [30, 40] }]]));
 
-    const result = mergeTrendData(cached, tail, false) as RawSeriesData;
+    const result = mergeTrendData(cached, tail) as RawSeriesData;
     const s = result.series.get(1)!;
-    // 300n is deduped (≤ max cached ts=300n); only 400n appended
-    expect(s.ts).toEqual([100n, 300n, 400n]);
-    expect(s.value).toEqual([1, 3, 4]);
+    expect(s.ts).toEqual([100n, 200n, 300n, 400n]);
+    expect(s.value).toEqual([1, 2, 30, 40]);
   });
 
   it('endTime advances to last merged ts', () => {
@@ -192,130 +197,77 @@ describe('mergeTrendData — raw happy path (fixed mode)', () => {
     );
     const tail = makeRawTail(new Map([[1, { ts: [500n], value: [5] }]]));
 
-    const result = mergeTrendData(cached, tail, false) as RawSeriesData;
+    const result = mergeTrendData(cached, tail) as RawSeriesData;
     expect(result.endTime).toBe(500n);
   });
-});
 
-describe('mergeTrendData — raw tailing mode', () => {
-  it('tailing: live extends past cached — all live kept, no cached truncation', () => {
-    // cached: ts 100, 200. live starts at 300 (no overlap). All entries kept.
-    const cached = makeRaw(
-      new Map([[1, { ts: [100n, 200n], value: [1, 2] }]]),
-      0n, 200n,
-    );
-    const tail = makeRawTail(new Map([[1, { ts: [300n, 400n], value: [3, 4] }]]));
-
-    const result = mergeTrendData(cached, tail, true) as RawSeriesData;
-    const s = result.series.get(1)!;
-    expect(s.ts).toEqual([100n, 200n, 300n, 400n]);
-    expect(s.value).toEqual([1, 2, 3, 4]);
-  });
-
-  it('tailing: cached extends past live (gapfill scenario) — cached entries at live range dropped', () => {
-    // cached: ts 100..500 (500 is future gapfill). live: starts at 300.
-    // minLiveTs = 300 → cached entries at 300, 400, 500 are dropped.
-    // Result: cached 100, 200 + live 300, 400.
-    const cached = makeRaw(
-      new Map([[1, { ts: [100n, 200n, 300n, 400n, 500n], value: [1, 2, 3, 4, 5] }]]),
-      0n, 500n,
-    );
-    const tail = makeRawTail(new Map([[1, { ts: [300n, 400n], value: [30, 40] }]]));
-
-    const result = mergeTrendData(cached, tail, true) as RawSeriesData;
-    const s = result.series.get(1)!;
-    // cached 100, 200 kept; 300+ dropped; live 300, 400 appended
-    expect(s.ts).toEqual([100n, 200n, 300n, 400n]);
-    expect(s.value).toEqual([1, 2, 30, 40]);
-  });
-
-  it('tailing: empty live → cached returned unchanged (no filtering)', () => {
+  it('no live entries for tag: cached entries preserved unchanged', () => {
     const cached = makeRaw(
       new Map([[1, { ts: [100n, 200n, 300n], value: [1, 2, 3] }]]),
       0n, 300n,
     );
     const tail = makeRawTail(new Map([[1, { ts: [], value: [] }]]));
 
-    const result = mergeTrendData(cached, tail, true) as RawSeriesData;
+    const result = mergeTrendData(cached, tail) as RawSeriesData;
     const s = result.series.get(1)!;
     expect(s.ts).toEqual([100n, 200n, 300n]);
     expect(s.value).toEqual([1, 2, 3]);
   });
 
-  it('isTailing=false with overlap: live dedup behaviour preserved', () => {
-    // Same as gapfill scenario but fixed mode → live entries at/before maxCachedTs dropped.
+  it('live entries that start before cached max are still included (live wins at coverage start)', () => {
+    // cached: [100, 300]. live: [300, 400, 600]. minLiveTs=300 → drop cached[300] → keep [100].
     const cached = makeRaw(
-      new Map([[1, { ts: [100n, 200n, 300n, 400n, 500n], value: [1, 2, 3, 4, 5] }]]),
-      0n, 500n,
+      new Map([[1, { ts: [100n, 300n], value: [1, 3] }]]),
+      0n, 300n,
     );
     const tail = makeRawTail(new Map([[1, { ts: [300n, 400n, 600n], value: [30, 40, 60] }]]));
 
-    const result = mergeTrendData(cached, tail, false) as RawSeriesData;
+    const result = mergeTrendData(cached, tail) as RawSeriesData;
     const s = result.series.get(1)!;
-    // live 300, 400 deduped (≤ maxCachedTs=500); only 600 appended
-    expect(s.ts).toEqual([100n, 200n, 300n, 400n, 500n, 600n]);
-    expect(s.value).toEqual([1, 2, 3, 4, 5, 60]);
+    // cached[100] kept; cached[300] dropped; live[300,400,600] appended
+    expect(s.ts).toEqual([100n, 300n, 400n, 600n]);
+    expect(s.value).toEqual([1, 30, 40, 60]);
   });
 });
 
-describe('mergeTrendData — tailing clip', () => {
-  it('isTailing=true: cached clipped to liveEndIndex when cached extends past live coverage', () => {
+describe('mergeTrendData — coverage clip (unconditional)', () => {
+  it('cached clipped to liveEndIndex when cached extends past live coverage', () => {
     // cached: 500 buckets (n=500); live: starts at bucket 450 with 30 samples → liveEndIndex=480.
-    // isTailing=true → effectiveCachedN=min(500,480)=480; totalN=480.
-    // Buckets 480-499 (LOCF gapfill in after-prefetch tile) must be absent.
+    // Live wins on coverage → effectiveCachedN=min(500,480)=480; totalN=480.
+    // Buckets 480-499 (LOCF gapfill past live coverage) are absent.
     const cachedVals = Array.from({ length: 500 }, (_, i) => i * 1.0);
     const cached = makeAgg(500, new Map([[1, cachedVals]]));
     const liveVals = Array.from({ length: 30 }, (_, i) => 1000 + i * 1.0);
     const tail = makeAggTail(BigInt(450 * BUCKET_SMS), new Map([[1, liveVals]]));
 
-    const result = mergeTrendData(cached, tail, true) as AggregateSeriesData;
+    const result = mergeTrendData(cached, tail) as AggregateSeriesData;
     expect(result.n).toBe(480);
     expect(result.endTime).toBe(BigInt(480 * BUCKET_SMS));
     const s = result.series.get(1)!;
-    // 0-449 from cached; 450-479 from live
     expect(s.value.length).toBe(480);
     expect(s.value[449]).toBe(449);    // last cached bucket before live
     expect(s.value[450]).toBe(1000);   // first live bucket
     expect(s.value[479]).toBe(1029);   // last live bucket
   });
 
-  it('isTailing=false (fixed mode): cached full extent included even when live ends earlier', () => {
-    // Same inputs but isTailing=false → full 500 buckets preserved.
-    const cachedVals = Array.from({ length: 500 }, (_, i) => i * 1.0);
-    const cached = makeAgg(500, new Map([[1, cachedVals]]));
-    const liveVals = Array.from({ length: 30 }, (_, i) => 1000 + i * 1.0);
-    const tail = makeAggTail(BigInt(450 * BUCKET_SMS), new Map([[1, liveVals]]));
-
-    const result = mergeTrendData(cached, tail, false) as AggregateSeriesData;
-    expect(result.n).toBe(500);
-    const s = result.series.get(1)!;
-    expect(s.value.length).toBe(500);
-    // Buckets 480-499 still present (LOCF from the last live/cached value at 479)
-    expect(s.value[480]).not.toBeUndefined();
-  });
-
-  it('isTailing=true with live extending past cached: no clip, totalN = liveEndIndex', () => {
+  it('live extending past cached: no clip, totalN = liveEndIndex', () => {
     // cached: 5 buckets; live: starts at bucket 3 with 5 samples → liveEndIndex=8 > cached.n.
-    // effectiveCachedN = min(5, max(0, 8)) = 5; totalN = max(5, 8) = 8 — same as non-tailing.
     const cached = makeAgg(5, new Map([[1, [1, 2, 3, 4, 5]]]));
     const tail = makeAggTail(BigInt(3 * BUCKET_SMS), new Map([[1, [10, 20, 30, 40, 50]]]));
 
-    const result = mergeTrendData(cached, tail, true) as AggregateSeriesData;
+    const result = mergeTrendData(cached, tail) as AggregateSeriesData;
     expect(result.n).toBe(8);
     const s = result.series.get(1)!;
     expect(s.value).toEqual([1, 2, 3, 10, 20, 30, 40, 50]);
   });
 
-  it('isTailing=true with empty live (liveEndIndex=0): cached returned unchanged, no clip', () => {
-    // live.startMs = 0n, maxLiveLen = 0 → liveEndIndex = 0.
-    // Guard: isTailing && liveEndIndex > 0 is false → effectiveCachedN = cached.n.
+  it('empty live tail (liveEndIndex=0): cached returned unchanged (same reference)', () => {
+    // live.startMs = 0n, perTag has empty arrays → fast-path → cached reference returned
     const cached = makeAgg(5, new Map([[1, [1, 2, 3, 4, 5]]]));
     const tail = makeAggTail(0n, new Map([[1, []]]));
 
-    const result = mergeTrendData(cached, tail, true) as AggregateSeriesData;
-    // live is empty so result should equal cached
-    expect(result.n).toBe(5);
-    expect(result.series.get(1)!.value).toEqual([1, 2, 3, 4, 5]);
+    const result = mergeTrendData(cached, tail);
+    expect(result).toBe(cached);
   });
 });
 
@@ -333,5 +285,103 @@ describe('mergeTrendData — type mismatch', () => {
       expect.anything(),
     );
     warnSpy.mockRestore();
+  });
+});
+
+// ─── New Phase 2 tests ────────────────────────────────────────────────────────
+
+describe('mergeTrendData — fast-path (empty live tail)', () => {
+  it('aggregate tail with all-empty perTag arrays → returns cached unchanged (same reference)', () => {
+    const cached = makeAgg(5, new Map([[1, [1, 2, 3, 4, 5]]]));
+    const tail = makeAggTail(0n, new Map([[1, []], [2, []]]));
+
+    const result = mergeTrendData(cached, tail);
+    expect(result).toBe(cached);
+  });
+
+  it('raw tail with all-empty ts arrays → returns cached unchanged (same reference)', () => {
+    const cached = makeRaw(
+      new Map([[1, { ts: [100n, 200n], value: [1, 2] }]]),
+      0n, 200n,
+    );
+    const tail = makeRawTail(new Map([[1, { ts: [], value: [] }], [2, { ts: [], value: [] }]]));
+
+    const result = mergeTrendData(cached, tail);
+    expect(result).toBe(cached);
+  });
+});
+
+describe('mergeTrendData — live null wins over cached non-null within coverage', () => {
+  it('live null in coverage range overrides cached non-null (watchdog case)', () => {
+    // cached: [1, 2, 5.2, 4.0, 5.0]; live covers buckets 2-3 with null at bucket 2
+    const cached = makeAgg(5, new Map([[1, [1, 2, 5.2, 4.0, 5.0]]]));
+    const tail = makeAggTail(2000n, new Map([[1, [null, 4.0]]]));
+    // liveStartIndex=2, liveEndIndex=4, effectiveCachedN=min(5,4)=4
+
+    const result = mergeTrendData(cached, tail) as AggregateSeriesData;
+    const s = result.series.get(1)!;
+    expect(result.n).toBe(4);
+    expect(s.value[0]).toBe(1);
+    expect(s.value[1]).toBe(2);
+    expect(s.value[2]).toBeNull();   // live null wins over cached 5.2
+    expect(s.value[3]).toBe(4.0);   // live 4.0 wins
+  });
+});
+
+describe('mergeTrendData — outside live coverage: cached wins', () => {
+  it('cached buckets before live start are preserved', () => {
+    // cached: 5 buckets; live covers only bucket 3 (1 entry)
+    const cached = makeAgg(5, new Map([[1, [1, 2, 3, 4, 5]]]));
+    const tail = makeAggTail(3000n, new Map([[1, [99]]]));
+    // liveStartIndex=3, liveEndIndex=4, effectiveCachedN=min(5,4)=4, totalN=4
+
+    const result = mergeTrendData(cached, tail) as AggregateSeriesData;
+    const s = result.series.get(1)!;
+    expect(result.n).toBe(4);
+    expect(s.value[0]).toBe(1);   // cached (before live)
+    expect(s.value[1]).toBe(2);   // cached (before live)
+    expect(s.value[2]).toBe(3);   // cached (before live)
+    expect(s.value[3]).toBe(99);  // live wins in coverage
+  });
+});
+
+describe('mergeTrendData — cross-bucketSMs re-bucketing', () => {
+  it('live re-bucketed at cached.bucketSMs when bucketSMs differ', () => {
+    const ORIGIN = TS_BUCKET_ORIGIN_MS;
+
+    // cached: 3 buckets at 1000 ms/bucket starting at ORIGIN
+    const cached = makeAgg(3, new Map([[1, [1, 2, 3]]]), ORIGIN);
+
+    // Raw ring entries that span two 1000ms buckets.
+    // Entry at ORIGIN+1100n triggers close of bucket at ORIGIN (contains 100n and 300n entries).
+    // Entry at ORIGIN+2100n triggers close of bucket at ORIGIN+1000n.
+    const rawEntries: Map<number, { moduleTs: bigint; value: number | null }[]> = new Map([
+      [1, [
+        { moduleTs: ORIGIN + 100n, value: 5 },
+        { moduleTs: ORIGIN + 300n, value: 7 },
+        { moduleTs: ORIGIN + 1100n, value: 9 },   // closes 1000ms bucket 0 → last=7, min=5, max=7
+        { moduleTs: ORIGIN + 1600n, value: 11 },
+        { moduleTs: ORIGIN + 2100n, value: 13 },  // closes 1000ms bucket 1 → last=11, min=9, max=11
+      ]],
+    ]);
+
+    // Live tail was accumulated at 250ms buckets (different from cached 1000ms)
+    const liveTail: AggregateTail = {
+      mode: 'aggregate',
+      startMs: ORIGIN,
+      bucketSMs: 250n,
+      perTag: new Map([[1, { value: [100, 200, 300, 400, 500], min: [], max: [] }]]),
+      rawEntries,
+    };
+
+    const result = mergeTrendData(cached, liveTail) as AggregateSeriesData;
+
+    // Re-bucketed at 1000ms: 2 closed buckets (bucket 2 is open, not closed)
+    // liveStartIndex=0, liveEndIndex=2, effectiveCachedN=min(3,2)=2, totalN=2
+    expect(result.n).toBe(2);
+    const s = result.series.get(1)!;
+    expect(s.value).toEqual([7, 11]);   // re-bucketed live values (last of each bucket)
+    expect(s.min).toEqual([5, 9]);
+    expect(s.max).toEqual([7, 11]);
   });
 });

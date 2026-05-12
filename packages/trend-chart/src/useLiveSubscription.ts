@@ -18,6 +18,12 @@ export interface AggregateTail {
     min:   (number | null)[];
     max:   (number | null)[];
   }>;
+  /**
+   * Raw ring entries per tag (moduleTs as bigint, numeric value).
+   * Used by mergeTrendData for cross-bucketSMs re-bucketing when cached.bucketSMs
+   * differs from live.bucketSMs (drag-zoom-during-live edge case — §5.6).
+   */
+  rawEntries: Map<number, { moduleTs: bigint; value: number | null }[]>;
 }
 
 export interface RawTail {
@@ -197,10 +203,12 @@ function processEventIntoAccumulator(
  * Builds an AggregateTail snapshot from current accumulator state.
  * Returns null when no tag has closed any buckets yet.
  * Shares array references with accumulator state — always rebuild after mutations.
+ * `rings` is projected into `rawEntries` for cross-bucketSMs re-bucketing in merge.
  */
 function buildAggregateTail(
   accumulators: Map<number, AccumulatorState>,
   bucketSMs: bigint,
+  rings: Map<number, TrendSample[]>,
 ): AggregateTail | null {
   const perTag = new Map<number, { value: (number | null)[]; min: (number | null)[]; max: (number | null)[] }>();
   let earliestStart: bigint | null = null;
@@ -217,7 +225,13 @@ function buildAggregateTail(
     }
   }
   if (earliestStart === null) return null;
-  return { mode: 'aggregate', startMs: earliestStart, bucketSMs, perTag };
+
+  const rawEntries = new Map<number, { moduleTs: bigint; value: number | null }[]>();
+  for (const [tagId, arr] of rings) {
+    rawEntries.set(tagId, arr.map(e => ({ moduleTs: BigInt(e.moduleTs), value: toNumericValue(e.value) })));
+  }
+
+  return { mode: 'aggregate', startMs: earliestStart, bucketSMs, perTag, rawEntries };
 }
 
 /**
@@ -296,7 +310,7 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
     if (tailModeRef.current === 'aggregate') {
       const bSMs = bucketSMsRef.current;
       if (bSMs === null) { setTail(null); return; }
-      setTail(buildAggregateTail(accumulatorsRef.current, bSMs));
+      setTail(buildAggregateTail(accumulatorsRef.current, bSMs, ringsRef.current));
     } else {
       setTail(buildRawTail(rawBuffersRef.current));
     }
