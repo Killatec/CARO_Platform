@@ -484,19 +484,16 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
       inFlightTilesRef.current.clear();
       setActiveTileCount(0);
 
-      const nowMs = BigInt(Date.now());
-      const { visible } = tilesForViewport({
-        viewport: currentViewport,
+      // Tile bounds = viewport bounds exactly. tilesForViewport aligns to a
+      // tile-grid for cache-key stability across viewport translations, which
+      // is a history-mode concern. The live path doesn't reuse tiles and
+      // doesn't cache, so alignment would only introduce a left-side gap
+      // (up to one tileSpan) for viewports that don't land on a grid boundary.
+      const spineTile: Tile = {
+        startTime: currentViewport.start,
+        endTime: currentViewport.end,
         bucketCount: visibleTilesPerWindow * bucketCount,
-        visibleTilesPerWindow: 1,
-        overfetchPerSide: 0,
-        nowMs,
-      });
-      const spineTile = visible[0];
-      if (!spineTile) {
-        setHookResult({ data: null, isLoading: false, error: null });
-        return;
-      }
+      };
 
       const generation = ++generationRef.current;
       const batchT0 = performance.now();

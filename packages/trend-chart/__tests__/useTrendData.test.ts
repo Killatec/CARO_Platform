@@ -199,6 +199,16 @@ describe('assembleLiveSpine', () => {
     expect(s99.value).toHaveLength(1000);
   });
 
+  it('tile boundaries are preserved exactly — no alignment fudge', () => {
+    // Spine bounds must equal viewport bounds regardless of grid alignment.
+    const oddTile: Tile = { startTime: 12_345_678n, endTime: 99_999_999n, bucketCount: 1000 };
+    const res = makeAggResponse([1], { n: 1000, bucketSMs: 88 });
+    const result = assembleLiveSpine([res], oddTile, [1]);
+    expect(result).not.toBeNull();
+    expect(result!.startTime).toBe(12_345_678n);
+    expect(result!.endTime).toBe(99_999_999n);
+  });
+
   it('empty responses → returns null', () => {
     expect(assembleLiveSpine([], spineTile, [1])).toBeNull();
   });
@@ -1464,10 +1474,27 @@ describe('useTrendData — isTailing skip guard', () => {
     await waitFor(() => expect(mockFetchTile.mock.calls.length).toBeGreaterThan(callsAfterInitial));
   });
 
-  // NOTE: The two tests below use renderHook and fail with "document is not defined"
+  // NOTE: The tests below use renderHook and fail with "document is not defined"
   // due to a pre-existing jsdom environment gap that affects all renderHook-based tests
   // in this package. The failure is NOT a logic regression — the assertions are correct
   // and should pass once the jsdom setup is fixed. Do not mark these .skip.
+
+  it('live entry: fetchTile called with exact viewport bounds, not tile-grid-aligned bounds', async () => {
+    // Viewport ending at a non-round timestamp — tile-grid alignment would shift
+    // startTime to a boundary earlier than viewport.start, creating a left-side gap.
+    const oddViewport: Viewport = { start: 12_345_678_000n, end: 12_345_678_000n + ONE_HOUR };
+    const { result } = renderHook(() =>
+      useTrendData({ viewport: oddViewport, tagIds: [1], isTailing: true }),
+    );
+
+    await waitFor(() => expect(mockFetchTile).toHaveBeenCalled());
+
+    const call = mockFetchTile.mock.calls[0]!;
+    expect(call[0].startTime).toBe(oddViewport.start);
+    expect(call[0].endTime).toBe(oddViewport.end);
+    expect(result.current.data?.startTime).toBe(oddViewport.start);
+    expect(result.current.data?.endTime).toBe(oddViewport.end);
+  });
 
   it('live entry: exactly one spine tile fetch, data assembled directly (no cache path)', async () => {
     const { result } = renderHook(
