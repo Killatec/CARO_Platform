@@ -114,6 +114,7 @@ function makeResult(tagIds: number[], opts: Partial<UseTrendDataResult> = {}): U
     error: null,
     ensureCovered: vi.fn(),
     evictRange: vi.fn(),
+    evictAll: vi.fn(),
     swapCounter: 0,
     activeTileCount: 0,
     lastFetchMs: null,
@@ -439,8 +440,7 @@ describe('TrendChartContainer', () => {
       expect(mockUseTrendData.mock.calls.length).toBe(beforeCount);
     });
 
-    it('pan in tailing → calls commitAndDrain + evictRange, then mode goes fixed', () => {
-      liveHoisted.commitAndDrain.mockReturnValue({ start: 100n, end: 200n });
+    it('pan in tailing → calls commitAndDrain + evictAll, then mode goes fixed', () => {
       renderContainer([1]);
 
       const farPastEnd = 1_700_000_000_000n;
@@ -451,12 +451,12 @@ describe('TrendChartContainer', () => {
       });
 
       expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
-      expect(mockResult.evictRange).toHaveBeenCalledWith(100n, 200n);
+      expect(mockResult.evictAll).toHaveBeenCalledOnce();
+      expect(mockResult.evictRange).not.toHaveBeenCalled();
       expect(screen.getByText('Go Live')).toBeTruthy();
     });
 
-    it('zoom (onXRangeChange) in tailing → calls commitAndDrain + evictRange', () => {
-      liveHoisted.commitAndDrain.mockReturnValue({ start: 50n, end: 150n });
+    it('zoom (onXRangeChange) in tailing → calls commitAndDrain + evictAll', () => {
       renderContainer([1]);
 
       const farPastEnd = 1_700_000_000_000n;
@@ -467,12 +467,12 @@ describe('TrendChartContainer', () => {
       });
 
       expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
-      expect(mockResult.evictRange).toHaveBeenCalledWith(50n, 150n);
+      expect(mockResult.evictAll).toHaveBeenCalledOnce();
+      expect(mockResult.evictRange).not.toHaveBeenCalled();
       expect(screen.getByText('Go Live')).toBeTruthy();
     });
 
-    it('drag-zoom in tailing → calls commitAndDrain + evictRange', () => {
-      liveHoisted.commitAndDrain.mockReturnValue({ start: 200n, end: 300n });
+    it('drag-zoom in tailing → calls commitAndDrain + evictAll', () => {
       renderContainer([1]);
 
       const farPastEnd = 1_700_000_000_000n;
@@ -482,19 +482,20 @@ describe('TrendChartContainer', () => {
       });
 
       expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
-      expect(mockResult.evictRange).toHaveBeenCalledWith(200n, 300n);
+      expect(mockResult.evictAll).toHaveBeenCalledOnce();
+      expect(mockResult.evictRange).not.toHaveBeenCalled();
       expect(screen.getByText('Go Live')).toBeTruthy();
     });
 
-    it('EndPicker commit in tailing → calls commitAndDrain + evictRange', () => {
-      liveHoisted.commitAndDrain.mockReturnValue({ start: 10n, end: 20n });
+    it('EndPicker commit in tailing → calls commitAndDrain + evictAll', () => {
       renderContainer([1]);
 
       const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
       fireEvent.change(input, { target: { value: '2020-01-02T00:00:00' } });
 
       expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
-      expect(mockResult.evictRange).toHaveBeenCalledWith(10n, 20n);
+      expect(mockResult.evictAll).toHaveBeenCalledOnce();
+      expect(mockResult.evictRange).not.toHaveBeenCalled();
       expect(screen.getByText('Go Live')).toBeTruthy();
     });
 
@@ -504,6 +505,7 @@ describe('TrendChartContainer', () => {
 
       expect(liveHoisted.commitAndDrain).not.toHaveBeenCalled();
       expect(mockResult.evictRange).not.toHaveBeenCalled();
+      expect(mockResult.evictAll).not.toHaveBeenCalled();
       expect(screen.getByText('● Live')).toBeTruthy();
     });
 
@@ -513,10 +515,11 @@ describe('TrendChartContainer', () => {
 
       expect(liveHoisted.commitAndDrain).not.toHaveBeenCalled();
       expect(mockResult.evictRange).not.toHaveBeenCalled();
+      expect(mockResult.evictAll).not.toHaveBeenCalled();
     });
 
-    it('evictRange not called when commitAndDrain returns empty range', () => {
-      // Default: { start: 0n, end: 0n } → guard skips evictRange.
+    it('evictAll always called on tailing→fixed even when commitAndDrain returns empty range', () => {
+      // Default: { start: 0n, end: 0n } — drain result no longer guards evictAll.
       renderContainer([1]);
 
       const farPastEnd = 1_700_000_000_000n;
@@ -527,7 +530,32 @@ describe('TrendChartContainer', () => {
       });
 
       expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
+      expect(mockResult.evictAll).toHaveBeenCalledOnce();
       expect(mockResult.evictRange).not.toHaveBeenCalled();
+    });
+
+    it('Live click in fixed → evictAll fires and mode returns to tailing', () => {
+      renderContainer([1]);
+
+      // Pan to enter fixed mode (clears spies via act boundary).
+      const farPastEnd = 1_700_000_000_000n;
+      const farPastStart = farPastEnd - 3_600_000n;
+      act(() => {
+        capturedOnXPan?.(farPastStart, farPastEnd);
+        vi.runAllTimers();
+      });
+      expect(screen.getByText('Go Live')).toBeTruthy();
+
+      // Clear spies accumulated during the tailing→fixed transition.
+      mockResult.evictAll.mockClear();
+      liveHoisted.commitAndDrain.mockClear();
+
+      // Click Live: fixed → tailing → evictAll fires, no commitAndDrain.
+      fireEvent.click(screen.getByText('Go Live'));
+
+      expect(mockResult.evictAll).toHaveBeenCalledOnce();
+      expect(liveHoisted.commitAndDrain).not.toHaveBeenCalled();
+      expect(screen.getByText('● Live')).toBeTruthy();
     });
 
     it('unmount in tailing → commitAndDrain + evictRange fire in cleanup', () => {

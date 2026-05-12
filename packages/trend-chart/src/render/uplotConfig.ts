@@ -155,6 +155,14 @@ export function buildUplotConfig(opts: BuildUplotConfigOpts): uPlot.Options {
     if (u.select.width <= 0) return;
     const minSec = u.posToVal(u.select.left, 'x');
     const maxSec = u.posToVal(u.select.left + u.select.width, 'x');
+    // Update userScaleRef BEFORE setScale so the range function returns the
+    // new bounds instead of the stale userScaleRef values. Otherwise uPlot's
+    // scale.x ends up stuck at the previous range (because the range fn we
+    // installed always returns userScaleRef.current when set), while the
+    // imperative xRange effect in TrendChart.tsx skips its own setScale call
+    // when lastIntent === 'zoom' — leaving uPlot's scale.x stale and causing
+    // downstream coverage checks to compute against the wrong viewport.
+    if (userScaleRef) userScaleRef.current = { min: minSec, max: maxSec };
     u.setScale('x', { min: minSec, max: maxSec });
     const minMs = BigInt(Math.round(minSec * 1000));
     const maxMs = BigInt(Math.round(maxSec * 1000));
@@ -173,8 +181,13 @@ export function buildUplotConfig(opts: BuildUplotConfigOpts): uPlot.Options {
                 onCursorChange(null, null);
                 return;
               }
-              const tsSec = u.data[0]?.[idx];
-              const tsMs = tsSec != null ? Number(tsSec) * 1000 : null;
+              // Use posToVal for the cursor's actual X-axis position rather
+              // than the nearest data point's timestamp. This matters in data
+              // gaps — the cursor time display should reflect where the cursor
+              // is on the X axis, not snap to the nearest sample.
+              // idx is still used for per-tag legend values (nearest data point).
+              const tsSec = u.posToVal(left, 'x');
+              const tsMs = Number.isFinite(tsSec) ? Math.round(tsSec * 1000) : null;
               onCursorChange(idx, tsMs);
             },
           ],

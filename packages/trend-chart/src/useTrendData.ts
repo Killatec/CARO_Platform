@@ -60,6 +60,9 @@ export interface UseTrendDataResult extends HookState {
   /** Evicts all cache entries whose tile range overlaps [startMs, endMs), prunes activeTilesRef,
    *  and bumps generationRef to drop in-flight fetches. Does NOT trigger a fetch. */
   evictRange: (startMs: bigint, endMs: bigint) => void;
+  /** Drops the entire cache, resets the active set, and bumps generationRef.
+   *  Called on every tailing↔fixed transition so the next fetch always starts clean. */
+  evictAll: () => void;
   swapCounter: number;
   activeTileCount: number;
   /** Wall-clock ms of the most recent viewport-change batch (visible tiles only).
@@ -305,7 +308,9 @@ export function pruneAndAdd(activeSet: Tile[], newTile: Tile, maxSize = MAX_ACTI
   const isRightEnd = newTile.endTime > activeSet[activeSet.length - 1]!.endTime;
   if (isLeftEnd) return sorted.slice(0, maxSize);
   if (isRightEnd) return sorted.slice(sorted.length - maxSize);
-  console.warn('[useTrendData] pruneAndAdd: newTile is in the middle of activeSet — unexpected');
+  console.warn('[useTrendData] pruneAndAdd: newTile is in the middle of activeSet — unexpected',
+    'activeSet=', activeSet.map(t => `[${Number(t.startTime)},${Number(t.endTime)}]`).join(' '),
+    'newTile=', `[${Number(newTile.startTime)},${Number(newTile.endTime)}]`);
   return sorted.slice(sorted.length - maxSize);
 }
 
@@ -678,5 +683,14 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     }
   }, [tagIds, bucketCount, cache]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  return { ...hookResult, ensureCovered, evictRange, swapCounter, activeTileCount, lastFetchMs, responseTailTs };
+  const evictAll = useCallback(() => {
+    generationRef.current++;
+    inFlightTilesRef.current.clear();
+    cache.deleteWhere(() => true);
+    activeTilesRef.current = [];
+    setActiveTileCount(0);
+    setResponseTailTs(null);
+  }, [cache]);
+
+  return { ...hookResult, ensureCovered, evictRange, evictAll, swapCounter, activeTileCount, lastFetchMs, responseTailTs };
 }

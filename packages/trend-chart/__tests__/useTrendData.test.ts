@@ -117,6 +117,7 @@ describe('pruneAndAdd', () => {
     expect(result).toHaveLength(8);
     expect(warnSpy).toHaveBeenCalledWith(
       '[useTrendData] pruneAndAdd: newTile is in the middle of activeSet — unexpected',
+      expect.any(String), expect.any(String), expect.any(String), expect.any(String),
     );
     warnSpy.mockRestore();
   });
@@ -1278,6 +1279,57 @@ describe('useTrendData — evictRange', () => {
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     expect(result.current.responseTailTs).toBe(TAIL_TS_2);
+  });
+});
+
+// ── evictAll ──────────────────────────────────────────────────────────────────
+
+describe('useTrendData — evictAll', () => {
+  it('clears entire cache: activeTileCount → 0, responseTailTs → null', async () => {
+    mockFetchTile.mockResolvedValue(makeAggResponse([1], { responseTailTs: DEFAULT_RESPONSE_TAIL_TS }));
+
+    const { result } = renderHook(() =>
+      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
+    );
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    expect(result.current.activeTileCount).toBeGreaterThan(0);
+    expect(result.current.responseTailTs).toBe(DEFAULT_RESPONSE_TAIL_TS);
+
+    await act(() => {
+      result.current.evictAll();
+    });
+
+    expect(result.current.activeTileCount).toBe(0);
+    expect(result.current.responseTailTs).toBeNull();
+  });
+
+  it('in-flight fetch after evictAll is dropped (generation bumped)', async () => {
+    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
+
+    const { result } = renderHook(() =>
+      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
+    );
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    const swapBefore = result.current.swapCounter;
+
+    // Stall next fetch so it stays in-flight across evictAll.
+    const resolvers: ((v: ReturnType<typeof makeAggResponse>) => void)[] = [];
+    mockFetchTile.mockImplementation(() => new Promise(r => resolvers.push(r)));
+
+    // ensureCovered queues an in-flight fetch.
+    act(() => { result.current.ensureCovered(-ONE_HOUR * 5n, -ONE_HOUR * 4n); });
+
+    // evictAll bumps generation; the in-flight fetch should be dropped.
+    await act(() => { result.current.evictAll(); });
+
+    // Resolve the stale fetch — swap counter must NOT advance.
+    await act(async () => {
+      for (const r of resolvers) r(makeAggResponse([1], { responseTailTs: 9_999_999_999_999 }));
+    });
+
+    expect(result.current.swapCounter).toBe(swapBefore);
+    expect(result.current.activeTileCount).toBe(0);
   });
 });
 

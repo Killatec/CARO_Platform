@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useHmiContext } from '@caro/hmi-context';
 import { TS_BUCKET_ORIGIN_MS, floorDiv } from './level.js';
 
@@ -522,5 +522,17 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
     return { start: unionStart, end: unionEnd };
   }, []); // all stable refs — no deps needed
 
-  return { commitAndDrain, tail };
+  // Suppress the brief mismatch window during a tailMode transition
+  // (e.g., preset change crossing the §6.3 raw/aggregate dispatch
+  // boundary). The tail state is updated via useEffect after the render
+  // where tailMode prop changed; until then, returning the stale tail
+  // would surface as a [mergeTrendData] type mismatch warning. Returning
+  // null while modes are inconsistent lets mergeTrendData fall through
+  // to cached-only rendering (correct behavior) until the effect runs.
+  const tailToReturn = useMemo(
+    () => (tail !== null && tail.mode !== tailMode ? null : tail),
+    [tail, tailMode],
+  );
+
+  return { commitAndDrain, tail: tailToReturn };
 }

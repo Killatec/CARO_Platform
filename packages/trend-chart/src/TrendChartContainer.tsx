@@ -164,18 +164,26 @@ export function TrendChartContainer({
 
   const bucketSMsIndicator = data?.type === 'aggregate' ? BigInt(data.bucketSMs) : null;
 
-  // ── dispatchModeAction: tailing-exit cleanup before dispatch ─────────────
-  // Used for actions that can transition tailing → fixed (zoom, pan, endPicker).
-  // Direct dispatch is used for actions that never exit tailing (preset, live, tick).
+  // ── dispatchModeAction: cache eviction + live drain before dispatch ──────
+  // Used for all actions that can change the tailing/fixed mode boundary.
   const dispatchModeAction = useCallback((action: TrendModeAction) => {
     const cur  = modeStateRef.current;
     const next = trendModeReducer(cur, action);
+
+    // Tailing → fixed: drain live buffer (no-op live data lost is within DB
+    // pipeline lag window; recoverable on REST refetch). Then evict all cached
+    // tiles for a fresh fetch on the new viewport.
     if (cur.mode === 'tailing' && next.mode === 'fixed') {
-      const range = liveSubRef.current?.commitAndDrain();
-      if (range && range.end > range.start) {
-        trendDataRef.current.evictRange(range.start, range.end);
-      }
+      liveSubRef.current?.commitAndDrain();
+      trendDataRef.current.evictAll();
     }
+
+    // Fixed → tailing: no live buffer to drain (was already cleared on prior
+    // exit). Evict cached tiles for fresh fetch at the new tailing position.
+    if (cur.mode === 'fixed' && next.mode === 'tailing') {
+      trendDataRef.current.evictAll();
+    }
+
     dispatch(action);
   }, [dispatch]);
 
@@ -227,8 +235,8 @@ export function TrendChartContainer({
   );
 
   const handleLive = useCallback(() => {
-    dispatch({ type: 'liveClicked', nowMs: BigInt(Date.now()) });
-  }, [dispatch]);
+    dispatchModeAction({ type: 'liveClicked', nowMs: BigInt(Date.now()) });
+  }, [dispatchModeAction]);
 
   const handleEndCommitted = useCallback(
     (to: bigint) => {
