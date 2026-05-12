@@ -164,25 +164,23 @@ export function TrendChartContainer({
 
   const bucketSMsIndicator = data?.type === 'aggregate' ? BigInt(data.bucketSMs) : null;
 
-  // ── dispatchModeAction: cache eviction + live drain before dispatch ──────
+  // ── dispatchModeAction: live drain before dispatch ────────────────────────
   // Used for all actions that can change the tailing/fixed mode boundary.
   const dispatchModeAction = useCallback((action: TrendModeAction) => {
     const cur  = modeStateRef.current;
     const next = trendModeReducer(cur, action);
 
-    // Tailing → fixed: drain live buffer (no-op live data lost is within DB
-    // pipeline lag window; recoverable on REST refetch). Then evict all cached
-    // tiles for a fresh fetch on the new viewport.
+    // Tailing → fixed: drain the live buffer so accumulated FIFO/accumulator
+    // coverage is committed. No cache eviction needed — live mode never writes
+    // to the LRU cache, so there is nothing to evict. History fetches start
+    // fresh against any stale tiles that remain (LRU displaces them naturally).
     if (cur.mode === 'tailing' && next.mode === 'fixed') {
       liveSubRef.current?.commitAndDrain();
-      trendDataRef.current.evictAll();
     }
 
-    // Fixed → tailing: no live buffer to drain (was already cleared on prior
-    // exit). Evict cached tiles for fresh fetch at the new tailing position.
-    if (cur.mode === 'fixed' && next.mode === 'tailing') {
-      trendDataRef.current.evictAll();
-    }
+    // Fixed → tailing: the live-spine path never touches the cache, so existing
+    // history tiles can stay. The spine fetch overwrites hookResult.data directly
+    // on the first live tick.
 
     dispatch(action);
   }, [dispatch]);

@@ -440,7 +440,8 @@ describe('TrendChartContainer', () => {
       expect(mockUseTrendData.mock.calls.length).toBe(beforeCount);
     });
 
-    it('pan in tailing → calls commitAndDrain + evictAll, then mode goes fixed', () => {
+    it('pan in tailing → calls commitAndDrain, mode goes fixed, no evictAll', () => {
+      // Live mode never writes to cache, so no eviction is needed on tailing→fixed.
       renderContainer([1]);
 
       const farPastEnd = 1_700_000_000_000n;
@@ -451,12 +452,12 @@ describe('TrendChartContainer', () => {
       });
 
       expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
-      expect(mockResult.evictAll).toHaveBeenCalledOnce();
+      expect(mockResult.evictAll).not.toHaveBeenCalled();
       expect(mockResult.evictRange).not.toHaveBeenCalled();
       expect(screen.getByText('Go Live')).toBeTruthy();
     });
 
-    it('zoom (onXRangeChange) in tailing → calls commitAndDrain + evictAll', () => {
+    it('zoom (onXRangeChange) in tailing → calls commitAndDrain, no evictAll', () => {
       renderContainer([1]);
 
       const farPastEnd = 1_700_000_000_000n;
@@ -467,12 +468,12 @@ describe('TrendChartContainer', () => {
       });
 
       expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
-      expect(mockResult.evictAll).toHaveBeenCalledOnce();
+      expect(mockResult.evictAll).not.toHaveBeenCalled();
       expect(mockResult.evictRange).not.toHaveBeenCalled();
       expect(screen.getByText('Go Live')).toBeTruthy();
     });
 
-    it('drag-zoom in tailing → calls commitAndDrain + evictAll', () => {
+    it('drag-zoom in tailing → calls commitAndDrain, no evictAll', () => {
       renderContainer([1]);
 
       const farPastEnd = 1_700_000_000_000n;
@@ -482,19 +483,19 @@ describe('TrendChartContainer', () => {
       });
 
       expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
-      expect(mockResult.evictAll).toHaveBeenCalledOnce();
+      expect(mockResult.evictAll).not.toHaveBeenCalled();
       expect(mockResult.evictRange).not.toHaveBeenCalled();
       expect(screen.getByText('Go Live')).toBeTruthy();
     });
 
-    it('EndPicker commit in tailing → calls commitAndDrain + evictAll', () => {
+    it('EndPicker commit in tailing → calls commitAndDrain, no evictAll', () => {
       renderContainer([1]);
 
       const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
       fireEvent.change(input, { target: { value: '2020-01-02T00:00:00' } });
 
       expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
-      expect(mockResult.evictAll).toHaveBeenCalledOnce();
+      expect(mockResult.evictAll).not.toHaveBeenCalled();
       expect(mockResult.evictRange).not.toHaveBeenCalled();
       expect(screen.getByText('Go Live')).toBeTruthy();
     });
@@ -518,8 +519,9 @@ describe('TrendChartContainer', () => {
       expect(mockResult.evictAll).not.toHaveBeenCalled();
     });
 
-    it('evictAll always called on tailing→fixed even when commitAndDrain returns empty range', () => {
-      // Default: { start: 0n, end: 0n } — drain result no longer guards evictAll.
+    it('tailing→fixed: commitAndDrain fires regardless of drain range; evictAll never fires', () => {
+      // Previously evictAll was gated on drain result; now it is never called.
+      liveHoisted.commitAndDrain.mockReturnValue({ start: 0n, end: 0n }); // empty drain
       renderContainer([1]);
 
       const farPastEnd = 1_700_000_000_000n;
@@ -530,14 +532,15 @@ describe('TrendChartContainer', () => {
       });
 
       expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
-      expect(mockResult.evictAll).toHaveBeenCalledOnce();
+      expect(mockResult.evictAll).not.toHaveBeenCalled();
       expect(mockResult.evictRange).not.toHaveBeenCalled();
     });
 
-    it('Live click in fixed → evictAll fires and mode returns to tailing', () => {
+    it('Live click in fixed → mode returns to tailing, no evictAll, no commitAndDrain', () => {
+      // Live-spine path never touches cache; no eviction needed on fixed→tailing.
       renderContainer([1]);
 
-      // Pan to enter fixed mode (clears spies via act boundary).
+      // Pan to enter fixed mode.
       const farPastEnd = 1_700_000_000_000n;
       const farPastStart = farPastEnd - 3_600_000n;
       act(() => {
@@ -550,12 +553,39 @@ describe('TrendChartContainer', () => {
       mockResult.evictAll.mockClear();
       liveHoisted.commitAndDrain.mockClear();
 
-      // Click Live: fixed → tailing → evictAll fires, no commitAndDrain.
+      // Click Live: fixed → tailing → no evictAll, no commitAndDrain.
       fireEvent.click(screen.getByText('Go Live'));
 
-      expect(mockResult.evictAll).toHaveBeenCalledOnce();
+      expect(mockResult.evictAll).not.toHaveBeenCalled();
       expect(liveHoisted.commitAndDrain).not.toHaveBeenCalled();
       expect(screen.getByText('● Live')).toBeTruthy();
+    });
+
+    it('spine-fetch window: bucketSMs=null during in-flight, correct after spine settles', () => {
+      // Cold start: data=null (spine in flight). useLiveSubscription must see
+      // tailMode=null so it accumulates in FIFOs only (no accumulator writes).
+      // When spine settles, tailMode→'aggregate' triggers FIFO replay with the
+      // correct bucketSMs. This verifies no deltas are misrouted during the
+      // spine-fetch window.
+      mockUseTrendData.mockReturnValue(makeResult([1], { data: null, isLoading: true, responseTailTs: null }));
+      renderContainer([1]);
+
+      // Spine in flight → tailMode=null, bucketSMs=null propagated to useLiveSubscription.
+      expect(liveHoisted.getLastOpts()?.tailMode).toBeNull();
+      expect(liveHoisted.getLastOpts()?.bucketSMs).toBeNull();
+
+      // Spine settles: useTrendData now returns data.
+      mockUseTrendData.mockReturnValue(makeResult([1]));
+      // Trigger a re-render by simulating a tick (onDataReceived advances nowMs).
+      act(() => {
+        (liveHoisted.getLastOpts()?.onDataReceived as ((ts: number) => void) | undefined)?.(
+          Date.now(),
+        );
+      });
+
+      // tailMode and bucketSMs now reflect the settled spine data.
+      expect(liveHoisted.getLastOpts()?.tailMode).toBe('aggregate');
+      expect(liveHoisted.getLastOpts()?.bucketSMs).toBe(3600n);
     });
 
     it('unmount in tailing → commitAndDrain + evictRange fire in cleanup', () => {

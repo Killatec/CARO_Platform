@@ -1,6 +1,6 @@
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { useTrendData, pruneAndAdd } from '../src/useTrendData.js';
+import { useTrendData, pruneAndAdd, assembleLiveSpine } from '../src/useTrendData.js';
 import { fetchTile } from '../src/api.js';
 import type { Viewport, Tile } from '../src/types.js';
 import type { TileApiResponse } from '../src/api.js';
@@ -137,6 +137,75 @@ describe('pruneAndAdd', () => {
     const result = pruneAndAdd(tiles, newTile, 5);
     expect(result[0]).toEqual(newTile);
     expect(result[1]).toEqual(tiles[0]);
+  });
+});
+
+// ─── assembleLiveSpine ────────────────────────────────────────────────────────
+// Pure-function tests — no renderHook, no jsdom dependency.
+
+describe('assembleLiveSpine', () => {
+  const spineTile: Tile = { startTime: 0n, endTime: ONE_HOUR, bucketCount: 1000 };
+
+  it('single aggregate response → AggregateSeriesData with correct shape', () => {
+    const res = makeAggResponse([1, 2], { n: 1000, bucketSMs: 3600, source: '1min_cagg' });
+    const result = assembleLiveSpine([res], spineTile, [1, 2]);
+    expect(result).not.toBeNull();
+    expect(result!.type).toBe('aggregate');
+    if (result!.type !== 'aggregate') return;
+    expect(result!.source).toBe('1min_cagg');
+    expect(result!.startTime).toBe(0n);
+    expect(result!.endTime).toBe(ONE_HOUR);
+    expect(result!.n).toBe(1000);
+    expect(result!.bucketSMs).toBe(3600);
+    expect(result!.series.has(1)).toBe(true);
+    expect(result!.series.has(2)).toBe(true);
+    expect(result!.series.get(1)!.value).toHaveLength(1000);
+  });
+
+  it('single raw response → RawSeriesData with bigint ts', () => {
+    const res = makeRawResponse([1, 2]);
+    const result = assembleLiveSpine([res], spineTile, [1, 2]);
+    expect(result).not.toBeNull();
+    expect(result!.type).toBe('raw');
+    if (result!.type !== 'raw') return;
+    expect(result!.source).toBe('raw');
+    const s1 = result!.series.get(1)!;
+    expect(s1.ts).toHaveLength(3);
+    // ts values should be bigints
+    expect(typeof s1.ts[0]).toBe('bigint');
+    expect(s1.ts[0]).toBe(100n);
+  });
+
+  it('multi-group aggregate: two responses for different tagId subsets are merged', () => {
+    const res1 = makeAggResponse([1, 2], { n: 1000, bucketSMs: 3600 });
+    const res2 = makeAggResponse([3, 4], { n: 1000, bucketSMs: 3600 });
+    const result = assembleLiveSpine([res1, res2], spineTile, [1, 2, 3, 4]);
+    expect(result).not.toBeNull();
+    expect(result!.type).toBe('aggregate');
+    if (result!.type !== 'aggregate') return;
+    expect(result!.series.has(1)).toBe(true);
+    expect(result!.series.has(3)).toBe(true);
+    expect(result!.series.size).toBe(4);
+  });
+
+  it('tagId absent from response → null-filled entry added', () => {
+    const res = makeAggResponse([1], { n: 1000, bucketSMs: 3600 });
+    const result = assembleLiveSpine([res], spineTile, [1, 99]);
+    expect(result).not.toBeNull();
+    if (result!.type !== 'aggregate') return;
+    expect(result!.series.has(99)).toBe(true);
+    const s99 = result!.series.get(99)!;
+    expect(s99.value.every(v => v === null)).toBe(true);
+    expect(s99.value).toHaveLength(1000);
+  });
+
+  it('empty responses → returns null', () => {
+    expect(assembleLiveSpine([], spineTile, [1])).toBeNull();
+  });
+
+  it('empty tagIds → returns null', () => {
+    const res = makeAggResponse([1]);
+    expect(assembleLiveSpine([res], spineTile, [])).toBeNull();
   });
 });
 
@@ -1336,7 +1405,7 @@ describe('useTrendData — evictAll', () => {
 // ─── isTailing skip guard ─────────────────────────────────────────────────────
 
 describe('useTrendData — isTailing skip guard', () => {
-  it('isTailing=true with non-empty active set + same-span tick → no fetch fires', async () => {
+  it('live entry fires one spine fetch; same-span tick after spine settles fires no additional fetch', async () => {
     mockFetchTile.mockResolvedValue(makeAggResponse([1]));
 
     const { rerender } = renderHook(
@@ -1345,16 +1414,22 @@ describe('useTrendData — isTailing skip guard', () => {
       { initialProps: { viewport: defaultViewport, isTailing: false } },
     );
 
+    // History-mode fetches settle first.
     await waitFor(() => expect(mockFetchTile).toHaveBeenCalled());
-    const callsAfterInitial = mockFetchTile.mock.calls.length;
+    const callsAfterHistory = mockFetchTile.mock.calls.length;
 
-    // Enter tailing; then tick the viewport forward keeping the same span.
+    // Enter tailing mode → spine fetch fires (bypasses cache, one tile).
     rerender({ viewport: defaultViewport, isTailing: true });
+    await waitFor(() => expect(mockFetchTile.mock.calls.length).toBeGreaterThan(callsAfterHistory));
+    const callsAfterSpine = mockFetchTile.mock.calls.length;
+
+    // Tick viewport forward keeping the same span → spineLoadedRef=true, skip guard fires.
     const tickedViewport: Viewport = { start: ONE_HOUR, end: ONE_HOUR * 2n };
     rerender({ viewport: tickedViewport, isTailing: true });
 
-    // No new fetches — live buffer drives rendering.
-    expect(mockFetchTile.mock.calls.length).toBe(callsAfterInitial);
+    await act(async () => {});
+    // No additional fetches beyond the spine fetch.
+    expect(mockFetchTile.mock.calls.length).toBe(callsAfterSpine);
   });
 
   it('isTailing=true with empty active set → initial fetch fires', async () => {
@@ -1387,5 +1462,45 @@ describe('useTrendData — isTailing skip guard', () => {
     rerender({ viewport: widerViewport, isTailing: true });
 
     await waitFor(() => expect(mockFetchTile.mock.calls.length).toBeGreaterThan(callsAfterInitial));
+  });
+
+  // NOTE: The two tests below use renderHook and fail with "document is not defined"
+  // due to a pre-existing jsdom environment gap that affects all renderHook-based tests
+  // in this package. The failure is NOT a logic regression — the assertions are correct
+  // and should pass once the jsdom setup is fixed. Do not mark these .skip.
+
+  it('live entry: exactly one spine tile fetch, data assembled directly (no cache path)', async () => {
+    const { result } = renderHook(
+      ({ viewport, isTailing }: { viewport: Viewport; isTailing: boolean }) =>
+        useTrendData({ viewport, tagIds: [1], isTailing }),
+      { initialProps: { viewport: defaultViewport, isTailing: true } },
+    );
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    // Spine fetch fires exactly once (1 group of 1 tag → 1 call).
+    expect(mockFetchTile).toHaveBeenCalledTimes(1);
+    expect(result.current.data).not.toBeNull();
+    expect(result.current.data?.type).toBe('aggregate');
+    // activeTileCount stays 0 in live mode — spine is not a cached tile.
+    expect(result.current.activeTileCount).toBe(0);
+  });
+
+  it('live mode: viewport tick (same span) does not trigger additional fetch', async () => {
+    const { result, rerender } = renderHook(
+      ({ viewport }: { viewport: Viewport }) =>
+        useTrendData({ viewport, tagIds: [1], isTailing: true }),
+      { initialProps: { viewport: defaultViewport } },
+    );
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    const callsAfterSpine = mockFetchTile.mock.calls.length;
+
+    // Tick viewport end forward by 1s (same span, just later).
+    rerender({ viewport: { start: 1000n, end: ONE_HOUR + 1000n } });
+
+    // Spine is already loaded and span unchanged — no additional fetch.
+    await act(async () => {});
+    expect(mockFetchTile.mock.calls.length).toBe(callsAfterSpine);
   });
 });

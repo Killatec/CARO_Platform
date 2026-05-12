@@ -6,6 +6,94 @@ import { fetchTile } from './api.js';
 import type { Tile, Viewport, TrendData, AggregateSeriesData, RawSeriesData } from './types.js';
 import type { TileApiResponse } from './api.js';
 
+/**
+ * Assembles one or more tile API responses (from parallel tag-group fetches of
+ * the same tile) directly into a TrendData object, bypassing the LRU cache.
+ * Used exclusively by the live-spine path so history-mode cache is untouched.
+ *
+ * Groups for the same tile always return the same source — the server picks CAG
+ * level by (span, bucketCount), which is tile-uniform. If sources disagree across
+ * groups it means a server-side inconsistency; a console.warn fires in that case
+ * and the result falls back to 'mixed'.
+ */
+export function assembleLiveSpine(
+  responses: TileApiResponse[],
+  tile: Tile,
+  tagIds: number[],
+): TrendData | null {
+  if (responses.length === 0 || tagIds.length === 0) return null;
+
+  const firstAgg = responses.find(r => r.source !== 'raw');
+  const isRaw = firstAgg === undefined;
+
+  if (isRaw) {
+    const series = new Map<number, { ts: bigint[]; value: (number | null)[]; prev?: { ts: bigint; value: number | null } }>();
+    for (const res of responses) {
+      if (res.source !== 'raw') continue;
+      for (const s of res.series) {
+        series.set(s.tagId, {
+          ts: s.ts.map(t => BigInt(t)),
+          value: s.value,
+          ...(s.prev ? { prev: { ts: BigInt(s.prev.ts), value: s.prev.value } } : {}),
+        });
+      }
+    }
+    for (const tagId of tagIds) {
+      if (!series.has(tagId)) series.set(tagId, { ts: [], value: [] });
+    }
+    const result: RawSeriesData = {
+      type: 'raw',
+      source: 'raw',
+      startTime: tile.startTime,
+      endTime: tile.endTime,
+      series,
+    };
+    return result;
+  }
+
+  // Aggregate path — n and bucketSMs are tile-uniform across all groups.
+  const { n, bucketSMs } = firstAgg!;
+  const sources = new Set(
+    responses.filter(r => r.source !== 'raw').map(r => r.source),
+  );
+  if (sources.size > 1) {
+    // The server picks CAG level by (span, bucketCount) — tile-uniform across
+    // groups — so this branch is unreachable in normal operation. If it fires,
+    // a server-side inconsistency has produced mixed levels for the same tile.
+    console.warn(
+      '[assembleLiveSpine] unexpected: multiple sources across tag groups for the same tile',
+      [...sources],
+    );
+  }
+  const effectiveSource: AggregateSeriesData['source'] =
+    sources.size === 1
+      ? (sources.values().next().value as AggregateSeriesData['source'])
+      : 'mixed';
+
+  const seriesMap = new Map<number, { value: (number | null)[]; min?: (number | null)[]; max?: (number | null)[] }>();
+  for (const res of responses) {
+    if (res.source === 'raw') continue;
+    for (const s of res.series) {
+      seriesMap.set(s.tagId, { value: s.value, min: s.min, max: s.max });
+    }
+  }
+  const nullFill = new Array<null>(n).fill(null);
+  for (const tagId of tagIds) {
+    if (!seriesMap.has(tagId)) seriesMap.set(tagId, { value: [...nullFill] });
+  }
+
+  const result: AggregateSeriesData = {
+    type: 'aggregate',
+    source: effectiveSource,
+    startTime: tile.startTime,
+    endTime: tile.endTime,
+    n,
+    bucketSMs,
+    series: seriesMap,
+  };
+  return result;
+}
+
 // Per-(tagId, tile) cache entry.
 type TileSource = TileApiResponse['source'];
 
@@ -358,6 +446,9 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
   // True between effect re-run and the performSwap point; blocks ensureCovered
   // so pan fetches don't fire during a zoom-level transition.
   const levelTransitionPendingRef = useRef<boolean>(false);
+  // True once the live-spine fetch has settled for the current viewport span.
+  // Parallel to the history path's `activeTilesRef.current.length > 0` skip guard.
+  const spineLoadedRef = useRef<boolean>(false);
 
   // Stable dep keys: tagIds array → joined string; Viewport object → component fields.
   const tagIdsKey = tagIds.join(',');
@@ -373,14 +464,69 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
 
     const currentViewport: Viewport = { start: viewportStart, end: viewportEnd };
 
-    // Tailing skip guard: suppress tile fetches while the viewport is just ticking
-    // forward at the same span. Span changes (preset switch) always trigger a fetch.
     const currentSpan = currentViewport.end - currentViewport.start;
     const spanChanged = prevSpanRef.current !== null && prevSpanRef.current !== currentSpan;
     prevSpanRef.current = currentSpan;
-    if (isTailing && !spanChanged && activeTilesRef.current.length > 0) {
-      return;
+
+    // ── Live-spine path: bypass cache entirely ────────────────────────────────
+    // One tile spanning the full viewport at history-mode resolution
+    // (visibleTilesPerWindow × bucketCount = 1000 buckets at defaults). The
+    // cache is never read or written. activeTilesRef stays empty so:
+    //   • ensureCovered's `activeTilesRef.current.length === 0` guard fires first
+    //     (line ~644) — live mode never triggers pan-prefetch fetches.
+    //   • levelTransitionPendingRef is never set in this branch; it lives
+    //     exclusively in the history path below.
+    if (isTailing) {
+      if (!spanChanged && spineLoadedRef.current) return;
+      spineLoadedRef.current = false;
+      // Clear any history-mode residue so ensureCovered stays a no-op.
+      activeTilesRef.current = [];
+      inFlightTilesRef.current.clear();
+      setActiveTileCount(0);
+
+      const nowMs = BigInt(Date.now());
+      const { visible } = tilesForViewport({
+        viewport: currentViewport,
+        bucketCount: visibleTilesPerWindow * bucketCount,
+        visibleTilesPerWindow: 1,
+        overfetchPerSide: 0,
+        nowMs,
+      });
+      const spineTile = visible[0];
+      if (!spineTile) {
+        setHookResult({ data: null, isLoading: false, error: null });
+        return;
+      }
+
+      const generation = ++generationRef.current;
+      const batchT0 = performance.now();
+      setHookResult(prev => ({ ...prev, isLoading: true }));
+
+      Promise.all(
+        chunkArray(tagIds, 8).map(group =>
+          fetchTile({ tagIds: group, startTime: spineTile.startTime, endTime: spineTile.endTime, bucketCount: spineTile.bucketCount }),
+        ),
+      ).then(responses => {
+        if (generationRef.current !== generation) return;
+        const data = assembleLiveSpine(responses, spineTile, tagIds);
+        setHookResult({ data, isLoading: false, error: null });
+        setSwapCounter(c => c + 1);
+        setLastFetchMs(Math.round(performance.now() - batchT0));
+        const maxTailTs = responses.reduce((m, r) => Math.max(m, r.responseTailTs), 0);
+        setResponseTailTs(maxTailTs > 0 ? maxTailTs : null);
+        spineLoadedRef.current = true;
+      }).catch(e => {
+        if (generationRef.current !== generation) return;
+        console.error('[useTrendData] live spine fetch failed', { tagIds, error: e });
+        setHookResult({ data: null, isLoading: false, error: e instanceof Error ? e.message : String(e) });
+      });
+
+      return () => { finalizeRef.current = null; };
     }
+
+    // ── History-mode path ─────────────────────────────────────────────────────
+    // Reset spine sentinel so a subsequent live entry always triggers a fresh fetch.
+    spineLoadedRef.current = false;
 
     const nowMs = BigInt(Date.now());
     const { visible, prefetch } = tilesForViewport({
@@ -690,6 +836,7 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     activeTilesRef.current = [];
     setActiveTileCount(0);
     setResponseTailTs(null);
+    spineLoadedRef.current = false;
   }, [cache]);
 
   return { ...hookResult, ensureCovered, evictRange, evictAll, swapCounter, activeTileCount, lastFetchMs, responseTailTs };
