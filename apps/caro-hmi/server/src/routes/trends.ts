@@ -47,6 +47,9 @@ function serializeTile(tile: TrendTile): unknown {
 }
 
 router.get('/tile', asyncWrap(async (req, res) => {
+  // Captured before any validation or SQL — clients use this as the FIFO trim threshold (§3.4).
+  const responseTailTs = Date.now();
+
   const q = req.query as Record<string, string | undefined>;
 
   // Presence check — all four params are required.
@@ -117,7 +120,7 @@ router.get('/tile', asyncWrap(async (req, res) => {
 
   try {
     const tile = await getTrendTile(tagIds, startTime, endTime, bucketCount);
-    res.json({ ok: true, data: serializeTile(tile) });
+    res.json({ ok: true, data: { ...(serializeTile(tile) as Record<string, unknown>), responseTailTs } });
   } catch (e: unknown) {
     const raw    = e as Error & { code?: string };
     const status = raw.code !== undefined ? (DB_CODE_STATUS[raw.code] ?? 500) : 500;

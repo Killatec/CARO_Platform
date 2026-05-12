@@ -111,21 +111,23 @@ describe('tilesForViewport', () => {
     }
   });
 
-  it('right-anchor: mid-viewport-end snaps to next bucket boundary within one bucketSMs', () => {
-    // viewport.end = 1_800_001n + 3_600_000n = 5_400_001n — 1ms past a bucket boundary.
-    // bucketSMs = 1_800_000n / 500n = 3600n.
-    // lastVisibleEnd = next 3600ms boundary ≥ 5_400_001n = 5_403_600n; gap = 3599n.
-    // firstVisibleStart = 5_403_600n − 3_600_000n = 1_803_600n; slip from start = 3599n.
-    const vp: Viewport = { start: 1_800_001n, end: 1_800_001n + 3_600_000n };
+  it('right-anchor: mid-viewport-end snaps to next tile boundary within one tileSpanMs', () => {
+    // Place viewport.end 1ms past a tile boundary (relative to TS_BUCKET_ORIGIN_MS).
+    // tileSpanMs = 3_600_000n / 2n = 1_800_000n.
+    // vp.end = TS_BUCKET_ORIGIN_MS + 5×tileSpanMs + 1ms → lastVisibleEnd = TS_BUCKET_ORIGIN_MS + 6×tileSpanMs; gap = 1_799_999n.
+    // firstVisibleStart = TS_BUCKET_ORIGIN_MS + 4×tileSpanMs; slip from vp.start = 1_799_999n.
+    const spanMs = 3_600_000n;
+    const tileSpanMs = spanMs / BigInt(TREND_VIEWER_DEFAULTS.visibleTilesPerWindow); // 1_800_000n
+    const vpEnd = TS_BUCKET_ORIGIN_MS + 5n * tileSpanMs + 1n;
+    const vp: Viewport = { start: vpEnd - spanMs, end: vpEnd };
     const { visible } = tilesForViewport({ viewport: vp });
-    const bucketSMs = 1_800_000n / 500n; // 3600n
     const lastVisibleEnd = visible[visible.length - 1]!.endTime;
-    // Right edge: covers viewport.end; gap is sub-bucket.
+    // Right edge: covers viewport.end; gap is sub-tile.
     expect(lastVisibleEnd >= vp.end).toBe(true);
-    expect(lastVisibleEnd - vp.end < bucketSMs).toBe(true);
-    // Left edge: at or after viewport.start; slip is sub-bucket.
+    expect(lastVisibleEnd - vp.end < tileSpanMs).toBe(true);
+    // Left edge: at or after viewport.start; slip is sub-tile.
     expect(visible[0]!.startTime >= vp.start).toBe(true);
-    expect(visible[0]!.startTime - vp.start < bucketSMs).toBe(true);
+    expect(visible[0]!.startTime - vp.start < tileSpanMs).toBe(true);
   });
 
   it('epoch-aligned: 24h viewport', () => {
@@ -139,18 +141,18 @@ describe('tilesForViewport', () => {
 
   it('epoch-aligned: 7d viewport at a realistic 2026 timestamp', () => {
     // 2026-04-27T00:00:00Z — known trigger of the 7d/14d 502 bug.
-    // With right-anchor: lastVisibleEnd is the first bucket boundary ≥ viewport.end;
-    // gap ≤ bucketSMs (~10 min). Tiles are bucket-grid-aligned, not tile-grid-aligned.
+    // With tile-grid right-anchor: lastVisibleEnd is the first tile boundary ≥ viewport.end;
+    // gap < tileSpanMs. Tile boundaries are multiples of bucketSMs from TS_BUCKET_ORIGIN_MS.
     const sevenDaysMs = 7n * 86_400_000n;
     const vp: Viewport = { start: 1_777_507_200_000n, end: 1_777_507_200_000n + sevenDaysMs };
     const tileSpan = sevenDaysMs / 2n;  // 302_400_000n
     const bucketSMs = tileSpan / 500n;  // 604_800n
     const { visible } = tilesForViewport({ viewport: vp });
-    // Right edge covers viewport.end; gap is sub-bucket.
+    // Right edge covers viewport.end; gap is sub-tile.
     const lastVisibleEnd = visible[visible.length - 1]!.endTime;
     expect(lastVisibleEnd >= vp.end).toBe(true);
-    expect(lastVisibleEnd - vp.end < bucketSMs).toBe(true);
-    // All tile boundaries are on the bucket grid (not necessarily the tile grid).
+    expect(lastVisibleEnd - vp.end < tileSpan).toBe(true);
+    // All tile boundaries are on the bucket grid (tile boundaries ⊂ bucket boundaries).
     for (const tile of visible) {
       expect((tile.startTime - TS_BUCKET_ORIGIN_MS) % bucketSMs).toBe(0n);
       expect((tile.endTime   - TS_BUCKET_ORIGIN_MS) % bucketSMs).toBe(0n);
@@ -182,23 +184,46 @@ describe('tilesForViewport', () => {
     expect(prefetch).toHaveLength(2); // 1 before + 1 after
   });
 
-  it('nowMs provided: after-tile whose startTime >= nowMs is dropped, before-tile kept', () => {
-    // viewport ends at oneHourMs; after-prefetch starts at oneHourMs.
-    // Set nowMs = oneHourMs so the after-tile (startTime = oneHourMs) is filtered out.
+  it('nowMs provided at live edge: after-tile within one tileSpanMs is kept (tailing look-ahead)', () => {
+    // viewport ends at oneHourMs; tileSpanMs = 1_800_000n; after-prefetch startTime = oneHourMs.
+    // New filter: startTime < nowMs + tileSpanMs → 3_600_000 < 3_600_000 + 1_800_000 → kept.
+    // Both before and after prefetch tiles are included.
     const { prefetch } = tilesForViewport({ viewport, nowMs: oneHourMs });
+    expect(prefetch).toHaveLength(2);
+  });
+
+  it('nowMs provided: after-tile more than one tileSpanMs past nowMs is dropped', () => {
+    // after-prefetch startTime = oneHourMs = 3_600_000n; tileSpanMs = 1_800_000n.
+    // Set nowMs = halfTileMs (1_800_000n) so nowMs + tileSpanMs = 3_600_000n.
+    // Filter: 3_600_000n < 3_600_000n → false → after-tile dropped.
+    const halfTileMs = oneHourMs / BigInt(TREND_VIEWER_DEFAULTS.visibleTilesPerWindow); // 1_800_000n
+    const { prefetch } = tilesForViewport({ viewport, nowMs: halfTileMs });
     expect(prefetch).toHaveLength(1);
-    // Only the before-tile remains (endTime === visible[0].startTime).
+    // Only the before-tile remains.
     const { visible } = tilesForViewport({ viewport });
     expect(prefetch[0]!.endTime).toBe(visible[0]!.startTime);
   });
 
   it('nowMs provided but after-tile is in the past: both tiles kept', () => {
     // Viewport is entirely in the past; nowMs is far future.
-    // Both prefetch tiles start before nowMs, so neither is filtered.
+    // Both prefetch tiles start well before nowMs + tileSpanMs, so neither is filtered.
     const pastViewport: Viewport = { start: 0n, end: oneHourMs };
     const farFutureNow = oneHourMs * 1_000_000n;
     const { prefetch } = tilesForViewport({ viewport: pastViewport, nowMs: farFutureNow });
     expect(prefetch).toHaveLength(2);
+  });
+
+  it('regression — tailing mode: after-prefetch included when startTime equals nowMs', () => {
+    // Under tile-grid alignment, the after-prefetch startTime = lastVisibleEnd which may
+    // equal nowMs exactly (viewport.end on tile boundary). The new filter keeps it so
+    // performSwap does not evict what ensureCovered just fetched on the next tick.
+    const tileSpanMs = oneHourMs / BigInt(TREND_VIEWER_DEFAULTS.visibleTilesPerWindow);
+    // Epoch-aligned viewport: lastVisibleEnd = oneHourMs; after-prefetch startTime = oneHourMs.
+    const { prefetch } = tilesForViewport({ viewport, nowMs: oneHourMs });
+    const afterTile = prefetch.find(t => t.startTime >= oneHourMs);
+    expect(afterTile).toBeDefined();
+    expect(afterTile!.startTime).toBe(oneHourMs);
+    expect(afterTile!.endTime).toBe(oneHourMs + tileSpanMs);
   });
 
   // ── Regression: 7d / 14d preset 500 error (TimescaleDB PG-epoch alignment) ──
@@ -230,10 +255,10 @@ describe('tilesForViewport', () => {
       expect(tile.endTime - tile.startTime).toBe(tileSpan);
       expect(tile.bucketCount).toBe(500);
     }
-    // Live-edge: visible right edge covers viewport.end; gap is sub-bucket.
+    // Live-edge: visible right edge covers viewport.end; gap is sub-tile.
     const lastVisibleEnd = visible[visible.length - 1]!.endTime;
     expect(lastVisibleEnd >= vp.end).toBe(true);
-    expect(lastVisibleEnd - vp.end < bucketSMs).toBe(true);
+    expect(lastVisibleEnd - vp.end < tileSpan).toBe(true);
   });
 
   it('regression 14d: tile boundaries are bucket-aligned for a 2026 viewport', () => {
@@ -249,16 +274,15 @@ describe('tilesForViewport', () => {
       expect((tile.endTime   - TS_BUCKET_ORIGIN_MS) % bucketSMs).toBe(0n);
       expect(tile.endTime - tile.startTime).toBe(tileSpan);
     }
-    // Live-edge: visible right edge covers viewport.end; gap is sub-bucket.
+    // Live-edge: visible right edge covers viewport.end; gap is sub-tile.
     const lastVisibleEnd = visible[visible.length - 1]!.endTime;
     expect(lastVisibleEnd >= vp.end).toBe(true);
-    expect(lastVisibleEnd - vp.end < bucketSMs).toBe(true);
+    expect(lastVisibleEnd - vp.end < tileSpan).toBe(true);
   });
 
-  it('15m/1h/4h/24h presets: bucket-aligned + live-edge covered (unaffected by right-anchor change)', () => {
-    // For these spans viewport.end falls exactly on a bucket boundary (the
-    // 10,957-day offset divides evenly), so lastVisibleEnd === viewport.end
-    // and the right-anchor change shifts nothing.
+  it('15m/1h/4h/24h presets: bucket-aligned + live-edge covered (unaffected by tile-grid right-anchor)', () => {
+    // For these spans viewport.end falls exactly on a tile boundary at this origin
+    // (the 10,957-day offset divides evenly), so lastVisibleEnd === viewport.end and gap = 0.
     const cases: [string, bigint][] = [
       ['15m', 15n * 60_000n],
       ['1h',  3_600_000n],
@@ -274,13 +298,32 @@ describe('tilesForViewport', () => {
       const lastVisibleEnd = visible[visible.length - 1]!.endTime;
       // Right edge covers viewport.end; gap is zero for these exact-divisor presets.
       expect(lastVisibleEnd >= vp.end).toBe(true);
-      expect(lastVisibleEnd - vp.end < bucketSMs).toBe(true);
+      expect(lastVisibleEnd - vp.end < tileSpan).toBe(true);
       for (const tile of visible) {
         expect((tile.startTime - TS_BUCKET_ORIGIN_MS) % bucketSMs).toBe(0n);
         expect((tile.endTime   - TS_BUCKET_ORIGIN_MS) % bucketSMs).toBe(0n);
       }
       void label; // suppress unused-variable lint
     }
+  });
+
+  it('tile-grid stability: viewport.end within same tile boundary window returns identical tiles', () => {
+    // Tiles must be stable across viewport.end advances that stay within the same tile
+    // boundary window — this is the property that eliminates cache thrashing in live mode.
+    const spanMs = 3_600_000n; // 1h preset
+    const tileSpanMs = spanMs / BigInt(TREND_VIEWER_DEFAULTS.visibleTilesPerWindow); // 1_800_000n
+    // Place base.end 1ms past a tile boundary so lastVisibleEnd = next tile boundary.
+    const baseEnd = TS_BUCKET_ORIGIN_MS + 5n * tileSpanMs + 1n;
+    const base: Viewport = { start: baseEnd - spanMs, end: baseEnd };
+    // Advance by (tileSpanMs - 2): advanced.end is still in the same tile window.
+    const delta = tileSpanMs - 2n;
+    const advanced: Viewport = { start: baseEnd - spanMs + delta, end: baseEnd + delta };
+
+    const { visible: baseVis, prefetch: basePre } = tilesForViewport({ viewport: base });
+    const { visible: advVis, prefetch: advPre } = tilesForViewport({ viewport: advanced });
+
+    expect(advVis).toEqual(baseVis);
+    expect(advPre).toEqual(basePre);
   });
 });
 

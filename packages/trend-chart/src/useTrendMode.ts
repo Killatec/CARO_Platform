@@ -1,21 +1,14 @@
-import { useEffect, useReducer } from 'react';
+import { useReducer } from 'react';
 import type { Dispatch } from 'react';
 import type { Viewport } from './types.js';
 
-// Reserved for Step 11 viewportChanged (WS-driven live-tick advance).
-// No longer used by zoomApplied — zoom always exits tailing unconditionally.
-export const NEAR_NOW_MS = 60_000n;
 const DEFAULT_SIZE_MS = 3_600_000n; // 1 hour default
-
-// Dormant: the 1Hz tick that advances tailing-mode `nowMs`. To re-enable when
-// WebSocket / live-data path lands (Step 11), set to true.
-const LIVE_MODE_ENABLED = false;
 
 /**
  * Tracks the most recent user action that changed the viewport, to drive
  * preset-button highlight logic. Rules:
  *   preset    — user clicked a span preset button
- *   live      — user clicked Live, or viewportChanged fired (Step 11 placeholder)
+ *   live      — user clicked Live
  *   endPicker — user committed an End value via the End picker
  *   zoom      — user drag-zoomed or wheel-zoomed (zoomApplied dispatched by container)
  *   pan       — user dragged the X axis (panApplied); span preserved, only End shifts
@@ -25,8 +18,6 @@ const LIVE_MODE_ENABLED = false;
  * All intents except 'zoom' either set or preserve sizeMs from a preset, so the highlight
  * survives pan, liveClicked, and endPickerCommitted. null excluded for initial-state cleanliness.
  * Tick preserves the existing lastIntent value (clock advance is not a user intent).
- * viewportChanged is reserved for Step 11 live-tail; 'live' is the placeholder
- * value and will be revisited when Step 11 lands.
  */
 export type LastIntent = 'preset' | 'live' | 'endPicker' | 'zoom' | 'pan' | null;
 
@@ -48,7 +39,6 @@ export type TrendModeAction =
   // mode — pan never enters tailing. To enter live mode the user must click
   // Live or commit End ≈ now via the End picker.
   | { type: 'panApplied'; from: bigint; to: bigint; nowMs: bigint }
-  | { type: 'viewportChanged'; from: bigint; to: bigint; nowMs: bigint }
   | { type: 'tick'; nowMs: bigint };
 
 /** Pure reducer — exported for unit testing. */
@@ -98,16 +88,6 @@ export function trendModeReducer(state: ModeState, action: TrendModeAction): Mod
       return { mode: 'fixed', from, to, sizeMs, lastIntent: 'pan' };
     }
 
-    // Reserved for Step 11 WS-driven viewport advance. lastIntent = 'live' as
-    // placeholder; will be revisited when Step 11 lands.
-    case 'viewportChanged': {
-      const { from, to, nowMs } = action;
-      if (to >= nowMs - NEAR_NOW_MS) {
-        return { mode: 'tailing', sizeMs: to - from, nowMs, lastIntent: 'live' };
-      }
-      return { mode: 'fixed', from, to, sizeMs: state.sizeMs, lastIntent: 'live' };
-    }
-
     case 'tick':
       if (state.mode === 'tailing') {
         // Spread preserves lastIntent — advancing the clock is not a user intent.
@@ -139,14 +119,6 @@ export function useTrendMode(): UseTrendModeResult {
     nowMs: BigInt(Date.now()),
     lastIntent: null as LastIntent,
   }));
-
-  useEffect(() => {
-    if (!LIVE_MODE_ENABLED) return;
-    const id = setInterval(() => {
-      dispatch({ type: 'tick', nowMs: BigInt(Date.now()) });
-    }, 1000);
-    return () => clearInterval(id);
-  }, []);
 
   const viewport = modeToViewport(state);
   return { state, viewport, dispatch };

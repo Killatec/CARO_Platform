@@ -11,6 +11,8 @@ type TileSource = TileApiResponse['source'];
 
 interface CachedEntry {
   source: TileSource;
+  /** Server Date.now() from the response that populated this entry. */
+  responseTailTs?: number;
   // Aggregate fields
   bucketSMs?: number;
   n?: number;
@@ -38,6 +40,9 @@ const MAX_ACTIVE_TILES = 8;
 export interface UseTrendDataOptions {
   viewport: Viewport;
   tagIds: number[];
+  /** When true, tile fetches are suppressed while the viewport span is unchanged
+   *  and at least one active tile exists — the live buffer drives rendering. */
+  isTailing?: boolean;
   bucketCount?: number;
   visibleTilesPerWindow?: number;
   overfetchPerSide?: number;
@@ -52,11 +57,16 @@ interface HookState {
 
 export interface UseTrendDataResult extends HookState {
   ensureCovered: (startMs: bigint, endMs: bigint) => void;
+  /** Evicts all cache entries whose tile range overlaps [startMs, endMs), prunes activeTilesRef,
+   *  and bumps generationRef to drop in-flight fetches. Does NOT trigger a fetch. */
+  evictRange: (startMs: bigint, endMs: bigint) => void;
   swapCounter: number;
   activeTileCount: number;
   /** Wall-clock ms of the most recent viewport-change batch (visible tiles only).
    *  null until the first batch settles. Includes failed batches. */
   lastFetchMs: number | null;
+  /** Most recent server-captured tail timestamp across active tiles. null until first fetch resolves. */
+  responseTailTs: number | null;
 }
 
 function chunkArray<T>(arr: T[], size: number): T[][] {
@@ -72,6 +82,7 @@ function storeTileResult(
   res: TileApiResponse,
   cache: TileCache<CachedEntry>,
 ): void {
+  const responseTailTs = res.responseTailTs;
   if (res.source === 'raw') {
     for (const s of res.series) {
       const key = makeTileCacheKey({
@@ -82,6 +93,7 @@ function storeTileResult(
       });
       cache.set(key, {
         source: 'raw',
+        responseTailTs,
         ts: s.ts.map(t => BigInt(t)),
         valueRaw: s.value,
         ...(s.prev ? { prev: { ts: BigInt(s.prev.ts), value: s.prev.value } } : {}),
@@ -97,6 +109,7 @@ function storeTileResult(
       });
       cache.set(key, {
         source:    res.source,
+        responseTailTs,
         bucketSMs: res.bucketSMs,
         n:         res.n,
         value:     s.value,
@@ -251,6 +264,31 @@ function assembleData(
 }
 
 /**
+ * Derives the maximum responseTailTs across active tiles from the cache.
+ * Returns null if no active tile has a responseTailTs entry.
+ */
+function computeResponseTailTs(
+  activeTiles: Tile[],
+  tagIds: number[],
+  cache: TileCache<CachedEntry>,
+  bucketCount: number,
+): number | null {
+  let max: number | null = null;
+  for (const tile of activeTiles) {
+    for (const tagId of tagIds) {
+      const entry = cache.get(
+        makeTileCacheKey({ tagId, startTime: tile.startTime, endTime: tile.endTime, bucketCount }),
+      );
+      if (entry?.responseTailTs !== undefined) {
+        if (max === null || entry.responseTailTs > max) max = entry.responseTailTs;
+        break; // all tags in a tile share the same responseTailTs; no need to check others
+      }
+    }
+  }
+  return max;
+}
+
+/**
  * Add `newTile` to `activeSet` and prune to `maxSize`, dropping from the side
  * farthest from `newTile`. Returns the new sorted active set.
  *
@@ -275,6 +313,7 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
   const {
     viewport,
     tagIds,
+    isTailing = false,
     bucketCount = TREND_VIEWER_DEFAULTS.bucketCount,
     visibleTilesPerWindow = TREND_VIEWER_DEFAULTS.visibleTilesPerWindow,
     overfetchPerSide = TREND_VIEWER_DEFAULTS.overfetchPerSide,
@@ -298,6 +337,10 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
   const [swapCounter, setSwapCounter] = useState(0);
   const [activeTileCount, setActiveTileCount] = useState<number>(0);
   const [lastFetchMs, setLastFetchMs] = useState<number | null>(null);
+  const [responseTailTs, setResponseTailTs] = useState<number | null>(null);
+
+  // Tracks the previous viewport span; used to detect preset changes during tailing.
+  const prevSpanRef = useRef<bigint | null>(null);
 
   // Incremented on each opts change; async callbacks from stale effects are ignored.
   const generationRef = useRef(0);
@@ -324,6 +367,16 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     }
 
     const currentViewport: Viewport = { start: viewportStart, end: viewportEnd };
+
+    // Tailing skip guard: suppress tile fetches while the viewport is just ticking
+    // forward at the same span. Span changes (preset switch) always trigger a fetch.
+    const currentSpan = currentViewport.end - currentViewport.start;
+    const spanChanged = prevSpanRef.current !== null && prevSpanRef.current !== currentSpan;
+    prevSpanRef.current = currentSpan;
+    if (isTailing && !spanChanged && activeTilesRef.current.length > 0) {
+      return;
+    }
+
     const nowMs = BigInt(Date.now());
     const { visible, prefetch } = tilesForViewport({
       viewport: currentViewport,
@@ -399,6 +452,7 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
       setActiveTileCount(newSorted.length);
       levelTransitionPendingRef.current = false;
       setLastFetchMs(Math.round(performance.now() - batchT0));
+      setResponseTailTs(computeResponseTailTs(newSorted, tagIds, cache, bucketCount));
       finalize();
       setSwapCounter(c => c + 1);
     };
@@ -494,7 +548,7 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     return () => {
       finalizeRef.current = null;
     };
-  }, [tagIdsKey, viewportStart, viewportEnd, bucketCount, visibleTilesPerWindow, overfetchPerSide, cache]);
+  }, [tagIdsKey, viewportStart, viewportEnd, bucketCount, visibleTilesPerWindow, overfetchPerSide, cache, isTailing]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const ensureCovered = useCallback((startMs: bigint, endMs: bigint) => {
     // Block during zoom-level transition; pan visually works but no tile fetches
@@ -579,6 +633,7 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
           if (generationRef.current !== gen) return;
           activeTilesRef.current = pruneAndAdd(activeTilesRef.current, tile);
           setActiveTileCount(activeTilesRef.current.length);
+          setResponseTailTs(computeResponseTailTs(activeTilesRef.current, tagIds, cache, bucketCount));
           finalizeRef.current?.();
         })
         .catch(e => {
@@ -590,5 +645,38 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     }
   }, [tagIds, viewportStart, viewportEnd, bucketCount, visibleTilesPerWindow, cache]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  return { ...hookResult, ensureCovered, swapCounter, activeTileCount, lastFetchMs };
+  const evictRange = useCallback((startMs: bigint, endMs: bigint) => {
+    // Bump generation — any in-flight fetch's .then() guard drops the stale result.
+    generationRef.current++;
+    // Clear in-flight set so subsequent ensureCovered calls can re-request evicted tiles.
+    inFlightTilesRef.current.clear();
+
+    // Delete all cache entries whose tile range overlaps [startMs, endMs).
+    // Key format: "${tagId}:${startTime}:${endTime}:${bucketCount}".
+    cache.deleteWhere((key) => {
+      const parts = key.split(':');
+      const tileStart = BigInt(parts[1]!);
+      const tileEnd   = BigInt(parts[2]!);
+      return tileStart < endMs && tileEnd > startMs;
+    });
+
+    // Prune activeTilesRef: keep only tiles whose range does NOT overlap [startMs, endMs).
+    activeTilesRef.current = activeTilesRef.current.filter(
+      tile => !(tile.startTime < endMs && tile.endTime > startMs),
+    );
+
+    // Update derived state.
+    setActiveTileCount(activeTilesRef.current.length);
+    setResponseTailTs(computeResponseTailTs(activeTilesRef.current, tagIds, cache, bucketCount));
+
+    // Reassemble data from surviving active tiles so the chart reflects the eviction.
+    try {
+      const data = assembleData(activeTilesRef.current, tagIds, cache);
+      setHookResult({ data, isLoading: false, error: null });
+    } catch (e) {
+      setHookResult({ data: null, isLoading: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  }, [tagIds, bucketCount, cache]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return { ...hookResult, ensureCovered, evictRange, swapCounter, activeTileCount, lastFetchMs, responseTailTs };
 }

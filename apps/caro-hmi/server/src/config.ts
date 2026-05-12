@@ -10,4 +10,9 @@ export const config = {
   hmiPublishIntervalMs:      parseInt(process.env.HMI_PUBLISH_INTERVAL_MS      ?? '250',   10),
   trendSnapshotEnabled:      (process.env.TREND_SNAPSHOT_ENABLED ?? 'true') !== 'false',
   trendSnapshotIntervalMs:   parseInt(process.env.TREND_SNAPSHOT_INTERVAL_MS   ?? '60000', 10),
+  trendFlushHz: (() => {
+    const v = parseInt(process.env.TREND_FLUSH_HZ ?? '4', 10);
+    if (!Number.isInteger(v) || v < 1 || v > 20) throw new Error(`TREND_FLUSH_HZ must be an integer 1..20, got '${process.env.TREND_FLUSH_HZ}'`);
+    return v;
+  })(),
 } as const;

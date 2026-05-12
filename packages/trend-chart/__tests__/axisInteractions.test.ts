@@ -492,3 +492,30 @@ describe('zoomXScale', () => {
     expect(opts.max).toBeCloseTo(5400);
   });
 });
+
+// ── Y-axis helpers never mutate the X scale ───────────────────────────────────
+//
+// Invariant guarded here: under the Step 11 dispatchModeAction semantics, any call
+// to onXRangeChange or onXPan from a Y-axis event path would exit tailing mode,
+// drain the live buffer, and freeze the chart. These tests confirm that panYScale
+// and zoomYScale always call setScale with the supplied Y key and never with 'x'.
+
+describe('Y-axis helpers never mutate the X scale', () => {
+  it('panYScale calls setScale with the provided Y key, never "x"', () => {
+    const { u, setScale } = makeU(makeRect(0, 0, 800, 400), { 'y_42': { min: 0, max: 100 } });
+    panYScale(u, 'y_42', 40, 400);
+    expect(setScale).toHaveBeenCalledOnce();
+    const [key] = setScale.mock.calls[0] as [string, unknown];
+    expect(key).toBe('y_42');
+    expect(key).not.toBe('x');
+  });
+
+  it('zoomYScale calls setScale with the provided Y key, never "x"', () => {
+    const { u, setScale } = makeU(makeRect(0, 0, 800, 400), { 'y_42': { min: 0, max: 100 } }, 400);
+    zoomYScale(u, 'y_42', 1, 200, 400);
+    expect(setScale).toHaveBeenCalledOnce();
+    const [key] = setScale.mock.calls[0] as [string, unknown];
+    expect(key).toBe('y_42');
+    expect(key).not.toBe('x');
+  });
+});

@@ -63,7 +63,10 @@ export const TREND_VIEWER_DEFAULTS = {
  * rangeStart. For typical use (analytics, tile cache misses) the gap is
  * sub-minute and invisible.
  *
- * For multi-tile viewport layouts use tilesForViewport instead.
+ * Bucket-grid alignment is correct for one-shot use (analytics, export, debug).
+ * Do NOT use for time-advancing viewports (live tailing): every viewport.end
+ * advance past a bucket boundary would change all tile keys. Use tilesForViewport
+ * for those — it right-anchors on the tile grid for cache stability.
  */
 export function alignedTilesInRange(opts: {
   rangeStart: bigint;
@@ -100,25 +103,35 @@ export function alignedTilesInRange(opts: {
  * tileSpanMs = floor((viewport.end − viewport.start) / visibleTilesPerWindow)
  * bucketSMs  = tileSpanMs / bucketCount  (exact for standard preset spans)
  *
- * Alignment strategy: right-anchor on the bucket grid.
- *   lastVisibleEnd    = first bucket boundary AT OR AFTER viewport.end
+ * Alignment strategy: right-anchor on the tile grid.
+ *   lastVisibleEnd    = first tileSpanMs boundary AT OR AFTER viewport.end
  *   firstVisibleStart = lastVisibleEnd − visibleTilesPerWindow × tileSpanMs
  *
  * This ensures:
  *   • lastVisibleEnd ≥ viewport.end — the live edge is always covered.
- *   • lastVisibleEnd − viewport.end < bucketSMs — gap is sub-minute even for
- *     7d/14d presets (≤ ~10 min at 604.8 s/bucket, versus ≤ 3.5 d with a
- *     tile-grid left-anchor).
- *   • Every tile boundary is a multiple of bucketSMs from TS_BUCKET_ORIGIN_MS,
- *     so time_bucket_gapfill returns exactly bucketCount rows per tile request.
+ *   • lastVisibleEnd − viewport.end < tileSpanMs — tiles are stable across all
+ *     viewport.end advances that stay within the same tile boundary window,
+ *     eliminating cache thrashing in live tailing mode.
+ *   • Every tile boundary is a multiple of tileSpanMs from TS_BUCKET_ORIGIN_MS.
+ *     Since tileSpanMs = bucketSMs × bucketCount, every tile boundary is also a
+ *     multiple of bucketSMs, so time_bucket_gapfill returns exactly bucketCount
+ *     rows per tile request.
  *
- * The left edge (firstVisibleStart) may sit up to one bucketSMs after
+ * Trade-off vs the prior bucket-grid right-anchor: the rightmost cached tile may
+ * contain up to tileSpanMs of future-coverage gapfill/LOCF past viewport.end.
+ * In live mode this extra data is overridden by the live tail extension before
+ * rendering. In fixed mode the chart X-axis clips to viewport.end so the extra
+ * data is fetched but not displayed.
+ *
+ * The left edge (firstVisibleStart) may sit up to one tileSpanMs after
  * viewport.start — the visible region shifts forward slightly. At standard
- * presets this is sub-minute and invisible to the chart.
+ * presets this is at most one tile-span and invisible if the chart clips to
+ * viewport.start.
  *
- * Prefetch tiles after the visible window may extend past now in tailing mode;
- * the server returns null/locf for the future portion, no client-side handling
- * needed.
+ * Prefetch tiles after the visible window may extend past now in tailing mode.
+ * The server returns null/locf for the future-coverage region; the live tail
+ * extension overrides those gapfilled buckets as samples accumulate, so no
+ * special client-side handling is needed at the chart edge.
  *
  * Note: bigint floor division is used for tileSpanMs. For typical viewport
  * spans (minutes to weeks) the span divides cleanly by visibleTilesPerWindow.
@@ -129,7 +142,14 @@ export function tilesForViewport(opts: {
   bucketCount?: number;
   visibleTilesPerWindow?: number;
   overfetchPerSide?: number;
-  /** When provided, prefetch tiles whose startTime >= nowMs are dropped (future-only tiles). */
+  /**
+   * When provided, prefetch tiles whose startTime is more than one tileSpanMs
+   * past nowMs are dropped. Allows one tile of look-ahead in tailing mode so
+   * the after-prefetch tile (startTime = lastVisibleEnd, up to tileSpanMs past
+   * nowMs under tile-grid alignment) is included. Without this allowance,
+   * ensureCovered would fetch the after-tile every halfTileMs threshold crossing
+   * only for performSwap to evict it on the next viewport tick — constant churn.
+   */
   nowMs?: bigint;
 }): { visible: Tile[]; prefetch: Tile[] } {
   const {
@@ -153,11 +173,12 @@ export function tilesForViewport(opts: {
   // which would crash ceilDiv (division by zero). Sub-millisecond viewports are nonsensical.
   if (bucketSMs === 0n) return { visible: [], prefetch: [] };
 
-  // Right-anchor on the bucket grid: last visible end is the first bucket
-  // boundary at or after viewport.end. firstVisibleStart steps back by the
-  // full visible window width. Both are multiples of bucketSMs from origin.
+  // Right-anchor on the tile grid: last visible end is the first tile boundary
+  // at or after viewport.end. Since tileSpanMs = bucketSMs × bucketCount, tile
+  // boundaries are also bucket-aligned — gapfill invariant is preserved. Tiles
+  // are stable across viewport.end advances that stay within the same tile window.
   const lastVisibleEnd = TS_BUCKET_ORIGIN_MS +
-    ceilDiv(viewport.end - TS_BUCKET_ORIGIN_MS, bucketSMs) * bucketSMs;
+    ceilDiv(viewport.end - TS_BUCKET_ORIGIN_MS, tileSpanMs) * tileSpanMs;
   const firstVisibleStart = lastVisibleEnd - BigInt(visibleTilesPerWindow) * tileSpanMs;
 
   const visible: Tile[] = [];
@@ -179,7 +200,7 @@ export function tilesForViewport(opts: {
   }
 
   const filteredPrefetch =
-    nowMs === undefined ? prefetch : prefetch.filter(t => t.startTime < nowMs);
+    nowMs === undefined ? prefetch : prefetch.filter(t => t.startTime < nowMs + tileSpanMs);
 
   return { visible, prefetch: filteredPrefetch };
 }

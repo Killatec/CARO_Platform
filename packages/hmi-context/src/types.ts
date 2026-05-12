@@ -45,6 +45,10 @@ export interface HmiDataContextValue {
   tagPathIndex: TagPathIndex;
   getLiveValue: (tagId: number) => LiveValue;
   subscribeLiveValue: (tagId: number, callback: (lv: LiveValue) => void) => () => void;
+  subscribeTrend: (
+    tagId: number,
+    callback: (moduleTs: number, value: number | boolean | string | null) => void,
+  ) => () => void;
   writeTag: (tagId: number, value: number | boolean | string) => Promise<void>;
 }
 

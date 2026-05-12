@@ -1,6 +1,6 @@
 # CARO_HMI Trend Viewer — Design Specification
 **Date:** 2026-05-05
-**Status:** Phase A Steps 1–10 complete; v0.8 min/max bands complete (feature/trends-min-max-bands → dev). Step 11 (Live tail) and Step 12 (Tag picker) pending.
+**Status:** Phase A Steps 1–11 complete. Step 12 (Tag picker) pending.
 **Companion Documents**
 
 CARO_Trending_Reference | hmi_functional_spec | hmi_API_spec | hmi_widget_spec | CARO_DB_Spec | DB_Config_Usage_And_Perf | platform_handoff
@@ -11,6 +11,7 @@ CARO_Trending_Reference | hmi_functional_spec | hmi_API_spec | hmi_widget_spec |
 
 | Version | Date | Author | Summary |
 |---|---|---|---|
+| 1.6 | 2026-05-11 | PM / Claude | Step 11 (live tail) complete. §4.4 rewritten: dedicated trend WS channel (`SUBSCRIBE_TREND`/`UNSUBSCRIBE_TREND`/`TREND_DELTA`), per-client outbox, `TREND_FLUSH_HZ` flush cadence (default 4 Hz), flat `samples[]` payload, synthetic-on-flush events. §6.2 aggregate response gains `responseTailTs` field. §9.3 cleaned: `viewportChanged` action removed (never shipped), `NEAR_NOW_MS` and `LIVE_MODE_ENABLED` constants removed. §10.6 rewritten: `useLiveSubscription` hook, bucket accumulator (aggregate) + raw buffer (raw mode), `isTailing` tile-fetch suppression in `useTrendData`, `rawBuffersRef` NOT trimmed on threshold, `mergeTrendData` with live-wins overlap logic. §10.7 updated: per-tag subscription lifecycle via `useLiveSubscription` tagIds prop. §17.1.1 Step 11 marked done (542 `@caro/trend-chart`, 67 `@caro/hmi-context` tests). |
 | 1.5 | 2026-05-07 | PM / Claude | Watermark memoization (§4.3): `getWatermarkMs` now caches per-source with 30s TTL + in-flight dedup; cold `cagg_watermark()` cost (130–300 ms) absorbed into one call per source per 30s. Raw path unified into a single SQL query (UNION ALL with `is_in_window` discriminant, one connection per tile). Server-side perf log `prev=N` field added to raw log lines (§14.7). Diagnostic logs removed; `TIMESCALE_LOG_TILE_QUERIES` default set to off. |
 | 1.4 | 2026-05-07 | PM / Claude | Mode rule: `zoomApplied` always → fixed (was: tailing if `to ≥ nowMs − NEAR_NOW_MS`). Zoom is exploratory; tailing now requires deliberate `liveClicked` or `presetClicked`-from-tailing. §9.3 transition diagram and action table updated. `NEAR_NOW_MS` retained for `viewportChanged` (Step 11). |
 | 1.3 | 2026-05-07 | PM / Claude | Removed LOCF cutoff query (`MAX(ts)`) and past-extent CASE wrapper from `getTrendTile`. §5.5 updated: LOCF now runs unbounded past MAX(ts); dead-tag detection deferred (TODO in handoff). CAG perf restored to 100-200ms baseline (814ms planning regression from the cutoff query on 251-chunk production table eliminated). |
@@ -132,17 +133,33 @@ The next-finer source is itself subject to the same rule recursively, so a query
 ```
 Client (tailing mode)                              Server
   │                                                  │
-  │   WS subscribe (existing @caro/hmi-context)      │
-  ├─────────────────────────────────────────────────▶│
+  │  { type: "SUBSCRIBE_TREND", tagIds: [...] }       │
+  ├─────────────────────────────────────────────────▶│  registers per-client trend outbox
   │                                                  │
-  │                                                  │   LKV update (MQTT or tick)
-  │   {tagId, ts, value}  (live value event)         │◀───
+  │                                                  │  MQTT ingest → TelemetryIntake.ingest()
+  │                                                  │    → trendDeltaListener(moduleTs, tagId, value)
+  │                                                  │    → per-client outbox.push(sample)
+  │                                                  │
+  │                                                  │  TREND_FLUSH_HZ tick (default 4 Hz):
+  │                                                  │    for each subscribed tag with no real event:
+  │                                                  │      emit synthetic { moduleTs: now, value: LKV }
+  │                                                  │    flush outbox → TREND_DELTA frame
+  │                                                  │
+  │  { type: "TREND_DELTA",                          │
+  │    samples: [{ moduleTs, tagId, value }, ...] }  │
   │◀─────────────────────────────────────────────────┤
-  │  if ts > responseTailTs: feed                    │
-  │  client-side bucket accumulator                  │
+  │                                                  │
+  │  useLiveSubscription feeds samples               │
+  │  into bucket accumulator (aggregate) or          │
+  │  raw buffer (raw mode); emits LiveTail           │
+  │  merged by TrendChartContainer via               │
+  │  mergeTrendData(cachedData, liveSub.tail,         │
+  │                 isTailing)                       │
 ```
 
-The WebSocket subscription model is unchanged from `hmi_functional_spec.md` §10.2. Trend live tail reuses `useLiveValue(tagId)` and does not introduce a separate WS channel.
+The trend live tail uses a **dedicated WS channel** — not the existing `useLiveValue` / SUBSCRIBE/DELTA path. Three reasons the LKV path is unsuitable: (1) **coalescing** — the pull-based 8 Hz DELTA tick only delivers the latest value per tag per tick, silently dropping intermediate samples; (2) **no module timestamp** — the DELTA payload carries no `ts`, so the client would have to use `Date.now()` at WS receipt, introducing 100–500 ms of variable clock skew against the module-timestamped historical axis; (3) **only-changed semantics** — flatlines produce no events, making bucket closure on COV-silent tags impossible without heuristics. The shared `ws` connection is reused; a parallel subscription set and per-client outbox are maintained by `WsServer` alongside the existing LKV subscription.
+
+`TelemetryIntake.setTrendDeltaListener(fn)` wires the ingest path to the WS server's outbox accumulator. The flush at `TREND_FLUSH_HZ` emits one `TREND_DELTA` frame per client containing all buffered samples plus one synthetic event per subscribed tag that had no real event in the flush window (keeping bucket accumulators advancing on flatlines). `responseTailTs` in the tile response (§6.2) is the stitch point — live data only enters the accumulator for `moduleTs > responseTailTs`.
 
 ---
 
@@ -293,6 +310,7 @@ Raw responses carry per-sample timestamps (COV samples are irregular). `ts[]` an
     "endTime": 1776864480000,
     "bucketSMs": 1920,
     "n": 500,
+    "responseTailTs": 1776864478080,
     "series": [
       {
         "tagId": 42,
@@ -314,6 +332,8 @@ Raw responses carry per-sample timestamps (COV samples are irregular). `ts[]` an
 `min[i]` and `max[i]` are aligned 1:1 with `value[i]`. All three arrays have length `n`. For empty buckets (gapfilled, no source rows), `min[i] === max[i] === value[i]` — band collapses to zero area since the value was provably constant (COV semantics). For mixed-null buckets, all three are `null`. Raw responses (`source: 'raw'`) do NOT carry `min` or `max`; the discriminated union enforces this. See §6.5 for the full three-case rule.
 
 `source` is one of `'1s_cagg'`, `'10s_cagg'`, `'1min_cagg'`, `'10min_cagg'`, or `'mixed'`. `source: 'mixed'` appears when watermark fall-through (§4.3) stitched portions from multiple sources. `bucketSMs` is the bucket size in integer milliseconds, returned for client rendering; the server derives it as `Math.round((endTime - startTime) / bucketCount)`.
+
+`responseTailTs` is the `moduleTs` of the last real sample in the response (the maximum `moduleTs` across all series in the tile closest to now). `useLiveSubscription` in the client uses this as the stitch point — live WS events with `moduleTs > responseTailTs` are fed into the accumulator; events at or before it are ignored as already covered by cached data. Absent from raw responses (raw tiles carry their own `ts[]` arrays per series).
 
 `n` is the **actual** row count in each `value` array. For aligned requests (`request_startTime` is an integer multiple of `bucketSMs` from epoch) `n === bucket_count`. For unaligned requests TimescaleDB's `time_bucket_gapfill` emits one extra leading bucket whose natural start precedes `request_startTime`, so `n === bucket_count + 1`.
 
@@ -625,14 +645,11 @@ Both branches carry `sizeMs` — required so `liveClicked` can restore the prior
 - `endPickerCommitted { to, nowMs }` — always → fixed, `from = to - sizeMs` (sizeMs from prior state). No near-now branch; user clicks Live to re-enter tailing after an End pick.
 - `zoomApplied { from, to, nowMs }` — **always → fixed** from any prior mode. Zoom is an exploratory action; staying tailing because the right edge happens to land near "now" hides intent. Tailing requires a deliberate `liveClicked` or `presetClicked`-from-tailing after any zoom. `sizeMs = to - from`.
 - `panApplied { from, to, nowMs }` — always → fixed. `sizeMs` preserved from prior state (not derived from `to - from`). Pan can never enter tailing.
-- `viewportChanged { from, to, nowMs }` — reserved for Step 11. Applies near-now heuristic (`NEAR_NOW_MS`).
-- `tick { nowMs }` — advances `nowMs` in tailing only. Preserves `lastIntent` (clock advance is not a user intent). Dormant while `LIVE_MODE_ENABLED = false`.
+- `tick { nowMs }` — advances `nowMs` in tailing only. Preserves `lastIntent` (clock advance is not a user intent). Dispatched by `TrendChartContainer.handleDataReceived` on each `TREND_DELTA` frame received while in tailing mode.
 
 **`lastIntent` and preset highlight rule.** `lastIntent` tracks the most recent user action. `SpanPresets` highlights the active preset when `(lastIntent === 'preset' || lastIntent === 'pan') && sizeMs === preset.sizeMs`. Pan preserves `sizeMs`, so the preset stays highlighted after a pan gesture. `tick` spreads the existing `lastIntent`.
 
-**`NEAR_NOW_MS = 60_000n`** (1 minute) — reserved for `viewportChanged` (Step 11). No longer used by `zoomApplied`.
-
-Tailing enables the WebSocket subscription; fixed disables it. One WebSocket connection, lifecycle managed by mode.
+Tailing enables the TREND WS subscription (`SUBSCRIBE_TREND`); fixed disables it (`UNSUBSCRIBE_TREND`). One shared WebSocket connection, trend subscription lifecycle managed by `useLiveSubscription` keyed on `isTailing`.
 
 ### 9.4 Selected Trace
 
@@ -735,21 +752,37 @@ The N ≤ 8 cap derives from the heap-scatter cliff (§6.6) and is enforced serv
 
 > **Implementation note (v1.0):** `ensureCovered` (the function called by `TrendChart`'s wheel/pan handlers to request additional tiles for the new viewport) anchors candidate tile computation to the *active-set edges* (`cachedStart`/`cachedEnd`) and walks outward from them, rather than re-deriving from the `TS_BUCKET_ORIGIN_MS` grid. This avoids a dependency on the origin constant inside `useTrendData.ts` and ensures candidates are contiguous with what's already cached regardless of how `viewport` was derived. `TS_BUCKET_ORIGIN_MS`, `floorDiv`, and `ceilDiv` are not imported by `useTrendData.ts`.
 
-### 10.6 Live Tail Stitching
+### 10.6 Live Tail Architecture
 
-In tailing mode, the trailing open range for each tag at the active `bucketS` accumulates live data as buckets close. REST provides data up to `responseTailTs` (the timestamp of the last bucket returned in the last range fetch); the watermark-aware fall-through (§4.3) ensures `responseTailTs` is genuinely current rather than stuck at a stale CAG watermark. WebSocket delivers live values for `ts > responseTailTs`. These are fed into a **client-side bucket accumulator**: a rolling buffer per tag that mirrors the server's bucketing rules for the active `bucketS`. The accumulator emits bucketed values into the open range as buckets close, matching what the server would have materialized.
+**`useLiveSubscription` hook.** The live tail is owned by `useLiveSubscription`, a dedicated hook that manages the `SUBSCRIBE_TREND`/`UNSUBSCRIBE_TREND` lifecycle and the client-side accumulator. It is active only while `isTailing === true`. On tailing entry it issues `SUBSCRIBE_TREND` for all current `tagIds`; on tailing exit (via `commitAndDrain`) it issues `UNSUBSCRIBE_TREND`, flushes the in-progress bucket/buffer state to a `{ start, end }` range, and returns that range to the caller so the container can evict it from the LRU cache.
 
-When the open range fills (range span elapses), the accumulator commits it to the LRU cache, opens the next range, and the live tail continues. If the chart is panned back and the tail is later re-approached, the open range is invalidated and re-fetched from REST to pick up any samples that arrived after eviction.
+**Aggregate tail (bucketS ≥ 1.0).** One FIFO per tag (capacity `TREND_FIFO_CAPACITY = 100` entries — at 4 Hz flush cadence this holds tens of seconds of history, sufficient to bridge any fetch-resolve gap). Each sample from a `TREND_DELTA` frame is appended to the tag's FIFO. A bucket accumulator closes a bucket whenever `moduleTs` crosses a `bucketSMs` boundary; it emits `{ ts, value, min, max, null_count }` matching the server's three-case rule (§6.5). `seedFromCachedTile` initializes the FIFO's `lastKnownValue` from the last entry in the cached tile so that the first live bucket's LOCF seeds correctly. The FIFO is trimmed by `trimThreshold` (= `responseTailTs - 1000`) when it advances — entries older than the threshold are pruned. **`rawBuffersRef` is never trimmed on `trimThreshold` advance** (see below).
+
+**Raw tail (bucketS < 1.0).** One raw buffer per tag (a plain `{ moduleTs, value }[]`). Samples are pushed directly; no bucketing occurs. Raw buffers are bounded to `2 × viewportSpanMs` in wall-clock coverage: on every WS push, entries older than `latestTs - 2 × viewportSpanMs` are dropped. The `rawBuffersRef` is **not** trimmed by `trimThreshold`. Trimming it would advance `minLiveTs` in `mergeRaw`, allowing LOCF gapfill from newly-fetched after-prefetch tiles to leak through the cached-drop filter as a flatline gap at each tile-boundary crossing. Raw buffers are cleared only on tailing exit via `commitAndDrain`.
+
+**`mergeTrendData(cachedData, liveTail, isTailing)`.** Merges the cached tile set with the live accumulator's tail. In tailing mode:
+- Aggregate: cached series arrays are clipped to `liveEndIndex` (the last cached bucket before live data begins) so LOCF gapfill from after-prefetch tiles cannot overwrite real live data.
+- Raw: cached entries with `ts >= minLiveTs` (the first raw buffer entry's `moduleTs`) are dropped; live data wins for the overlap region.
+
+In fixed mode `isTailing === false`: `mergeTrendData` returns the cached data unchanged.
+
+**`isTailing` tile-fetch suppression in `useTrendData`.** While `isTailing === true`, the viewport span has not changed, and the active tile set is non-empty, `useTrendData` skips tile fetches — the live buffer drives rendering. Tile fetches still fire on: initial tailing entry (active set empty), preset switch (span change), or re-entry after eviction. This eliminates the class of merge bugs caused by tiles fetched during tailing (no new cached tiles means no LOCF gapfill can contaminate the live view during a session).
+
+**`tilesForViewport` alignment.** Right-anchor uses the tile grid (`tileSpanMs`) rather than the bucket grid (`bucketSMs`). This prevents the rightmost tile from refetching on every bucket boundary as viewport.end advances during tailing. Prefetch filter allows one tile of look-ahead (`startTime < nowMs + tileSpanMs`) to avoid constant fetch→evict cycles on the after-prefetch tile.
+
+**`tick` dispatch.** `onDataReceived(maxModuleTs)` in `useLiveSubscription` fires unconditionally on every `TREND_DELTA` frame regardless of `isTailing`. `TrendChartContainer.handleDataReceived` guards on `modeStateRef.current.mode !== 'tailing'` before dispatching `tick { nowMs: maxModuleTs }` — keeps the viewport advancing in tailing without affecting fixed mode.
+
+**`dispatchModeAction` wrapper.** `TrendChartContainer` wraps all mode transitions that can exit tailing (zoom, pan, endPicker) in `dispatchModeAction`: it pre-computes the next state, and if it detects a tailing→fixed transition, calls `commitAndDrain()` then `evictRange()` before dispatching. This ensures atomic cleanup — no live tail data leaks into the fixed view.
 
 ### 10.7 Per-Tag Subscription Lifecycle
 
-Within tailing mode, tag add and remove operations mutate the WebSocket subscription set without tearing down the single underlying connection. The subscription channel reuses the `@caro/hmi-context` model (per-tag subscribe/unsubscribe messages on the shared WS).
+`useLiveSubscription` manages subscription by tracking `tagIds` and `isTailing`. On tag add or remove, the hook's effect re-runs: it sends `UNSUBSCRIBE_TREND` for removed tags and `SUBSCRIBE_TREND` for added tags. FIFO entries for removed tags are pruned at the start of the new effect body (not in cleanup), because cleanup closures only see the old `tagIds` set.
 
-**Add tag while tailing.** Ordering is: subscribe WS for the new `tag_id` first, then fire the single-tag REST tile fetch (§10.4 single-tag exception). Any live values that arrive on the WS before the REST response returns are held in the bucket accumulator keyed by `tag_id` and stitched at `responseTailTs` once the REST data lands. This reuses the cold-start stitching logic per newly-added tag — no special case.
+**Add tag while tailing.** `TrendChartContainer` updates its `tagIds` state; `useLiveSubscription`'s effect fires on the next render and sends `SUBSCRIBE_TREND` for the new tag. Concurrently, `useTrendData` detects the empty active set for the new tag and issues a single-tag REST tile fetch. Samples arriving on the WS before the REST response lands are held in the FIFO and stitched at `responseTailTs` when the cached data arrives.
 
-**Remove tag while tailing.** Send the WS unsubscribe for that `tag_id` immediately. Cached tiles for the removed tag are not evicted explicitly; they age out via LRU (§10.3) and remain available if the operator re-adds the same tag within the cache window.
+**Remove tag while tailing.** `useLiveSubscription` sends `UNSUBSCRIBE_TREND` and prunes the FIFO/rawBuffer for the removed tag. Cached tiles age out via LRU.
 
-**Tailing → fixed during an in-flight fetch.** On mode transition, the client unsubscribes the WS immediately. Any REST tile fetches already in flight are allowed to complete, and their results are committed to the LRU cache — the tiles are valid historical data regardless of mode. They just aren't used for live rendering because the chart no longer has an open-tile concept in fixed mode.
+**Tailing → fixed.** `commitAndDrain()` is called synchronously via `dispatchModeAction` before the mode transition dispatches. It issues `UNSUBSCRIBE_TREND` for all current tags, returns a `{ start, end }` range covering the live tail's extent, and clears all internal buffers. `evictRange(start, end)` then removes those tiles from the LRU cache so the fixed view fetches clean historical data for the same window.
 
 ---
 
@@ -1092,7 +1125,7 @@ Non-binding, but each step is landable independently and its tests pass in isola
 | 9 | **`TrendChart` static rendering**: uPlot wrapper, `spanGaps: false`, stepped interpolation, per-trace Y-scale defaults (§8.1.1), Legend component with `unit` and cursor-time field (§8.4, §8.5), resolution indicator (§8.6). Dev test page at `/dev/trend-chart-test`. ✓ Done — 106 total passing in @caro/trend-chart. Pan/zoom and time-range controls deferred to Step 10. | 8 | render path, null-as-gap, color/legend/cursor-time |
 | 10 | **Mode state machine + time range UI**: tailing / fixed transitions (§9.3), preset strip (§12.1), custom range picker (§12.2), Live button (§12.3), pan/zoom interactions (§9.1–9.2). Still no WS. ✓ Done. | 9 | interaction model, mode correctness |
 | A.5 | **v0.8 min/max bands (feature/trends-min-max-bands).** DB aggregate path returns `min`/`max` per series; three-case JS post-pass (§6.5); REST v0.8 serializes both arrays; `@caro/trend-chart` always-band 2-series render (§8.7); `bandsFromTrendData` helper; `bucketSMs === 0n` + `newStart >= 1n` defensive guards (§9.5); SpanBucketIndicator `lastFetchMs` / Last Fetch line. ✓ Done — `@caro/db` 102 passing, HMI server 233 passing, `@caro/trend-chart` 424 passing. | 1–10 | full band pipeline, defensive guards |
-| 11 | **Live tail**: WS subscription wiring via `@caro/hmi-context`, client-side bucket accumulator (§10.6), per-tag subscription lifecycle (§10.7), reconnect/backoff (§14.4). | 10 | live stitching, subscription correctness |
+| 11 | **Live tail**: dedicated trend WS channel (`SUBSCRIBE_TREND`/`UNSUBSCRIBE_TREND`/`TREND_DELTA`), `useLiveSubscription` hook (FIFO + bucket accumulator for aggregate; raw buffer for raw mode; 2×viewportSpanMs trim; `commitAndDrain`), `mergeTrendData` (live-wins overlap, isTailing clip), `isTailing` tile-fetch suppression in `useTrendData`, `dispatchModeAction` wrapper for atomic tailing-exit cleanup. ✓ Done — 542 `@caro/trend-chart` + 67 `@caro/hmi-context` tests passing. | 10 | live stitching, subscription correctness, tailing-exit cleanup |
 | 12 | **Tag picker drawer**: tree + search (§11.2), multi-select commit (§11.3), trendable filter (§11.4). | 11 | picker UX, trendable filtering |
 | 13 | **Connection pool resize and monitoring**: bump `@caro/db` Timescale pool from 10 to 20–30; add NULL `prev` rate monitoring per `DB_Config_Usage_And_Perf.md` §8.1; add per-CAG latency dashboards. | runs alongside production rollout | pool sufficiency, writer-cadence monitoring |
 

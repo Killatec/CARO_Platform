@@ -64,9 +64,6 @@ export function useZoomState({
   // Reset zoom level when modeViewport changes (preset click, custom commit, Live tick).
   // Skipped when lastIntent === 'zoom' or 'pan': both gestures keep the anchor/bucket
   // size intact so incremental threshold accumulation works correctly.
-  // NOTE (Step 11): viewportChanged will set lastIntent='live' and fire this reset on every
-  // live-tick advance — clobbering bucket size each second. When Step 11 lands, either add
-  // 'live' to the skip list here, or use a more targeted action for tick advances.
   useEffect(() => {
     if (lastIntent === 'zoom' || lastIntent === 'pan') return;
     const span = modeViewport.end - modeViewport.start;

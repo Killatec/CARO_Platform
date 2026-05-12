@@ -126,6 +126,9 @@ export function TrendChart({
 
   // Captured in cleanup, consumed on next effect body — preserves user X-zoom across rebuilds.
   const preservedXRangeRef = useRef<{ min: number; max: number } | null>(null);
+  // Holds the last user-requested X scale range; read by uPlot's range function to
+  // prevent data-extent clamping on setScale calls.
+  const userScaleRef = useRef<{ min: number; max: number } | null>(null);
   // Persists user Y-axis pan/zoom across rebuilds. Keyed by tagId.
   // Ref (not state) so handler writes don't trigger re-renders.
   const yScaleOverridesRef = useRef<Map<number, { min: number; max: number }>>(new Map());
@@ -258,6 +261,7 @@ export function TrendChart({
       onCursorChange,
       yScaleOverrides: yScaleOverridesRef.current,
       onDragZoom: (s, e) => onDragZoomRef.current?.(s, e),
+      userScaleRef,
     });
 
     // Old instance was destroyed in cleanup; preservedXRangeRef was written there.
@@ -368,7 +372,10 @@ export function TrendChart({
         const span = xDragStart.maxX - xDragStart.minX;
         if (overW === 0 || span === 0) return;
         const dataDx = (dxPx / overW) * span;
-        u.setScale('x', { min: xDragStart.minX - dataDx, max: xDragStart.maxX - dataDx });
+        const newMin = xDragStart.minX - dataDx;
+        const newMax = xDragStart.maxX - dataDx;
+        userScaleRef.current = { min: newMin, max: newMax };
+        u.setScale('x', { min: newMin, max: newMax });
         const xScalePan = u.scales['x'];
         if (xScalePan?.min != null && xScalePan?.max != null) {
           onXPanRef.current?.(
@@ -403,7 +410,7 @@ export function TrendChart({
       e.preventDefault();
       const r = u.over.getBoundingClientRect();
       const cursorXPx = e.clientX - r.left;
-      zoomXScale(u, e.deltaY, cursorXPx, u.over.clientWidth);
+      zoomXScale(u, e.deltaY, cursorXPx, u.over.clientWidth, 1.2, userScaleRef);
 
       const xScale = u.scales['x'];
       if (xScale?.min != null && xScale?.max != null) {
@@ -477,30 +484,36 @@ export function TrendChart({
       interleaved.push(mins[i]!);
       interleaved.push(maxs[i]!);
     }
-    uplotRef.current.setData([xs, ...interleaved] as uPlot.AlignedData);
+    const newData: uPlot.AlignedData = [xs, ...interleaved] as uPlot.AlignedData;
+    uplotRef.current.setData(newData);
   }, [data, tagIds]);
 
-  // ── Post-swap coverage check — fires once per performSwap, not on every setData ──
-  // swapCounter increments only when useTrendData installs a new active tile set.
-  // This handles the case where the user kept zooming past the level-switch threshold,
-  // leaving xRange wider than the new active set. Pan-driven setData events do NOT
-  // increment swapCounter, so checkAndExtendXCoverage in onXMove handles those instead.
+  // ── Coverage check: fires when the active CAG bucket size changes (zoom across a
+  // §6.3 dispatch threshold). Pan-driven coverage extensions are handled by onXMove's
+  // checkAndExtendXCoverage call instead. swapCounter is intentionally NOT used here —
+  // it increments on every viewport tick in tailing mode (performSwap is unconditional),
+  // and using it would cause the panThresholdCheck to fire spuriously on every frame,
+  // triggering a constant fetch→evict→fetch loop.
+  const bucketSMsKey = data?.type === 'aggregate' ? data.bucketSMs : null;
   useEffect(() => {
     if (uplotRef.current && ensureCoveredRef.current) {
       checkAndExtendXCoverage(uplotRef.current, ensureCoveredRef.current);
     }
-  }, [swapCounter]);
+  }, [bucketSMsKey]);
 
   // ── Imperative X-scale update — does NOT rebuild uPlot ───────────────────
   // Skipped when lastIntent === 'zoom' or 'pan': uPlot already has the right
   // scale from the gesture handler; firing here would overwrite it or cause jitter.
   useEffect(() => {
     if (!uplotRef.current || !xRange) return;
+    const sentMin = Number(xRange.startMs) / 1000;
+    const sentMax = Number(xRange.endMs) / 1000;
+    // Always update the ref so the range function returns current values even
+    // when setScale is skipped (zoom/pan paths handle the scale directly).
+    userScaleRef.current = { min: sentMin, max: sentMax };
     if (lastIntentRef.current === 'zoom' || lastIntentRef.current === 'pan') return;
-    uplotRef.current.setScale('x', {
-      min: Number(xRange.startMs) / 1000,
-      max: Number(xRange.endMs) / 1000,
-    });
+    uplotRef.current.setScale('x', { min: sentMin, max: sentMax });
+    uplotRef.current.redraw(false, true);
   }, [xRange]);
 
   // ── Prune Y-scale overrides when tags are removed ─────────────────────────

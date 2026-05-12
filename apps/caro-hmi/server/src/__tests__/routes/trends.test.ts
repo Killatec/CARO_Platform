@@ -301,6 +301,47 @@ describe('GET /api/v1/trends/tile — unit (mocked)', () => {
 
   // ── JSON round-trip (BigInt guard) ──────────────────────────────────────────
 
+  it('responseTailTs present on raw response — is a number close to Date.now()', async () => {
+    mockGet.mockResolvedValueOnce(RAW_TILE);
+    const before = Date.now();
+    const res = await request(app)
+      .get('/api/v1/trends/tile?tag_ids=1&start_time=3600000&end_time=3840000&bucket_count=250');
+    const after = Date.now();
+    expect(res.status).toBe(200);
+    expect(typeof res.body.data.responseTailTs).toBe('number');
+    expect(res.body.data.responseTailTs).toBeGreaterThanOrEqual(before);
+    expect(res.body.data.responseTailTs).toBeLessThanOrEqual(after);
+  });
+
+  it('responseTailTs present on aggregate response — is a number close to Date.now()', async () => {
+    mockGet.mockResolvedValueOnce(AGG_TILE);
+    const before = Date.now();
+    const res = await request(app)
+      .get('/api/v1/trends/tile?tag_ids=1&start_time=7200000&end_time=10800000&bucket_count=250');
+    const after = Date.now();
+    expect(res.status).toBe(200);
+    expect(typeof res.body.data.responseTailTs).toBe('number');
+    expect(res.body.data.responseTailTs).toBeGreaterThanOrEqual(before);
+    expect(res.body.data.responseTailTs).toBeLessThanOrEqual(after);
+  });
+
+  it('responseTailTs is captured before getTrendTile resolves (pre-SQL timestamp)', async () => {
+    let capturedResponseTailTs = 0;
+    mockGet.mockImplementationOnce(async () => {
+      // Record when getTrendTile is called — responseTailTs must precede this
+      capturedResponseTailTs = Date.now();
+      await new Promise(r => setTimeout(r, 80));
+      return RAW_TILE;
+    });
+    const before = Date.now();
+    const res = await request(app)
+      .get('/api/v1/trends/tile?tag_ids=1&start_time=3600000&end_time=3840000&bucket_count=250');
+    expect(res.status).toBe(200);
+    // responseTailTs must be ≤ when getTrendTile was entered (since it's captured before the call)
+    expect(res.body.data.responseTailTs).toBeLessThanOrEqual(capturedResponseTailTs);
+    expect(res.body.data.responseTailTs).toBeGreaterThanOrEqual(before);
+  });
+
   it('response body is JSON-serialisable (bigints converted to numbers by serializeTile)', async () => {
     mockGet.mockResolvedValueOnce(RAW_TILE);
     const res = await request(app)

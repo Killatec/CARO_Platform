@@ -114,7 +114,14 @@ export function panXScale(u: uPlot, dxPx: number, overWidthPx: number): void {
 }
 
 /** Zoom the uPlot X scale around a cursor pixel position (cursorXPx from u.over.left). */
-export function zoomXScale(u: uPlot, deltaY: number, cursorXPx: number, overWidthPx: number, factor = 1.2): void {
+export function zoomXScale(
+  u: uPlot,
+  deltaY: number,
+  cursorXPx: number,
+  overWidthPx: number,
+  factor = 1.2,
+  userScaleRef?: { current: { min: number; max: number } | null },
+): void {
   const xScale = u.scales['x'];
   if (!xScale || overWidthPx === 0) return;
   const xMin = xScale.min ?? 0;
@@ -125,7 +132,10 @@ export function zoomXScale(u: uPlot, deltaY: number, cursorXPx: number, overWidt
   const newSpan = span * f;
   const cursorFrac = Math.max(0, Math.min(1, cursorXPx / overWidthPx));
   const cursorX = xMin + cursorFrac * span;
-  u.setScale('x', { min: cursorX - cursorFrac * newSpan, max: cursorX + (1 - cursorFrac) * newSpan });
+  const newMin = cursorX - cursorFrac * newSpan;
+  const newMax = cursorX + (1 - cursorFrac) * newSpan;
+  if (userScaleRef) userScaleRef.current = { min: newMin, max: newMax };
+  u.setScale('x', { min: newMin, max: newMax });
 }
 
 // Shared post-setScale threshold check — used by both X-pan and X-wheel handlers.

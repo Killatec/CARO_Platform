@@ -1,4 +1,5 @@
 import uPlot from 'uplot';
+import type { MutableRefObject } from 'react';
 import type { TagDef } from '@caro/hmi-context';
 import { colorAssign } from '../colorAssign.js';
 import { defaultYScale } from './yScales.js';
@@ -16,6 +17,12 @@ export interface BuildUplotConfigOpts {
   yScaleOverrides?: Map<number, { min: number; max: number }>;
   /** Called when the user completes a drag-zoom selection on the plot area. */
   onDragZoom?: (startMs: bigint, endMs: bigint) => void;
+  /**
+   * Ref holding the last user-requested X scale range. The range function
+   * reads this to return the requested min/max rather than data extent,
+   * preventing uPlot from clamping setScale calls to the data range.
+   */
+  userScaleRef?: MutableRefObject<{ min: number; max: number } | null>;
 }
 
 /** Parse a hex color like '#4e79a7' into rgba(r,g,b,alpha). */
@@ -40,10 +47,20 @@ function hexToRgba(hex: string, alpha: number): string {
  * This contrast applies uniformly to both aggregate bands and raw stepped lines.
  */
 export function buildUplotConfig(opts: BuildUplotConfigOpts): uPlot.Options {
-  const { tagIds, selectedTagId, tagMap, width, height, siteTimezone, onCursorChange, yScaleOverrides, onDragZoom } = opts;
+  const { tagIds, selectedTagId, tagMap, width, height, siteTimezone, onCursorChange, yScaleOverrides, onDragZoom, userScaleRef } = opts;
 
   // Named scale entries — one per tag, shared by both band series.
-  const xScale: uPlot.Scale = { time: true, auto: false };
+  // range: returns userScaleRef values when set, so setScale requests aren't
+  // clamped to the data extent by uPlot's default range computation.
+  const xScale: uPlot.Scale = {
+    time: true,
+    auto: false,
+    range: (_u, dataMin, dataMax) => {
+      const userScale = userScaleRef?.current;
+      if (userScale != null) return [userScale.min, userScale.max];
+      return [dataMin, dataMax];
+    },
+  };
   const scales: uPlot.Options['scales'] = { x: xScale };
   for (const tagId of tagIds) {
     const override = yScaleOverrides?.get(tagId);

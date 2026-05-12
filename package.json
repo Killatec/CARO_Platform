@@ -12,7 +12,7 @@
   ],
   "scripts": {
     "dev": "node scripts/kill-ports.js && concurrently -k -n tr-srv,mqtt-srv,hmi-srv,tr-cli,mqtt-cli,hmi-cli -c blue,yellow,magenta,cyan,green,red \"npm run dev -w apps/tag-registry/server\" \"npm run dev --prefix apps/mqtt-simulator/server\" \"npm run dev -w @caro/hmi-server\" \"node scripts/wait-for-port.js 3001 && npm run dev -w apps/tag-registry/client\" \"node scripts/wait-for-port.js 3002 && npm run dev --prefix apps/mqtt-simulator/client\" \"node scripts/wait-for-port.js 3003 && npm run dev -w @caro/hmi-client\"",
-    "dev:fresh": "npm run build -w @caro/db -w @caro/server -w @caro/ui -w @caro/hmi-context -w @caro/widgets -w @caro/tag-registry-shared && npm run dev",
+    "dev:fresh": "npm run build -w @caro/db -w @caro/server -w @caro/ui -w @caro/hmi-context -w @caro/widgets -w @caro/tag-registry-shared -w @caro/trend-chart && npm run dev",
     "dev:kill": "node scripts/kill-ports.js",
     "build": "npm run build --workspace=@caro/db && npm run build --workspace=@caro/server && npm run build --workspace=@caro/ui",
     "dev:tag-registry": "npm run dev --workspace=@caro/tag-registry",

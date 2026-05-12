@@ -75,6 +75,24 @@ export class TileCache<T> {
     return this._map.size;
   }
 
+  /**
+   * Deletes all entries for which `predicate(key, value)` returns true.
+   * Safe to call during evictRange — collects keys first, then deletes.
+   * Returns the number of entries deleted.
+   */
+  deleteWhere(predicate: (key: string, value: T) => boolean): number {
+    const toDelete: string[] = [];
+    for (const [key, value] of this._map) {
+      if (predicate(key, value)) toDelete.push(key);
+    }
+    for (const key of toDelete) {
+      this._currentBytes -= this._sizes.get(key)!;
+      this._map.delete(key);
+      this._sizes.delete(key);
+    }
+    return toDelete.length;
+  }
+
   private _evict(): void {
     // Evict from the front (LRU) until within capacity.
     const iter = this._map.keys();

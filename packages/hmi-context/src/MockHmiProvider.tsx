@@ -79,6 +79,13 @@ export function MockHmiProvider({
     []
   );
 
+  const subscribeTrend = useCallback(
+    (_tagId: number, _callback: (moduleTs: number, value: number | boolean | string | null) => void): (() => void) => {
+      return () => {};
+    },
+    []
+  );
+
   const writeTag = useCallback(
     (tagId: number, value: number | boolean | string): Promise<void> => {
       if (onWrite) return onWrite(tagId, value);
@@ -93,8 +100,8 @@ export function MockHmiProvider({
   );
 
   const dataValue = useMemo<HmiDataContextValue>(
-    () => ({ tagMap, tagPathIndex, getLiveValue, subscribeLiveValue, writeTag }),
-    [tagMap, tagPathIndex, getLiveValue, subscribeLiveValue, writeTag]
+    () => ({ tagMap, tagPathIndex, getLiveValue, subscribeLiveValue, subscribeTrend, writeTag }),
+    [tagMap, tagPathIndex, getLiveValue, subscribeLiveValue, subscribeTrend, writeTag]
   );
 
   return (

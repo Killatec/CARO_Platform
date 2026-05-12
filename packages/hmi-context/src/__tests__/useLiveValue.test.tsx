@@ -103,15 +103,17 @@ describe('useLiveValue', () => {
         []
       );
       const writeTag = useCallback(async () => {}, []);
+      const subscribeTrend = useCallback(() => () => {}, []);
       const dataValue = useMemo<HmiDataContextValue>(
         () => ({
           tagMap: new Map(),
           tagPathIndex: buildTagPathIndex([]),
           getLiveValue,
           subscribeLiveValue,
+          subscribeTrend,
           writeTag,
         }),
-        [getLiveValue, subscribeLiveValue, writeTag]
+        [getLiveValue, subscribeLiveValue, subscribeTrend, writeTag]
       );
 
       return (

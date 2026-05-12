@@ -54,6 +54,19 @@ async function start(): Promise<void> {
   }
   const { tagMap, moduleTagIds, trendableTagIds } = tagMapResult;
 
+  // Build module → trendable-tag-IDs index for WS trend-delta emission
+  const trendableTagsByModule = new Map<string, Set<number>>();
+  for (const [tagId, tagDef] of tagMap) {
+    if (trendableTagIds.has(tagId)) {
+      let set = trendableTagsByModule.get(tagDef.module_id);
+      if (!set) {
+        set = new Set();
+        trendableTagsByModule.set(tagDef.module_id, set);
+      }
+      set.add(tagId);
+    }
+  }
+
   // 2. Core data structures
   const lkv = new LkvCache();
   const dutyTracker = new DutyTracker();
@@ -138,8 +151,15 @@ async function start(): Promise<void> {
   const httpServer = http.createServer(app);
 
   // 7. WS server
-  const wsServer = new WsServer({ lkv, tickMs: config.wsTickMs, dutyTracker });
+  const wsServer = new WsServer({
+    lkv,
+    tickMs: config.wsTickMs,
+    dutyTracker,
+    trendableTagsByModule,
+    trendFlushHz: config.trendFlushHz,
+  });
   wsServer.attach(httpServer);
+  intake.setTrendDeltaListener((moduleTs, moduleId) => wsServer.handleTrendDelta(moduleTs, moduleId));
 
   // 7b. Start the async DB pipeline flush tick
   dbPipeline.start();

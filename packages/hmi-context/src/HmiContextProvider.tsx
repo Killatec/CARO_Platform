@@ -29,6 +29,12 @@ export function HmiContextProvider({ children, apiUrl, wsUrl }: HmiContextProvid
   const serverRef  = useRef<Set<number>>(new Set());
   const flushScheduledRef = useRef(false);
 
+  // Trend-delta channel — parallel reconciler sharing the same WS and flush microtask.
+  type TrendCallback = (moduleTs: number, value: number | boolean | string | null) => void;
+  const trendSubscribersRef = useRef<Map<number, Set<TrendCallback>>>(new Map());
+  const trendDesiredRef = useRef<Set<number>>(new Set());
+  const trendServerRef  = useRef<Set<number>>(new Set());
+
   // WebSocket
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectDelayRef = useRef(1000);
@@ -95,13 +101,31 @@ export function HmiContextProvider({ children, apiUrl, wsUrl }: HmiContextProvid
       if (!desiredRef.current.has(tagId)) toUnsub.push(tagId);
     }
 
+    const trendToSub: number[] = [];
+    for (const tagId of trendDesiredRef.current) {
+      if (!trendServerRef.current.has(tagId)) trendToSub.push(tagId);
+    }
+    const trendToUnsub: number[] = [];
+    for (const tagId of trendServerRef.current) {
+      if (!trendDesiredRef.current.has(tagId)) trendToUnsub.push(tagId);
+    }
+
+    // Wire order: SUBSCRIBE → SUBSCRIBE_TREND → UNSUBSCRIBE → UNSUBSCRIBE_TREND
     if (toSub.length > 0) {
       ws.send(JSON.stringify({ type: 'SUBSCRIBE', tagIds: toSub }));
       for (const t of toSub) serverRef.current.add(t);
     }
+    if (trendToSub.length > 0) {
+      ws.send(JSON.stringify({ type: 'SUBSCRIBE_TREND', tagIds: trendToSub }));
+      for (const t of trendToSub) trendServerRef.current.add(t);
+    }
     if (toUnsub.length > 0) {
       ws.send(JSON.stringify({ type: 'UNSUBSCRIBE', tagIds: toUnsub }));
       for (const t of toUnsub) serverRef.current.delete(t);
+    }
+    if (trendToUnsub.length > 0) {
+      ws.send(JSON.stringify({ type: 'UNSUBSCRIBE_TREND', tagIds: trendToUnsub }));
+      for (const t of trendToUnsub) trendServerRef.current.delete(t);
     }
   }, []);
 
@@ -147,13 +171,14 @@ export function HmiContextProvider({ children, apiUrl, wsUrl }: HmiContextProvid
             ? event.data.length
             : ((event.data as ArrayBuffer).byteLength ?? 0);
 
-        let msg: { type: string; values?: Record<string, unknown>; ts?: number };
+        let msg: {
+          type: string;
+          values?: Record<string, unknown>;
+          ts?: number;
+          samples?: Array<{ moduleTs: number; tagId: number; value: number | boolean | string | null }>;
+        };
         try {
-          msg = JSON.parse(event.data as string) as {
-            type: string;
-            values?: Record<string, unknown>;
-            ts?: number;
-          };
+          msg = JSON.parse(event.data as string) as typeof msg;
         } catch {
           return;
         }
@@ -167,6 +192,11 @@ export function HmiContextProvider({ children, apiUrl, wsUrl }: HmiContextProvid
             valuesRef.current.set(tagId, lv);
             subscribersRef.current.get(tagId)?.forEach(cb => cb(lv));
           }
+        } else if (msg.type === 'TREND_DELTA') {
+          wsStatsRef.current.messageCount++;
+          for (const { moduleTs, tagId, value } of msg.samples ?? []) {
+            trendSubscribersRef.current.get(tagId)?.forEach(cb => cb(moduleTs, value));
+          }
         } else if (msg.type === 'PONG' && msg.ts !== undefined) {
           latencyRef.current = Date.now() - msg.ts;
         }
@@ -174,8 +204,9 @@ export function HmiContextProvider({ children, apiUrl, wsUrl }: HmiContextProvid
 
       const onDisconnect = () => {
         // Server connection lost — it forgets all subscriptions.
-        // Leave desiredRef intact; next onopen reconciles from it.
+        // Leave desiredRef/trendDesiredRef intact; next onopen reconciles from them.
         serverRef.current.clear();
+        trendServerRef.current.clear();
         if (pingIntervalRef.current !== null) {
           clearInterval(pingIntervalRef.current);
           pingIntervalRef.current = null;
@@ -267,6 +298,34 @@ export function HmiContextProvider({ children, apiUrl, wsUrl }: HmiContextProvid
     [scheduleFlush]
   );
 
+  const subscribeTrend = useCallback(
+    (
+      tagId: number,
+      callback: (moduleTs: number, value: number | boolean | string | null) => void,
+    ): (() => void) => {
+      let subs = trendSubscribersRef.current.get(tagId);
+      if (!subs) {
+        subs = new Set();
+        trendSubscribersRef.current.set(tagId, subs);
+      }
+      subs.add(callback);
+      trendDesiredRef.current.add(tagId);
+      scheduleFlush();
+
+      return () => {
+        const s = trendSubscribersRef.current.get(tagId);
+        if (!s) return;
+        s.delete(callback);
+        if (s.size === 0) {
+          trendSubscribersRef.current.delete(tagId);
+          trendDesiredRef.current.delete(tagId);
+          scheduleFlush();
+        }
+      };
+    },
+    [scheduleFlush]
+  );
+
   const writeTag = useCallback(
     async (tagId: number, value: number | boolean | string): Promise<void> => {
       const res = await fetch(`${apiUrl}/tags/write`, {
@@ -307,8 +366,8 @@ export function HmiContextProvider({ children, apiUrl, wsUrl }: HmiContextProvid
   // getLiveValue/subscribeLiveValue/writeTag are stable refs (useCallback with stable deps).
   // wsStats is intentionally NOT here — it lives in its own context to avoid churn.
   const dataValue = useMemo<HmiDataContextValue>(
-    () => ({ tagMap: tagMapRef.current, tagPathIndex: tagPathIndexRef.current, getLiveValue, subscribeLiveValue, writeTag }),
-    [tagMapLoaded, getLiveValue, subscribeLiveValue, writeTag] // eslint-disable-line react-hooks/exhaustive-deps
+    () => ({ tagMap: tagMapRef.current, tagPathIndex: tagPathIndexRef.current, getLiveValue, subscribeLiveValue, subscribeTrend, writeTag }),
+    [tagMapLoaded, getLiveValue, subscribeLiveValue, subscribeTrend, writeTag] // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   if (!tagMapLoaded) return null;

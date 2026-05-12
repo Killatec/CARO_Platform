@@ -8,7 +8,6 @@
 
 ## HMI
 
-- [ ] **Step 11 — Live tail (active next build):** WebSocket subscription wiring via `@caro/hmi-context`, client-side bucket accumulator (§10.6), per-tag subscription lifecycle (§10.7), reconnect/backoff (§14.4). Requires setting `LIVE_MODE_ENABLED = true` in `useTrendMode.ts`. Build order in `Docs/hmi_trend_viewer_spec.md` §17.1.1.
 - [ ] **Step 12 — Tag picker drawer:** Side drawer with tag tree + type-ahead search (§11.2), multi-select commit (§11.3), trendable filter (§11.4). Depends on Step 11.
 - [ ] Add NULL `prev` rate monitoring per `DB_Config_Usage_And_Perf.md` §8.1 — daily sample at 1-min bound; non-zero rate signals writer-cadence drift
 

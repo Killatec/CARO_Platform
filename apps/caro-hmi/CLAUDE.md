@@ -25,11 +25,11 @@ Prerequisites: PostgreSQL running with tag registry populated, Mosquitto on 1883
 | Module | File | Purpose |
 |---|---|---|
 | LKV Cache | `server/src/lkv.ts` | In-memory `Map<tag_id, { value, generation }>`. Generation bumps only on value change (strict equality). |
-| Telemetry Intake | `server/src/telemetry-intake.ts` | Transport-agnostic ingestion: LKV writes, watchdog (lastSeen tracking, null-write on timeout), DB pipeline enqueue. Universal entry point for all telemetry via `ingest(moduleId, message)`. |
+| Telemetry Intake | `server/src/telemetry-intake.ts` | Transport-agnostic ingestion: LKV writes, watchdog (lastSeen tracking, null-write on timeout), DB pipeline enqueue. Universal entry point for all telemetry via `ingest(moduleId, message)`. **Step 11:** calls `trendDeltaListener(moduleTs, tagId, value)` on every COV write for trendable tags; listener registered via `setTrendDeltaListener(fn)` called at startup. |
 | MQTT Bridge | `server/src/mqtt-bridge.ts` | Transport only — subscribes `caro/+/telemetry`, parses payload, delegates to `TelemetryIntake.ingest()`. Routes `caro/+/cmd_ack` to `CommandPublisher`. Publishes commands to `caro/{module_id}/cmd`. Heartbeat. |
 | HMI Tag Source | `server/src/hmi-tag-source.ts` | Proxy-based telemetry producer for `module_type='HMI'` tags. Property names derived from `tag_path` (strips module segment, joins remaining with `_`). Publishes to TelemetryIntake on configurable timer (default 250ms). Reads 7 Trend_Info values from `DbPipeline` and `TimescaleSizeMonitor` each tick: Trending, Queue_Depth, Rows_Per_Sec, Flush_ms, Dropped_Pkgs, Error_Count, DB_Size. |
 | Duty Tracker | `server/src/duty-tracker.ts` | Wraps telemetry hot paths with `performance.now()` timing. `snapshot(intervalMs)` returns duty cycle as percentage, resets accumulator. Fed into `hmiTags.Telemetry_CPU` via `onBeforePublish`. |
-| WS Server | `server/src/ws-server.ts` | Pull-based at configurable tick (default 8 Hz / 125 ms). Per-client generation tracking. SUBSCRIBE → SNAPSHOT → DELTA. JSON encoding. |
+| WS Server | `server/src/ws-server.ts` | Pull-based at configurable tick (default 8 Hz / 125 ms). Per-client generation tracking. SUBSCRIBE → SNAPSHOT → DELTA. JSON encoding. **Trend channel (Step 11):** parallel subscription set for trend deltas. SUBSCRIBE_TREND → per-client outbox accumulates `{ moduleTs, tagId, value }` samples. Flushed at `TREND_FLUSH_HZ` (default 4 Hz) as `TREND_DELTA { samples: [...] }` frames, including synthetic events for subscribed tags with no real ingest in the flush window. UNSUBSCRIBE_TREND tears down the trend subscription for those tagIds. `setTrendDeltaListener(fn)` on WsServer registers the ingest callback that `TelemetryIntake` calls on every COV write. |
 | DB Pipeline | `server/src/db-pipeline.ts` | Push-based queue from TelemetryIntake. Peek-then-consume flush with inFlight guard. `TimescaleDbWriter` (or `NullDbWriter` fallback). `TIMESCALE_DB_TICK_MS` tick (default 500ms); queue max 5000 (`TIMESCALE_DB_QUEUE_MAX`); max 500 entries per flush (`TIMESCALE_DB_MAX_ENTRIES_PER_FLUSH`). Counters clipped at 9999. `queueDepth` is a tick-held pre-peek snapshot; `queueLength` is live. |
 | TimescaleDbWriter | `server/src/timescale-writer.ts` | Wraps `writeTagSamples()` from `@caro/db`. Coerces bool→float, drops NaN/Infinity to null, drops strings to null (logs once per instance). |
 | TimescaleSizeMonitor | `server/src/timescale-size-monitor.ts` | Background poll of `pg_database_size()` every `TIMESCALE_SIZE_POLL_MS` (default 30s). Exposes `sizeGB`; started only on the `TimescaleDbWriter` path. Errors held silently (previous value retained); warn logged at most once per hour. |
@@ -128,6 +128,9 @@ TREND_SNAPSHOT_INTERVAL_MS=60000
 # Trends REST endpoint
 HMI_TRENDS_GZIP=                  # unset/off by default — any value enables gzip on /api/v1/trends
 TIMESCALE_LOG_TILE_QUERIES=        # unset/off by default — set to 1 to log tile query durations
+
+# Trend live tail (Step 11)
+TREND_FLUSH_HZ=4                  # flush cadence for TREND_DELTA frames (default 4 Hz)
 ```
 
 ## Phase Status
@@ -139,7 +142,7 @@ TIMESCALE_LOG_TILE_QUERIES=        # unset/off by default — set to 1 to log ti
 | 3 — Client Shell | ✅ Complete | Vite React app, shell components, demo page, E2E pipeline working |
 | 4 — Auth | Not started | express-session, Argon2id, TOTP MFA |
 | 4.5 — DB Migrations | Not started | HMI tables (users, sessions, audit_log, etc.) |
-| 5 — REST Endpoints + Trend Chart | In progress (Steps 1–10 + v0.9 done) | Trends API v0.9 complete (tile + extent + trendable routes; min/max bands; three-case rule; raw bounded-prev; watermark memoization). `@caro/trend-chart` package complete through Step 10 + A.5: always-band 2-series render, `bandsFromTrendData`, `SpanBucketIndicator` Last Fetch line, `formatFetchMs`. 445 @caro/trend-chart + 236 server + 109 @caro/db tests passing. Remaining: Step 11 (live tail), Step 12 (tag picker), remaining CRUD per hmi_API_spec. |
+| 5 — REST Endpoints + Trend Chart | In progress (Steps 1–11 done) | Trends API v0.9 complete (tile + extent + trendable routes; min/max bands; three-case rule; raw bounded-prev; watermark memoization). `@caro/trend-chart` package complete through Step 11: `useLiveSubscription` (FIFO + bucket accumulator + raw buffer + 2×viewportSpanMs trim + commitAndDrain), `mergeTrendData` (isTailing live-wins overlap), `isTailing` tile-fetch suppression in `useTrendData`, `dispatchModeAction` tailing-exit cleanup. Dedicated trend WS channel (SUBSCRIBE_TREND/UNSUBSCRIBE_TREND/TREND_DELTA). 542 @caro/trend-chart + 67 @caro/hmi-context + 236 server + 109 @caro/db tests passing. Remaining: Step 12 (tag picker), remaining CRUD per hmi_API_spec. |
 | 6 — Protobuf | Not started | Replace JSON WS messages with Protobuf encoding |
 
 ## Related Docs

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { TelemetryIntake } from '../telemetry-intake.js';
 import type { TelemetryMessage } from '../telemetry-intake.js';
 import { LkvCache } from '../lkv.js';
@@ -593,5 +593,99 @@ describe('TelemetryIntake — FAULT message with tag data', () => {
     intake.ingest(MODULE_ID, telemetryMsg([], 'FAULT'));
 
     expect(enqueueSpy).not.toHaveBeenCalled();
+  });
+});
+
+// ── trendDeltaListener ────────────────────────────────────────────────────────
+
+describe('TelemetryIntake — trendDeltaListener', () => {
+  let intake: TelemetryIntake;
+
+  beforeEach(() => {
+    intake = makeIntake();
+  });
+
+  it('fires listener with correct moduleTs and moduleId on normal ingest', () => {
+    const received: { moduleTs: number; moduleId: string }[] = [];
+    intake.setTrendDeltaListener((ts, id) => received.push({ moduleTs: ts, moduleId: id }));
+
+    intake.ingest(MODULE_ID, telemetryMsg([{ tag_id: TAG_TREND, value: 42 }], 'OK', 1234));
+
+    expect(received).toHaveLength(1);
+    expect(received[0].moduleTs).toBe(1234);
+    expect(received[0].moduleId).toBe(MODULE_ID);
+  });
+
+  it('fires listener after LKV writes — LKV reflects ingested value at fire time', () => {
+    const lkv = new LkvCache();
+    const localIntake = makeIntake(lkv);
+
+    let capturedValue: unknown;
+    localIntake.setTrendDeltaListener(() => {
+      capturedValue = lkv.getValue(TAG_TREND);
+    });
+
+    localIntake.ingest(MODULE_ID, telemetryMsg([{ tag_id: TAG_TREND, value: 77 }], 'OK', 1000));
+
+    expect(capturedValue).toBe(77);
+  });
+
+  it('fires listener on FAULT message — LKV is null at fire time (FAULT nulled it)', () => {
+    const lkv = new LkvCache();
+    lkv.set(TAG_TREND, 99);
+    const localIntake = makeIntake(lkv);
+
+    let capturedValue: unknown = 'not-fired';
+    localIntake.setTrendDeltaListener(() => {
+      capturedValue = lkv.getValue(TAG_TREND);
+    });
+
+    // FAULT with no tag data — all module tags are nulled by the FAULT branch
+    localIntake.ingest(MODULE_ID, telemetryMsg([], 'FAULT', 5000));
+
+    expect(capturedValue).toBeNull();
+  });
+
+  it('fires listener on FAULT with tag data — LKV reflects COV values at fire time', () => {
+    const lkv = new LkvCache();
+    lkv.set(TAG_TREND, 99);
+    const localIntake = makeIntake(lkv);
+
+    let capturedValue: unknown;
+    localIntake.setTrendDeltaListener(() => {
+      capturedValue = lkv.getValue(TAG_TREND);
+    });
+
+    // FAULT with real tag data — FAULT nulls first, then COV loop writes back the real value
+    localIntake.ingest(MODULE_ID, telemetryMsg([{ tag_id: TAG_TREND, value: 42 }], 'FAULT', 6000));
+
+    expect(capturedValue).toBe(42);
+  });
+
+  it('does not crash when no listener is set', () => {
+    expect(() =>
+      intake.ingest(MODULE_ID, telemetryMsg([{ tag_id: TAG_TREND, value: 1 }])),
+    ).not.toThrow();
+  });
+
+  it('fires once per ingest call', () => {
+    let count = 0;
+    intake.setTrendDeltaListener(() => { count++; });
+
+    intake.ingest(MODULE_ID, telemetryMsg([{ tag_id: TAG_TREND, value: 1 }]));
+    intake.ingest(MODULE_ID, telemetryMsg([{ tag_id: TAG_TREND, value: 2 }]));
+
+    expect(count).toBe(2);
+  });
+
+  it('listener can be cleared by setting null', () => {
+    let count = 0;
+    intake.setTrendDeltaListener(() => { count++; });
+    intake.ingest(MODULE_ID, telemetryMsg([{ tag_id: TAG_TREND, value: 1 }]));
+
+    intake.setTrendDeltaListener(null);
+    intake.ingest(MODULE_ID, telemetryMsg([{ tag_id: TAG_TREND, value: 2 }]));
+
+    expect(count).toBe(1);
   });
 });

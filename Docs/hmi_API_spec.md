@@ -16,6 +16,7 @@ hmi_functional_spec | CARO_MQTT_Spec | Tag Registry Functional Spec | CARO_DB_Sp
 | 1.3 | 2026-03-26 | PM / Claude | Rate limiting defaults added: 100 req/min read, 20 req/min write, both configurable (OI-02 closed). Idempotency note added: write retries are safe — telemetry loop resolves ambiguity. command_id correlation via WebSocket not required — out-of-sync detection handles outcome visibility. |
 | 1.4 | 2026-03-28 | PM / Claude | Audit log endpoint updated: tag.write split into tag.write.request and tag.write.outcome (two-row pattern with shared command_id); tag.sync.lost and tag.sync.reset added; comment no longer required on tag writes (mode save only). Sync reset endpoint added: POST /api/v1/tags/{tag_id}/sync-reset. PENDING_TABLE_EMPTY error code updated: no longer references cmd_status. |
 | 1.5 | 2026-04-14 | PM / Claude | POST /tags/write: `comment` field changed from required to optional for individual tag writes. The HMI client sends a default value but the field is not validated as required. `comment` remains required only for mode save operations (Section 8, POST /modes/{mode_id}/save). |
+| 1.7 | 2026-05-11 | PM / Claude | Section 11 WebSocket: added SUBSCRIBE_TREND, UNSUBSCRIBE_TREND, TREND_DELTA message types (Step 11 live tail). Section 7 tile response: added `responseTailTs` field to aggregate response. Added TREND_FLUSH_HZ env var note. |
 | 1.6 | 2026-04-29 | PM / Claude | Section 7 Trends: replaced stub with live endpoint documentation — GET /api/v1/trends/tile (v0.5+ wire contract with start_time/end_time/bucket_count, watermark fall-through, discriminated source response), GET /api/v1/trends/extent (hypertable extent), GET /api/v1/tags/trendable (trendable tag discovery). Added error codes: INVALID_TAG_IDS (trends), INVALID_RANGE, INVALID_BUCKET_COUNT, INVALID_BUCKET_S, MISSING_QUERY_PARAM. Detailed spec: Docs/hmi_trend_viewer_spec.md. |
 
 ---
@@ -678,13 +679,16 @@ The WebSocket connection is the primary real-time data channel. Connection: `wss
 
 | Message Type | Direction | Description |
 |---|---|---|
-| SUBSCRIBE | Client → Server | Subscribe to tag_ids. Server responds with SNAPSHOT then streams updates. |
-| UNSUBSCRIBE | Client → Server | Unsubscribe from tag_ids. |
+| SUBSCRIBE | Client → Server | Subscribe to tag_ids for LKV live values. Server responds with SNAPSHOT then streams DELTA updates. |
+| UNSUBSCRIBE | Client → Server | Unsubscribe from tag_ids (LKV channel). |
 | SNAPSHOT | Server → Client | Full current LKV cache values for all subscribed tag_ids. Sent on subscribe or reconnect. Values only (no timestamps). |
-| DELTA | Server → Client | Changed values only, up to 8 Hz (125 ms tick). Filtered per client to subscribed tags only. Values only (no timestamps). |
+| DELTA | Server → Client | Changed LKV values only, up to 8 Hz (125 ms tick). Filtered per client to subscribed tags only. Values only (no timestamps). |
 | PING | Client → Server | Latency measurement. |
 | PONG | Server → Client | Echoes PING timestamp. |
 | MODE_CHANGED | Server → Client | Broadcast when active mode revision changes. |
+| SUBSCRIBE_TREND | Client → Server | Subscribe to trend delta stream for the given tag_ids (Step 11). Server begins routing ingest events for those tags into the per-client trend outbox. |
+| UNSUBSCRIBE_TREND | Client → Server | Unsubscribe from trend delta stream for the given tag_ids. |
+| TREND_DELTA | Server → Client | Flushed at `TREND_FLUSH_HZ` (default 4 Hz). Contains all ingest events since last flush plus one synthetic event per subscribed tag that had no real ingest in the window (for flatline advancement). |
 
 All WebSocket messages use JSON encoding. SNAPSHOT and DELTA carry a `values` object keyed by tag_id with the value only (no timestamp, no quality enum). A null value means bad quality.
 
@@ -700,7 +704,22 @@ All WebSocket messages use JSON encoding. SNAPSHOT and DELTA carry a `values` ob
 
 // DELTA (sent on tick when values change)
 { "type": "DELTA", "values": { "1001": 86.1 } }
+
+// SUBSCRIBE_TREND (Step 11)
+{ "type": "SUBSCRIBE_TREND", "tagIds": [42, 87] }
+
+// UNSUBSCRIBE_TREND (Step 11)
+{ "type": "UNSUBSCRIBE_TREND", "tagIds": [42] }
+
+// TREND_DELTA (Step 11, sent at TREND_FLUSH_HZ cadence)
+{ "type": "TREND_DELTA", "samples": [
+    { "moduleTs": 1776864001234, "tagId": 42, "value": 1.9 },
+    { "moduleTs": 1776864001234, "tagId": 87, "value": 0.0 }
+  ]
+}
 ```
+
+`TREND_DELTA.samples` is a flat array of `{ moduleTs: number, tagId: number, value: number | boolean | null }`. Module timestamps match the values written to `tag_samples` (module clock, not WS-receipt wall-clock). `TREND_FLUSH_HZ` is configurable via server env var (default 4). Detailed spec: `Docs/hmi_trend_viewer_spec.md` §4.4 and §10.6.
 
 > *NOTE: Protobuf encoding is reserved for future optimization (Phase 6). The current implementation uses JSON for all WebSocket messages.*
 

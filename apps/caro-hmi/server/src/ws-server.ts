@@ -7,26 +7,47 @@ interface WsClient {
   ws: WebSocket;
   subscriptions: Set<number>;
   lastSentGen: Map<number, number>;
+  trendSubscriptions: Set<number>;
+  trendOutbox: Map<number, Array<{ moduleTs: number; value: LkvValue }>>;
 }
 
 type InboundMessage =
-  | { type: 'SUBSCRIBE';   tagIds: number[] }
-  | { type: 'UNSUBSCRIBE'; tagIds: number[] }
-  | { type: 'PING';        ts: number };
+  | { type: 'SUBSCRIBE';         tagIds: number[] }
+  | { type: 'UNSUBSCRIBE';       tagIds: number[] }
+  | { type: 'SUBSCRIBE_TREND';   tagIds: number[] }
+  | { type: 'UNSUBSCRIBE_TREND'; tagIds: number[] }
+  | { type: 'PING';              ts: number };
 
 export class WsServer {
   private clients = new Set<WsClient>();
   private wss: WebSocketServer | null = null;
   private tickTimer: ReturnType<typeof setInterval> | null = null;
+  private trendFlushTimer: ReturnType<typeof setInterval> | null = null;
 
   private readonly lkv: LkvCache;
   private readonly tickMs: number;
   private readonly dutyTracker: DutyTracker;
+  private readonly trendableTagsByModule: Map<string, Set<number>>;
+  private readonly trendFlushMs: number;
 
-  constructor({ lkv, tickMs, dutyTracker }: { lkv: LkvCache; tickMs: number; dutyTracker: DutyTracker }) {
+  constructor({
+    lkv,
+    tickMs,
+    dutyTracker,
+    trendableTagsByModule = new Map(),
+    trendFlushHz = 4,
+  }: {
+    lkv: LkvCache;
+    tickMs: number;
+    dutyTracker: DutyTracker;
+    trendableTagsByModule?: Map<string, Set<number>>;
+    trendFlushHz?: number;
+  }) {
     this.lkv = lkv;
     this.tickMs = tickMs;
     this.dutyTracker = dutyTracker;
+    this.trendableTagsByModule = trendableTagsByModule;
+    this.trendFlushMs = Math.round(1000 / trendFlushHz);
   }
 
   attach(server: http.Server): void {
@@ -38,6 +59,8 @@ export class WsServer {
         ws,
         subscriptions: new Set(),
         lastSentGen: new Map(),
+        trendSubscriptions: new Set(),
+        trendOutbox: new Map(),
       };
       this.clients.add(client);
 
@@ -46,6 +69,8 @@ export class WsServer {
       });
 
       const cleanup = () => {
+        client.trendSubscriptions.clear();
+        client.trendOutbox.clear();
         this.clients.delete(client);
       };
       ws.on('close', cleanup);
@@ -53,6 +78,7 @@ export class WsServer {
     });
 
     this.tickTimer = setInterval(() => this.tick(), this.tickMs);
+    this.trendFlushTimer = setInterval(() => this.trendFlush(), this.trendFlushMs);
   }
 
   stop(): void {
@@ -60,11 +86,39 @@ export class WsServer {
       clearInterval(this.tickTimer);
       this.tickTimer = null;
     }
+    if (this.trendFlushTimer !== null) {
+      clearInterval(this.trendFlushTimer);
+      this.trendFlushTimer = null;
+    }
     for (const client of this.clients) {
       client.ws.terminate();
     }
     this.clients.clear();
     this.wss?.close();
+  }
+
+  /** Called by TelemetryIntake listener after every ingest. Hot path — O(tags × clients). */
+  handleTrendDelta(moduleTs: number, moduleId: string): void {
+    const trendableTags = this.trendableTagsByModule.get(moduleId);
+    if (!trendableTags || trendableTags.size === 0) return;
+
+    // Read LKV once — shared across all clients for this ingest
+    const lkvCache = new Map<number, LkvValue>();
+    for (const tagId of trendableTags) {
+      lkvCache.set(tagId, this.lkv.getValue(tagId));
+    }
+
+    for (const client of this.clients) {
+      for (const tagId of trendableTags) {
+        if (!client.trendSubscriptions.has(tagId)) continue;
+        let events = client.trendOutbox.get(tagId);
+        if (!events) {
+          events = [];
+          client.trendOutbox.set(tagId, events);
+        }
+        events.push({ moduleTs, value: lkvCache.get(tagId) ?? null });
+      }
+    }
   }
 
   private handleMessage(client: WsClient, raw: Buffer): void {
@@ -98,6 +152,19 @@ export class WsServer {
         break;
       }
 
+      case 'SUBSCRIBE_TREND': {
+        for (const id of msg.tagIds) client.trendSubscriptions.add(id);
+        break;
+      }
+
+      case 'UNSUBSCRIBE_TREND': {
+        for (const id of msg.tagIds) {
+          client.trendSubscriptions.delete(id);
+          client.trendOutbox.delete(id);
+        }
+        break;
+      }
+
       case 'PING': {
         this.send(client, { type: 'PONG', ts: msg.ts });
         break;
@@ -124,6 +191,32 @@ export class WsServer {
         if (Object.keys(delta).length > 0) {
           this.send(client, { type: 'DELTA', values: delta });
         }
+      }
+    });
+  }
+
+  private trendFlush(): void {
+    this.dutyTracker.track(() => {
+      const serverNow = Date.now();
+      for (const client of this.clients) {
+        if (client.ws.readyState !== WebSocket.OPEN) continue;
+        if (client.trendSubscriptions.size === 0) continue;
+
+        const samples: Array<{ moduleTs: number; tagId: number; value: LkvValue }> = [];
+
+        for (const tagId of client.trendSubscriptions) {
+          const events = client.trendOutbox.get(tagId);
+          if (events && events.length > 0) {
+            for (const evt of events) {
+              samples.push({ moduleTs: evt.moduleTs, tagId, value: evt.value });
+            }
+          } else {
+            samples.push({ moduleTs: serverNow, tagId, value: this.lkv.getValue(tagId) });
+          }
+        }
+
+        client.trendOutbox.clear();
+        this.send(client, { type: 'TREND_DELTA', samples });
       }
     });
   }

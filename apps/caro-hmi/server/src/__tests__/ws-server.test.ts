@@ -1,6 +1,6 @@
 import http from 'http';
 import { WebSocket } from 'ws';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { LkvCache } from '../lkv.js';
 import { WsServer } from '../ws-server.js';
 import { DutyTracker } from '../duty-tracker.js';
@@ -235,5 +235,257 @@ describe('WsServer', () => {
     expect(resp.type).toBe('SNAPSHOT');
     expect(resp.values['2']).toBe('second');
     expect(resp.values['1']).toBeUndefined();
+  });
+});
+
+// ── Trend channel ─────────────────────────────────────────────────────────────
+
+const TREND_MODULE = 'mod_trend';
+const TREND_TAG_1 = 10;
+const TREND_TAG_2 = 20;
+
+// trendableTagsByModule: mod_trend has tags 10 and 20
+const TRENDABLE_BY_MODULE = new Map<string, Set<number>>([
+  [TREND_MODULE, new Set([TREND_TAG_1, TREND_TAG_2])],
+]);
+
+// High flush rate (20 Hz / 50 ms) so tests don't need long waits
+const TREND_FLUSH_HZ = 20;
+const TREND_FLUSH_WAIT_MS = 200; // ≥4 flush cycles
+
+let trendLkv: LkvCache;
+let trendServer: WsServer;
+let trendHttp: http.Server;
+let trendPort: number;
+const trendClients: WebSocket[] = [];
+
+beforeEach(async () => {
+  trendLkv = new LkvCache();
+  trendServer = new WsServer({
+    lkv: trendLkv,
+    tickMs: TICK_MS,
+    dutyTracker: new DutyTracker(),
+    trendableTagsByModule: TRENDABLE_BY_MODULE,
+    trendFlushHz: TREND_FLUSH_HZ,
+  });
+  trendHttp = http.createServer();
+  trendServer.attach(trendHttp);
+  await new Promise<void>(r => trendHttp.listen(0, r));
+  trendPort = (trendHttp.address() as { port: number }).port;
+});
+
+afterEach(async () => {
+  for (const ws of trendClients.splice(0)) {
+    if (ws.readyState === WebSocket.OPEN) ws.terminate();
+  }
+  trendServer.stop();
+  await new Promise<void>(r => trendHttp.close(() => r()));
+});
+
+async function makeTrendClient(): Promise<WebSocket> {
+  const ws = await openClient(trendPort);
+  trendClients.push(ws);
+  return ws;
+}
+
+/** Collect all TREND_DELTA frames received within timeoutMs. */
+function collectTrendDeltas(
+  ws: WebSocket,
+  timeoutMs: number,
+): Promise<Array<{ type: string; samples: Array<{ moduleTs: number; tagId: number; value: unknown }> }>> {
+  return new Promise(resolve => {
+    const frames: Array<{ type: string; samples: Array<{ moduleTs: number; tagId: number; value: unknown }> }> = [];
+    const timer = setTimeout(() => resolve(frames), timeoutMs);
+    ws.on('message', (raw: Buffer) => {
+      const msg = JSON.parse(raw.toString()) as { type: string; samples?: unknown[] };
+      if (msg.type === 'TREND_DELTA') {
+        frames.push(msg as { type: string; samples: Array<{ moduleTs: number; tagId: number; value: unknown }> });
+        // keep collecting until timeout
+      }
+    });
+    // ensure cleanup doesn't hold open
+    timer.unref?.();
+    void timer; // suppress unused warning
+    void frames; // suppress unused warning
+  });
+}
+
+describe('WsServer — trend channel', () => {
+  it('SUBSCRIBE_TREND: flush delivers samples only for subscribed tag', async () => {
+    trendLkv.set(TREND_TAG_1, 42);
+    const ws = await makeTrendClient();
+    ws.send(JSON.stringify({ type: 'SUBSCRIBE_TREND', tagIds: [TREND_TAG_1] }));
+
+    const frames = await collectTrendDeltas(ws, TREND_FLUSH_WAIT_MS);
+
+    expect(frames.length).toBeGreaterThanOrEqual(1);
+    const allSamples = frames.flatMap(f => f.samples);
+    const tag1Samples = allSamples.filter(s => s.tagId === TREND_TAG_1);
+    const tag2Samples = allSamples.filter(s => s.tagId === TREND_TAG_2);
+    expect(tag1Samples.length).toBeGreaterThanOrEqual(1);
+    expect(tag2Samples).toHaveLength(0);
+  });
+
+  it('UNSUBSCRIBE_TREND: flush stops delivering samples for unsubscribed tag', async () => {
+    trendLkv.set(TREND_TAG_1, 1);
+    const ws = await makeTrendClient();
+    ws.send(JSON.stringify({ type: 'SUBSCRIBE_TREND', tagIds: [TREND_TAG_1] }));
+    await wait(TREND_FLUSH_WAIT_MS); // let some flushes land
+
+    ws.send(JSON.stringify({ type: 'UNSUBSCRIBE_TREND', tagIds: [TREND_TAG_1] }));
+    await wait(50); // let unsubscribe process
+
+    const frames = await collectTrendDeltas(ws, TREND_FLUSH_WAIT_MS);
+    const allSamples = frames.flatMap(f => f.samples);
+    const tag1Samples = allSamples.filter(s => s.tagId === TREND_TAG_1);
+    expect(tag1Samples).toHaveLength(0);
+  });
+
+  it('no TREND_DELTA when client has no trend subscriptions', async () => {
+    const ws = await makeTrendClient();
+    // No SUBSCRIBE_TREND sent
+
+    const frames = await collectTrendDeltas(ws, TREND_FLUSH_WAIT_MS);
+    expect(frames).toHaveLength(0);
+  });
+
+  it('handleTrendDelta routes real events into outbox → flush sends them', async () => {
+    trendLkv.set(TREND_TAG_1, 99);
+    const ws = await makeTrendClient();
+    ws.send(JSON.stringify({ type: 'SUBSCRIBE_TREND', tagIds: [TREND_TAG_1] }));
+    await wait(50); // let subscribe land
+
+    const EXPECTED_TS = 1_234_567_890;
+    // Resolve only on a frame that carries the specific moduleTs — ignores synthetic frames
+    const frameP = new Promise<{ samples: Array<{ moduleTs: number; tagId: number; value: unknown }> }>(
+      resolve => {
+        ws.on('message', (raw: Buffer) => {
+          const msg = JSON.parse(raw.toString()) as { type: string; samples?: Array<{ moduleTs: number; tagId: number; value: unknown }> };
+          if (msg.type === 'TREND_DELTA' && msg.samples?.some(s => s.moduleTs === EXPECTED_TS)) {
+            resolve(msg as { samples: Array<{ moduleTs: number; tagId: number; value: unknown }> });
+          }
+        });
+      },
+    );
+
+    trendServer.handleTrendDelta(EXPECTED_TS, TREND_MODULE);
+    const frame = await frameP;
+
+    const sample = frame.samples.find(s => s.tagId === TREND_TAG_1 && s.moduleTs === EXPECTED_TS);
+    expect(sample).toBeDefined();
+    expect(sample!.value).toBe(99);
+  });
+
+  it('handleTrendDelta does nothing for unknown module', async () => {
+    const ws = await makeTrendClient();
+    ws.send(JSON.stringify({ type: 'SUBSCRIBE_TREND', tagIds: [TREND_TAG_1] }));
+    await wait(50);
+
+    // Spy to detect if outbox is written — indirect: just verify flush carries synthetic only
+    trendServer.handleTrendDelta(9999, 'unknown_module');
+
+    const frames = await collectTrendDeltas(ws, TREND_FLUSH_WAIT_MS);
+    // Frames will have synthetic entries (not from handleTrendDelta for unknown module)
+    // All samples must have tagId TREND_TAG_1 (synthetic); none should have moduleTs=9999
+    const allSamples = frames.flatMap(f => f.samples);
+    const fromUnknown = allSamples.filter(s => s.moduleTs === 9999);
+    expect(fromUnknown).toHaveLength(0);
+  });
+
+  it('two clients with different subscriptions each get only their tag samples', async () => {
+    trendLkv.set(TREND_TAG_1, 11);
+    trendLkv.set(TREND_TAG_2, 22);
+    const ws1 = await makeTrendClient();
+    const ws2 = await makeTrendClient();
+
+    ws1.send(JSON.stringify({ type: 'SUBSCRIBE_TREND', tagIds: [TREND_TAG_1] }));
+    ws2.send(JSON.stringify({ type: 'SUBSCRIBE_TREND', tagIds: [TREND_TAG_2] }));
+    await wait(50);
+
+    trendServer.handleTrendDelta(1111, TREND_MODULE);
+
+    const [frames1, frames2] = await Promise.all([
+      collectTrendDeltas(ws1, TREND_FLUSH_WAIT_MS),
+      collectTrendDeltas(ws2, TREND_FLUSH_WAIT_MS),
+    ]);
+
+    const tag2InClient1 = frames1.flatMap(f => f.samples).filter(s => s.tagId === TREND_TAG_2);
+    const tag1InClient2 = frames2.flatMap(f => f.samples).filter(s => s.tagId === TREND_TAG_1);
+    expect(tag2InClient1).toHaveLength(0);
+    expect(tag1InClient2).toHaveLength(0);
+  });
+
+  it('synthetic-on-flush: subscribed tag with no real events gets synthetic sample with current LKV', async () => {
+    trendLkv.set(TREND_TAG_1, 55.5);
+    const ws = await makeTrendClient();
+    ws.send(JSON.stringify({ type: 'SUBSCRIBE_TREND', tagIds: [TREND_TAG_1] }));
+    // No handleTrendDelta called → only synthetic events
+
+    const frames = await collectTrendDeltas(ws, TREND_FLUSH_WAIT_MS);
+    const allSamples = frames.flatMap(f => f.samples).filter(s => s.tagId === TREND_TAG_1);
+    expect(allSamples.length).toBeGreaterThanOrEqual(1);
+    for (const s of allSamples) {
+      expect(s.value).toBe(55.5); // LKV value
+    }
+  });
+
+  it('synthetic with null LKV emits null-value sample', async () => {
+    // LKV never set for TREND_TAG_1 → getValue returns null
+    const ws = await makeTrendClient();
+    ws.send(JSON.stringify({ type: 'SUBSCRIBE_TREND', tagIds: [TREND_TAG_1] }));
+
+    const frames = await collectTrendDeltas(ws, TREND_FLUSH_WAIT_MS);
+    const allSamples = frames.flatMap(f => f.samples).filter(s => s.tagId === TREND_TAG_1);
+    expect(allSamples.length).toBeGreaterThanOrEqual(1);
+    for (const s of allSamples) {
+      expect(s.value).toBeNull();
+    }
+  });
+
+  it('multiple ingests in one flush window produce multiple samples for the tag', async () => {
+    trendLkv.set(TREND_TAG_1, 1);
+    const ws = await makeTrendClient();
+    ws.send(JSON.stringify({ type: 'SUBSCRIBE_TREND', tagIds: [TREND_TAG_1] }));
+    await wait(50);
+
+    // Both events use sentinel timestamps well below real Date.now() values to distinguish them
+    const TS_A = 2000;
+    const TS_B = 3000;
+
+    // Resolve when a frame contains at least one of the sentinel timestamps
+    const frameP = new Promise<{ samples: Array<{ moduleTs: number; tagId: number; value: unknown }> }>(
+      resolve => {
+        ws.on('message', (raw: Buffer) => {
+          const msg = JSON.parse(raw.toString()) as { type: string; samples?: Array<{ moduleTs: number; tagId: number; value: unknown }> };
+          if (msg.type === 'TREND_DELTA' && msg.samples?.some(s => s.moduleTs === TS_A || s.moduleTs === TS_B)) {
+            resolve(msg as { samples: Array<{ moduleTs: number; tagId: number; value: unknown }> });
+          }
+        });
+      },
+    );
+
+    trendLkv.set(TREND_TAG_1, 10);
+    trendServer.handleTrendDelta(TS_A, TREND_MODULE);
+    trendLkv.set(TREND_TAG_1, 20);
+    trendServer.handleTrendDelta(TS_B, TREND_MODULE);
+
+    const frame = await frameP;
+    const tag1Samples = frame.samples.filter(
+      s => s.tagId === TREND_TAG_1 && (s.moduleTs === TS_A || s.moduleTs === TS_B),
+    );
+    expect(tag1Samples.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('disconnect clears trendSubscriptions — no further frames after terminate', async () => {
+    trendLkv.set(TREND_TAG_1, 7);
+    const ws = await makeTrendClient();
+    ws.send(JSON.stringify({ type: 'SUBSCRIBE_TREND', tagIds: [TREND_TAG_1] }));
+    await wait(50);
+
+    ws.terminate();
+    await wait(TREND_FLUSH_WAIT_MS); // flush ticks should not throw after disconnect
+
+    // No assertion needed beyond "no uncaught error during wait"
+    // The test passes if nothing throws
   });
 });

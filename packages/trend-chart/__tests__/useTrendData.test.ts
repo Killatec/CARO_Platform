@@ -18,13 +18,16 @@ const HALF_HOUR = 1_800_000n;
 
 const defaultViewport: Viewport = { start: 0n, end: ONE_HOUR };
 
-function makeAggResponse(tagIds: number[], opts: { n?: number; bucketSMs?: number; source?: TileApiResponse['source'] } = {}): TileApiResponse {
-  const { n = 500, bucketSMs = 3_600, source = '1min_cagg' } = opts;
+const DEFAULT_RESPONSE_TAIL_TS = 1_700_000_000_000; // fixed sentinel for test assertions
+
+function makeAggResponse(tagIds: number[], opts: { n?: number; bucketSMs?: number; source?: TileApiResponse['source']; responseTailTs?: number } = {}): TileApiResponse {
+  const { n = 500, bucketSMs = 3_600, source = '1min_cagg', responseTailTs = DEFAULT_RESPONSE_TAIL_TS } = opts;
   if (source === 'raw') throw new Error('use makeRawResponse for raw source');
   return {
     source: source as '1min_cagg',
     startTime: 0,
     endTime: Number(ONE_HOUR),
+    responseTailTs,
     bucketSMs,
     n,
     series: tagIds.map(id => ({
@@ -36,11 +39,12 @@ function makeAggResponse(tagIds: number[], opts: { n?: number; bucketSMs?: numbe
   };
 }
 
-function makeRawResponse(tagIds: number[]): TileApiResponse {
+function makeRawResponse(tagIds: number[], responseTailTs = DEFAULT_RESPONSE_TAIL_TS): TileApiResponse {
   return {
     source: 'raw',
     startTime: 0,
     endTime: Number(ONE_HOUR),
+    responseTailTs,
     series: tagIds.map(id => ({ tagId: id, ts: [100, 200, 300], value: [1.0, 2.0, null] })),
   };
 }
@@ -480,6 +484,7 @@ describe('useTrendData', () => {
       source: 'raw',
       startTime: 0,
       endTime: Number(ONE_HOUR),
+      responseTailTs: DEFAULT_RESPONSE_TAIL_TS,
       series: [{ tagId: 1, ts: [100, 200, 300], value: [1.0, 2.0, null], prev: { ts: -60_000, value: 0.5 } }],
     };
     mockFetchTile.mockResolvedValue(rawWithPrev);
@@ -761,6 +766,7 @@ describe('useTrendData', () => {
         source: '1min_cagg' as const,
         startTime: Number(p.startTime),
         endTime: Number(p.endTime),
+        responseTailTs: DEFAULT_RESPONSE_TAIL_TS,
         bucketSMs: 360,
         n: 500,
         series: p.tagIds.map(id => ({
@@ -838,6 +844,7 @@ describe('useTrendData', () => {
         source,
         startTime: Number(p.startTime),
         endTime: Number(p.endTime),
+        responseTailTs: DEFAULT_RESPONSE_TAIL_TS,
         bucketSMs: 3_600,
         n: 500,
         series: p.tagIds.map(id => ({
@@ -1085,5 +1092,248 @@ describe('useTrendData — lastFetchMs', () => {
     expect(Number.isInteger(result.current.lastFetchMs)).toBe(true);
 
     dateSpy.mockRestore();
+  });
+});
+
+// ── responseTailTs ────────────────────────────────────────────────────────────
+
+describe('useTrendData — responseTailTs', () => {
+  it('null before any fetch resolves', () => {
+    mockFetchTile.mockImplementation(() => new Promise(() => {})); // never resolves
+
+    const { result } = renderHook(() =>
+      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
+    );
+
+    expect(result.current.responseTailTs).toBeNull();
+  });
+
+  it('equals the response responseTailTs after a successful fetch', async () => {
+    const TAIL_TS = 1_712_617_200_000;
+    mockFetchTile.mockResolvedValue(makeAggResponse([1], { responseTailTs: TAIL_TS }));
+
+    const { result } = renderHook(() =>
+      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
+    );
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    expect(result.current.responseTailTs).toBe(TAIL_TS);
+  });
+
+  it('is the MAX responseTailTs across active tiles when tiles have different values', async () => {
+    const OLDER_TS = 1_000_000_000_000;
+    const NEWER_TS = 2_000_000_000_000;
+
+    mockFetchTile.mockImplementation(async (params) => {
+      const p = params as Parameters<typeof fetchTile>[0];
+      const ts = p.startTime === 0n ? OLDER_TS : NEWER_TS;
+      return makeAggResponse(p.tagIds, { responseTailTs: ts });
+    });
+
+    const { result } = renderHook(() =>
+      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
+    );
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    expect(result.current.responseTailTs).toBe(NEWER_TS);
+  });
+
+  it('LRU eviction of non-active (prefetch) tiles does NOT change responseTailTs', async () => {
+    const TAIL_TS = 1_712_617_200_000;
+    mockFetchTile.mockResolvedValue(makeAggResponse([1], { responseTailTs: TAIL_TS }));
+
+    // estimateCachedEntrySize for 500-bucket entry ≈ (500+500+500)*8 + 100 = 12100 bytes.
+    // Capacity 30000 holds the 2 active visible tiles but LRU-evicts prefetch tiles.
+    const { result } = renderHook(() =>
+      useTrendData({ viewport: defaultViewport, tagIds: [1], cacheCapacityBytes: 30_000 }),
+    );
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    // responseTailTs reflects only active tiles; LRU-evicted prefetch tiles don't affect it.
+    expect(result.current.responseTailTs).toBe(TAIL_TS);
+  });
+});
+
+// ── evictRange ────────────────────────────────────────────────────────────────
+
+describe('useTrendData — evictRange', () => {
+  it('deletes cache entries in the range; entries outside the range survive', async () => {
+    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
+
+    const { result } = renderHook(() =>
+      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
+    );
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    const activeBefore = result.current.activeTileCount;
+    expect(activeBefore).toBeGreaterThan(0);
+
+    // Evict the first half of the viewport — overlaps some active tiles.
+    await act(() => {
+      result.current.evictRange(0n, HALF_HOUR);
+    });
+
+    expect(result.current.activeTileCount).toBeLessThan(activeBefore);
+  });
+
+  it('evictRange with no overlap: activeTileCount unchanged, swapCounter unchanged', async () => {
+    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
+
+    const { result } = renderHook(() =>
+      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
+    );
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    const swapBefore = result.current.swapCounter;
+    const activeBefore = result.current.activeTileCount;
+
+    // Evict a range far in the future — no active tiles there.
+    await act(() => {
+      result.current.evictRange(ONE_HOUR * 1000n, ONE_HOUR * 1001n);
+    });
+
+    expect(result.current.activeTileCount).toBe(activeBefore);
+    expect(result.current.swapCounter).toBe(swapBefore);
+  });
+
+  it('in-flight fetch after evictRange is dropped (stale generation guard)', async () => {
+    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
+
+    const { result } = renderHook(() =>
+      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
+    );
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    // Active set after load: tiles up to ONE_HOUR + HALF_HOUR (prefetch-after edge).
+    // The first tile past the active set starts at ONE_HOUR + HALF_HOUR.
+    const cachedEnd = ONE_HOUR + HALF_HOUR;
+
+    const resolvers: Array<(v: TileApiResponse) => void> = [];
+    mockFetchTile.mockImplementation(() => new Promise<TileApiResponse>(r => resolvers.push(r)));
+
+    // ensureCovered fires exactly 1 fetch for the one tile just past cachedEnd.
+    const dateSpy = vi.spyOn(Date, 'now').mockReturnValue(Number(ONE_HOUR * 100n));
+    act(() => { result.current.ensureCovered(cachedEnd, cachedEnd + HALF_HOUR); });
+    dateSpy.mockRestore();
+    expect(resolvers.length).toBe(1);
+
+    const swapBefore = result.current.swapCounter;
+    // Evict the active tile range so the in-flight tile's generation becomes stale.
+    await act(() => {
+      result.current.evictRange(-ONE_HOUR * 10n, ONE_HOUR * 10n);
+    });
+
+    // Resolve the stale in-flight fetch.
+    await act(async () => {
+      for (const r of resolvers) r(makeAggResponse([1], { responseTailTs: 9_999_999_999_999 }));
+      await Promise.resolve();
+    });
+
+    // Stale result dropped — swapCounter and responseTailTs must not reflect it.
+    expect(result.current.swapCounter).toBe(swapBefore);
+    expect(result.current.responseTailTs).not.toBe(9_999_999_999_999);
+  });
+
+  it('responseTailTs drops to null when all active tiles are evicted', async () => {
+    const TAIL_TS = 1_712_617_200_000;
+    mockFetchTile.mockResolvedValue(makeAggResponse([1], { responseTailTs: TAIL_TS }));
+
+    const { result } = renderHook(() =>
+      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
+    );
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.responseTailTs).toBe(TAIL_TS);
+
+    // Evict the entire viewport range.
+    await act(() => {
+      result.current.evictRange(-ONE_HOUR * 10n, ONE_HOUR * 10n);
+    });
+
+    expect(result.current.activeTileCount).toBe(0);
+    expect(result.current.responseTailTs).toBeNull();
+  });
+
+  it('after evictRange + viewport change, re-fetch repopulates responseTailTs', async () => {
+    const TAIL_TS_1 = 1_712_617_200_000;
+    const TAIL_TS_2 = 1_712_617_300_000;
+    mockFetchTile.mockResolvedValue(makeAggResponse([1], { responseTailTs: TAIL_TS_1 }));
+
+    const { result, rerender } = renderHook(
+      (props: { viewport: Viewport }) => useTrendData({ ...props, tagIds: [1] }),
+      { initialProps: { viewport: defaultViewport } },
+    );
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.responseTailTs).toBe(TAIL_TS_1);
+
+    await act(() => {
+      result.current.evictRange(-ONE_HOUR * 10n, ONE_HOUR * 10n);
+    });
+    expect(result.current.responseTailTs).toBeNull();
+
+    mockFetchTile.mockResolvedValue(makeAggResponse([1], { responseTailTs: TAIL_TS_2 }));
+    rerender({ viewport: { start: ONE_HOUR * 5n, end: ONE_HOUR * 6n } });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    expect(result.current.responseTailTs).toBe(TAIL_TS_2);
+  });
+});
+
+// ─── isTailing skip guard ─────────────────────────────────────────────────────
+
+describe('useTrendData — isTailing skip guard', () => {
+  it('isTailing=true with non-empty active set + same-span tick → no fetch fires', async () => {
+    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
+
+    const { rerender } = renderHook(
+      ({ viewport, isTailing }: { viewport: Viewport; isTailing: boolean }) =>
+        useTrendData({ viewport, tagIds: [1], isTailing }),
+      { initialProps: { viewport: defaultViewport, isTailing: false } },
+    );
+
+    await waitFor(() => expect(mockFetchTile).toHaveBeenCalled());
+    const callsAfterInitial = mockFetchTile.mock.calls.length;
+
+    // Enter tailing; then tick the viewport forward keeping the same span.
+    rerender({ viewport: defaultViewport, isTailing: true });
+    const tickedViewport: Viewport = { start: ONE_HOUR, end: ONE_HOUR * 2n };
+    rerender({ viewport: tickedViewport, isTailing: true });
+
+    // No new fetches — live buffer drives rendering.
+    expect(mockFetchTile.mock.calls.length).toBe(callsAfterInitial);
+  });
+
+  it('isTailing=true with empty active set → initial fetch fires', async () => {
+    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
+
+    const { result } = renderHook(() =>
+      useTrendData({ viewport: defaultViewport, tagIds: [1], isTailing: true }),
+    );
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    // At least one visible-tile fetch must have fired (empty active set → guard skipped).
+    expect(mockFetchTile).toHaveBeenCalled();
+    expect(result.current.data).not.toBeNull();
+  });
+
+  it('isTailing=true + span change (preset switch) → fetch fires', async () => {
+    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
+
+    const { rerender } = renderHook(
+      ({ viewport, isTailing }: { viewport: Viewport; isTailing: boolean }) =>
+        useTrendData({ viewport, tagIds: [1], isTailing }),
+      { initialProps: { viewport: defaultViewport, isTailing: false } },
+    );
+
+    await waitFor(() => expect(mockFetchTile).toHaveBeenCalled());
+    const callsAfterInitial = mockFetchTile.mock.calls.length;
+
+    // Switch to 2h span (simulates preset change during tailing).
+    const widerViewport: Viewport = { start: 0n, end: ONE_HOUR * 2n };
+    rerender({ viewport: widerViewport, isTailing: true });
+
+    await waitFor(() => expect(mockFetchTile.mock.calls.length).toBeGreaterThan(callsAfterInitial));
   });
 });

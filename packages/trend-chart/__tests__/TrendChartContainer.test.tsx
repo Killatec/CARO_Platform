@@ -1,5 +1,5 @@
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import { MockHmiProvider } from '@caro/hmi-context';
 import type { TagDef } from '@caro/hmi-context';
@@ -8,6 +8,33 @@ import { computeDragZoomViewport } from '../src/useZoomState.js';
 import { useTrendData } from '../src/useTrendData.js';
 import { formatDateTime } from '../src/dateUtils.js';
 import type { UseTrendDataResult } from '../src/useTrendData.js';
+
+// ── useLiveSubscription mock (hoisted so vi.mock factory can close over it) ───
+
+const liveHoisted = vi.hoisted(() => {
+  const commitAndDrain = vi.fn(() => ({ start: 0n, end: 0n }));
+  let _tail: unknown = null;
+  let _lastOpts: Record<string, unknown> | null = null;
+
+  return {
+    commitAndDrain,
+    setTail: (t: unknown) => { _tail = t; },
+    getTail: () => _tail,
+    setLastOpts: (o: Record<string, unknown>) => { _lastOpts = o; },
+    getLastOpts: () => _lastOpts,
+  };
+});
+
+vi.mock('../src/useLiveSubscription.js', () => ({
+  useLiveSubscription: vi.fn((opts: Record<string, unknown>) => {
+    liveHoisted.setLastOpts(opts);
+    return {
+      tail: liveHoisted.getTail(),
+      commitAndDrain: liveHoisted.commitAndDrain,
+    };
+  }),
+  TREND_FIFO_CAPACITY: 500,
+}));
 
 // ── TrendChart mock ───────────────────────────────────────────────────────────
 // Renders the footer prop (so all footer-based assertions still work) and stub
@@ -64,6 +91,7 @@ const TAG_DEFS: Record<number, TagDef> = {
 
 function makeAggData(tagIds: number[] = [1, 2]) {
   const n = 500;
+  const baseVals = Array.from({ length: n }, (_, i) => i * 0.1);
   return {
     type: 'aggregate' as const,
     source: '1min_cagg' as const,
@@ -71,7 +99,11 @@ function makeAggData(tagIds: number[] = [1, 2]) {
     endTime: BigInt(n * 3600),
     n,
     bucketSMs: 3600,
-    series: new Map(tagIds.map(id => [id, new Array(n).fill(id * 1.0)])),
+    series: new Map(tagIds.map(id => [id, {
+      value: baseVals.map(v => v + id),
+      min:   baseVals.map(v => v + id - 0.5),
+      max:   baseVals.map(v => v + id + 0.5),
+    }])),
   };
 }
 
@@ -80,6 +112,12 @@ function makeResult(tagIds: number[], opts: Partial<UseTrendDataResult> = {}): U
     data: makeAggData(tagIds),
     isLoading: false,
     error: null,
+    ensureCovered: vi.fn(),
+    evictRange: vi.fn(),
+    swapCounter: 0,
+    activeTileCount: 0,
+    lastFetchMs: null,
+    responseTailTs: null,
     ...opts,
   };
 }
@@ -101,6 +139,8 @@ describe('TrendChartContainer', () => {
     capturedOnXRangeChange = undefined;
     capturedOnXPan = undefined;
     capturedOnDragZoom = undefined;
+    liveHoisted.setTail(null);
+    liveHoisted.commitAndDrain.mockReturnValue({ start: 0n, end: 0n });
     mockUseTrendData.mockReturnValue(makeResult([1, 2]));
     // EndPicker calls showPicker() on the hidden input; jsdom doesn't implement it.
     Object.defineProperty(HTMLInputElement.prototype, 'showPicker', {
@@ -192,13 +232,13 @@ describe('TrendChartContainer', () => {
   });
 
   it('shows loading hint when data is null and isLoading=true', () => {
-    mockUseTrendData.mockReturnValue({ data: null, isLoading: true, error: null });
+    mockUseTrendData.mockReturnValue(makeResult([1, 2], { data: null, isLoading: true }));
     renderContainer();
     expect(screen.getByText('Loading…')).toBeTruthy();
   });
 
   it('shows no-tags hint when tagIds is empty', () => {
-    mockUseTrendData.mockReturnValue({ data: null, isLoading: false, error: null });
+    mockUseTrendData.mockReturnValue(makeResult([], { data: null, isLoading: false }));
     renderContainer([]);
     expect(screen.getByText('No tags selected.')).toBeTruthy();
   });
@@ -215,7 +255,6 @@ describe('TrendChartContainer', () => {
   it('committing End ≈ now → goes fixed (End picker never enters tailing), shows "Go Live"', () => {
     renderContainer([1]);
     vi.setSystemTime(new Date('2024-06-01T12:00:00Z'));
-    // '2024-06-01T12:00:00' in UTC is within NEAR_NOW_MS of Date.now(), but
     // endPickerCommitted always goes fixed — user must click Live to enter tailing.
     const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
     fireEvent.change(input, { target: { value: '2024-06-01T12:00:00' } });
@@ -342,6 +381,178 @@ describe('TrendChartContainer', () => {
     expect(screen.getByText('Go Live')).toBeTruthy();
     // Preset highlight clears: lastIntent = 'zoom' and sizeMs no longer matches 1h.
     expect(screen.getByText('1h').style.background).not.toBe('rgb(37, 99, 235)');
+  });
+
+  // ── live tail integration ─────────────────────────────────────────────────
+
+  describe('live tail integration', () => {
+    let mockResult: UseTrendDataResult;
+
+    beforeEach(() => {
+      liveHoisted.setTail(null);
+      liveHoisted.commitAndDrain.mockReturnValue({ start: 0n, end: 0n });
+      mockResult = makeResult([1, 2]);
+      mockUseTrendData.mockReturnValue(mockResult);
+    });
+
+    it('initial render passes isTailing=true to useLiveSubscription', () => {
+      renderContainer();
+      expect(liveHoisted.getLastOpts()?.isTailing).toBe(true);
+    });
+
+    it('after End commit, isTailing=false passed to useLiveSubscription', () => {
+      renderContainer([1]);
+      const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: '2020-01-02T00:00:00' } });
+      expect(liveHoisted.getLastOpts()?.isTailing).toBe(false);
+    });
+
+    it('onDataReceived dispatches tick when mode is tailing (re-renders useTrendData)', () => {
+      renderContainer([1]);
+      const beforeCount = mockUseTrendData.mock.calls.length;
+
+      act(() => {
+        (liveHoisted.getLastOpts()?.onDataReceived as ((ts: number) => void) | undefined)?.(
+          1_700_000_000_000,
+        );
+      });
+
+      // Tick advances nowMs → modeViewport changes → useTrendData re-called.
+      expect(mockUseTrendData.mock.calls.length).toBeGreaterThan(beforeCount);
+    });
+
+    it('onDataReceived does not dispatch tick when mode is fixed', () => {
+      renderContainer([1]);
+      // Enter fixed mode.
+      const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: '2020-01-02T00:00:00' } });
+
+      const beforeCount = mockUseTrendData.mock.calls.length;
+
+      act(() => {
+        (liveHoisted.getLastOpts()?.onDataReceived as ((ts: number) => void) | undefined)?.(
+          1_700_000_000_000,
+        );
+      });
+
+      // No tick dispatched in fixed mode → call count unchanged.
+      expect(mockUseTrendData.mock.calls.length).toBe(beforeCount);
+    });
+
+    it('pan in tailing → calls commitAndDrain + evictRange, then mode goes fixed', () => {
+      liveHoisted.commitAndDrain.mockReturnValue({ start: 100n, end: 200n });
+      renderContainer([1]);
+
+      const farPastEnd = 1_700_000_000_000n;
+      const farPastStart = farPastEnd - 3_600_000n;
+      act(() => {
+        capturedOnXPan?.(farPastStart, farPastEnd);
+        vi.runAllTimers();
+      });
+
+      expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
+      expect(mockResult.evictRange).toHaveBeenCalledWith(100n, 200n);
+      expect(screen.getByText('Go Live')).toBeTruthy();
+    });
+
+    it('zoom (onXRangeChange) in tailing → calls commitAndDrain + evictRange', () => {
+      liveHoisted.commitAndDrain.mockReturnValue({ start: 50n, end: 150n });
+      renderContainer([1]);
+
+      const farPastEnd = 1_700_000_000_000n;
+      const farPastStart = farPastEnd - 2_700_000n;
+      act(() => {
+        capturedOnXRangeChange?.(farPastStart, farPastEnd);
+        vi.runAllTimers();
+      });
+
+      expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
+      expect(mockResult.evictRange).toHaveBeenCalledWith(50n, 150n);
+      expect(screen.getByText('Go Live')).toBeTruthy();
+    });
+
+    it('drag-zoom in tailing → calls commitAndDrain + evictRange', () => {
+      liveHoisted.commitAndDrain.mockReturnValue({ start: 200n, end: 300n });
+      renderContainer([1]);
+
+      const farPastEnd = 1_700_000_000_000n;
+      const farPastStart = farPastEnd - 1_800_000n;
+      act(() => {
+        capturedOnDragZoom?.(farPastStart, farPastEnd);
+      });
+
+      expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
+      expect(mockResult.evictRange).toHaveBeenCalledWith(200n, 300n);
+      expect(screen.getByText('Go Live')).toBeTruthy();
+    });
+
+    it('EndPicker commit in tailing → calls commitAndDrain + evictRange', () => {
+      liveHoisted.commitAndDrain.mockReturnValue({ start: 10n, end: 20n });
+      renderContainer([1]);
+
+      const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: '2020-01-02T00:00:00' } });
+
+      expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
+      expect(mockResult.evictRange).toHaveBeenCalledWith(10n, 20n);
+      expect(screen.getByText('Go Live')).toBeTruthy();
+    });
+
+    it('preset click in tailing → no commitAndDrain (stays tailing)', () => {
+      renderContainer([1]);
+      fireEvent.click(screen.getByText('4h'));
+
+      expect(liveHoisted.commitAndDrain).not.toHaveBeenCalled();
+      expect(mockResult.evictRange).not.toHaveBeenCalled();
+      expect(screen.getByText('● Live')).toBeTruthy();
+    });
+
+    it('Live button click in tailing → no commitAndDrain (stays tailing)', () => {
+      renderContainer([1]);
+      fireEvent.click(screen.getByText('● Live'));
+
+      expect(liveHoisted.commitAndDrain).not.toHaveBeenCalled();
+      expect(mockResult.evictRange).not.toHaveBeenCalled();
+    });
+
+    it('evictRange not called when commitAndDrain returns empty range', () => {
+      // Default: { start: 0n, end: 0n } → guard skips evictRange.
+      renderContainer([1]);
+
+      const farPastEnd = 1_700_000_000_000n;
+      const farPastStart = farPastEnd - 3_600_000n;
+      act(() => {
+        capturedOnXPan?.(farPastStart, farPastEnd);
+        vi.runAllTimers();
+      });
+
+      expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
+      expect(mockResult.evictRange).not.toHaveBeenCalled();
+    });
+
+    it('unmount in tailing → commitAndDrain + evictRange fire in cleanup', () => {
+      liveHoisted.commitAndDrain.mockReturnValue({ start: 500n, end: 1000n });
+      const { unmount } = renderContainer([1]);
+      expect(screen.getByTestId('idle-mode').textContent).toBe('live');
+
+      unmount();
+
+      expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
+      expect(mockResult.evictRange).toHaveBeenCalledWith(500n, 1000n);
+    });
+
+    it('unmount in fixed → no commitAndDrain', () => {
+      const { unmount } = renderContainer([1]);
+      // Enter fixed mode.
+      const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: '2020-01-02T00:00:00' } });
+      // Clear calls made during the tailing→fixed transition.
+      liveHoisted.commitAndDrain.mockClear();
+
+      unmount();
+
+      expect(liveHoisted.commitAndDrain).not.toHaveBeenCalled();
+    });
   });
 });
 

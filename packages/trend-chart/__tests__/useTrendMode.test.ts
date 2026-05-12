@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { trendModeReducer, modeToViewport, NEAR_NOW_MS } from '../src/useTrendMode.js';
+import { trendModeReducer, modeToViewport } from '../src/useTrendMode.js';
 import type { ModeState, TrendModeAction } from '../src/useTrendMode.js';
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
 const NOW = 1_700_000_000_000n; // arbitrary fixed "now" in ms
-const FAR_PAST = NOW - 10_000_000n; // 10 000 s in the past — well outside NEAR_NOW
+const FAR_PAST = NOW - 10_000_000n; // 10 000 s in the past
 
 // Tailing state with 1h window
 const TAILING_1H: ModeState = {
@@ -105,7 +105,7 @@ describe('endPickerCommitted', () => {
   // End picker always goes fixed — Live button is the sole entry to tailing.
 
   it('to ≈ now → fixed (no near-now auto-tailing for End picker)', () => {
-    const to = NOW - 30_000n; // 30 s ago — inside NEAR_NOW_MS, but still goes fixed
+    const to = NOW - 30_000n; // 30 s ago — End picker always goes fixed
     const next = dispatch(TAILING_1H, { type: 'endPickerCommitted', to, nowMs: NOW });
     expect(next.mode).toBe('fixed');
     if (next.mode !== 'fixed') return;
@@ -113,14 +113,6 @@ describe('endPickerCommitted', () => {
     expect(next.from).toBe(to - TAILING_1H.sizeMs);
     expect(next.sizeMs).toBe(TAILING_1H.sizeMs);
     expect(next.lastIntent).toBe('endPicker');
-  });
-
-  it('to exactly at NEAR_NOW_MS boundary → fixed', () => {
-    const to = NOW - NEAR_NOW_MS;
-    const next = dispatch(TAILING_1H, { type: 'endPickerCommitted', to, nowMs: NOW });
-    expect(next.mode).toBe('fixed');
-    if (next.mode !== 'fixed') return;
-    expect(next.to).toBe(to);
   });
 
   it('to << now → fixed, from = to - sizeMs (sizeMs from tailing state)', () => {
@@ -208,20 +200,6 @@ describe('zoomApplied', () => {
     expect(next.lastIntent).toBe('zoom');
   });
 
-  it('from tailing: to at NEAR_NOW_MS boundary → fixed (NEAR_NOW_MS no longer gates zoom)', () => {
-    const to = NOW - NEAR_NOW_MS;
-    const from = to - 1_800_000n;
-    const next = dispatch(TAILING_1H, { type: 'zoomApplied', from, to, nowMs: NOW });
-    expect(next.mode).toBe('fixed');
-  });
-
-  it('from tailing: to just past NEAR_NOW_MS → fixed (unchanged)', () => {
-    const to = NOW - NEAR_NOW_MS - 1n;
-    const from = to - 1_800_000n;
-    const next = dispatch(TAILING_1H, { type: 'zoomApplied', from, to, nowMs: NOW });
-    expect(next.mode).toBe('fixed');
-  });
-
   it('clears preset highlight: lastIntent was preset → becomes zoom', () => {
     const tailingPreset: ModeState = { ...TAILING_1H, lastIntent: 'preset' };
     const from = FAR_PAST;
@@ -256,7 +234,7 @@ describe('panApplied', () => {
   });
 
   it('to ≈ now → fixed (pan never enters tailing), sizeMs preserved', () => {
-    const to = NOW - 30_000n; // within NEAR_NOW_MS — but pan ignores near-now
+    const to = NOW - 30_000n;
     const from = to - TAILING_1H.sizeMs;
     const next = dispatch(TAILING_1H, { type: 'panApplied', from, to, nowMs: NOW });
     expect(next.mode).toBe('fixed');
@@ -301,63 +279,6 @@ describe('panApplied', () => {
     const to = FAR_PAST + TAILING_1H.sizeMs;
     const next = dispatch(withPreset, { type: 'panApplied', from, to, nowMs: NOW });
     expect(next.lastIntent).toBe('pan');
-  });
-});
-
-// ── viewportChanged ────────────────────────────────────────────────────────────
-
-describe('viewportChanged', () => {
-  it('from tailing: to < now - NEAR_NOW_MS → fixed', () => {
-    const from = FAR_PAST;
-    const to = FAR_PAST + 3_600_000n;
-    const next = dispatch(TAILING_1H, { type: 'viewportChanged', from, to, nowMs: NOW });
-    expect(next.mode).toBe('fixed');
-    if (next.mode !== 'fixed') return;
-    expect(next.from).toBe(from);
-    expect(next.to).toBe(to);
-    expect(next.lastIntent).toBe('live');
-  });
-
-  it('from tailing: to < now - NEAR_NOW_MS → fixed, carries tailing sizeMs', () => {
-    const tailingWith4h: ModeState = { mode: 'tailing', sizeMs: 14_400_000n, nowMs: NOW, lastIntent: null };
-    const from = FAR_PAST;
-    const to = FAR_PAST + 3_600_000n;
-    const next = dispatch(tailingWith4h, { type: 'viewportChanged', from, to, nowMs: NOW });
-    expect(next.mode).toBe('fixed');
-    if (next.mode !== 'fixed') return;
-    expect(next.sizeMs).toBe(14_400_000n);
-    expect(next.lastIntent).toBe('live');
-  });
-
-  it('from tailing: to >= now - NEAR_NOW_MS → stays tailing with new sizeMs', () => {
-    const from = NOW - 900_000n;
-    const to = NOW - 10_000n; // close to now
-    const next = dispatch(TAILING_1H, { type: 'viewportChanged', from, to, nowMs: NOW });
-    expect(next.mode).toBe('tailing');
-    if (next.mode !== 'tailing') return;
-    expect(next.sizeMs).toBe(to - from);
-    expect(next.lastIntent).toBe('live');
-  });
-
-  it('from fixed: to >= now - NEAR_NOW_MS → tailing', () => {
-    const from = NOW - 3_600_000n;
-    const to = NOW - 30_000n;
-    const next = dispatch(FIXED_1H, { type: 'viewportChanged', from, to, nowMs: NOW });
-    expect(next.mode).toBe('tailing');
-    if (next.mode !== 'tailing') return;
-    expect(next.sizeMs).toBe(to - from);
-    expect(next.lastIntent).toBe('live');
-  });
-
-  it('from fixed: to < now - NEAR_NOW_MS → stays fixed with updated range', () => {
-    const from = FAR_PAST + 1_000n;
-    const to = FAR_PAST + 3_601_000n;
-    const next = dispatch(FIXED_1H, { type: 'viewportChanged', from, to, nowMs: NOW });
-    expect(next.mode).toBe('fixed');
-    if (next.mode !== 'fixed') return;
-    expect(next.from).toBe(from);
-    expect(next.to).toBe(to);
-    expect(next.lastIntent).toBe('live');
   });
 });
 

@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useState, useMemo, useRef } from 'react';
 import type { CSSProperties } from 'react';
-import { useTrendMode } from './useTrendMode.js';
+import { useTrendMode, trendModeReducer } from './useTrendMode.js';
+import type { TrendModeAction } from './useTrendMode.js';
 import { useTrendData } from './useTrendData.js';
+import type { UseTrendDataResult } from './useTrendData.js';
+import { useLiveSubscription } from './useLiveSubscription.js';
+import type { UseLiveSubscriptionResult } from './useLiveSubscription.js';
+import { mergeTrendData } from './mergeTrendData.js';
 import { useZoomState } from './useZoomState.js';
 import { TrendChart } from './TrendChart.js';
 import { SpanBucketIndicator } from './SpanBucketIndicator.js';
@@ -72,7 +77,83 @@ export function TrendChartContainer({
   });
 
   // ── Data fetch (driven by explicit dataViewport) ──────────────────────────
-  const { data, isLoading, ensureCovered, swapCounter, activeTileCount, lastFetchMs } = useTrendData({ viewport: dataViewport, tagIds });
+  const trendData = useTrendData({ viewport: dataViewport, tagIds, isTailing: modeState.mode === 'tailing' });
+  const { data, isLoading, ensureCovered, swapCounter, activeTileCount, lastFetchMs } = trendData;
+
+  // ── Stable refs for synchronous access from callbacks and cleanup ─────────
+  // Updated synchronously during render so callbacks always see the latest values.
+  const modeStateRef = useRef(modeState);
+  const trendDataRef = useRef<UseTrendDataResult>(trendData);
+  const liveSubRef   = useRef<UseLiveSubscriptionResult | null>(null);
+
+  modeStateRef.current = modeState;
+  trendDataRef.current = trendData;
+
+  // ── Live subscription inputs ──────────────────────────────────────────────
+  const viewportSpanMs = modeViewport.end - modeViewport.start;
+  const cachedData = data;
+
+  const tailMode: 'aggregate' | 'raw' | null =
+    cachedData?.type === 'aggregate' ? 'aggregate'
+    : cachedData?.type === 'raw'       ? 'raw'
+    : null;
+
+  const bucketSMs: bigint | null =
+    cachedData?.type === 'aggregate' ? BigInt(cachedData.bucketSMs) : null;
+
+  const trimThreshold: number | null =
+    trendData.responseTailTs != null ? trendData.responseTailTs - 1000 : null;
+
+  const seedFromCachedTile = useMemo(() => {
+    if (!cachedData) return null;
+    const m = new Map<number, number | boolean | string | null>();
+    if (cachedData.type === 'aggregate') {
+      for (const [tagId, arrs] of cachedData.series) {
+        m.set(tagId, arrs.value[arrs.value.length - 1] ?? null);
+      }
+    } else {
+      for (const [tagId, s] of cachedData.series) {
+        m.set(tagId, s.value[s.value.length - 1] ?? null);
+      }
+    }
+    return m;
+  }, [cachedData]);
+
+  // Advances nowMs from WS frame's max moduleTs — only while tailing.
+  const handleDataReceived = useCallback((maxModuleTs: number) => {
+    if (modeStateRef.current.mode !== 'tailing') return;
+    dispatch({ type: 'tick', nowMs: BigInt(maxModuleTs) });
+  }, [dispatch]);
+
+  const liveSub = useLiveSubscription({
+    tagIds,
+    isTailing: modeState.mode === 'tailing',
+    trimThreshold,
+    seedFromCachedTile,
+    tailMode,
+    bucketSMs,
+    viewportSpanMs,
+    onDataReceived: handleDataReceived,
+  });
+
+  // Synchronous ref update — liveSubRef is always fresh before any callback fires.
+  liveSubRef.current = liveSub;
+
+  // ── Container unmount cleanup: drain + evict on tailing exit ─────────────
+  useEffect(() => () => {
+    if (modeStateRef.current.mode === 'tailing') {
+      const range = liveSubRef.current?.commitAndDrain();
+      if (range && range.end > range.start) {
+        trendDataRef.current.evictRange(range.start, range.end);
+      }
+    }
+  }, []);
+
+  // ── Merged data for rendering ─────────────────────────────────────────────
+  const mergedData = useMemo(
+    () => mergeTrendData(data, liveSub.tail, modeState.mode === 'tailing'),
+    [data, liveSub.tail, modeState.mode],
+  );
 
   // ── xRange: passes the live mode viewport to TrendChart for imperative
   //    setScale — updated every tick in tailing, or on preset/EndPicker/zoom. ──
@@ -81,8 +162,22 @@ export function TrendChartContainer({
     [modeViewport.start, modeViewport.end],
   );
 
-  const viewportSpanMs = modeViewport.end - modeViewport.start;
-  const bucketSMs = data?.type === 'aggregate' ? BigInt(data.bucketSMs) : null;
+  const bucketSMsIndicator = data?.type === 'aggregate' ? BigInt(data.bucketSMs) : null;
+
+  // ── dispatchModeAction: tailing-exit cleanup before dispatch ─────────────
+  // Used for actions that can transition tailing → fixed (zoom, pan, endPicker).
+  // Direct dispatch is used for actions that never exit tailing (preset, live, tick).
+  const dispatchModeAction = useCallback((action: TrendModeAction) => {
+    const cur  = modeStateRef.current;
+    const next = trendModeReducer(cur, action);
+    if (cur.mode === 'tailing' && next.mode === 'fixed') {
+      const range = liveSubRef.current?.commitAndDrain();
+      if (range && range.end > range.start) {
+        trendDataRef.current.evictRange(range.start, range.end);
+      }
+    }
+    dispatch(action);
+  }, [dispatch]);
 
   // ── Callbacks ─────────────────────────────────────────────────────────────
 
@@ -109,9 +204,9 @@ export function TrendChartContainer({
       rafIdRef.current = null;
       const r = pendingRangeRef.current;
       pendingRangeRef.current = null;
-      if (r) dispatch({ type: 'zoomApplied', from: r.min, to: r.max, nowMs: BigInt(Date.now()) });
+      if (r) dispatchModeAction({ type: 'zoomApplied', from: r.min, to: r.max, nowMs: BigInt(Date.now()) });
     });
-  }, [dispatch]);
+  }, [dispatchModeAction]);
 
   const handleXPan = useCallback((min: bigint, max: bigint) => {
     pendingPanRef.current = { min, max };
@@ -120,9 +215,9 @@ export function TrendChartContainer({
       panRafIdRef.current = null;
       const r = pendingPanRef.current;
       pendingPanRef.current = null;
-      if (r) dispatch({ type: 'panApplied', from: r.min, to: r.max, nowMs: BigInt(Date.now()) });
+      if (r) dispatchModeAction({ type: 'panApplied', from: r.min, to: r.max, nowMs: BigInt(Date.now()) });
     });
-  }, [dispatch]);
+  }, [dispatchModeAction]);
 
   const handlePreset = useCallback(
     (sizeMs: bigint) => {
@@ -137,9 +232,9 @@ export function TrendChartContainer({
 
   const handleEndCommitted = useCallback(
     (to: bigint) => {
-      dispatch({ type: 'endPickerCommitted', to, nowMs: BigInt(Date.now()) });
+      dispatchModeAction({ type: 'endPickerCommitted', to, nowMs: BigInt(Date.now()) });
     },
-    [dispatch],
+    [dispatchModeAction],
   );
 
   // Dispatch zoomApplied with the raw selection bounds: modeViewport reflects
@@ -149,14 +244,14 @@ export function TrendChartContainer({
   const handleDragZoom = useCallback(
     (selectionStartMs: bigint, selectionEndMs: bigint) => {
       _handleDragZoom(selectionStartMs, selectionEndMs);
-      dispatch({
+      dispatchModeAction({
         type: 'zoomApplied',
         from: selectionStartMs,
         to: selectionEndMs,
         nowMs: BigInt(Date.now()),
       });
     },
-    [_handleDragZoom, dispatch],
+    [_handleDragZoom, dispatchModeAction],
   );
 
   // Wrap zoom-level switch: update data-fetch state (bucketSMs, dataViewport, zoomAnchorSpan).
@@ -176,7 +271,7 @@ export function TrendChartContainer({
       <div style={FOOTER}>
         <div style={FOOTER_LEFT}>
           <SpanPresets state={modeState} onPreset={handlePreset} />
-          <SpanBucketIndicator spanMs={viewportSpanMs} bucketSMs={bucketSMs} lastFetchMs={lastFetchMs} />
+          <SpanBucketIndicator spanMs={viewportSpanMs} bucketSMs={bucketSMsIndicator} lastFetchMs={lastFetchMs} />
         </div>
         <div style={FOOTER_RIGHT}>
           <EndPicker
@@ -191,7 +286,7 @@ export function TrendChartContainer({
     </>
   );
 
-  if (!data) {
+  if (!mergedData) {
     return (
       <div style={LOADING_HINT}>
         {isLoading ? 'Loading…' : tagIds.length === 0 ? 'No tags selected.' : null}
@@ -201,7 +296,7 @@ export function TrendChartContainer({
 
   return (
     <TrendChart
-      data={data}
+      data={mergedData}
       tagIds={tagIds}
       siteTimezone={siteTimezone}
       height={height}

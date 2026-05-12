@@ -314,6 +314,7 @@ function makeStableDataValue(
     tagPathIndex: buildTagPathIndex([]),
     getLiveValue: () => ({ value: null }),
     subscribeLiveValue: subscribeSpy as HmiDataContextValue['subscribeLiveValue'],
+    subscribeTrend: () => () => {},
     writeTag: async () => {},
   };
 }
@@ -662,4 +663,306 @@ describe('WS reconciler', () => {
 
     await act(() => { unsubs.forEach(u => u()); });
   });
+});
+
+// ─── WS trend channel tests ──────────────────────────────────────────────────
+
+describe('WS trend channel', () => {
+  // T-1. subscribeTrend emits SUBSCRIBE_TREND on the wire.
+  it('subscribeTrend sends SUBSCRIBE_TREND for the subscribed tagId', async () => {
+    const wrapper = makeWrapper();
+    const { result } = renderHook(() => useHmiContext(), { wrapper });
+    const ws = await getWsInstance();
+    await openWs(ws);
+    ws.sentMessages.length = 0;
+
+    let unsub!: () => void;
+    await act(() => {
+      unsub = result.current.subscribeTrend(42, () => {});
+    });
+
+    const msgs = ws.sentMessages
+      .map(m => JSON.parse(m) as { type: string; tagIds: number[] })
+      .filter(m => m.type === 'SUBSCRIBE_TREND');
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].tagIds).toContain(42);
+
+    await act(() => { unsub(); });
+  });
+
+  // T-2. Unsubscribing the last callback sends UNSUBSCRIBE_TREND.
+  it('unsubscribing last callback sends UNSUBSCRIBE_TREND', async () => {
+    const wrapper = makeWrapper();
+    const { result } = renderHook(() => useHmiContext(), { wrapper });
+    const ws = await getWsInstance();
+    await openWs(ws);
+
+    let unsub!: () => void;
+    await act(() => {
+      unsub = result.current.subscribeTrend(42, () => {});
+    });
+    ws.sentMessages.length = 0;
+
+    await act(() => { unsub(); });
+
+    const msgs = ws.sentMessages
+      .map(m => JSON.parse(m) as { type: string; tagIds: number[] })
+      .filter(m => m.type === 'UNSUBSCRIBE_TREND');
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].tagIds).toContain(42);
+  });
+
+  // T-3. Same-tick subscribe+unsubscribe → zero wire messages.
+  it('subscribe then immediate unsubscribe in same tick produces no trend wire messages', async () => {
+    const wrapper = makeWrapper();
+    const { result } = renderHook(() => useHmiContext(), { wrapper });
+    const ws = await getWsInstance();
+    await openWs(ws);
+    ws.sentMessages.length = 0;
+
+    await act(() => {
+      const unsub = result.current.subscribeTrend(99, () => {});
+      unsub();
+    });
+
+    expect(
+      ws.sentMessages.filter(
+        m => (JSON.parse(m) as { type: string }).type === 'SUBSCRIBE_TREND' ||
+             (JSON.parse(m) as { type: string }).type === 'UNSUBSCRIBE_TREND',
+      ),
+    ).toHaveLength(0);
+  });
+
+  // T-4. subscribeLiveValue + subscribeTrend in the same tick → one SUBSCRIBE + one SUBSCRIBE_TREND.
+  it('subscribeLiveValue and subscribeTrend in same tick each emit once', async () => {
+    const wrapper = makeWrapper([mockTag, mockReadbackTag]);
+    const { result } = renderHook(() => useHmiContext(), { wrapper });
+    const ws = await getWsInstance();
+    await openWs(ws);
+    ws.sentMessages.length = 0;
+
+    let unsubLive!: () => void;
+    let unsubTrend!: () => void;
+    await act(() => {
+      unsubLive  = result.current.subscribeLiveValue(1001, () => {});
+      unsubTrend = result.current.subscribeTrend(2001, () => {});
+    });
+
+    const parsed = ws.sentMessages.map(m => JSON.parse(m) as { type: string; tagIds: number[] });
+    expect(parsed.filter(m => m.type === 'SUBSCRIBE')).toHaveLength(1);
+    expect(parsed.filter(m => m.type === 'SUBSCRIBE_TREND')).toHaveLength(1);
+    expect(parsed.filter(m => m.type === 'SUBSCRIBE')[0].tagIds).toContain(1001);
+    expect(parsed.filter(m => m.type === 'SUBSCRIBE_TREND')[0].tagIds).toContain(2001);
+
+    await act(() => { unsubLive(); unsubTrend(); });
+  });
+
+  // T-5. TREND_DELTA frame dispatches to per-tag callbacks.
+  it('TREND_DELTA frame fires each subscribed tag callback with correct args', async () => {
+    const wrapper = makeWrapper();
+    const { result } = renderHook(() => useHmiContext(), { wrapper });
+    const ws = await getWsInstance();
+    await openWs(ws);
+
+    const cb42 = vi.fn<[number, number | boolean | string | null], void>();
+    const cb43 = vi.fn<[number, number | boolean | string | null], void>();
+
+    let unsub42!: () => void;
+    let unsub43!: () => void;
+    await act(() => {
+      unsub42 = result.current.subscribeTrend(42, cb42);
+      unsub43 = result.current.subscribeTrend(43, cb43);
+    });
+
+    await act(() => {
+      ws.simulateMessage({
+        type: 'TREND_DELTA',
+        samples: [
+          { moduleTs: 1000, tagId: 42, value: 3.14 },
+          { moduleTs: 1001, tagId: 43, value: true },
+        ],
+      });
+    });
+
+    expect(cb42).toHaveBeenCalledTimes(1);
+    expect(cb42).toHaveBeenCalledWith(1000, 3.14);
+    expect(cb43).toHaveBeenCalledTimes(1);
+    expect(cb43).toHaveBeenCalledWith(1001, true);
+
+    await act(() => { unsub42(); unsub43(); });
+  });
+
+  // T-6. Multiple subscribers to the same tagId all fire.
+  it('multiple subscribers to the same tagId all receive the TREND_DELTA callback', async () => {
+    const wrapper = makeWrapper();
+    const { result } = renderHook(() => useHmiContext(), { wrapper });
+    const ws = await getWsInstance();
+    await openWs(ws);
+
+    const cbA = vi.fn<[number, number | boolean | string | null], void>();
+    const cbB = vi.fn<[number, number | boolean | string | null], void>();
+
+    let unsubA!: () => void;
+    let unsubB!: () => void;
+    await act(() => {
+      unsubA = result.current.subscribeTrend(42, cbA);
+      unsubB = result.current.subscribeTrend(42, cbB);
+    });
+
+    await act(() => {
+      ws.simulateMessage({
+        type: 'TREND_DELTA',
+        samples: [{ moduleTs: 5000, tagId: 42, value: 7 }],
+      });
+    });
+
+    expect(cbA).toHaveBeenCalledTimes(1);
+    expect(cbA).toHaveBeenCalledWith(5000, 7);
+    expect(cbB).toHaveBeenCalledTimes(1);
+    expect(cbB).toHaveBeenCalledWith(5000, 7);
+
+    await act(() => { unsubA(); unsubB(); });
+  });
+
+  // T-7. Callbacks for unsubscribed tags do not fire.
+  it('does not fire callbacks for tags the client did not subscribe to', async () => {
+    const wrapper = makeWrapper();
+    const { result } = renderHook(() => useHmiContext(), { wrapper });
+    const ws = await getWsInstance();
+    await openWs(ws);
+
+    const cb42 = vi.fn<[number, number | boolean | string | null], void>();
+    let unsub42!: () => void;
+    await act(() => {
+      unsub42 = result.current.subscribeTrend(42, cb42);
+    });
+
+    await act(() => {
+      ws.simulateMessage({
+        type: 'TREND_DELTA',
+        samples: [{ moduleTs: 9000, tagId: 99, value: 1.0 }],
+      });
+    });
+
+    expect(cb42).not.toHaveBeenCalled();
+
+    await act(() => { unsub42(); });
+  });
+
+  // T-8. Reconnect re-emits SUBSCRIBE_TREND for all trendDesiredRef tags.
+  it('reconnect re-emits SUBSCRIBE_TREND for all desired trend tags', async () => {
+    const wrapper = makeWrapper();
+    const { result } = renderHook(() => useHmiContext(), { wrapper });
+    const ws = await getWsInstance();
+    await openWs(ws);
+
+    const unsubs: (() => void)[] = [];
+    await act(() => {
+      unsubs.push(result.current.subscribeTrend(10, () => {}));
+      unsubs.push(result.current.subscribeTrend(20, () => {}));
+    });
+
+    await act(() => { ws.close(); });
+
+    await waitFor(() => expect(MockWebSocket.instances.length).toBe(2), { timeout: 2500 });
+    const ws2 = MockWebSocket.instances[1];
+    await openWs(ws2);
+
+    const trendSubs = ws2.sentMessages
+      .map(m => JSON.parse(m) as { type: string; tagIds: number[] })
+      .filter(m => m.type === 'SUBSCRIBE_TREND');
+    expect(trendSubs).toHaveLength(1);
+    expect([...trendSubs[0].tagIds].sort((a, b) => a - b)).toEqual([10, 20]);
+
+    expect(
+      ws2.sentMessages.filter(
+        m => (JSON.parse(m) as { type: string }).type === 'UNSUBSCRIBE_TREND',
+      ),
+    ).toHaveLength(0);
+
+    await act(() => { unsubs.forEach(u => u()); });
+  }, 4000);
+
+  // T-9. Same tagId in both live-value and trend desiredRef → both SUBSCRIBE and SUBSCRIBE_TREND emit.
+  it('same tagId subscribed via both subscribeLiveValue and subscribeTrend emits both types', async () => {
+    const wrapper = makeWrapper();
+    const { result } = renderHook(() => useHmiContext(), { wrapper });
+    const ws = await getWsInstance();
+    await openWs(ws);
+    ws.sentMessages.length = 0;
+
+    let unsubLive!: () => void;
+    let unsubTrend!: () => void;
+    await act(() => {
+      unsubLive  = result.current.subscribeLiveValue(42, () => {});
+      unsubTrend = result.current.subscribeTrend(42, () => {});
+    });
+
+    const parsed = ws.sentMessages.map(m => JSON.parse(m) as { type: string; tagIds: number[] });
+    expect(parsed.filter(m => m.type === 'SUBSCRIBE').some(m => m.tagIds.includes(42))).toBe(true);
+    expect(parsed.filter(m => m.type === 'SUBSCRIBE_TREND').some(m => m.tagIds.includes(42))).toBe(true);
+
+    // DELTA fires live-value callback; TREND_DELTA fires trend callback — no cross-fire.
+    const liveCb  = vi.fn<[{ value: unknown }], void>();
+    const trendCb = vi.fn<[number, number | boolean | string | null], void>();
+    let unsubLive2!: () => void;
+    let unsubTrend2!: () => void;
+    await act(() => {
+      unsubLive2  = result.current.subscribeLiveValue(42, liveCb);
+      unsubTrend2 = result.current.subscribeTrend(42, trendCb);
+    });
+    // subscribeLiveValue delivers the current value synchronously on subscribe; clear that call.
+    liveCb.mockClear();
+
+    await act(() => {
+      ws.simulateMessage({ type: 'DELTA', values: { '42': 99 } });
+    });
+    expect(liveCb).toHaveBeenCalledTimes(1);
+    expect(trendCb).not.toHaveBeenCalled();
+
+    await act(() => {
+      ws.simulateMessage({ type: 'TREND_DELTA', samples: [{ moduleTs: 1, tagId: 42, value: 88 }] });
+    });
+    expect(trendCb).toHaveBeenCalledTimes(1);
+    expect(liveCb).toHaveBeenCalledTimes(1);
+
+    await act(() => { unsubLive(); unsubTrend(); unsubLive2(); unsubTrend2(); });
+  });
+
+  // T-10. Disconnect clears trendServerRef; trendDesiredRef and trendSubscribersRef survive.
+  it('disconnect clears trendServerRef but leaves trendDesiredRef intact for reconnect', async () => {
+    const wrapper = makeWrapper();
+    const { result } = renderHook(() => useHmiContext(), { wrapper });
+    const ws = await getWsInstance();
+    await openWs(ws);
+
+    const cb = vi.fn<[number, number | boolean | string | null], void>();
+    let unsub!: () => void;
+    await act(() => {
+      unsub = result.current.subscribeTrend(77, cb);
+    });
+
+    // Disconnect
+    await act(() => { ws.close(); });
+
+    // Wait for reconnect attempt
+    await waitFor(() => expect(MockWebSocket.instances.length).toBe(2), { timeout: 2500 });
+    const ws2 = MockWebSocket.instances[1];
+    await openWs(ws2);
+
+    // SUBSCRIBE_TREND should fire again (trendDesiredRef survived, trendServerRef was cleared)
+    const trendSubs = ws2.sentMessages
+      .map(m => JSON.parse(m) as { type: string; tagIds: number[] })
+      .filter(m => m.type === 'SUBSCRIBE_TREND');
+    expect(trendSubs.some(m => m.tagIds.includes(77))).toBe(true);
+
+    // Callback still fires after reconnect (trendSubscribersRef survived)
+    await act(() => {
+      ws2.simulateMessage({ type: 'TREND_DELTA', samples: [{ moduleTs: 2000, tagId: 77, value: 5 }] });
+    });
+    expect(cb).toHaveBeenCalledTimes(1);
+    expect(cb).toHaveBeenCalledWith(2000, 5);
+
+    await act(() => { unsub(); });
+  }, 4000);
 });

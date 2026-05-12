@@ -38,6 +38,8 @@ export class TelemetryIntake {
   private readonly watchdogTimeoutMs: number;
   private readonly dutyTracker: DutyTracker;
 
+  private trendDeltaListener: ((moduleTs: number, moduleId: string) => void) | null = null;
+
   private trendSnapshotPending = new Set<string>();
 
   private lastSeen = new Map<string, number>();
@@ -104,6 +106,12 @@ export class TelemetryIntake {
     } else if (changedTrendable.length > 0) {
       this.dbPipeline.enqueue({ moduleTs: message.timestamp, tags: changedTrendable });
     }
+
+    this.trendDeltaListener?.(message.timestamp, moduleId);
+  }
+
+  setTrendDeltaListener(fn: ((moduleTs: number, moduleId: string) => void) | null): void {
+    this.trendDeltaListener = fn;
   }
 
   markTrendSnapshotPending(moduleId: string): void {
