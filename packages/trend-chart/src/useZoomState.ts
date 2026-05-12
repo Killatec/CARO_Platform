@@ -68,20 +68,11 @@ export function useZoomState({
   // Skipped when lastIntent === 'zoom' or 'pan': both gestures keep the anchor/bucket
   // size intact so incremental threshold accumulation works correctly.
   useEffect(() => {
-    console.log('[DIAG-live] useZoomState reset effect fired',
-      'lastIntent=', lastIntent,
-      'modeViewport.start=', modeViewport.start.toString(),
-      'modeViewport.end=', modeViewport.end.toString(),
-      'span(ms)=', (modeViewport.end - modeViewport.start).toString(),
-      'willSkip=', lastIntent === 'zoom' || lastIntent === 'pan');
     if (lastIntent === 'zoom' || lastIntent === 'pan') return;
     const span = modeViewport.end - modeViewport.start;
     const bucketSMs = span / BigInt(visibleTilesPerWindow * bucketCount);
     setCurrentBucketSMs(bucketSMs);
     setZoomAnchorSpan(span);
-    console.log('[DIAG-live] setDataViewport',
-      'start=', modeViewport.start.toString(),
-      'end=', modeViewport.end.toString());
     setDataViewport({ start: modeViewport.start, end: modeViewport.end });
   }, [modeViewport.start, modeViewport.end, visibleTilesPerWindow, bucketCount, lastIntent]);
 
@@ -117,9 +108,6 @@ export function useZoomState({
   );
 
   const syncDataViewport = useCallback((v: Viewport) => {
-    console.log('[DIAG-live] syncDataViewport called',
-      'start=', v.start.toString(),
-      'end=', v.end.toString());
     setDataViewport({ start: v.start, end: v.end });
   }, []);
 

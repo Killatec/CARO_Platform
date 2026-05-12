@@ -64,6 +64,32 @@ describe('useZoomState — handleZoomLevelSwitch', () => {
   });
 });
 
+// ── syncDataViewport ──────────────────────────────────────────────────────────
+
+describe('useZoomState — syncDataViewport', () => {
+  it('sets dataViewport to provided bounds regardless of lastIntent', () => {
+    // lastIntent='pan' would normally cause the reset effect to skip — syncDataViewport bypasses that.
+    const opts = { ...DEFAULT_OPTS, lastIntent: 'pan' as LastIntent };
+    const { result } = renderHook(() => useZoomState(opts));
+
+    const newViewport = { start: MODERN_START + ONE_HOUR_MS * 5n, end: MODERN_START + ONE_HOUR_MS * 6n };
+    act(() => { result.current.syncDataViewport(newViewport); });
+
+    expect(result.current.dataViewport.start).toBe(newViewport.start);
+    expect(result.current.dataViewport.end).toBe(newViewport.end);
+  });
+
+  it('sets dataViewport even when lastIntent would skip the reset effect (zoom)', () => {
+    const opts = { ...DEFAULT_OPTS, lastIntent: 'zoom' as LastIntent };
+    const { result } = renderHook(() => useZoomState(opts));
+
+    const newViewport = { start: 500n, end: 5000n };
+    act(() => { result.current.syncDataViewport(newViewport); });
+
+    expect(result.current.dataViewport).toEqual(newViewport);
+  });
+});
+
 // ── computeDragZoomViewport (pure, already exported) ─────────────────────────
 
 describe('computeDragZoomViewport', () => {

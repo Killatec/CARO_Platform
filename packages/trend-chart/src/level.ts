@@ -142,6 +142,10 @@ export function tilesForViewport(opts: {
   bucketCount?: number;
   visibleTilesPerWindow?: number;
   overfetchPerSide?: number;
+  /** Overrides left-side prefetch count. Defaults to overfetchPerSide if not provided. */
+  overfetchLeftCount?: number;
+  /** Overrides right-side prefetch count. Defaults to overfetchPerSide if not provided. */
+  overfetchRightCount?: number;
   /**
    * When provided, prefetch tiles whose startTime is more than one tileSpanMs
    * past nowMs are dropped. Allows one tile of look-ahead in tailing mode so
@@ -157,8 +161,13 @@ export function tilesForViewport(opts: {
     bucketCount = TREND_VIEWER_DEFAULTS.bucketCount,
     visibleTilesPerWindow = TREND_VIEWER_DEFAULTS.visibleTilesPerWindow,
     overfetchPerSide = TREND_VIEWER_DEFAULTS.overfetchPerSide,
+    overfetchLeftCount,
+    overfetchRightCount,
     nowMs,
   } = opts;
+
+  const leftCount  = overfetchLeftCount  ?? overfetchPerSide;
+  const rightCount = overfetchRightCount ?? overfetchPerSide;
 
   const viewportSpan = viewport.end - viewport.start;
   if (viewportSpan <= 0n) return { visible: [], prefetch: [] };
@@ -189,12 +198,12 @@ export function tilesForViewport(opts: {
 
   const prefetch: Tile[] = [];
   // Tiles before the visible window.
-  for (let i = overfetchPerSide; i >= 1; i--) {
+  for (let i = leftCount; i >= 1; i--) {
     const start = firstVisibleStart - BigInt(i) * tileSpanMs;
     prefetch.push({ startTime: start, endTime: start + tileSpanMs, bucketCount });
   }
   // Tiles after the visible window.
-  for (let i = 0; i < overfetchPerSide; i++) {
+  for (let i = 0; i < rightCount; i++) {
     const start = lastVisibleEnd + BigInt(i) * tileSpanMs;
     prefetch.push({ startTime: start, endTime: start + tileSpanMs, bucketCount });
   }

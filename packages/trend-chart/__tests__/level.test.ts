@@ -96,6 +96,29 @@ describe('tilesForViewport', () => {
     expect(prefetch).toHaveLength(4);
   });
 
+  it('overfetchLeftCount=1, overfetchRightCount=0 → 1 prefetch tile to the left', () => {
+    const { visible, prefetch } = tilesForViewport({ viewport, overfetchLeftCount: 1, overfetchRightCount: 0 });
+    expect(visible).toHaveLength(2);
+    expect(prefetch).toHaveLength(1);
+    // The single prefetch tile must be to the left of the visible window.
+    expect(prefetch[0]!.endTime).toBe(visible[0]!.startTime);
+  });
+
+  it('overfetchLeftCount=0, overfetchRightCount=1 → 1 prefetch tile to the right', () => {
+    const { visible, prefetch } = tilesForViewport({ viewport, overfetchLeftCount: 0, overfetchRightCount: 1 });
+    expect(visible).toHaveLength(2);
+    expect(prefetch).toHaveLength(1);
+    // The single prefetch tile must be to the right of the visible window.
+    expect(prefetch[0]!.startTime).toBe(visible[visible.length - 1]!.endTime);
+  });
+
+  it('overfetchLeftCount and overfetchRightCount both omitted → falls back to overfetchPerSide', () => {
+    const { prefetch: defaultPrefetch } = tilesForViewport({ viewport });
+    const { prefetch: explicitPrefetch } = tilesForViewport({ viewport, overfetchPerSide: 1 });
+    expect(defaultPrefetch).toHaveLength(explicitPrefetch.length);
+    expect(defaultPrefetch).toEqual(explicitPrefetch);
+  });
+
   it('all returned Tile.startTime and endTime are bigint', () => {
     const { visible, prefetch } = tilesForViewport({ viewport });
     for (const t of [...visible, ...prefetch]) {
