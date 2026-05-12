@@ -1,6 +1,6 @@
 import { renderHook, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { useLiveSubscription, TREND_FIFO_CAPACITY } from '../src/useLiveSubscription.js';
+import { useLiveSubscription, TREND_RING_CAPACITY } from '../src/useLiveSubscription.js';
 import { TS_BUCKET_ORIGIN_MS } from '../src/level.js';
 
 // ─── Mock @caro/hmi-context ────────────────────────────────────────────────────
@@ -95,14 +95,14 @@ describe('useLiveSubscription — subscription lifecycle', () => {
     expect(calledIds).toContain(2);
   });
 
-  it('tagIds change — remove tag: unsubscribe fires; that tag FIFO is pruned', () => {
+  it('tagIds change — remove tag: unsubscribe fires; that tag ring entry is pruned', () => {
     const { rerender, result } = renderHook(
       ({ opts }) => useLiveSubscription(opts),
       { initialProps: { opts: { tagIds: [1, 2], trimThreshold: null } } },
     );
     act(() => { fireCb(1, 100, 5); fireCb(2, 200, 6); });
 
-    // Remove tag 2: its FIFO entry (200) should be deleted. Tag 1's FIFO (100) survives.
+    // Remove tag 2: its ring entry (200) should be deleted. Tag 1's ring entry (100) survives.
     rerender({ opts: { tagIds: [1], trimThreshold: null } });
 
     const { start, end } = result.current.commitAndDrain();
@@ -112,7 +112,7 @@ describe('useLiveSubscription — subscription lifecycle', () => {
   });
 });
 
-describe('useLiveSubscription — FIFO buffer', () => {
+describe('useLiveSubscription — ring buffer', () => {
   it('single callback → entry appears; commitAndDrain returns that moduleTs', () => {
     const { result } = renderHook(() =>
       useLiveSubscription({ tagIds: [1], trimThreshold: null }),
@@ -139,13 +139,13 @@ describe('useLiveSubscription — FIFO buffer', () => {
     expect(end).toBe(1500n);
   });
 
-  it('FIFO overflow: 101st push drops the oldest entry', () => {
+  it('ring overflow: 101st push drops the oldest entry', () => {
     const { result } = renderHook(() =>
       useLiveSubscription({ tagIds: [1], trimThreshold: null }),
     );
     act(() => {
-      // Push TREND_FIFO_CAPACITY + 1 entries: moduleTs 0..100
-      for (let i = 0; i <= TREND_FIFO_CAPACITY; i++) {
+      // Push TREND_RING_CAPACITY + 1 entries: moduleTs 0..100
+      for (let i = 0; i <= TREND_RING_CAPACITY; i++) {
         fireCb(1, i, i);
       }
     });
@@ -153,7 +153,7 @@ describe('useLiveSubscription — FIFO buffer', () => {
     // Entry 0 was the oldest and should have been shifted out.
     const { start, end } = result.current.commitAndDrain();
     expect(start).toBe(1n);           // moduleTs=0 was evicted
-    expect(end).toBe(BigInt(TREND_FIFO_CAPACITY));
+    expect(end).toBe(BigInt(TREND_RING_CAPACITY));
   });
 
   it('commitAndDrain on empty state → { start: 0n, end: 0n }', () => {
@@ -165,7 +165,7 @@ describe('useLiveSubscription — FIFO buffer', () => {
     expect(end).toBe(0n);
   });
 
-  it('commitAndDrain clears FIFOs but preserves subscriptions; next callback appends correctly', () => {
+  it('commitAndDrain clears ring buffers but preserves subscriptions; next callback appends correctly', () => {
     const { result } = renderHook(() =>
       useLiveSubscription({ tagIds: [1], trimThreshold: null }),
     );
@@ -412,12 +412,12 @@ describe('useLiveSubscription — bucket boundaries', () => {
 // ─── Mode-flip tests ──────────────────────────────────────────────────────────
 
 describe('useLiveSubscription — mode-flip', () => {
-  it('false→true with FIFO entries: accumulator replays them and produces tail', () => {
+  it('false→true with ring entries: accumulator replays them and produces tail', () => {
     const { result, rerender } = renderHook(
       ({ opts }) => useLiveSubscription(opts),
       { initialProps: { opts: { tagIds: [1], trimThreshold: null, isTailing: false, bucketSMs: BUCKET_SMS, seedFromCachedTile: null, tailMode: 'aggregate' as const } } },
     );
-    // Push events while not tailing (FIFO fills, no accumulator)
+    // Push events while not tailing (ring fills, no accumulator)
     act(() => {
       fireCb(1, tAt(0, 100), 3);
       fireCb(1, tAt(0, 200), 5);
@@ -425,7 +425,7 @@ describe('useLiveSubscription — mode-flip', () => {
     });
     expect(result.current.tail).toBeNull(); // not tailing yet
 
-    // Flip to tailing: replays FIFO
+    // Flip to tailing: replays ring
     rerender({ opts: { tagIds: [1], trimThreshold: null, isTailing: true, bucketSMs: BUCKET_SMS, seedFromCachedTile: null, tailMode: 'aggregate' as const } });
 
     const { tail } = result.current;
@@ -434,7 +434,7 @@ describe('useLiveSubscription — mode-flip', () => {
     expect(tail!.perTag.get(1)!.value[0]).toBe(5); // last in bucket 0 (5 came after 3, then 7 closes it — last non-null = 5 since 7 is in bucket 1)
   });
 
-  it('false→true with empty FIFO: tail remains null until first event', () => {
+  it('false→true with empty ring: tail remains null until first event', () => {
     const { result, rerender } = renderHook(
       ({ opts }) => useLiveSubscription(opts),
       { initialProps: { opts: { tagIds: [1], trimThreshold: null, isTailing: false, bucketSMs: BUCKET_SMS, seedFromCachedTile: null, tailMode: 'aggregate' as const } } },
@@ -453,12 +453,12 @@ describe('useLiveSubscription — mode-flip', () => {
       ({ opts }) => useLiveSubscription(opts),
       { initialProps: { opts: { tagIds: [1], trimThreshold: null, isTailing: true, bucketSMs: null as bigint | null, seedFromCachedTile: null, tailMode: 'aggregate' as const } } },
     );
-    act(() => { fireCb(1, tAt(0, 100), 5); }); // FIFO fills but no accumulator
+    act(() => { fireCb(1, tAt(0, 100), 5); }); // ring fills but no accumulator
     expect(result.current.tail).toBeNull();
 
-    // bucketSMs arrives — triggers re-init + FIFO replay
+    // bucketSMs arrives — triggers re-init + ring replay
     rerender({ opts: { tagIds: [1], trimThreshold: null, isTailing: true, bucketSMs: BUCKET_SMS, seedFromCachedTile: null, tailMode: 'aggregate' as const } });
-    // FIFO has one event in bucket 0; no close yet
+    // ring has one event in bucket 0; no close yet
     expect(result.current.tail).toBeNull();
 
     // Bucket 1 event closes bucket 0
@@ -487,7 +487,7 @@ describe('useLiveSubscription — mode-flip', () => {
 // ─── Trim integration ────────────────────────────────────────────────────────
 
 describe('useLiveSubscription — trim + accumulator coexistence', () => {
-  it('trimThreshold advance trims FIFO; accumulator state survives unchanged', () => {
+  it('trimThreshold advance trims ring; accumulator state survives unchanged', () => {
     const { result, rerender } = renderHook(
       ({ opts }) => useLiveSubscription(opts),
       { initialProps: { opts: { tagIds: [1], trimThreshold: null as number | null, isTailing: true, bucketSMs: BUCKET_SMS, seedFromCachedTile: null, tailMode: 'aggregate' as const } } },
@@ -499,7 +499,7 @@ describe('useLiveSubscription — trim + accumulator coexistence', () => {
     const closedBefore = result.current.tail!.perTag.get(1)!.value.length;
     expect(closedBefore).toBe(1);
 
-    // Advance trim: FIFO events below threshold are removed. Accumulator untouched.
+    // Advance trim: ring entries below threshold are removed. Accumulator untouched.
     rerender({ opts: { tagIds: [1], trimThreshold: tAt(0, 500), isTailing: true, bucketSMs: BUCKET_SMS, seedFromCachedTile: null, tailMode: 'aggregate' as const } });
 
     // Accumulator still reports the same closed bucket
@@ -523,21 +523,21 @@ describe('useLiveSubscription — commitAndDrain with accumulator', () => {
     expect(end).toBe(BigInt(ORIGIN) + 2n * BUCKET_SMS);     // open bucket 1 end
   });
 
-  it('FIFO + accumulator: range is union of both', () => {
-    // Push FIFO entry before tailing starts (FIFO entry at an earlier time)
+  it('ring + accumulator: range is union of both', () => {
+    // Push ring entry before tailing starts (ring entry at an earlier time)
     const { result, rerender } = renderHook(
       ({ opts }) => useLiveSubscription(opts),
       { initialProps: { opts: { tagIds: [1], trimThreshold: null, isTailing: false, bucketSMs: BUCKET_SMS, seedFromCachedTile: null, tailMode: 'aggregate' as const } } },
     );
     act(() => {
-      fireCb(1, tAt(0, 100), 1); // FIFO entry at tAt(0,100)
+      fireCb(1, tAt(0, 100), 1); // ring entry at tAt(0,100)
     });
     // Flip to tailing and push an event that closes a bucket
     rerender({ opts: { tagIds: [1], trimThreshold: null, isTailing: true, bucketSMs: BUCKET_SMS, seedFromCachedTile: null, tailMode: 'aggregate' as const } });
     act(() => {
       fireCb(1, tAt(1, 500), 9); // closes bucket 0; bucket 1 open
     });
-    // FIFO has tAt(0,100) and tAt(1,500); acc covers [bucket0.start, bucket1.end]
+    // ring has tAt(0,100) and tAt(1,500); acc covers [bucket0.start, bucket1.end]
     const { start, end } = result.current.commitAndDrain();
     // start: min(fifoMin=tAt(0,100), accStart=bucket0.start=ORIGIN) = ORIGIN
     // end: max(fifoMax=tAt(1,500), accEnd=ORIGIN+2*BUCKET_SMS=ORIGIN+2000)
@@ -674,16 +674,16 @@ describe('useLiveSubscription — tailMode transitions', () => {
     });
     expect(result.current.tail!.mode).toBe('aggregate');
 
-    // Switch to raw mode: accumulator clears; FIFO in FIFO replays into raw buffer
+    // Switch to raw mode: accumulator clears; ring replays into raw buffer
     rerender({ opts: { tagIds: [1], trimThreshold: null, isTailing: true, bucketSMs: BUCKET_SMS, tailMode: 'raw' } });
-    // FIFO was populated during aggregate phase; replay produces raw tail
+    // ring was populated during aggregate phase; replay produces raw tail
     expect(result.current.tail!.mode).toBe('raw');
     const rawTail = result.current.tail as import('../src/useLiveSubscription.js').RawTail;
-    // Entries from FIFO replay should be present
+    // Entries from ring replay should be present
     expect(rawTail.perTag.get(1)!.ts.length).toBeGreaterThan(0);
   });
 
-  it('tailMode raw → aggregate while tailing: raw clears; accumulator re-inits from FIFO', () => {
+  it('tailMode raw → aggregate while tailing: raw clears; accumulator re-inits from ring', () => {
     const { result, rerender } = renderHook(
       ({ opts }) => useLiveSubscription(opts),
       { initialProps: { opts: { tagIds: [1], trimThreshold: null, isTailing: true, bucketSMs: BUCKET_SMS, tailMode: 'raw' as const } } },
@@ -694,9 +694,9 @@ describe('useLiveSubscription — tailMode transitions', () => {
     });
     expect(result.current.tail!.mode).toBe('raw');
 
-    // Switch to aggregate: raw clears, accumulator replays FIFO
+    // Switch to aggregate: raw clears, accumulator replays ring
     rerender({ opts: { tagIds: [1], trimThreshold: null, isTailing: true, bucketSMs: BUCKET_SMS, tailMode: 'aggregate' } });
-    // FIFO has two entries spanning bucket 0 and 1; replay closes bucket 0
+    // ring has two entries spanning bucket 0 and 1; replay closes bucket 0
     expect(result.current.tail!.mode).toBe('aggregate');
     const aggTail = result.current.tail as import('../src/useLiveSubscription.js').AggregateTail;
     expect(aggTail.perTag.get(1)!.value).toHaveLength(1); // bucket 0 closed
@@ -757,7 +757,7 @@ describe('useLiveSubscription — raw trim', () => {
     expect(rawTail.perTag.get(1)!.ts[0]).toBe(1000n);
   });
 
-  it('FIFO IS trimmed when trimThreshold advances in raw mode', () => {
+  it('ring IS trimmed when trimThreshold advances in raw mode', () => {
     const { result, rerender } = renderHook(
       ({ opts }) => useLiveSubscription(opts),
       { initialProps: { opts: { tagIds: [1], trimThreshold: null as number | null, isTailing: true, tailMode: 'raw' as const } } },
@@ -768,7 +768,7 @@ describe('useLiveSubscription — raw trim', () => {
       fireCb(1, 900, 3);
     });
     rerender({ opts: { tagIds: [1], trimThreshold: 500, isTailing: true, tailMode: 'raw' as const } });
-    // After trim, re-enter tailing to force FIFO replay into rawBuffers — should
+    // After trim, re-enter tailing to force ring replay into rawBuffers — should
     // replay only entries >= threshold (500 and 900)
     rerender({ opts: { tagIds: [1], trimThreshold: 500, isTailing: false, tailMode: 'raw' as const } });
     rerender({ opts: { tagIds: [1], trimThreshold: 500, isTailing: true, tailMode: 'raw' as const } });
@@ -853,9 +853,9 @@ describe('useLiveSubscription — viewportSpanMs 2×span trim', () => {
   });
 });
 
-// ─── Raw mode: commitAndDrain and FIFO replay ─────────────────────────────────
+// ─── Raw mode: commitAndDrain and ring replay ─────────────────────────────────
 
-describe('useLiveSubscription — raw commitAndDrain + FIFO replay', () => {
+describe('useLiveSubscription — raw commitAndDrain + ring replay', () => {
   it('raw entries: covered range is min/max moduleTs across all tags', () => {
     const { result } = renderHook(() => useLiveSubscription(rawOpts([1, 2])));
     act(() => {
@@ -868,19 +868,19 @@ describe('useLiveSubscription — raw commitAndDrain + FIFO replay', () => {
     expect(end).toBe(3000n);
   });
 
-  it('enter tailing with tailMode=raw and FIFO entries: raw buffer gets FIFO replay', () => {
+  it('enter tailing with tailMode=raw and ring entries: raw buffer gets ring replay', () => {
     const { result, rerender } = renderHook(
       ({ opts }) => useLiveSubscription(opts),
       { initialProps: { opts: { tagIds: [1], trimThreshold: null, isTailing: false, tailMode: 'raw' as const } } },
     );
-    // Fill FIFO while not tailing
+    // Fill ring while not tailing
     act(() => {
       fireCb(1, 1000, 10);
       fireCb(1, 2000, 20);
     });
     expect(result.current.tail).toBeNull();
 
-    // Enter tailing: FIFO replays into raw buffer
+    // Enter tailing: ring replays into raw buffer
     rerender({ opts: { tagIds: [1], trimThreshold: null, isTailing: true, tailMode: 'raw' as const } });
     const rawTail = result.current.tail as import('../src/useLiveSubscription.js').RawTail;
     expect(rawTail).not.toBeNull();

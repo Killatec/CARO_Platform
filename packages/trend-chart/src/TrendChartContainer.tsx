@@ -170,7 +170,7 @@ export function TrendChartContainer({
     const cur  = modeStateRef.current;
     const next = trendModeReducer(cur, action);
 
-    // Tailing → fixed: drain the live buffer so accumulated FIFO/accumulator
+    // Tailing → fixed: drain the live buffer so accumulated ring/accumulator
     // coverage is committed. No cache eviction needed — live mode never writes
     // to the LRU cache, so there is nothing to evict. History fetches start
     // fresh against any stale tiles that remain (LRU displaces them naturally).

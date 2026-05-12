@@ -33,7 +33,7 @@ vi.mock('../src/useLiveSubscription.js', () => ({
       commitAndDrain: liveHoisted.commitAndDrain,
     };
   }),
-  TREND_FIFO_CAPACITY: 500,
+  TREND_RING_CAPACITY: 500,
 }));
 
 // ── TrendChart mock ───────────────────────────────────────────────────────────
@@ -571,8 +571,8 @@ describe('TrendChartContainer', () => {
 
     it('spine-fetch window: bucketSMs=null during in-flight, correct after spine settles', () => {
       // Cold start: data=null (spine in flight). useLiveSubscription must see
-      // tailMode=null so it accumulates in FIFOs only (no accumulator writes).
-      // When spine settles, tailMode→'aggregate' triggers FIFO replay with the
+      // tailMode=null so it accumulates in ring only (no accumulator writes).
+      // When spine settles, tailMode→'aggregate' triggers ring replay with the
       // correct bucketSMs. This verifies no deltas are misrouted during the
       // spine-fetch window.
       mockUseTrendData.mockReturnValue(makeResult([1], { data: null, isLoading: true, responseTailTs: null }));

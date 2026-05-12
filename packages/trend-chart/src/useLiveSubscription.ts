@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useHmiContext } from '@caro/hmi-context';
 import { TS_BUCKET_ORIGIN_MS, floorDiv } from './level.js';
 
-export const TREND_FIFO_CAPACITY = 100;
+export const TREND_RING_CAPACITY = 100;
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -59,7 +59,7 @@ export interface UseLiveSubscriptionOptions {
 
 export interface UseLiveSubscriptionResult {
   /**
-   * Reads the union of FIFO + accumulator + raw-buffer covered range, clears
+   * Reads the union of ring + accumulator + raw-buffer covered range, clears
    * all three, returns the range. Returns { start: 0n, end: 0n } if empty.
    * Synchronous; safe to call inside dispatchModeAction wrappers.
    */
@@ -256,7 +256,7 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
 
   const { subscribeTrend } = useHmiContext();
 
-  const fifosRef        = useRef<Map<number, TrendSample[]>>(new Map());
+  const ringsRef        = useRef<Map<number, TrendSample[]>>(new Map());
   const accumulatorsRef = useRef<Map<number, AccumulatorState>>(new Map());
   const rawBuffersRef   = useRef<Map<number, TrendSample[]>>(new Map());
 
@@ -307,21 +307,21 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
   useEffect(() => {
     const tagIdSet = new Set(tagIds);
 
-    // Prune FIFOs for removed tags (runs after previous cleanup unsubscribes).
-    for (const key of [...fifosRef.current.keys()]) {
-      if (!tagIdSet.has(key)) fifosRef.current.delete(key);
+    // Prune ring entries for removed tags (runs after previous cleanup unsubscribes).
+    for (const key of [...ringsRef.current.keys()]) {
+      if (!tagIdSet.has(key)) ringsRef.current.delete(key);
     }
     for (const tagId of tagIds) {
-      if (!fifosRef.current.has(tagId)) fifosRef.current.set(tagId, []);
+      if (!ringsRef.current.has(tagId)) ringsRef.current.set(tagId, []);
     }
 
     const unsubscribes: (() => void)[] = [];
     for (const tagId of tagIds) {
       const unsub = subscribeTrend(tagId, (moduleTs, value) => {
-        const arr = fifosRef.current.get(tagId);
+        const arr = ringsRef.current.get(tagId);
         if (!arr) return;
         arr.push({ moduleTs, value });
-        if (arr.length > TREND_FIFO_CAPACITY) arr.shift();
+        if (arr.length > TREND_RING_CAPACITY) arr.shift();
 
         if (isTailingRef.current) {
           const mode = tailModeRef.current;
@@ -374,13 +374,13 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
 
   useEffect(() => {
     if (trimThreshold === null) return;
-    // Trim FIFO only. rawBuffersRef is intentionally NOT trimmed here:
+    // Trim ring only. rawBuffersRef is intentionally NOT trimmed here:
     // trimming it forward as new tiles load pushes minLiveTs forward in
     // mergeRaw, letting LOCF gapfill from newly-fetched after-prefetch
     // tiles leak through the cached-drop filter as a flatline gap.
     // rawBuffersRef is cleared on tailing exit via commitAndDrain.
-    for (const [tagId, arr] of fifosRef.current) {
-      fifosRef.current.set(tagId, arr.filter(e => e.moduleTs >= trimThreshold));
+    for (const [tagId, arr] of ringsRef.current) {
+      ringsRef.current.set(tagId, arr.filter(e => e.moduleTs >= trimThreshold));
     }
   }, [trimThreshold]);
 
@@ -390,7 +390,7 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
   // tailMode change while tailing is treated as tailing-exit-then-re-enter.
   // On true→false or tailMode→null: clears both accumulators and raw buffers.
   // On false→true (or bucketSMs/tagIds/tailMode change while true): re-inits
-  // the matching path and replays FIFO.
+  // the matching path and replays ring.
 
   useEffect(() => {
     if (!isTailing || tailMode === null) {
@@ -417,10 +417,10 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
         });
       }
 
-      // Replay FIFO (filtered by current trimThreshold)
+      // Replay ring (filtered by current trimThreshold)
       for (const tagId of tagIds) {
-        const fifo = fifosRef.current.get(tagId) ?? [];
-        const entries = threshold !== null ? fifo.filter(s => s.moduleTs >= threshold) : fifo;
+        const ring = ringsRef.current.get(tagId) ?? [];
+        const entries = threshold !== null ? ring.filter(s => s.moduleTs >= threshold) : ring;
         const state = accumulatorsRef.current.get(tagId)!;
         for (const { moduleTs, value } of entries) {
           processEventIntoAccumulator(state, moduleTs, toNumericValue(value), bucketSMs);
@@ -434,10 +434,10 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
         rawBuffersRef.current.set(tagId, []);
       }
 
-      // Replay FIFO (filtered by current trimThreshold)
+      // Replay ring (filtered by current trimThreshold)
       for (const tagId of tagIds) {
-        const fifo = fifosRef.current.get(tagId) ?? [];
-        const entries = threshold !== null ? fifo.filter(s => s.moduleTs >= threshold) : fifo;
+        const ring = ringsRef.current.get(tagId) ?? [];
+        const entries = threshold !== null ? ring.filter(s => s.moduleTs >= threshold) : ring;
         const buf = rawBuffersRef.current.get(tagId)!;
         for (const entry of entries) {
           buf.push({ moduleTs: entry.moduleTs, value: entry.value });
@@ -452,10 +452,10 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
   // ── commitAndDrain ────────────────────────────────────────────────────────
 
   const commitAndDrain = useCallback((): { start: bigint; end: bigint } => {
-    // Collect FIFO range
+    // Collect ring range
     let fifoMin: number | null = null;
     let fifoMax: number | null = null;
-    for (const arr of fifosRef.current.values()) {
+    for (const arr of ringsRef.current.values()) {
       for (const { moduleTs } of arr) {
         if (fifoMin === null || moduleTs < fifoMin) fifoMin = moduleTs;
         if (fifoMax === null || moduleTs > fifoMax) fifoMax = moduleTs;
@@ -500,11 +500,11 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
 
     // Clear all underlying state (synchronous). React state (tail) will be cleared
     // by the tailing-exit effect that follows the dispatchModeAction call.
-    for (const arr of fifosRef.current.values()) arr.length = 0;
+    for (const arr of ringsRef.current.values()) arr.length = 0;
     accumulatorsRef.current.clear();
     rawBuffersRef.current.clear();
 
-    // Union FIFO, accumulator, and raw ranges
+    // Union ring, accumulator, and raw ranges
     const candidates = (pickStart: boolean): bigint[] => [
       pickStart ? (fifoMin !== null ? BigInt(fifoMin) : null) : (fifoMax !== null ? BigInt(fifoMax) : null),
       pickStart ? accStart : accEnd,
