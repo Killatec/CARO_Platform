@@ -145,12 +145,20 @@ interface HookState {
 
 export interface UseTrendDataResult extends HookState {
   ensureCovered: (startMs: bigint, endMs: bigint) => void;
+  /** Returns the time bounds of the current active tile set, or null if no tiles are active.
+   *  Used by checkAndExtendXCoverage to derive cached extent from tile metadata rather than
+   *  u.data[0], which is unreliable in raw mode when samples don't reach tile edges. */
+  getActiveRange: () => { startMs: bigint; endMs: bigint } | null;
   /** Evicts all cache entries whose tile range overlaps [startMs, endMs), prunes activeTilesRef,
    *  and bumps generationRef to drop in-flight fetches. Does NOT trigger a fetch. */
   evictRange: (startMs: bigint, endMs: bigint) => void;
   /** Drops the entire cache, resets the active set, and bumps generationRef.
-   *  Called on every tailing↔fixed transition so the next fetch always starts clean. */
+   *  Exposed for external use (test cleanup, etc.). Not called by the normal mode-transition path —
+   *  the live-spine path does not write to the LRU cache, so no eviction is needed on transition. */
   evictAll: () => void;
+  /** Forces the main effect to re-run the history fetch path, using an asymmetric
+   *  overfetch (1 LEFT, 0 RIGHT) — used on live → fixed transition. */
+  refetchHistory: () => void;
   swapCounter: number;
   activeTileCount: number;
   /** Wall-clock ms of the most recent viewport-change batch (visible tiles only).
@@ -431,6 +439,7 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
   const [activeTileCount, setActiveTileCount] = useState<number>(0);
   const [lastFetchMs, setLastFetchMs] = useState<number | null>(null);
   const [responseTailTs, setResponseTailTs] = useState<number | null>(null);
+  const [historyRefetchVersion, setHistoryRefetchVersion] = useState<number>(0);
 
   // Tracks the previous viewport span; used to detect preset changes during tailing.
   const prevSpanRef = useRef<bigint | null>(null);
@@ -452,6 +461,9 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
   // True while a spine fetch is in-flight; prevents 4 Hz tick re-fires from
   // launching duplicate requests before the first one settles.
   const spineFetchInFlightRef = useRef<boolean>(false);
+  // Set by refetchHistory() before the version bump; read and consumed by the
+  // history branch to use asymmetric overfetch (1 left, 0 right) on live → fixed.
+  const liveExitRefetchPendingRef = useRef<boolean>(false);
   // Ref-tracked isTailing so the effect can read the current value without
   // being in the dep array — mode flip and viewport cascade arrive in separate
   // renders; putting isTailing in deps caused a stale-viewport fetch on entry.
@@ -485,11 +497,6 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     //   • levelTransitionPendingRef is never set in this branch; it lives
     //     exclusively in the history path below.
     if (isTailingRef.current) {
-      console.log('[DIAG-live] effect fired',
-        'isTailing=', isTailingRef.current,
-        'viewport.start=', currentViewport.start.toString(),
-        'viewport.end=', currentViewport.end.toString(),
-        'tagIdsKey=', tagIdsKey);
       if (!spanChanged && (spineLoadedRef.current || spineFetchInFlightRef.current)) return;
       spineLoadedRef.current = false;
       // Clear any history-mode residue so ensureCovered stays a no-op.
@@ -512,14 +519,6 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
       const batchT0 = performance.now();
       setHookResult(prev => ({ ...prev, isLoading: true }));
 
-      console.log('[DIAG-live] spine fetch start',
-        'viewport.start=', currentViewport.start.toString(),
-        'viewport.end=', currentViewport.end.toString(),
-        'span(ms)=', (currentViewport.end - currentViewport.start).toString(),
-        'spineLoadedRef=', spineLoadedRef.current,
-        'spanChanged=', spanChanged,
-        'prevSpan=', prevSpanRef.current?.toString() ?? 'null');
-
       spineFetchInFlightRef.current = true;
       Promise.all(
         chunkArray(tagIds, 8).map(group =>
@@ -528,13 +527,6 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
       ).then(responses => {
         if (generationRef.current !== generation) return;
         spineFetchInFlightRef.current = false;
-        console.log('[DIAG-live] spine fetch settled',
-          'generation=', generation,
-          'currentGen=', generationRef.current,
-          'response[0].startTime=', responses[0]?.startTime,
-          'response[0].endTime=', responses[0]?.endTime,
-          'response[0].source=', responses[0]?.source,
-          'response[0].n=', (responses[0] as { n?: number } | undefined)?.n);
         const data = assembleLiveSpine(responses, spineTile, tagIds);
         setHookResult({ data, isLoading: false, error: null });
         setSwapCounter(c => c + 1);
@@ -557,10 +549,11 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     spineLoadedRef.current = false;
     spineFetchInFlightRef.current = false;
 
-    console.log('[DIAG-live] history branch entered',
-      'viewport.start=', currentViewport.start.toString(),
-      'viewport.end=', currentViewport.end.toString(),
-      'tagIdsKey=', tagIdsKey);
+    // Live → fixed refetch: skip the right-side prefetch tile (the user is panning
+    // back in time; the future-side tile would be useless here). The flag is reset
+    // after reading so subsequent normal-history fetches use the default overfetch.
+    const isLiveExitRefetch = liveExitRefetchPendingRef.current;
+    liveExitRefetchPendingRef.current = false;
 
     const nowMs = BigInt(Date.now());
     const { visible, prefetch } = tilesForViewport({
@@ -568,14 +561,9 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
       bucketCount,
       visibleTilesPerWindow,
       overfetchPerSide,
+      overfetchRightCount: isLiveExitRefetch ? 0 : undefined,
       nowMs,
     });
-
-    console.log('[DIAG-live] history tiles computed',
-      'visible.length=', visible.length,
-      'prefetch.length=', prefetch.length,
-      'firstVisible=', visible[0] ? `[${visible[0].startTime},${visible[0].endTime}]` : 'none',
-      'lastVisible=', visible[visible.length - 1] ? `[${visible[visible.length - 1]!.startTime},${visible[visible.length - 1]!.endTime}]` : 'none');
 
     if (visible.length === 0) {
       setHookResult({ data: null, isLoading: false, error: null });
@@ -739,11 +727,9 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     return () => {
       finalizeRef.current = null;
     };
-  }, [tagIdsKey, viewportStart, viewportEnd, bucketCount, visibleTilesPerWindow, overfetchPerSide, cache]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [tagIdsKey, viewportStart, viewportEnd, bucketCount, visibleTilesPerWindow, overfetchPerSide, cache, historyRefetchVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const ensureCovered = useCallback((startMs: bigint, endMs: bigint) => {
-    // Block during zoom-level transition; pan visually works but no tile fetches
-    // fire until performSwap completes and the new active set is in place.
     if (levelTransitionPendingRef.current) return;
     if (tagIds.length === 0) return;
     const active = activeTilesRef.current;
@@ -880,5 +866,19 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     spineFetchInFlightRef.current = false;
   }, [cache]);
 
-  return { ...hookResult, ensureCovered, evictRange, evictAll, swapCounter, activeTileCount, lastFetchMs, responseTailTs };
+  const refetchHistory = useCallback(() => {
+    liveExitRefetchPendingRef.current = true;
+    setHistoryRefetchVersion(v => v + 1);
+  }, []);
+
+  const getActiveRange = useCallback((): { startMs: bigint; endMs: bigint } | null => {
+    const active = activeTilesRef.current;
+    if (active.length === 0) return null;
+    return {
+      startMs: active[0]!.startTime,
+      endMs: active[active.length - 1]!.endTime,
+    };
+  }, []);
+
+  return { ...hookResult, ensureCovered, getActiveRange, evictRange, evictAll, refetchHistory, swapCounter, activeTileCount, lastFetchMs, responseTailTs };
 }

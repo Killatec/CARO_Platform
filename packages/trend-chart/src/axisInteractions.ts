@@ -140,14 +140,20 @@ export function zoomXScale(
 
 // Shared post-setScale threshold check — used by both X-pan and X-wheel handlers.
 // Fires ensureCovered when the visible X range crosses 50% into the cached extent's edge.
-export function checkAndExtendXCoverage(u: uPlot, ensureCovered?: (startMs: bigint, endMs: bigint) => void): void {
-  const xs = u.data[0];
+// cachedStart/cachedEnd are derived from getActiveRange (tile metadata) rather than u.data[0],
+// because raw-mode responses only contain actual sample timestamps which may not reach tile edges.
+export function checkAndExtendXCoverage(
+  u: uPlot,
+  ensureCovered?: (startMs: bigint, endMs: bigint) => void,
+  getActiveRange?: () => { startMs: bigint; endMs: bigint } | null,
+): void {
+  if (!ensureCovered || !getActiveRange) return;
   const xScale = u.scales['x'];
-  if (!xs || xs.length === 0 || !xScale || !ensureCovered) return;
-  const cachedStartMs = BigInt(Math.round((xs[0] as number) * 1000));
-  const cachedEndMs = BigInt(Math.round((xs[xs.length - 1] as number) * 1000));
+  if (!xScale) return;
+  const range = getActiveRange();
+  if (!range) return;
   const visMinMs = BigInt(Math.round((xScale.min ?? 0) * 1000));
   const visMaxMs = BigInt(Math.round((xScale.max ?? 1) * 1000));
-  const need = panThresholdCheck(visMinMs, visMaxMs, cachedStartMs, cachedEndMs);
+  const need = panThresholdCheck(visMinMs, visMaxMs, range.startMs, range.endMs);
   if (need) ensureCovered(need.startMs, need.endMs);
 }

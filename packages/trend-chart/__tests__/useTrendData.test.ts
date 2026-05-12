@@ -1428,13 +1428,15 @@ describe('useTrendData — isTailing skip guard', () => {
     await waitFor(() => expect(mockFetchTile).toHaveBeenCalled());
     const callsAfterHistory = mockFetchTile.mock.calls.length;
 
-    // Enter tailing mode → spine fetch fires (bypasses cache, one tile).
-    rerender({ viewport: defaultViewport, isTailing: true });
+    // Enter tailing mode with a new viewport (Go Live always changes nowMs → new viewport).
+    // isTailing is no longer in the effect dep array; only the viewport change triggers a re-run.
+    const liveViewport: Viewport = { start: ONE_HOUR * 10n, end: ONE_HOUR * 11n };
+    rerender({ viewport: liveViewport, isTailing: true });
     await waitFor(() => expect(mockFetchTile.mock.calls.length).toBeGreaterThan(callsAfterHistory));
     const callsAfterSpine = mockFetchTile.mock.calls.length;
 
     // Tick viewport forward keeping the same span → spineLoadedRef=true, skip guard fires.
-    const tickedViewport: Viewport = { start: ONE_HOUR, end: ONE_HOUR * 2n };
+    const tickedViewport: Viewport = { start: ONE_HOUR * 10n + 1000n, end: ONE_HOUR * 11n + 1000n };
     rerender({ viewport: tickedViewport, isTailing: true });
 
     await act(async () => {});
@@ -1529,5 +1531,92 @@ describe('useTrendData — isTailing skip guard', () => {
     // Spine is already loaded and span unchanged — no additional fetch.
     await act(async () => {});
     expect(mockFetchTile.mock.calls.length).toBe(callsAfterSpine);
+  });
+
+  it('in-flight guard: second effect run while spine fetch in-flight fires no duplicate fetch', async () => {
+    // Stall the spine fetch so spineFetchInFlightRef stays true.
+    const resolvers: Array<(v: TileApiResponse) => void> = [];
+    mockFetchTile.mockImplementation(() => new Promise<TileApiResponse>(r => resolvers.push(r)));
+
+    const { rerender } = renderHook(
+      ({ viewport }: { viewport: Viewport }) =>
+        useTrendData({ viewport, tagIds: [1], isTailing: true }),
+      { initialProps: { viewport: defaultViewport } },
+    );
+
+    // Wait for the first effect to fire and start the in-flight fetch.
+    await waitFor(() => expect(mockFetchTile).toHaveBeenCalledTimes(1));
+
+    // Translate the viewport (same span, different start/end) → effect re-fires.
+    // spanChanged=false + spineFetchInFlightRef=true → skip guard blocks the second fetch.
+    rerender({ viewport: { start: 1000n, end: ONE_HOUR + 1000n } });
+    await act(async () => {});
+
+    // Only the original spine fetch was initiated — no duplicate.
+    expect(mockFetchTile).toHaveBeenCalledTimes(1);
+
+    // Clean up: resolve the pending fetch so no hanging promises remain.
+    act(() => { for (const r of resolvers) r(makeAggResponse([1])); });
+  });
+});
+
+// ── refetchHistory ─────────────────────────────────────────────────────────────
+
+describe('useTrendData — refetchHistory', () => {
+  it('forces a history fetch with 1 left prefetch and 0 right prefetch tiles', async () => {
+    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
+
+    // Start in tailing mode so spineLoadedRef is set, then switch to fixed
+    // to simulate the live → fixed transition. refetchHistory() is called
+    // on the fixed-mode side to trigger the asymmetric history fetch.
+    const { result, rerender } = renderHook(
+      ({ viewport, isTailing }: { viewport: Viewport; isTailing: boolean }) =>
+        useTrendData({ viewport, tagIds: [1], isTailing }),
+      { initialProps: { viewport: defaultViewport, isTailing: false } },
+    );
+
+    // Let history mode settle first.
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    // Enter live mode with a new viewport (Go Live produces a new modeViewport).
+    const liveViewport: Viewport = { start: ONE_HOUR * 10n, end: ONE_HOUR * 11n };
+    rerender({ viewport: liveViewport, isTailing: true });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    // Simulate live → fixed transition: switch to fixed mode at the live viewport.
+    rerender({ viewport: liveViewport, isTailing: false });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    const callsBeforeRefetch = mockFetchTile.mock.calls.length;
+
+    // Call refetchHistory() — same viewport, no dep change, but version bump forces effect.
+    act(() => { result.current.refetchHistory(); });
+
+    await waitFor(() => expect(mockFetchTile.mock.calls.length).toBeGreaterThan(callsBeforeRefetch));
+
+    // Collect the new calls from the refetch.
+    const newCalls = mockFetchTile.mock.calls.slice(callsBeforeRefetch);
+
+    // With visibleTilesPerWindow=2 and overfetchPerSide=1 (but rightCount=0):
+    // visible = 2 tiles, prefetch = 1 left tile. Total = 3 tile fetches.
+    expect(newCalls.length).toBe(3);
+
+    // Verify the 1 left-prefetch tile ends at firstVisibleStart (i.e. it's left of visible).
+    const tileSpan = (liveViewport.end - liveViewport.start) / 2n; // visibleTilesPerWindow=2
+    // All tiles returned by tilesForViewport use endTime = startTime + tileSpan.
+    // The left prefetch tile has the smallest startTime of the batch.
+    const starts = newCalls.map(([p]) => (p as Parameters<typeof fetchTile>[0]).startTime);
+    const minStart = starts.reduce((a, b) => (a < b ? a : b));
+    const maxStart = starts.reduce((a, b) => (a > b ? a : b));
+    // Left prefetch is exactly one tileSpan before the first visible tile.
+    // First visible start = lastVisibleEnd - 2*tileSpan; leftPrefetch start = firstVisible - tileSpan.
+    // Equivalently: maxStart - minStart should be exactly 2*tileSpan (covering 3 tiles).
+    expect(maxStart - minStart).toBe(tileSpan * 2n);
+
+    // No right-side prefetch: no call should have startTime >= lastVisibleEnd.
+    // lastVisibleEnd = minStart + 3*tileSpan.
+    const lastVisibleEnd = minStart + tileSpan * 3n;
+    for (const [p] of newCalls) {
+      expect((p as Parameters<typeof fetchTile>[0]).startTime).toBeLessThan(lastVisibleEnd);
+    }
   });
 });
