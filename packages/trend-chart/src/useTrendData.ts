@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { tilesForViewport, TREND_VIEWER_DEFAULTS } from './level.js';
+import { tilesForViewport, TREND_VIEWER_DEFAULTS, MAX_BUCKET_S } from './level.js';
 import { makeTileCacheKey } from './tileCache.js';
 import { TileCache } from './tileCache.js';
 import { fetchTile } from './api.js';
@@ -493,6 +493,18 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     const currentSpan = currentViewport.end - currentViewport.start;
     const spanChanged = prevSpanRef.current !== null && prevSpanRef.current !== currentSpan;
     prevSpanRef.current = currentSpan;
+
+    // Proactive bucketS guard: skip all fetches when the viewport span would
+    // derive a bucketS above the server's cap. Prevents 400 spam in the network
+    // tab and server log before the reducer clamp gets a chance to fire.
+    const spanMs = Number(currentSpan);
+    const perTileSpanMs = spanMs / visibleTilesPerWindow;
+    const derivedBucketS = perTileSpanMs / (bucketCount * 1000);
+    if (derivedBucketS > MAX_BUCKET_S) {
+      setRangeExceeded(true);
+      return;
+    }
+    setRangeExceeded(false);
 
     // ── Live-spine path: bypass cache entirely ────────────────────────────────
     // One tile spanning the full viewport at history-mode resolution

@@ -293,8 +293,21 @@ export function TrendChartContainer({
 
   if (rangeExceeded) {
     return (
-      <div style={LOADING_HINT}>
-        Range too wide. Zoom in or pick a smaller preset.
+      <div style={{ display: 'flex', flexDirection: 'column' }}>
+        <div style={{
+          height,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: '#9ca3af',
+          fontSize: 13,
+          fontFamily: 'monospace',
+          border: '1px solid #e5e7eb',
+          borderRadius: 4,
+        }}>
+          Range too wide. Zoom in or pick a smaller preset.
+        </div>
+        {footerJsx}
       </div>
     );
   }

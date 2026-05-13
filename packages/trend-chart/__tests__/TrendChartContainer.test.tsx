@@ -244,10 +244,13 @@ describe('TrendChartContainer', () => {
     expect(screen.getByText('No tags selected.')).toBeTruthy();
   });
 
-  it('rangeExceeded=true renders "Range too wide" message instead of chart or loading', () => {
+  it('rangeExceeded=true renders "Range too wide" message AND keeps footer controls visible', () => {
     mockUseTrendData.mockReturnValue(makeResult([1], { rangeExceeded: true }));
     renderContainer([1]);
     expect(screen.getByText('Range too wide. Zoom in or pick a smaller preset.')).toBeTruthy();
+    // Footer must stay visible so the operator can click a preset or Live to recover.
+    expect(screen.getByText('1m')).toBeTruthy();
+    expect(screen.getByText('● Live')).toBeTruthy();
   });
 
   // ── EndPicker integration ─────────────────────────────────────────────────

@@ -2,6 +2,7 @@ import { renderHook, waitFor, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useTrendData, pruneAndAdd, assembleLiveSpine } from '../src/useTrendData.js';
 import { fetchTile } from '../src/api.js';
+import { MAX_BUCKET_S, TREND_VIEWER_DEFAULTS } from '../src/level.js';
 import type { Viewport, Tile } from '../src/types.js';
 import type { TileApiResponse } from '../src/api.js';
 
@@ -1528,5 +1529,42 @@ describe('useTrendData — rangeExceeded', () => {
 
     await waitFor(() => expect(result.current.rangeExceeded).toBe(false));
     expect(result.current.data).not.toBeNull();
+  });
+
+  it('over-range viewport: proactive skip fires no fetch and sets rangeExceeded=true', async () => {
+    // derivedBucketS = spanMs / (visibleTilesPerWindow * bucketCount * 1000)
+    // With defaults (vtpw=2, bc=500): over-range when span > MAX_BUCKET_S * 1_000_000 ms.
+    const { visibleTilesPerWindow, bucketCount } = TREND_VIEWER_DEFAULTS;
+    const OVER_RANGE_SPAN = BigInt(MAX_BUCKET_S + 1) * BigInt(visibleTilesPerWindow) * BigInt(bucketCount) * 1000n;
+    const overViewport: Viewport = { start: 0n, end: OVER_RANGE_SPAN };
+
+    const { result } = renderHook(() =>
+      useTrendData({ viewport: overViewport, tagIds: [1] }),
+    );
+
+    await waitFor(() => expect(result.current.rangeExceeded).toBe(true));
+    // No network call must have fired — the proactive guard returned before constructing tiles.
+    expect(mockFetchTile).not.toHaveBeenCalled();
+  });
+
+  it('viewport change from over-range to valid clears rangeExceeded and fires fetch', async () => {
+    const { visibleTilesPerWindow, bucketCount } = TREND_VIEWER_DEFAULTS;
+    const OVER_RANGE_SPAN = BigInt(MAX_BUCKET_S + 1) * BigInt(visibleTilesPerWindow) * BigInt(bucketCount) * 1000n;
+    const overViewport: Viewport = { start: 0n, end: OVER_RANGE_SPAN };
+
+    const { result, rerender } = renderHook(
+      (props: { viewport: Viewport }) => useTrendData({ ...props, tagIds: [1] }),
+      { initialProps: { viewport: overViewport } },
+    );
+
+    await waitFor(() => expect(result.current.rangeExceeded).toBe(true));
+    expect(mockFetchTile).not.toHaveBeenCalled();
+
+    // Switch to a valid viewport — proactive guard passes, fetch fires, flag clears.
+    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
+    rerender({ viewport: defaultViewport });
+
+    await waitFor(() => expect(result.current.rangeExceeded).toBe(false));
+    expect(mockFetchTile).toHaveBeenCalled();
   });
 });
