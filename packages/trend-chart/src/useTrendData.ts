@@ -415,17 +415,6 @@ export function pruneAndAdd(activeSet: Tile[], newTile: Tile, maxSize = MAX_ACTI
   return sorted.slice(sorted.length - maxSize);
 }
 
-function isViewportOverRange(
-  viewport: { start: bigint; end: bigint },
-  visibleTilesPerWindow: number,
-  bucketCount: number,
-): boolean {
-  const spanMs = Number(viewport.end - viewport.start);
-  const perTileSpanMs = spanMs / visibleTilesPerWindow;
-  const bucketS = perTileSpanMs / (bucketCount * 1000);
-  return bucketS > MAX_BUCKET_S;
-}
-
 export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
   const {
     viewport,
@@ -492,6 +481,25 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
   const viewportStart = viewport.start;
   const viewportEnd = viewport.end;
 
+  // Single chokepoint for all tile fetches. Checks per-tile bucketS against the server cap
+  // before calling fetchTile — any new fetch site added later MUST use this wrapper.
+  const gatedFetchTile = useCallback(
+    (args: Parameters<typeof fetchTile>[0]) => {
+      const tileSpanMs = Number(args.endTime - args.startTime);
+      const bucketS    = tileSpanMs / (args.bucketCount * 1000);
+      if (bucketS > MAX_BUCKET_S) {
+        setRangeExceeded(true);
+        return Promise.reject(
+          Object.assign(new Error('viewport over range — fetch skipped client-side'),
+                        { code: 'CLIENT_OVER_RANGE' }),
+        );
+      }
+      setRangeExceeded(false);
+      return fetchTile(args);
+    },
+    [], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (tagIds.length === 0) {
@@ -504,15 +512,6 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     const currentSpan = currentViewport.end - currentViewport.start;
     const spanChanged = prevSpanRef.current !== null && prevSpanRef.current !== currentSpan;
     prevSpanRef.current = currentSpan;
-
-    // Proactive bucketS guard: skip all fetches when the viewport span would
-    // derive a bucketS above the server's cap. Prevents 400 spam in the network
-    // tab and server log before the reducer clamp gets a chance to fire.
-    if (isViewportOverRange(currentViewport, visibleTilesPerWindow, bucketCount)) {
-      setRangeExceeded(true);
-      return;
-    }
-    setRangeExceeded(false);
 
     // ── Live-spine path: bypass cache entirely ────────────────────────────────
     // One tile spanning the full viewport at history-mode resolution
@@ -548,7 +547,7 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
       spineFetchInFlightRef.current = true;
       Promise.all(
         chunkArray(tagIds, 8).map(group =>
-          fetchTile({ tagIds: group, startTime: spineTile.startTime, endTime: spineTile.endTime, bucketCount: spineTile.bucketCount }),
+          gatedFetchTile({ tagIds: group, startTime: spineTile.startTime, endTime: spineTile.endTime, bucketCount: spineTile.bucketCount }),
         ),
       ).then(responses => {
         if (generationRef.current !== generation) return;
@@ -560,9 +559,10 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
         const maxTailTs = responses.reduce((m, r) => Math.max(m, r.responseTailTs), 0);
         setResponseTailTs(maxTailTs > 0 ? maxTailTs : null);
         spineLoadedRef.current = true;
-      }).catch(e => {
+      }).catch((e: Error & { code?: string }) => {
         if (generationRef.current !== generation) return;
         spineFetchInFlightRef.current = false;
+        if (e.code === 'CLIENT_OVER_RANGE') return;
         console.error('[useTrendData] live spine fetch failed', { tagIds, error: e });
         setHookResult({ data: null, isLoading: false, error: e instanceof Error ? e.message : String(e) });
       });
@@ -685,7 +685,7 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
 
       const groups = chunkArray(missing, 8);
       const promises = groups.map(group =>
-        fetchTile({ tagIds: group, startTime: tile.startTime, endTime: tile.endTime, bucketCount: tile.bucketCount }).then(
+        gatedFetchTile({ tagIds: group, startTime: tile.startTime, endTime: tile.endTime, bucketCount: tile.bucketCount }).then(
           res => {
             if (generationRef.current !== generation) return;
             storeTileResult(tile, res, cache);
@@ -698,9 +698,14 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
           if (generationRef.current !== generation) return;
           onVisibleTileSettled();
         })
-        .catch(e => {
+        .catch((e: Error & { code?: string }) => {
           if (generationRef.current !== generation) return;
-          if ((e as { code?: string }).code === 'INVALID_BUCKET_S') {
+          if (e.code === 'CLIENT_OVER_RANGE') {
+            batchHasRangeExceeded = true; // prevents performSwap from clearing rangeExceeded
+            onVisibleTileSettled();
+            return;
+          }
+          if (e.code === 'INVALID_BUCKET_S') {
             batchHasRangeExceeded = true;
             setRangeExceeded(true);
           }
@@ -724,7 +729,7 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
 
       const groups = chunkArray(missing, 8);
       const promises = groups.map(group =>
-        fetchTile({ tagIds: group, startTime: tile.startTime, endTime: tile.endTime, bucketCount: tile.bucketCount }).then(
+        gatedFetchTile({ tagIds: group, startTime: tile.startTime, endTime: tile.endTime, bucketCount: tile.bucketCount }).then(
           res => {
             if (generationRef.current !== generation) return;
             storeTileResult(tile, res, cache);
@@ -739,8 +744,9 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
           if (levelTransitionPendingRef.current) return;
           finalize();
         })
-        .catch(e => {
+        .catch((e: Error & { code?: string }) => {
           if (generationRef.current !== generation) return;
+          if (e.code === 'CLIENT_OVER_RANGE') return;
           console.warn('[useTrendData] prefetch fetch failed', {
             tagIds: missing,
             startTime: tile.startTime,
@@ -764,10 +770,6 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
   const ensureCovered = useCallback((startMs: bigint, endMs: bigint) => {
     if (levelTransitionPendingRef.current) return;
     if (tagIds.length === 0) return;
-    if (isViewportOverRange({ start: viewportStart, end: viewportEnd }, visibleTilesPerWindow, bucketCount)) {
-      setRangeExceeded(true);
-      return;
-    }
     const active = activeTilesRef.current;
     if (active.length === 0) return;
 
@@ -831,7 +833,7 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
 
       const groups = chunkArray(missing, 8);
       const promises = groups.map(group =>
-        fetchTile({ tagIds: group, startTime: tile.startTime, endTime: tile.endTime, bucketCount: tile.bucketCount }).then(
+        gatedFetchTile({ tagIds: group, startTime: tile.startTime, endTime: tile.endTime, bucketCount: tile.bucketCount }).then(
           res => {
             if (generationRef.current !== gen) return;
             storeTileResult(tile, res, cache);
@@ -849,8 +851,9 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
           setResponseTailTs(computeResponseTailTs(activeTilesRef.current, tagIds, cache, bucketCount));
           finalizeRef.current?.();
         })
-        .catch(e => {
+        .catch((e: Error & { code?: string }) => {
           inFlightTilesRef.current.delete(tileKey);
+          if (e.code === 'CLIENT_OVER_RANGE') return;
           setLastFetchMs(Math.round(performance.now() - tileT0));
           if (generationRef.current !== gen) return;
           console.warn('[useTrendData] dynamic fetch failed', { tile, error: e });

@@ -1587,6 +1587,19 @@ describe('useTrendData — rangeExceeded', () => {
     expect(result.current.rangeExceeded).toBe(true);
   });
 
+  it('gatedFetchTile wrapper: over-range live-spine tile never calls fetchTile and sets rangeExceeded=true', async () => {
+    const { visibleTilesPerWindow, bucketCount } = TREND_VIEWER_DEFAULTS;
+    const OVER_RANGE_SPAN = BigInt(MAX_BUCKET_S + 1) * BigInt(visibleTilesPerWindow) * BigInt(bucketCount) * 1000n;
+    const overViewport: Viewport = { start: 0n, end: OVER_RANGE_SPAN };
+
+    const { result } = renderHook(() =>
+      useTrendData({ viewport: overViewport, tagIds: [1], isTailing: true }),
+    );
+
+    await waitFor(() => expect(result.current.rangeExceeded).toBe(true));
+    expect(mockFetchTile).not.toHaveBeenCalled();
+  });
+
   it('ensureCovered: valid-then-over-range transition fires no dynamic fetch during over-range state', async () => {
     const { visibleTilesPerWindow, bucketCount } = TREND_VIEWER_DEFAULTS;
     const OVER_RANGE_SPAN = BigInt(MAX_BUCKET_S + 1) * BigInt(visibleTilesPerWindow) * BigInt(bucketCount) * 1000n;
