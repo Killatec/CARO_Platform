@@ -13,6 +13,8 @@
 
 ### Trend Viewer — Deferred / Possible Future Improvements
 
+- [ ] **TrendSnapshotScheduler heartbeat-vs-null:** When a module has not received any MQTT packet within the snapshot interval, write a null sentinel rather than the last-known value. Surfaces device-silent periods as gaps in CAG rendering instead of LOCF flat lines. Deferred until a user-visible complaint is observed. See `hmi_trend_viewer_handoff.md` §11.D for context.
+
 These three items were specified for Phase A (§17.1.1 steps 5 and 13) but deferred by explicit decision (2026-04-29). The Trend Viewer API and its test coverage are complete; these are observability, operational sizing, and one-shot validation — not contract-level work.
 
 - [ ] **Pool sizing optimization (§15):** Bump `@caro/db` Timescale pool from `max = 10` to 20–30 per spec §15. Recommended before multi-operator production rollout. One-line config change in `packages/db/timescale/pool.ts`. Empirical sizing test recommended (`Docs/DB_Config_Usage_And_Perf.md` §10.5) before settling on the exact value. Deferred 2026-04-29.

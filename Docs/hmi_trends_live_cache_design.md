@@ -4,15 +4,36 @@
 **Author:** Live-mode refactor session, 2026-05-12
 **Target reader:** Third-party reviewer who may not know the codebase deeply. Some sections reference the existing specs (`hmi_trend_viewer_spec.md` §10) for the canonical detail.
 
-**Implementation status (2026-05-12):** The ring-survives-transition
-architecture proposed in §5.3-§5.4 was SUPERSEDED by a simpler
-eviction-on-live-entry approach during Phase 2 manual testing. Gap A
-(§4.1) was observed to be negligible in practice; Gap B (§4.2) is the
-dominant visible issue. The shipped implementation evicts the entire
-tile cache on Live entry, forcing a fresh fetch on every Live exit.
-Phase 3-4 as originally specified are not implemented. If Gap A
-manifests in production usage, the ring-survives architecture in
-§5.3-§5.4 remains a viable follow-up.
+## Implementation Outcome (as of 2026-05-13)
+
+**What shipped:**
+
+- **Phase 1 (commit 650b2b5):** `fifosRef` renamed to `ringsRef`; `TREND_FIFO_CAPACITY` renamed to `TREND_RING_CAPACITY` (initial value 100, later reduced to 20); `closeBucketsFromRing` extracted as a pure helper; `hadNullsAtFetch` added to `CachedEntry`.
+- **Phase 2 (commit 021d6a1):** `mergeTrendData` rewritten to the unified live-wins-on-coverage rule; `isTailing` parameter dropped from the signature; cross-bucketSMs re-bucketing via `closeBucketsFromRing`.
+- **Gap B fix (commit f380cbb):** Instead of the ring-survives lifecycle proposed in §5.3-§5.4, `dispatchModeAction` calls `evictAll()` on every fixed→tailing transition. This clears the LRU cache on each Live entry, ensuring fresh tile fetches on each live exit. Simpler than Phases 3-4 and fully addresses Gap B.
+- **Server-side future-bucket nulling (commit ca49c58):** `getTrendTile` gained an optional `nowMs` 5th parameter; buckets with `startMs > nowMs` are nulled post-assembly on the aggregate path. The route passes `responseTailTs` as `nowMs`.
+- **Cleanup (commits 9ed9890, ca49c58 context):** `hadNullsAtFetch` removed (Phase 3 invalidation never built); `rawEntries` removed from `AggregateTail`; cross-bucketSMs re-bucket branch replaced with `return cached` (§5.6 edge case accepted as one-frame live-overlay loss); `TREND_RING_CAPACITY` reduced 100→20; `Tooltip.tsx` deleted; `closeBucketsFromRing.ts` deleted (no callers after §5.6 removal); `commitAndDrain` simplified to return `void`; unmount cleanup useEffect removed; `seedFromCachedTile` restricted to aggregate-only path.
+
+**What was abandoned:**
+
+- §5.3-§5.4 ring-survives-transition lifecycle (ring preserved across mode changes, re-entry replays stale ring entries).
+- §5.4 cache invalidation on ring eviction (`invalidateOverlapping`, `hadNullsAtFetch` filter).
+- §7.1 Phases 3-4 (the ring-lifecycle and invalidation implementation phases).
+- The `hadNullsAtFetch` per-entry flag (stored in Phase 1, consumed in Phase 3, removed in cleanup).
+
+**Why eviction-on-live-entry won:**
+
+Gap B is the dominant user-visible issue; Gap A was observed to be small and transient in manual testing. `evictAll()` on Live entry eliminates Gap B with ~5 lines of code vs. ~200 lines for the ring-survives architecture. The trade-off (every Live exit pays a full tile refetch) is acceptable because the user is returning from a live session with fresh WS data and likely wants fresh history too.
+
+**When ring-survives might still be relevant:**
+
+If Gap A becomes a real user complaint (operators frequently toggle live and notice the brief null band at the right edge post-transition), the §5.3-§5.4 architecture remains a viable follow-up. The ring infrastructure still exists (ringsRef, TREND_RING_CAPACITY, ring trim logic); the abandoned pieces are the lifecycle hook that kept the ring alive across transitions and the cache invalidation wiring. Estimate: ~200 lines to revive Phases 3-4.
+
+**Separate concern — past-LOCF on dormant signals:**
+
+The flat-line symptom on devices that went silent (TrendSnapshotScheduler writing LKV instead of null) is outside this design doc's scope. Tracked in `hmi_trend_viewer_handoff.md` §11.D and `platform_todo.md`. Fix path: write null sentinel on module silence detection.
+
+The sections below (§5.3-§5.4, §7.1 Phases 3-4, §8) are preserved as design history — they document a viable alternative that was not chosen, not an abandoned mistake.
 
 ---
 
