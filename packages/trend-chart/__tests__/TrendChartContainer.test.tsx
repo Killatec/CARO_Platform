@@ -542,8 +542,9 @@ describe('TrendChartContainer', () => {
       expect(mockResult.evictRange).not.toHaveBeenCalled();
     });
 
-    it('Live click in fixed → mode returns to tailing, no evictAll, no commitAndDrain', () => {
-      // Live-spine path never touches cache; no eviction needed on fixed→tailing.
+    it('Live click in fixed → evictAll called once to clear stale cache; mode returns to tailing', () => {
+      // evictAll on fixed→tailing ensures every subsequent live exit fetches
+      // fresh tiles, preventing Gap B (stale CAG-lag nulls accumulating in cache).
       renderContainer([1]);
 
       // Pan to enter fixed mode.
@@ -560,10 +561,10 @@ describe('TrendChartContainer', () => {
       mockResult.refetchHistory.mockClear();
       liveHoisted.commitAndDrain.mockClear();
 
-      // Click Live: fixed → tailing → no evictAll, no commitAndDrain, no refetchHistory.
+      // Click Live: fixed → tailing → evictAll fires; no commitAndDrain; no refetchHistory.
       fireEvent.click(screen.getByText('Go Live'));
 
-      expect(mockResult.evictAll).not.toHaveBeenCalled();
+      expect(mockResult.evictAll).toHaveBeenCalledOnce();
       expect(mockResult.refetchHistory).not.toHaveBeenCalled();
       expect(liveHoisted.commitAndDrain).not.toHaveBeenCalled();
       expect(screen.getByText('● Live')).toBeTruthy();
@@ -605,6 +606,50 @@ describe('TrendChartContainer', () => {
 
       expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
       expect(mockResult.evictRange).toHaveBeenCalledWith(500n, 1000n);
+    });
+
+    // ── evictAll on Live entry (Gap B fix) ───────────────────────────────────
+
+    it('evictAll called exactly once on fixed→tailing (Live button click)', () => {
+      renderContainer([1]);
+
+      // Pan to enter fixed mode.
+      const farPastEnd = 1_700_000_000_000n;
+      const farPastStart = farPastEnd - 3_600_000n;
+      act(() => {
+        capturedOnXPan?.(farPastStart, farPastEnd);
+        vi.runAllTimers();
+      });
+      mockResult.evictAll.mockClear();
+
+      fireEvent.click(screen.getByText('Go Live'));
+      expect(mockResult.evictAll).toHaveBeenCalledOnce();
+    });
+
+    it('evictAll NOT called on tailing→fixed transitions (pan, EndPicker commit)', () => {
+      renderContainer([1]);
+
+      // Pan (tailing→fixed): no evictAll.
+      const farPastEnd = 1_700_000_000_000n;
+      const farPastStart = farPastEnd - 3_600_000n;
+      act(() => {
+        capturedOnXPan?.(farPastStart, farPastEnd);
+        vi.runAllTimers();
+      });
+      expect(mockResult.evictAll).not.toHaveBeenCalled();
+    });
+
+    it('evictAll NOT called on same-mode transitions (preset click while fixed)', () => {
+      renderContainer([1]);
+
+      // Enter fixed mode first.
+      const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: '2020-01-02T00:00:00' } });
+      mockResult.evictAll.mockClear();
+
+      // Preset click stays within fixed mode — no evictAll.
+      fireEvent.click(screen.getByText('4h'));
+      expect(mockResult.evictAll).not.toHaveBeenCalled();
     });
 
     it('unmount in fixed → no commitAndDrain', () => {

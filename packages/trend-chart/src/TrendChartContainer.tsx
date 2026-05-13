@@ -170,10 +170,18 @@ export function TrendChartContainer({
     const cur  = modeStateRef.current;
     const next = trendModeReducer(cur, action);
 
+    // Fixed → tailing: evict all tiles. Forces every subsequent live exit to
+    // refetch fresh data, eliminating Gap B (stale CAG-lag nulls accumulating
+    // in the tile cache across sessions). Trade-off: every live exit pays a full
+    // tile re-fetch (~3 tiles); negligible at expected usage rates.
+    if (cur.mode === 'fixed' && next.mode === 'tailing') {
+      trendDataRef.current.evictAll();
+    }
+
     // Tailing → fixed: drain the live buffer so accumulated ring/accumulator
     // coverage is committed. No cache eviction needed — live mode never writes
     // to the LRU cache, so there is nothing to evict. History fetches start
-    // fresh against any stale tiles that remain (LRU displaces them naturally).
+    // fresh against the now-clean cache.
     if (cur.mode === 'tailing' && next.mode === 'fixed') {
       liveSubRef.current?.commitAndDrain();
       // Force dataViewport to match the post-pan modeViewport so the main
@@ -188,10 +196,6 @@ export function TrendChartContainer({
       // viewport bounds, so no state change would occur from syncDataViewport alone).
       trendDataRef.current.refetchHistory();
     }
-
-    // Fixed → tailing: the live-spine path never touches the cache, so existing
-    // history tiles can stay. The spine fetch overwrites hookResult.data directly
-    // on the first live tick.
 
     dispatch(action);
   }, [dispatch]);

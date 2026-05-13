@@ -4,6 +4,16 @@
 **Author:** Live-mode refactor session, 2026-05-12
 **Target reader:** Third-party reviewer who may not know the codebase deeply. Some sections reference the existing specs (`hmi_trend_viewer_spec.md` §10) for the canonical detail.
 
+**Implementation status (2026-05-12):** The ring-survives-transition
+architecture proposed in §5.3-§5.4 was SUPERSEDED by a simpler
+eviction-on-live-entry approach during Phase 2 manual testing. Gap A
+(§4.1) was observed to be negligible in practice; Gap B (§4.2) is the
+dominant visible issue. The shipped implementation evicts the entire
+tile cache on Live entry, forcing a fresh fetch on every Live exit.
+Phase 3-4 as originally specified are not implemented. If Gap A
+manifests in production usage, the ring-survives architecture in
+§5.3-§5.4 remains a viable follow-up.
+
 ---
 
 ## 1. Purpose
