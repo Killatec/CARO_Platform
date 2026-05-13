@@ -33,7 +33,7 @@ vi.mock('../src/useLiveSubscription.js', () => ({
       commitAndDrain: liveHoisted.commitAndDrain,
     };
   }),
-  TREND_RING_CAPACITY: 500,
+  TREND_RING_CAPACITY: 20,
 }));
 
 // ── TrendChart mock ───────────────────────────────────────────────────────────

@@ -1,6 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
 import { mergeTrendData } from '../src/mergeTrendData.js';
-import { TS_BUCKET_ORIGIN_MS } from '../src/level.js';
 import type { AggregateSeriesData, RawSeriesData } from '../src/types.js';
 import type { AggregateTail, RawTail } from '../src/useLiveSubscription.js';
 
@@ -44,15 +43,10 @@ function makeRaw(
   return { type: 'raw', source: 'raw', startTime, endTime, series };
 }
 
-/**
- * Build an AggregateTail. rawEntries defaults to an empty Map — only needed for
- * cross-bucketSMs tests.
- */
 function makeAggTail(
   startMs: bigint,
   tagValues: Map<number, (number | null)[]>,
   bucketSMs = BigInt(BUCKET_SMS),
-  rawEntries: Map<number, { moduleTs: bigint; value: number | null }[]> = new Map(),
 ): AggregateTail {
   const perTag = new Map<number, { value: (number | null)[]; min: (number | null)[]; max: (number | null)[] }>();
   for (const [tagId, vals] of tagValues) {
@@ -62,7 +56,7 @@ function makeAggTail(
       max: vals.map(v => v !== null ? v + 0.1 : null),
     });
   }
-  return { mode: 'aggregate', startMs, bucketSMs, perTag, rawEntries };
+  return { mode: 'aggregate', startMs, bucketSMs, perTag };
 }
 
 function makeRawTail(
@@ -345,43 +339,11 @@ describe('mergeTrendData — outside live coverage: cached wins', () => {
   });
 });
 
-describe('mergeTrendData — cross-bucketSMs re-bucketing', () => {
-  it('live re-bucketed at cached.bucketSMs when bucketSMs differ', () => {
-    const ORIGIN = TS_BUCKET_ORIGIN_MS;
-
-    // cached: 3 buckets at 1000 ms/bucket starting at ORIGIN
-    const cached = makeAgg(3, new Map([[1, [1, 2, 3]]]), ORIGIN);
-
-    // Raw ring entries that span two 1000ms buckets.
-    // Entry at ORIGIN+1100n triggers close of bucket at ORIGIN (contains 100n and 300n entries).
-    // Entry at ORIGIN+2100n triggers close of bucket at ORIGIN+1000n.
-    const rawEntries: Map<number, { moduleTs: bigint; value: number | null }[]> = new Map([
-      [1, [
-        { moduleTs: ORIGIN + 100n, value: 5 },
-        { moduleTs: ORIGIN + 300n, value: 7 },
-        { moduleTs: ORIGIN + 1100n, value: 9 },   // closes 1000ms bucket 0 → last=7, min=5, max=7
-        { moduleTs: ORIGIN + 1600n, value: 11 },
-        { moduleTs: ORIGIN + 2100n, value: 13 },  // closes 1000ms bucket 1 → last=11, min=9, max=11
-      ]],
-    ]);
-
-    // Live tail was accumulated at 250ms buckets (different from cached 1000ms)
-    const liveTail: AggregateTail = {
-      mode: 'aggregate',
-      startMs: ORIGIN,
-      bucketSMs: 250n,
-      perTag: new Map([[1, { value: [100, 200, 300, 400, 500], min: [], max: [] }]]),
-      rawEntries,
-    };
-
-    const result = mergeTrendData(cached, liveTail) as AggregateSeriesData;
-
-    // Re-bucketed at 1000ms: 2 closed buckets (bucket 2 is open, not closed)
-    // liveStartIndex=0, liveEndIndex=2, effectiveCachedN=min(3,2)=2, totalN=2
-    expect(result.n).toBe(2);
-    const s = result.series.get(1)!;
-    expect(s.value).toEqual([7, 11]);   // re-bucketed live values (last of each bucket)
-    expect(s.min).toEqual([5, 9]);
-    expect(s.max).toEqual([7, 11]);
+describe('mergeTrendData — cross-bucketSMs (bucketSMs mismatch)', () => {
+  it('returns cached unchanged when live.bucketSMs !== cached.bucketSMs', () => {
+    const cached = makeAgg(3, new Map([[1, [1, 2, 3]]]));
+    const tail = makeAggTail(0n, new Map([[1, [10, 20]]]), 250n);
+    const result = mergeTrendData(cached, tail);
+    expect(result).toBe(cached);
   });
 });

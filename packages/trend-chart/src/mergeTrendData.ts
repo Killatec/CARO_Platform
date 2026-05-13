@@ -1,6 +1,5 @@
 import type { TrendData, AggregateSeriesData, RawSeriesData } from './types.js';
 import type { LiveTail, AggregateTail, RawTail } from './useLiveSubscription.js';
-import { closeBucketsFromRing } from './closeBucketsFromRing.js';
 
 /**
  * Combines cached tile data with a live tail using the unified coverage rule (§5.2):
@@ -51,44 +50,19 @@ export function mergeTrendData(
 
 // ─── Aggregate merge ──────────────────────────────────────────────────────────
 
-const BIG_END = BigInt(Number.MAX_SAFE_INTEGER);
-
 function mergeAggregate(
   cached: AggregateSeriesData,
   live: AggregateTail,
 ): AggregateSeriesData {
-  // Cross-bucketSMs: re-bucket raw ring entries at cached.bucketSMs.
-  // Occurs when drag-zoom changes the viewport bucketSMs during live mode (§5.6).
-  let effectiveLiveStartMs = live.startMs;
-  let effectiveLivePerTag  = live.perTag;
-
-  if (cached.bucketSMs !== Number(live.bucketSMs)) {
-    const rebucketed = new Map<number, { value: (number | null)[]; min: (number | null)[]; max: (number | null)[] }>();
-    let earliestStart: bigint | null = null;
-
-    const allRawTagIds = new Set([...cached.series.keys(), ...live.rawEntries.keys()]);
-    for (const tagId of allRawTagIds) {
-      const raw = live.rawEntries.get(tagId) ?? [];
-      const closed = closeBucketsFromRing(raw, cached.bucketSMs, 0n, BIG_END);
-      rebucketed.set(tagId, { value: closed.value, min: closed.min, max: closed.max });
-      if (closed.ts.length > 0) {
-        const first = closed.ts[0]!;
-        if (earliestStart === null || first < earliestStart) earliestStart = first;
-      }
-    }
-
-    if (earliestStart === null) return cached; // no closed buckets after re-bucketing
-    effectiveLiveStartMs = earliestStart;
-    effectiveLivePerTag  = rebucketed;
-  }
+  if (cached.bucketSMs !== Number(live.bucketSMs)) return cached;
 
   // Index into cached's bucket array where live coverage begins.
   const liveStartIndex = Number(
-    (effectiveLiveStartMs - cached.startTime) / BigInt(cached.bucketSMs),
+    (live.startMs - cached.startTime) / BigInt(cached.bucketSMs),
   );
 
   let maxLiveLen = 0;
-  for (const liveArrs of effectiveLivePerTag.values()) {
+  for (const liveArrs of live.perTag.values()) {
     if (liveArrs.value.length > maxLiveLen) maxLiveLen = liveArrs.value.length;
   }
   const liveEndIndex = liveStartIndex + maxLiveLen;
@@ -101,7 +75,7 @@ function mergeAggregate(
 
   const totalN = Math.max(effectiveCachedN, liveEndIndex);
 
-  const allTagIds = new Set([...cached.series.keys(), ...effectiveLivePerTag.keys()]);
+  const allTagIds = new Set([...cached.series.keys(), ...live.perTag.keys()]);
 
   const newSeries = new Map<number, {
     value: (number | null)[];
@@ -111,7 +85,7 @@ function mergeAggregate(
 
   for (const tagId of allTagIds) {
     const cachedArrs = cached.series.get(tagId);
-    const liveArrs   = effectiveLivePerTag.get(tagId) ?? { value: [], min: [], max: [] };
+    const liveArrs   = live.perTag.get(tagId) ?? { value: [], min: [], max: [] };
 
     // LOCF seed for gap between effectiveCachedN and liveStartIndex.
     const lastCachedV   = cachedArrs ? (cachedArrs.value[effectiveCachedN - 1] ?? null) : null;

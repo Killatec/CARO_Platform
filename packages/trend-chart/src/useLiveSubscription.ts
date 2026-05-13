@@ -2,7 +2,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useHmiContext } from '@caro/hmi-context';
 import { TS_BUCKET_ORIGIN_MS, floorDiv } from './level.js';
 
-export const TREND_RING_CAPACITY = 100;
+/**
+ * Per-tag bounded buffer for samples arriving during the fetch-in-flight
+ * window. Trimmed by `responseTailTs - 1000ms` on every tile response,
+ * so effective contents are samples newer than the most recent tile's
+ * request entry time. Capacity bounds the pathological case of an
+ * unusually slow fetch (cold CAG query, network blip) at ~5 s of live
+ * history at 4 Hz. The ring's role narrowed when the original
+ * "ring-survives-transition" architecture was abandoned in favor of
+ * eviction-on-live-entry — state-change replay is bounded by the same
+ * fetch window, so a small capacity suffices.
+ */
+export const TREND_RING_CAPACITY = 20;
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -18,12 +29,6 @@ export interface AggregateTail {
     min:   (number | null)[];
     max:   (number | null)[];
   }>;
-  /**
-   * Raw ring entries per tag (moduleTs as bigint, numeric value).
-   * Used by mergeTrendData for cross-bucketSMs re-bucketing when cached.bucketSMs
-   * differs from live.bucketSMs (drag-zoom-during-live edge case — §5.6).
-   */
-  rawEntries: Map<number, { moduleTs: bigint; value: number | null }[]>;
 }
 
 export interface RawTail {
@@ -203,12 +208,10 @@ function processEventIntoAccumulator(
  * Builds an AggregateTail snapshot from current accumulator state.
  * Returns null when no tag has closed any buckets yet.
  * Shares array references with accumulator state — always rebuild after mutations.
- * `rings` is projected into `rawEntries` for cross-bucketSMs re-bucketing in merge.
  */
 function buildAggregateTail(
   accumulators: Map<number, AccumulatorState>,
   bucketSMs: bigint,
-  rings: Map<number, TrendSample[]>,
 ): AggregateTail | null {
   const perTag = new Map<number, { value: (number | null)[]; min: (number | null)[]; max: (number | null)[] }>();
   let earliestStart: bigint | null = null;
@@ -226,12 +229,7 @@ function buildAggregateTail(
   }
   if (earliestStart === null) return null;
 
-  const rawEntries = new Map<number, { moduleTs: bigint; value: number | null }[]>();
-  for (const [tagId, arr] of rings) {
-    rawEntries.set(tagId, arr.map(e => ({ moduleTs: BigInt(e.moduleTs), value: toNumericValue(e.value) })));
-  }
-
-  return { mode: 'aggregate', startMs: earliestStart, bucketSMs, perTag, rawEntries };
+  return { mode: 'aggregate', startMs: earliestStart, bucketSMs, perTag };
 }
 
 /**
@@ -310,7 +308,7 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
     if (tailModeRef.current === 'aggregate') {
       const bSMs = bucketSMsRef.current;
       if (bSMs === null) { setTail(null); return; }
-      setTail(buildAggregateTail(accumulatorsRef.current, bSMs, ringsRef.current));
+      setTail(buildAggregateTail(accumulatorsRef.current, bSMs));
     } else {
       setTail(buildRawTail(rawBuffersRef.current));
     }

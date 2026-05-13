@@ -101,10 +101,6 @@ interface CachedEntry {
   source: TileSource;
   /** Server Date.now() from the response that populated this entry. */
   responseTailTs?: number;
-  /** True when the response had at least one null bucket value (CAG-lag indicator).
-   *  Phase 3 cache invalidation uses this to skip tiles that were fully materialised
-   *  at fetch time and therefore need no refresh when the ring releases coverage. */
-  hadNullsAtFetch: boolean;
   // Aggregate fields
   bucketSMs?: number;
   n?: number;
@@ -186,9 +182,6 @@ function storeTileResult(
   cache: TileCache<CachedEntry>,
 ): void {
   const responseTailTs = res.responseTailTs;
-  const hadNullsAtFetch =
-    res.source !== 'raw' &&
-    res.series.some((s) => s.value.includes(null));
 
   if (res.source === 'raw') {
     for (const s of res.series) {
@@ -201,7 +194,6 @@ function storeTileResult(
       cache.set(key, {
         source: 'raw',
         responseTailTs,
-        hadNullsAtFetch: false,
         ts: s.ts.map(t => BigInt(t)),
         valueRaw: s.value,
         ...(s.prev ? { prev: { ts: BigInt(s.prev.ts), value: s.prev.value } } : {}),
@@ -216,14 +208,13 @@ function storeTileResult(
         bucketCount: tile.bucketCount,
       });
       cache.set(key, {
-        source:          res.source,
+        source:      res.source,
         responseTailTs,
-        hadNullsAtFetch,
-        bucketSMs:       res.bucketSMs,
-        n:               res.n,
-        value:           s.value,
-        min:             s.min,
-        max:             s.max,
+        bucketSMs:   res.bucketSMs,
+        n:           res.n,
+        value:       s.value,
+        min:         s.min,
+        max:         s.max,
       });
     }
   }
