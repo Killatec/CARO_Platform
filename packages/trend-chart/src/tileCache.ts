@@ -77,7 +77,7 @@ export class TileCache<T> {
 
   /**
    * Deletes all entries for which `predicate(key, value)` returns true.
-   * Safe to call during evictRange — collects keys first, then deletes.
+   * Safe to call during cache mutation — collects keys first, then deletes.
    * Returns the number of entries deleted.
    */
   deleteWhere(predicate: (key: string, value: T) => boolean): number {

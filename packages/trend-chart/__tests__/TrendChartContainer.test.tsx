@@ -113,7 +113,6 @@ function makeResult(tagIds: number[], opts: Partial<UseTrendDataResult> = {}): U
     isLoading: false,
     error: null,
     ensureCovered: vi.fn(),
-    evictRange: vi.fn(),
     evictAll: vi.fn(),
     refetchHistory: vi.fn(),
     swapCounter: 0,
@@ -453,7 +452,6 @@ describe('TrendChartContainer', () => {
       expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
       expect(mockResult.refetchHistory).toHaveBeenCalledOnce();
       expect(mockResult.evictAll).not.toHaveBeenCalled();
-      expect(mockResult.evictRange).not.toHaveBeenCalled();
       expect(screen.getByText('Go Live')).toBeTruthy();
     });
 
@@ -470,7 +468,6 @@ describe('TrendChartContainer', () => {
       expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
       expect(mockResult.refetchHistory).toHaveBeenCalledOnce();
       expect(mockResult.evictAll).not.toHaveBeenCalled();
-      expect(mockResult.evictRange).not.toHaveBeenCalled();
       expect(screen.getByText('Go Live')).toBeTruthy();
     });
 
@@ -486,7 +483,6 @@ describe('TrendChartContainer', () => {
       expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
       expect(mockResult.refetchHistory).toHaveBeenCalledOnce();
       expect(mockResult.evictAll).not.toHaveBeenCalled();
-      expect(mockResult.evictRange).not.toHaveBeenCalled();
       expect(screen.getByText('Go Live')).toBeTruthy();
     });
 
@@ -499,7 +495,6 @@ describe('TrendChartContainer', () => {
       expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
       expect(mockResult.refetchHistory).toHaveBeenCalledOnce();
       expect(mockResult.evictAll).not.toHaveBeenCalled();
-      expect(mockResult.evictRange).not.toHaveBeenCalled();
       expect(screen.getByText('Go Live')).toBeTruthy();
     });
 
@@ -508,7 +503,6 @@ describe('TrendChartContainer', () => {
       fireEvent.click(screen.getByText('4h'));
 
       expect(liveHoisted.commitAndDrain).not.toHaveBeenCalled();
-      expect(mockResult.evictRange).not.toHaveBeenCalled();
       expect(mockResult.evictAll).not.toHaveBeenCalled();
       expect(screen.getByText('● Live')).toBeTruthy();
     });
@@ -518,7 +512,6 @@ describe('TrendChartContainer', () => {
       fireEvent.click(screen.getByText('● Live'));
 
       expect(liveHoisted.commitAndDrain).not.toHaveBeenCalled();
-      expect(mockResult.evictRange).not.toHaveBeenCalled();
       expect(mockResult.evictAll).not.toHaveBeenCalled();
     });
 
@@ -535,7 +528,6 @@ describe('TrendChartContainer', () => {
       expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
       expect(mockResult.refetchHistory).toHaveBeenCalledOnce();
       expect(mockResult.evictAll).not.toHaveBeenCalled();
-      expect(mockResult.evictRange).not.toHaveBeenCalled();
     });
 
     it('Live click in fixed → evictAll called once to clear stale cache; mode returns to tailing', () => {

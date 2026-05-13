@@ -149,9 +149,6 @@ export interface UseTrendDataResult extends HookState {
    *  Used by checkAndExtendXCoverage to derive cached extent from tile metadata rather than
    *  u.data[0], which is unreliable in raw mode when samples don't reach tile edges. */
   getActiveRange: () => { startMs: bigint; endMs: bigint } | null;
-  /** Evicts all cache entries whose tile range overlaps [startMs, endMs), prunes activeTilesRef,
-   *  and bumps generationRef to drop in-flight fetches. Does NOT trigger a fetch. */
-  evictRange: (startMs: bigint, endMs: bigint) => void;
   /**
    * Clears the entire LRU cache and resets activeTilesRef. Called on every
    * fixed→tailing transition (TrendChartContainer.dispatchModeAction) to ensure
@@ -826,39 +823,6 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     }
   }, [tagIds, viewportStart, viewportEnd, bucketCount, visibleTilesPerWindow, cache]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const evictRange = useCallback((startMs: bigint, endMs: bigint) => {
-    // Bump generation — any in-flight fetch's .then() guard drops the stale result.
-    generationRef.current++;
-    // Clear in-flight set so subsequent ensureCovered calls can re-request evicted tiles.
-    inFlightTilesRef.current.clear();
-
-    // Delete all cache entries whose tile range overlaps [startMs, endMs).
-    // Key format: "${tagId}:${startTime}:${endTime}:${bucketCount}".
-    cache.deleteWhere((key) => {
-      const parts = key.split(':');
-      const tileStart = BigInt(parts[1]!);
-      const tileEnd   = BigInt(parts[2]!);
-      return tileStart < endMs && tileEnd > startMs;
-    });
-
-    // Prune activeTilesRef: keep only tiles whose range does NOT overlap [startMs, endMs).
-    activeTilesRef.current = activeTilesRef.current.filter(
-      tile => !(tile.startTime < endMs && tile.endTime > startMs),
-    );
-
-    // Update derived state.
-    setActiveTileCount(activeTilesRef.current.length);
-    setResponseTailTs(computeResponseTailTs(activeTilesRef.current, tagIds, cache, bucketCount));
-
-    // Reassemble data from surviving active tiles so the chart reflects the eviction.
-    try {
-      const data = assembleData(activeTilesRef.current, tagIds, cache);
-      setHookResult({ data, isLoading: false, error: null });
-    } catch (e) {
-      setHookResult({ data: null, isLoading: false, error: e instanceof Error ? e.message : String(e) });
-    }
-  }, [tagIds, bucketCount, cache]); // eslint-disable-line react-hooks/exhaustive-deps
-
   const evictAll = useCallback(() => {
     generationRef.current++;
     inFlightTilesRef.current.clear();
@@ -884,5 +848,5 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     };
   }, []);
 
-  return { ...hookResult, ensureCovered, getActiveRange, evictRange, evictAll, refetchHistory, swapCounter, activeTileCount, lastFetchMs, responseTailTs };
+  return { ...hookResult, ensureCovered, getActiveRange, evictAll, refetchHistory, swapCounter, activeTileCount, lastFetchMs, responseTailTs };
 }
