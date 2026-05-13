@@ -14,6 +14,7 @@ import { SpanPresets } from './SpanPresets.js';
 import { EndPicker } from './EndPicker.js';
 import { CursorDisplay } from './CursorDisplay.js';
 import { TREND_VIEWER_DEFAULTS } from './level.js';
+import type { AggregateSeriesData } from './types.js';
 
 const VISIBLE_TILES_PER_WINDOW = TREND_VIEWER_DEFAULTS.visibleTilesPerWindow;
 const BUCKET_COUNT = TREND_VIEWER_DEFAULTS.bucketCount;
@@ -52,6 +53,15 @@ const LOADING_HINT: CSSProperties = {
   color: '#9ca3af',
   padding: '4px 0',
   fontFamily: 'monospace',
+};
+
+const OVER_RANGE_BANNER: CSSProperties = {
+  padding: '4px 0 8px 0',
+  color: '#dc2626',
+  fontWeight: 700,
+  fontSize: 13,
+  fontFamily: 'monospace',
+  textAlign: 'center',
 };
 
 export function TrendChartContainer({
@@ -292,22 +302,42 @@ export function TrendChartContainer({
   );
 
   if (rangeExceeded) {
+    const emptyData: AggregateSeriesData = {
+      type: 'aggregate',
+      source: 'mixed',
+      startTime: dataViewport.start,
+      endTime:   dataViewport.end,
+      bucketSMs: 1,
+      n: 0,
+      series: new Map(),
+    };
+
     return (
       <div style={{ display: 'flex', flexDirection: 'column' }}>
-        <div style={{
-          height,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: '#9ca3af',
-          fontSize: 13,
-          fontFamily: 'monospace',
-          border: '1px solid #e5e7eb',
-          borderRadius: 4,
-        }}>
+        <div style={OVER_RANGE_BANNER}>
           Range too wide. Zoom in or pick a smaller preset.
         </div>
-        {footerJsx}
+        <TrendChart
+          data={emptyData}
+          tagIds={tagIds}
+          siteTimezone={siteTimezone}
+          height={height}
+          xRange={xRange}
+          onTagRemove={handleTagRemove}
+          ensureCovered={ensureCovered}
+          getActiveRange={getActiveRange}
+          zoomAnchorSpan={zoomAnchorSpan}
+          onZoomLevelSwitch={handleZoomLevelSwitch}
+          swapCounter={swapCounter}
+          activeTileCount={activeTileCount}
+          onDragZoom={handleDragZoom}
+          footer={footerJsx}
+          onCursorTsChange={setCursorTsMs}
+          showLastWhenIdle={modeState.mode === 'tailing'}
+          onXRangeChange={handleXRangeChange}
+          onXPan={handleXPan}
+          lastIntent={modeState.lastIntent}
+        />
       </div>
     );
   }

@@ -244,11 +244,14 @@ describe('TrendChartContainer', () => {
     expect(screen.getByText('No tags selected.')).toBeTruthy();
   });
 
-  it('rangeExceeded=true renders "Range too wide" message AND keeps footer controls visible', () => {
+  it('rangeExceeded=true: shows red banner above a live TrendChart; axes and controls stay interactive', () => {
     mockUseTrendData.mockReturnValue(makeResult([1], { rangeExceeded: true }));
     renderContainer([1]);
+    // Banner text present.
     expect(screen.getByText('Range too wide. Zoom in or pick a smaller preset.')).toBeTruthy();
-    // Footer must stay visible so the operator can click a preset or Live to recover.
+    // TrendChart was rendered — mock emits a × button per tagId (not a placeholder div).
+    expect(screen.getByTitle('Remove trace')).toBeTruthy();
+    // Footer controls present via TrendChart's footer prop — operator can recover.
     expect(screen.getByText('1m')).toBeTruthy();
     expect(screen.getByText('● Live')).toBeTruthy();
   });
