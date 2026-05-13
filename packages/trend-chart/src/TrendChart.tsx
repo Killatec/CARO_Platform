@@ -58,6 +58,16 @@ export interface TrendChartProps {
   getActiveRange?: () => { startMs: bigint; endMs: bigint } | null;
 }
 
+// ── Diagnostic instrumentation (temporary) ───────────────────────────────────
+const _fmt = (b: bigint): string => {
+  const n = Number(b);
+  if (Number.isFinite(n) && n > 0 && n < 10_000_000_000_000) {
+    return `${b.toString()} (${new Date(n).toISOString()})`;
+  }
+  return b.toString();
+};
+// ─────────────────────────────────────────────────────────────────────────────
+
 const WRAPPER: CSSProperties = {
   display: 'flex',
   flexDirection: 'row',
@@ -385,10 +395,15 @@ export function TrendChart({
         u.setScale('x', { min: newMin, max: newMax });
         const xScalePan = u.scales['x'];
         if (xScalePan?.min != null && xScalePan?.max != null) {
-          onXPanRef.current?.(
-            BigInt(Math.round(xScalePan.min * 1000)),
-            BigInt(Math.round(xScalePan.max * 1000)),
-          );
+          const panFromMs = BigInt(Math.round(xScalePan.min * 1000));
+          const panToMs   = BigInt(Math.round(xScalePan.max * 1000));
+          console.log('[viewport-trace] uplot xScale changed (x-axis pan)', {
+            uplotMin_s: xScalePan.min,
+            uplotMax_s: xScalePan.max,
+            emittedFromMs: _fmt(panFromMs),
+            emittedToMs:   _fmt(panToMs),
+          });
+          onXPanRef.current?.(panFromMs, panToMs);
         }
         // Prefetch check: fire ensureCovered when visible edge approaches cached extent.
         checkAndExtendXCoverage(u, ensureCoveredRef.current, getActiveRangeRef.current);
@@ -422,10 +437,15 @@ export function TrendChart({
       const xScale = u.scales['x'];
       if (xScale?.min != null && xScale?.max != null) {
         // Fire on every wheel tick — drives mode-state sync regardless of threshold.
-        onXRangeChangeRef.current?.(
-          BigInt(Math.round(xScale.min * 1000)),
-          BigInt(Math.round(xScale.max * 1000)),
-        );
+        const emitFromMs = BigInt(Math.round(xScale.min * 1000));
+        const emitToMs   = BigInt(Math.round(xScale.max * 1000));
+        console.log('[viewport-trace] uplot xScale changed (wheel)', {
+          uplotMin_s: xScale.min,
+          uplotMax_s: xScale.max,
+          emittedFromMs: _fmt(emitFromMs),
+          emittedToMs:   _fmt(emitToMs),
+        });
+        onXRangeChangeRef.current?.(emitFromMs, emitToMs);
 
         // Check for zoom-level threshold crossing (CAG bucket-size switch).
         const newSpanSec = xScale.max - xScale.min;

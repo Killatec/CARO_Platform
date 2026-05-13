@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { tilesForViewport, TREND_VIEWER_DEFAULTS, MAX_BUCKET_S } from './level.js';
+
+// ── Diagnostic instrumentation (temporary) ───────────────────────────────────
+const _fmt = (b: bigint): string => {
+  const n = Number(b);
+  if (Number.isFinite(n) && n > 0 && n < 10_000_000_000_000) {
+    return `${b.toString()} (${new Date(n).toISOString()})`;
+  }
+  return b.toString();
+};
+// ─────────────────────────────────────────────────────────────────────────────
 import { makeTileCacheKey } from './tileCache.js';
 import { TileCache } from './tileCache.js';
 import { fetchTile } from './api.js';
@@ -488,6 +498,11 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
       // Defense in depth: upstream tilesForViewport and ensureCovered filters should prevent
       // pre-epoch tiles, but guard here in case a future call site bypasses those filters.
       if (args.startTime < 0n) {
+        console.log('[viewport-trace] gatedFetchTile BLOCKED_PRE_EPOCH', {
+          startTime:   _fmt(args.startTime),
+          endTime:     _fmt(args.endTime),
+          bucketCount: args.bucketCount,
+        });
         return Promise.reject(
           Object.assign(new Error('tile start before epoch — skipped client-side'),
                         { code: 'CLIENT_PRE_EPOCH' }),
@@ -496,12 +511,25 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
       const tileSpanMs = Number(args.endTime - args.startTime);
       const bucketS    = tileSpanMs / (args.bucketCount * 1000);
       if (bucketS > MAX_BUCKET_S) {
+        console.log('[viewport-trace] gatedFetchTile BLOCKED_OVER_RANGE', {
+          startTime:   _fmt(args.startTime),
+          endTime:     _fmt(args.endTime),
+          bucketCount: args.bucketCount,
+          bucketS,
+          MAX_BUCKET_S,
+        });
         setRangeExceeded(true);
         return Promise.reject(
           Object.assign(new Error('viewport over range — fetch skipped client-side'),
                         { code: 'CLIENT_OVER_RANGE' }),
         );
       }
+      console.log('[viewport-trace] gatedFetchTile FORWARDED', {
+        startTime:   _fmt(args.startTime),
+        endTime:     _fmt(args.endTime),
+        bucketCount: args.bucketCount,
+        bucketS,
+      });
       setRangeExceeded(false);
       return fetchTile(args);
     },
@@ -597,6 +625,16 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
       overfetchPerSide,
       overfetchRightCount: isLiveExitRefetch ? 0 : undefined,
       nowMs,
+    });
+
+    console.log('[viewport-trace] tilesForViewport result', {
+      dataViewportStart: _fmt(currentViewport.start),
+      dataViewportEnd:   _fmt(currentViewport.end),
+      visibleCount:      visible.length,
+      prefetchCount:     prefetch.length,
+      firstVisibleStart: visible[0] ? _fmt(visible[0].startTime) : 'none',
+      lastVisibleEnd:    visible[visible.length - 1] ? _fmt(visible[visible.length - 1]!.endTime) : 'none',
+      firstPrefetchStart: prefetch[0] ? _fmt(prefetch[0].startTime) : 'none',
     });
 
     if (visible.length === 0) {

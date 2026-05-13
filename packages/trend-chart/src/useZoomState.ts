@@ -2,6 +2,16 @@ import { useCallback, useEffect, useState } from 'react';
 import type { Viewport } from './types.js';
 import type { LastIntent } from './useTrendMode.js';
 
+// ── Diagnostic instrumentation (temporary) ───────────────────────────────────
+const _fmt = (b: bigint): string => {
+  const n = Number(b);
+  if (Number.isFinite(n) && n > 0 && n < 10_000_000_000_000) {
+    return `${b.toString()} (${new Date(n).toISOString()})`;
+  }
+  return b.toString();
+};
+// ─────────────────────────────────────────────────────────────────────────────
+
 /** Pure snap-and-center math for drag-zoom. Exported for testing. */
 export function computeDragZoomViewport(
   currentBucketSMs: bigint,
@@ -73,6 +83,11 @@ export function useZoomState({
     const bucketSMs = span / BigInt(visibleTilesPerWindow * bucketCount);
     setCurrentBucketSMs(bucketSMs);
     setZoomAnchorSpan(span);
+    console.log('[viewport-trace] dataViewport <- reset effect (modeViewport changed)', {
+      newStart: _fmt(modeViewport.start),
+      newEnd:   _fmt(modeViewport.end),
+      lastIntent,
+    });
     setDataViewport({ start: modeViewport.start, end: modeViewport.end });
   }, [modeViewport.start, modeViewport.end, visibleTilesPerWindow, bucketCount, lastIntent]);
 
@@ -87,6 +102,11 @@ export function useZoomState({
       const newSpan = newEnd - newStart;
       setCurrentBucketSMs(newBucketSMs);
       setZoomAnchorSpan(newSpan);
+      console.log('[viewport-trace] dataViewport <- handleDragZoom', {
+        newStart: _fmt(newStart),
+        newEnd:   _fmt(newEnd),
+        newBucketSMs: newBucketSMs.toString(),
+      });
       setDataViewport({ start: newStart, end: newEnd });
     },
     [currentBucketSMs, visibleTilesPerWindow, bucketCount],
@@ -97,17 +117,38 @@ export function useZoomState({
       const newBucketSMs = direction === 'out' ? currentBucketSMs * 2n : currentBucketSMs / 2n;
       if (newBucketSMs <= 0n) return;
       const newSpan = newBucketSMs * BigInt(visibleTilesPerWindow * bucketCount);
-      let newStart = cursorTimeMs - newSpan / 2n;
-      if (newStart < 1n) newStart = 1n;
+      const unsaturatedStart = cursorTimeMs - newSpan / 2n;
+      let newStart = unsaturatedStart;
+      const saturated = newStart < 1n;
+      if (saturated) newStart = 1n;
       const newEnd = newStart + newSpan;
+      console.log('[viewport-trace] handleZoomLevelSwitch', {
+        direction,
+        cursorTimeMs:        _fmt(cursorTimeMs),
+        currentBucketSMs:    currentBucketSMs.toString(),
+        newBucketSMs:        newBucketSMs.toString(),
+        newSpanMs:           newSpan.toString(),
+        unsaturatedStart:    _fmt(unsaturatedStart),
+        saturatedStart:      _fmt(newStart),
+        saturated,
+        newEnd:              _fmt(newEnd),
+      });
       setCurrentBucketSMs(newBucketSMs);
       setZoomAnchorSpan(newSpan);
+      console.log('[viewport-trace] dataViewport <- handleZoomLevelSwitch', {
+        newStart: _fmt(newStart),
+        newEnd:   _fmt(newEnd),
+      });
       setDataViewport({ start: newStart, end: newEnd });
     },
     [currentBucketSMs, visibleTilesPerWindow, bucketCount],
   );
 
   const syncDataViewport = useCallback((v: Viewport) => {
+    console.log('[viewport-trace] dataViewport <- syncDataViewport', {
+      newStart: _fmt(v.start),
+      newEnd:   _fmt(v.end),
+    });
     setDataViewport({ start: v.start, end: v.end });
   }, []);
 

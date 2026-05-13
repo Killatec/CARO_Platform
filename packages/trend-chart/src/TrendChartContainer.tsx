@@ -19,6 +19,16 @@ import type { AggregateSeriesData } from './types.js';
 const VISIBLE_TILES_PER_WINDOW = TREND_VIEWER_DEFAULTS.visibleTilesPerWindow;
 const BUCKET_COUNT = TREND_VIEWER_DEFAULTS.bucketCount;
 
+// ── Diagnostic instrumentation (temporary) ───────────────────────────────────
+const _fmt = (b: bigint): string => {
+  const n = Number(b);
+  if (Number.isFinite(n) && n > 0 && n < 10_000_000_000_000) {
+    return `${b.toString()} (${new Date(n).toISOString()})`;
+  }
+  return b.toString();
+};
+// ─────────────────────────────────────────────────────────────────────────────
+
 export interface TrendChartContainerProps {
   /**
    * Initial tag ID list. Container owns the list and handles removes via the
@@ -213,40 +223,63 @@ export function TrendChartContainer({
   }, []);
 
   const handleXRangeChange = useCallback((min: bigint, max: bigint) => {
+    console.log('[viewport-trace] handleXRangeChange scheduled', {
+      from: _fmt(min),
+      to:   _fmt(max),
+    });
     pendingRangeRef.current = { min, max };
     if (rafIdRef.current !== null) return;
     rafIdRef.current = requestAnimationFrame(() => {
       rafIdRef.current = null;
       const r = pendingRangeRef.current;
       pendingRangeRef.current = null;
-      if (r) dispatchModeAction({ type: 'zoomApplied', from: r.min, to: r.max, nowMs: BigInt(Date.now()) });
+      if (r) {
+        console.log('[viewport-trace] handleXRangeChange dispatching zoomApplied', {
+          from: _fmt(r.min),
+          to:   _fmt(r.max),
+        });
+        dispatchModeAction({ type: 'zoomApplied', from: r.min, to: r.max, nowMs: BigInt(Date.now()) });
+      }
     });
   }, [dispatchModeAction]);
 
   const handleXPan = useCallback((min: bigint, max: bigint) => {
+    console.log('[viewport-trace] handleXPan scheduled', {
+      from: _fmt(min),
+      to:   _fmt(max),
+    });
     pendingPanRef.current = { min, max };
     if (panRafIdRef.current !== null) return;
     panRafIdRef.current = requestAnimationFrame(() => {
       panRafIdRef.current = null;
       const r = pendingPanRef.current;
       pendingPanRef.current = null;
-      if (r) dispatchModeAction({ type: 'panApplied', from: r.min, to: r.max, nowMs: BigInt(Date.now()) });
+      if (r) {
+        console.log('[viewport-trace] handleXPan dispatching panApplied', {
+          from: _fmt(r.min),
+          to:   _fmt(r.max),
+        });
+        dispatchModeAction({ type: 'panApplied', from: r.min, to: r.max, nowMs: BigInt(Date.now()) });
+      }
     });
   }, [dispatchModeAction]);
 
   const handlePreset = useCallback(
     (sizeMs: bigint) => {
+      console.log('[viewport-trace] handlePreset dispatching presetClicked', { sizeMs: sizeMs.toString() });
       dispatchModeAction({ type: 'presetClicked', sizeMs, nowMs: BigInt(Date.now()) });
     },
     [dispatchModeAction],
   );
 
   const handleLive = useCallback(() => {
+    console.log('[viewport-trace] handleLive dispatching liveClicked');
     dispatchModeAction({ type: 'liveClicked', nowMs: BigInt(Date.now()) });
   }, [dispatchModeAction]);
 
   const handleEndCommitted = useCallback(
     (to: bigint) => {
+      console.log('[viewport-trace] handleEndCommitted dispatching endPickerCommitted', { to: _fmt(to) });
       dispatchModeAction({ type: 'endPickerCommitted', to, nowMs: BigInt(Date.now()) });
     },
     [dispatchModeAction],
@@ -258,6 +291,10 @@ export function TrendChartContainer({
   // EndPicker shows the intended end, fetches use the snapped range.
   const handleDragZoom = useCallback(
     (selectionStartMs: bigint, selectionEndMs: bigint) => {
+      console.log('[viewport-trace] handleDragZoom dispatching zoomApplied', {
+        from: _fmt(selectionStartMs),
+        to:   _fmt(selectionEndMs),
+      });
       _handleDragZoom(selectionStartMs, selectionEndMs);
       dispatchModeAction({
         type: 'zoomApplied',
