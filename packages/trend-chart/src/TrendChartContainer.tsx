@@ -105,16 +105,10 @@ export function TrendChartContainer({
     trendData.responseTailTs != null ? trendData.responseTailTs - 1000 : null;
 
   const seedFromCachedTile = useMemo(() => {
-    if (!cachedData) return null;
+    if (cachedData?.type !== 'aggregate') return null;
     const m = new Map<number, number | boolean | string | null>();
-    if (cachedData.type === 'aggregate') {
-      for (const [tagId, arrs] of cachedData.series) {
-        m.set(tagId, arrs.value[arrs.value.length - 1] ?? null);
-      }
-    } else {
-      for (const [tagId, s] of cachedData.series) {
-        m.set(tagId, s.value[s.value.length - 1] ?? null);
-      }
+    for (const [tagId, arrs] of cachedData.series) {
+      m.set(tagId, arrs.value[arrs.value.length - 1] ?? null);
     }
     return m;
   }, [cachedData]);
@@ -138,16 +132,6 @@ export function TrendChartContainer({
 
   // Synchronous ref update — liveSubRef is always fresh before any callback fires.
   liveSubRef.current = liveSub;
-
-  // ── Container unmount cleanup: drain + evict on tailing exit ─────────────
-  useEffect(() => () => {
-    if (modeStateRef.current.mode === 'tailing') {
-      const range = liveSubRef.current?.commitAndDrain();
-      if (range && range.end > range.start) {
-        trendDataRef.current.evictRange(range.start, range.end);
-      }
-    }
-  }, []);
 
   // ── Merged data for rendering ─────────────────────────────────────────────
   const mergedData = useMemo(
@@ -242,9 +226,9 @@ export function TrendChartContainer({
 
   const handlePreset = useCallback(
     (sizeMs: bigint) => {
-      dispatch({ type: 'presetClicked', sizeMs, nowMs: BigInt(Date.now()) });
+      dispatchModeAction({ type: 'presetClicked', sizeMs, nowMs: BigInt(Date.now()) });
     },
-    [dispatch],
+    [dispatchModeAction],
   );
 
   const handleLive = useCallback(() => {

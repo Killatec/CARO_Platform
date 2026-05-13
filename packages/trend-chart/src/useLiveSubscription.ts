@@ -70,11 +70,10 @@ export interface UseLiveSubscriptionOptions {
 
 export interface UseLiveSubscriptionResult {
   /**
-   * Reads the union of ring + accumulator + raw-buffer covered range, clears
-   * all three, returns the range. Returns { start: 0n, end: 0n } if empty.
-   * Synchronous; safe to call inside dispatchModeAction wrappers.
+   * Clears ring, accumulator, and raw-buffer state. Synchronous; safe to
+   * call inside dispatchModeAction wrappers.
    */
-  commitAndDrain(): { start: bigint; end: bigint };
+  commitAndDrain(): void;
   /**
    * Live tail extension for chart rendering. null when not tailing, when
    * tailMode is null, or when no data has closed/arrived yet.
@@ -463,76 +462,11 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
 
   // ── commitAndDrain ────────────────────────────────────────────────────────
 
-  const commitAndDrain = useCallback((): { start: bigint; end: bigint } => {
-    // Collect ring range
-    let fifoMin: number | null = null;
-    let fifoMax: number | null = null;
-    for (const arr of ringsRef.current.values()) {
-      for (const { moduleTs } of arr) {
-        if (fifoMin === null || moduleTs < fifoMin) fifoMin = moduleTs;
-        if (fifoMax === null || moduleTs > fifoMax) fifoMax = moduleTs;
-      }
-    }
-
-    // Collect accumulator range
-    let accStart: bigint | null = null;
-    let accEnd: bigint | null = null;
-    const bSMs = bucketSMsRef.current;
-    if (bSMs !== null) {
-      for (const state of accumulatorsRef.current.values()) {
-        let tagStart: bigint | null = null;
-        let tagEnd: bigint | null = null;
-        const { firstClosedStartMs, closed, openBucket } = state;
-        if (firstClosedStartMs !== null) {
-          tagStart = firstClosedStartMs;
-          tagEnd   = firstClosedStartMs + BigInt(closed.value.length) * bSMs;
-        }
-        if (openBucket !== null) {
-          const oStart = openBucket.startMs;
-          const oEnd   = oStart + bSMs;
-          if (tagStart === null || oStart < tagStart) tagStart = oStart;
-          if (tagEnd   === null || oEnd   > tagEnd)   tagEnd   = oEnd;
-        }
-        if (tagStart !== null && tagEnd !== null) {
-          if (accStart === null || tagStart < accStart) accStart = tagStart;
-          if (accEnd   === null || tagEnd   > accEnd)   accEnd   = tagEnd;
-        }
-      }
-    }
-
-    // Collect raw range
-    let rawMin: number | null = null;
-    let rawMax: number | null = null;
-    for (const buf of rawBuffersRef.current.values()) {
-      for (const { moduleTs } of buf) {
-        if (rawMin === null || moduleTs < rawMin) rawMin = moduleTs;
-        if (rawMax === null || moduleTs > rawMax) rawMax = moduleTs;
-      }
-    }
-
-    // Clear all underlying state (synchronous). React state (tail) will be cleared
-    // by the tailing-exit effect that follows the dispatchModeAction call.
+  const commitAndDrain = useCallback((): void => {
     for (const arr of ringsRef.current.values()) arr.length = 0;
     accumulatorsRef.current.clear();
     rawBuffersRef.current.clear();
-
-    // Union ring, accumulator, and raw ranges
-    const candidates = (pickStart: boolean): bigint[] => [
-      pickStart ? (fifoMin !== null ? BigInt(fifoMin) : null) : (fifoMax !== null ? BigInt(fifoMax) : null),
-      pickStart ? accStart : accEnd,
-      pickStart ? (rawMin !== null ? BigInt(rawMin) : null) : (rawMax !== null ? BigInt(rawMax) : null),
-    ].filter((v): v is bigint => v !== null);
-
-    const startVals = candidates(true);
-    const endVals   = candidates(false);
-
-    if (startVals.length === 0 || endVals.length === 0) return { start: 0n, end: 0n };
-
-    const unionStart = startVals.reduce((a, b) => a < b ? a : b);
-    const unionEnd   = endVals.reduce((a, b) => a > b ? a : b);
-
-    return { start: unionStart, end: unionEnd };
-  }, []); // all stable refs — no deps needed
+  }, []);
 
   // Suppress the brief mismatch window during a tailMode transition
   // (e.g., preset change crossing the §6.3 raw/aggregate dispatch

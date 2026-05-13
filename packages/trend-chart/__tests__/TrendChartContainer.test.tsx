@@ -12,7 +12,7 @@ import type { UseTrendDataResult } from '../src/useTrendData.js';
 // ── useLiveSubscription mock (hoisted so vi.mock factory can close over it) ───
 
 const liveHoisted = vi.hoisted(() => {
-  const commitAndDrain = vi.fn(() => ({ start: 0n, end: 0n }));
+  const commitAndDrain = vi.fn();
   let _tail: unknown = null;
   let _lastOpts: Record<string, unknown> | null = null;
 
@@ -142,7 +142,6 @@ describe('TrendChartContainer', () => {
     capturedOnXPan = undefined;
     capturedOnDragZoom = undefined;
     liveHoisted.setTail(null);
-    liveHoisted.commitAndDrain.mockReturnValue({ start: 0n, end: 0n });
     mockUseTrendData.mockReturnValue(makeResult([1, 2]));
     // EndPicker calls showPicker() on the hidden input; jsdom doesn't implement it.
     Object.defineProperty(HTMLInputElement.prototype, 'showPicker', {
@@ -392,7 +391,6 @@ describe('TrendChartContainer', () => {
 
     beforeEach(() => {
       liveHoisted.setTail(null);
-      liveHoisted.commitAndDrain.mockReturnValue({ start: 0n, end: 0n });
       mockResult = makeResult([1, 2]);
       mockUseTrendData.mockReturnValue(mockResult);
     });
@@ -525,8 +523,6 @@ describe('TrendChartContainer', () => {
     });
 
     it('tailing→fixed: commitAndDrain + refetchHistory fire; evictAll never fires', () => {
-      // Previously evictAll was gated on drain result; now it is never called.
-      liveHoisted.commitAndDrain.mockReturnValue({ start: 0n, end: 0n }); // empty drain
       renderContainer([1]);
 
       const farPastEnd = 1_700_000_000_000n;
@@ -597,17 +593,6 @@ describe('TrendChartContainer', () => {
       expect(liveHoisted.getLastOpts()?.bucketSMs).toBe(3600n);
     });
 
-    it('unmount in tailing → commitAndDrain + evictRange fire in cleanup', () => {
-      liveHoisted.commitAndDrain.mockReturnValue({ start: 500n, end: 1000n });
-      const { unmount } = renderContainer([1]);
-      expect(screen.getByTestId('idle-mode').textContent).toBe('live');
-
-      unmount();
-
-      expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
-      expect(mockResult.evictRange).toHaveBeenCalledWith(500n, 1000n);
-    });
-
     // ── evictAll on Live entry (Gap B fix) ───────────────────────────────────
 
     it('evictAll called exactly once on fixed→tailing (Live button click)', () => {
@@ -652,18 +637,6 @@ describe('TrendChartContainer', () => {
       expect(mockResult.evictAll).not.toHaveBeenCalled();
     });
 
-    it('unmount in fixed → no commitAndDrain', () => {
-      const { unmount } = renderContainer([1]);
-      // Enter fixed mode.
-      const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
-      fireEvent.change(input, { target: { value: '2020-01-02T00:00:00' } });
-      // Clear calls made during the tailing→fixed transition.
-      liveHoisted.commitAndDrain.mockClear();
-
-      unmount();
-
-      expect(liveHoisted.commitAndDrain).not.toHaveBeenCalled();
-    });
   });
 });
 

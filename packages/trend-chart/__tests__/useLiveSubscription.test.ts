@@ -95,77 +95,22 @@ describe('useLiveSubscription — subscription lifecycle', () => {
     expect(calledIds).toContain(2);
   });
 
-  it('tagIds change — remove tag: unsubscribe fires; that tag ring entry is pruned', () => {
-    const { rerender, result } = renderHook(
+  it('tagIds change — remove tag: unsubscribe fires', () => {
+    const { rerender } = renderHook(
       ({ opts }) => useLiveSubscription(opts),
       { initialProps: { opts: { tagIds: [1, 2], trimThreshold: null } } },
     );
     act(() => { fireCb(1, 100, 5); fireCb(2, 200, 6); });
 
-    // Remove tag 2: its ring entry (200) should be deleted. Tag 1's ring entry (100) survives.
     rerender({ opts: { tagIds: [1], trimThreshold: null } });
 
-    const { start, end } = result.current.commitAndDrain();
-    // Tag 2's entry at 200 is pruned. Only tag 1's entry at 100 remains.
-    expect(start).toBe(100n);
-    expect(end).toBe(100n);
+    expect(cbCount(2)).toBe(0); // tag 2 unsubscribed
+    expect(cbCount(1)).toBe(1); // tag 1 still subscribed
   });
 });
 
 describe('useLiveSubscription — ring buffer', () => {
-  it('single callback → entry appears; commitAndDrain returns that moduleTs', () => {
-    const { result } = renderHook(() =>
-      useLiveSubscription({ tagIds: [1], trimThreshold: null }),
-    );
-    act(() => { fireCb(1, 1_000, 42); });
-
-    const { start, end } = result.current.commitAndDrain();
-    expect(start).toBe(1_000n);
-    expect(end).toBe(1_000n);
-  });
-
-  it('multiple callbacks across tags → commitAndDrain returns min/max across all', () => {
-    const { result } = renderHook(() =>
-      useLiveSubscription({ tagIds: [1, 2], trimThreshold: null }),
-    );
-    act(() => {
-      fireCb(1, 500, 1);
-      fireCb(2, 1500, 2);
-      fireCb(1, 1200, 3);
-    });
-
-    const { start, end } = result.current.commitAndDrain();
-    expect(start).toBe(500n);
-    expect(end).toBe(1500n);
-  });
-
-  it('ring overflow: 101st push drops the oldest entry', () => {
-    const { result } = renderHook(() =>
-      useLiveSubscription({ tagIds: [1], trimThreshold: null }),
-    );
-    act(() => {
-      // Push TREND_RING_CAPACITY + 1 entries: moduleTs 0..100
-      for (let i = 0; i <= TREND_RING_CAPACITY; i++) {
-        fireCb(1, i, i);
-      }
-    });
-
-    // Entry 0 was the oldest and should have been shifted out.
-    const { start, end } = result.current.commitAndDrain();
-    expect(start).toBe(1n);           // moduleTs=0 was evicted
-    expect(end).toBe(BigInt(TREND_RING_CAPACITY));
-  });
-
-  it('commitAndDrain on empty state → { start: 0n, end: 0n }', () => {
-    const { result } = renderHook(() =>
-      useLiveSubscription({ tagIds: [1, 2], trimThreshold: null }),
-    );
-    const { start, end } = result.current.commitAndDrain();
-    expect(start).toBe(0n);
-    expect(end).toBe(0n);
-  });
-
-  it('commitAndDrain clears ring buffers but preserves subscriptions; next callback appends correctly', () => {
+  it('commitAndDrain clears ring buffers but preserves subscriptions', () => {
     const { result } = renderHook(() =>
       useLiveSubscription({ tagIds: [1], trimThreshold: null }),
     );
@@ -174,69 +119,9 @@ describe('useLiveSubscription — ring buffer', () => {
 
     // New callback after drain should still be received
     act(() => { fireCb(1, 200, 2); });
-    const { start, end } = result.current.commitAndDrain();
-    expect(start).toBe(200n);
-    expect(end).toBe(200n);
+    result.current.commitAndDrain();
     // Subscription is still active (callback count unchanged)
     expect(cbCount(1)).toBe(1);
-  });
-});
-
-describe('useLiveSubscription — trim threshold', () => {
-  it('entries with moduleTs < threshold are removed; == and > are kept', () => {
-    const { result, rerender } = renderHook(
-      ({ opts }) => useLiveSubscription(opts),
-      { initialProps: { opts: { tagIds: [1], trimThreshold: null as number | null } } },
-    );
-    act(() => {
-      fireCb(1, 50, 1);   // below threshold
-      fireCb(1, 100, 2);  // equals threshold
-      fireCb(1, 150, 3);  // above threshold
-    });
-
-    rerender({ opts: { tagIds: [1], trimThreshold: 100 } });
-
-    const { start, end } = result.current.commitAndDrain();
-    expect(start).toBe(100n);
-    expect(end).toBe(150n);
-  });
-
-  it('null → number transition triggers an immediate trim', () => {
-    const { result, rerender } = renderHook(
-      ({ opts }) => useLiveSubscription(opts),
-      { initialProps: { opts: { tagIds: [1], trimThreshold: null as number | null } } },
-    );
-    act(() => {
-      fireCb(1, 200, 1);
-      fireCb(1, 800, 2);
-    });
-
-    // Transition from null to 500 should trim the entry at 200
-    rerender({ opts: { tagIds: [1], trimThreshold: 500 } });
-
-    const { start, end } = result.current.commitAndDrain();
-    expect(start).toBe(800n);
-    expect(end).toBe(800n);
-  });
-
-  it('backward trimThreshold is a no-op (already-trimmed entries are not restored)', () => {
-    const { result, rerender } = renderHook(
-      ({ opts }) => useLiveSubscription(opts),
-      { initialProps: { opts: { tagIds: [1], trimThreshold: null as number | null } } },
-    );
-    // Push entry while threshold is null (no trim runs yet)
-    act(() => { fireCb(1, 50, 1); });
-
-    // Advance threshold to 100: entry at 50 is removed (50 < 100)
-    rerender({ opts: { tagIds: [1], trimThreshold: 100 } });
-
-    // Move threshold backward to 40: entry at 50 is already gone; a lower threshold
-    // cannot restore it
-    rerender({ opts: { tagIds: [1], trimThreshold: 40 } });
-
-    const { start, end } = result.current.commitAndDrain();
-    expect(start).toBe(0n);
-    expect(end).toBe(0n);
   });
 });
 
@@ -507,44 +392,6 @@ describe('useLiveSubscription — trim + accumulator coexistence', () => {
   });
 });
 
-// ─── commitAndDrain extension ────────────────────────────────────────────────
-
-describe('useLiveSubscription — commitAndDrain with accumulator', () => {
-  it('accumulator-only data: range spans closed buckets + open bucket end', () => {
-    const { result } = renderHook(() => useLiveSubscription(tailingOpts([1])));
-    act(() => {
-      fireCb(1, tAt(0, 500), 3); // open bucket 0
-      fireCb(1, tAt(1, 500), 5); // closes bucket 0; bucket 1 open
-    });
-    // Accumulator: closed=[bucket0], open=bucket1
-    // acc range: [bucket0.startMs, bucket1.startMs + BUCKET_SMS]
-    const { start, end } = result.current.commitAndDrain();
-    expect(start).toBe(BigInt(ORIGIN));                      // first closed = bucket 0
-    expect(end).toBe(BigInt(ORIGIN) + 2n * BUCKET_SMS);     // open bucket 1 end
-  });
-
-  it('ring + accumulator: range is union of both', () => {
-    // Push ring entry before tailing starts (ring entry at an earlier time)
-    const { result, rerender } = renderHook(
-      ({ opts }) => useLiveSubscription(opts),
-      { initialProps: { opts: { tagIds: [1], trimThreshold: null, isTailing: false, bucketSMs: BUCKET_SMS, seedFromCachedTile: null, tailMode: 'aggregate' as const } } },
-    );
-    act(() => {
-      fireCb(1, tAt(0, 100), 1); // ring entry at tAt(0,100)
-    });
-    // Flip to tailing and push an event that closes a bucket
-    rerender({ opts: { tagIds: [1], trimThreshold: null, isTailing: true, bucketSMs: BUCKET_SMS, seedFromCachedTile: null, tailMode: 'aggregate' as const } });
-    act(() => {
-      fireCb(1, tAt(1, 500), 9); // closes bucket 0; bucket 1 open
-    });
-    // ring has tAt(0,100) and tAt(1,500); acc covers [bucket0.start, bucket1.end]
-    const { start, end } = result.current.commitAndDrain();
-    // start: min(fifoMin=tAt(0,100), accStart=bucket0.start=ORIGIN) = ORIGIN
-    // end: max(fifoMax=tAt(1,500), accEnd=ORIGIN+2*BUCKET_SMS=ORIGIN+2000)
-    expect(start).toBe(BigInt(ORIGIN));
-    expect(end).toBe(BigInt(ORIGIN) + 2n * BUCKET_SMS);
-  });
-});
 
 // ─── Raw mode helpers ─────────────────────────────────────────────────────────
 
@@ -853,21 +700,9 @@ describe('useLiveSubscription — viewportSpanMs 2×span trim', () => {
   });
 });
 
-// ─── Raw mode: commitAndDrain and ring replay ─────────────────────────────────
+// ─── Raw mode: ring replay ─────────────────────────────────────────────────────
 
-describe('useLiveSubscription — raw commitAndDrain + ring replay', () => {
-  it('raw entries: covered range is min/max moduleTs across all tags', () => {
-    const { result } = renderHook(() => useLiveSubscription(rawOpts([1, 2])));
-    act(() => {
-      fireCb(1, 1000, 5);
-      fireCb(2, 3000, 7);
-      fireCb(1, 2000, 9);
-    });
-    const { start, end } = result.current.commitAndDrain();
-    expect(start).toBe(1000n);
-    expect(end).toBe(3000n);
-  });
-
+describe('useLiveSubscription — raw ring replay', () => {
   it('enter tailing with tailMode=raw and ring entries: raw buffer gets ring replay', () => {
     const { result, rerender } = renderHook(
       ({ opts }) => useLiveSubscription(opts),
@@ -888,14 +723,6 @@ describe('useLiveSubscription — raw commitAndDrain + ring replay', () => {
     expect(rawTail.perTag.get(1)!.value).toEqual([10, 20]);
   });
 
-  it('raw commitAndDrain after drain → { 0n, 0n }', () => {
-    const { result } = renderHook(() => useLiveSubscription(rawOpts([1])));
-    act(() => { fireCb(1, 5000, 1); });
-    result.current.commitAndDrain();
-    const { start, end } = result.current.commitAndDrain();
-    expect(start).toBe(0n);
-    expect(end).toBe(0n);
-  });
 });
 
 // ─── onDataReceived ───────────────────────────────────────────────────────────

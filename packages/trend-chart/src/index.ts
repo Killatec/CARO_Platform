@@ -13,7 +13,6 @@ export { colorAssign, PALETTE, PALETTE_SIZE } from './colorAssign.js';
 export { useTrendData } from './useTrendData.js';
 export type { UseTrendDataOptions, UseTrendDataResult } from './useTrendData.js';
 export { useLiveSubscription, TREND_RING_CAPACITY } from './useLiveSubscription.js';
-export { closeBucketsFromRing } from './closeBucketsFromRing.js';
 export type { UseLiveSubscriptionOptions, UseLiveSubscriptionResult, AggregateTail, RawTail, LiveTail } from './useLiveSubscription.js';
 export { useZoomState, computeDragZoomViewport } from './useZoomState.js';
 export type { UseZoomStateOpts, UseZoomStateResult } from './useZoomState.js';

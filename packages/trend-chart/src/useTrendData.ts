@@ -152,9 +152,12 @@ export interface UseTrendDataResult extends HookState {
   /** Evicts all cache entries whose tile range overlaps [startMs, endMs), prunes activeTilesRef,
    *  and bumps generationRef to drop in-flight fetches. Does NOT trigger a fetch. */
   evictRange: (startMs: bigint, endMs: bigint) => void;
-  /** Drops the entire cache, resets the active set, and bumps generationRef.
-   *  Exposed for external use (test cleanup, etc.). Not called by the normal mode-transition path —
-   *  the live-spine path does not write to the LRU cache, so no eviction is needed on transition. */
+  /**
+   * Clears the entire LRU cache and resets activeTilesRef. Called on every
+   * fixed→tailing transition (TrendChartContainer.dispatchModeAction) to ensure
+   * each Live exit fetches fresh tiles — eliminates Gap B (stale CAG-lag nulls
+   * accumulating in cache across sessions). Also available for test cleanup.
+   */
   evictAll: () => void;
   /** Forces the main effect to re-run the history fetch path, using an asymmetric
    *  overfetch (1 LEFT, 0 RIGHT) — used on live → fixed transition. */
