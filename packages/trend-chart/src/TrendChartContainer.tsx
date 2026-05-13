@@ -305,8 +305,8 @@ export function TrendChartContainer({
     const emptyData: AggregateSeriesData = {
       type: 'aggregate',
       source: 'mixed',
-      startTime: dataViewport.start,
-      endTime:   dataViewport.end,
+      startTime: modeViewport.start,
+      endTime:   modeViewport.end,
       bucketSMs: 1,
       n: 0,
       series: new Map(),

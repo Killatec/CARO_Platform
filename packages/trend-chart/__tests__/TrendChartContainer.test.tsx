@@ -44,9 +44,11 @@ vi.mock('../src/useLiveSubscription.js', () => ({
 let capturedOnXRangeChange: ((min: bigint, max: bigint) => void) | undefined;
 let capturedOnXPan: ((min: bigint, max: bigint) => void) | undefined;
 let capturedOnDragZoom: ((startMs: bigint, endMs: bigint) => void) | undefined;
+let capturedData: { startTime: bigint; endTime: bigint; n?: number; series?: Map<unknown, unknown> } | undefined;
 
 vi.mock('../src/TrendChart.js', () => ({
   TrendChart: (props: {
+    data?: { startTime: bigint; endTime: bigint; n?: number; series?: Map<unknown, unknown> };
     tagIds: number[];
     footer?: unknown;
     onTagRemove?: (id: number) => void;
@@ -58,6 +60,7 @@ vi.mock('../src/TrendChart.js', () => ({
     capturedOnXRangeChange = props.onXRangeChange;
     capturedOnXPan = props.onXPan;
     capturedOnDragZoom = props.onDragZoom;
+    capturedData = props.data;
     return (
       <div>
         {props.tagIds.map(id => (
@@ -141,6 +144,7 @@ describe('TrendChartContainer', () => {
     capturedOnXRangeChange = undefined;
     capturedOnXPan = undefined;
     capturedOnDragZoom = undefined;
+    capturedData = undefined;
     liveHoisted.setTail(null);
     mockUseTrendData.mockReturnValue(makeResult([1, 2]));
     // EndPicker calls showPicker() on the hidden input; jsdom doesn't implement it.
@@ -254,6 +258,30 @@ describe('TrendChartContainer', () => {
     // Footer controls present via TrendChart's footer prop — operator can recover.
     expect(screen.getByText('1m')).toBeTruthy();
     expect(screen.getByText('● Live')).toBeTruthy();
+  });
+
+  it('rangeExceeded=true: emptyData uses modeViewport bounds, not dataViewport bounds', () => {
+    // Set a known system time so modeViewport.start is a real timestamp, not epoch.
+    // dataViewport (managed by useZoomState) can saturate to 1n during aggressive
+    // wheel-zoom-out — if emptyData used dataViewport bounds the chart would show
+    // epoch labels (Dec 31 1969). modeViewport is reducer-clamped and stays sensible.
+    vi.setSystemTime(new Date('2024-06-01T12:00:00Z'));
+    mockUseTrendData.mockReturnValue(makeResult([1], { rangeExceeded: true }));
+    renderContainer([1]);
+
+    // emptyData is the placeholder passed to TrendChart in the over-range branch.
+    expect(capturedData).toBeDefined();
+    // n=0 and empty series — it's the empty placeholder, not real tile data.
+    expect(capturedData!.n).toBe(0);
+    expect(capturedData!.series!.size).toBe(0);
+    // startTime must be a real timestamp from modeViewport, NOT near Unix epoch.
+    // With fake time at 2024-06-01T12:00:00Z (1717243200000ms) and the default 1h
+    // preset, modeViewport.start ≈ 1717239600000n. A dataViewport saturation guard
+    // would produce startTime = 1n — orders of magnitude smaller.
+    const ONE_HOUR_MS = 3_600_000n;
+    const expectedNow = BigInt(new Date('2024-06-01T12:00:00Z').getTime());
+    expect(capturedData!.startTime).toBeGreaterThanOrEqual(expectedNow - ONE_HOUR_MS);
+    expect(capturedData!.endTime).toBeLessThanOrEqual(expectedNow + ONE_HOUR_MS);
   });
 
   // ── EndPicker integration ─────────────────────────────────────────────────
