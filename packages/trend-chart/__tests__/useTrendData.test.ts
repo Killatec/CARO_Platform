@@ -1567,4 +1567,49 @@ describe('useTrendData — rangeExceeded', () => {
     await waitFor(() => expect(result.current.rangeExceeded).toBe(false));
     expect(mockFetchTile).toHaveBeenCalled();
   });
+
+  it('ensureCovered: over-range viewport gates dynamic fetch and sets rangeExceeded=true', async () => {
+    const { visibleTilesPerWindow, bucketCount } = TREND_VIEWER_DEFAULTS;
+    const OVER_RANGE_SPAN = BigInt(MAX_BUCKET_S + 1) * BigInt(visibleTilesPerWindow) * BigInt(bucketCount) * 1000n;
+    const overViewport: Viewport = { start: 0n, end: OVER_RANGE_SPAN };
+
+    const { result } = renderHook(() =>
+      useTrendData({ viewport: overViewport, tagIds: [1] }),
+    );
+
+    await waitFor(() => expect(result.current.rangeExceeded).toBe(true));
+    mockFetchTile.mockClear();
+
+    // ensureCovered must also gate — no dynamic fetch even if activeTilesRef were populated.
+    act(() => { result.current.ensureCovered(0n, OVER_RANGE_SPAN * 2n); });
+
+    expect(mockFetchTile).not.toHaveBeenCalled();
+    expect(result.current.rangeExceeded).toBe(true);
+  });
+
+  it('ensureCovered: valid-then-over-range transition fires no dynamic fetch during over-range state', async () => {
+    const { visibleTilesPerWindow, bucketCount } = TREND_VIEWER_DEFAULTS;
+    const OVER_RANGE_SPAN = BigInt(MAX_BUCKET_S + 1) * BigInt(visibleTilesPerWindow) * BigInt(bucketCount) * 1000n;
+
+    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
+    const { result, rerender } = renderHook(
+      (props: { viewport: Viewport }) => useTrendData({ ...props, tagIds: [1] }),
+      { initialProps: { viewport: defaultViewport } },
+    );
+
+    await waitFor(() => expect(result.current.rangeExceeded).toBe(false));
+    expect(mockFetchTile).toHaveBeenCalled();
+
+    // Transition to over-range — main-effect proactive guard fires.
+    rerender({ viewport: { start: 0n, end: OVER_RANGE_SPAN } });
+    await waitFor(() => expect(result.current.rangeExceeded).toBe(true));
+    mockFetchTile.mockClear();
+
+    // Pan attempt while over-range: ensureCovered must not fire a fetch.
+    act(() => {
+      result.current.ensureCovered(-OVER_RANGE_SPAN, OVER_RANGE_SPAN * 2n);
+    });
+
+    expect(mockFetchTile).not.toHaveBeenCalled();
+  });
 });

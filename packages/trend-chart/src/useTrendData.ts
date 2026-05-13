@@ -415,6 +415,17 @@ export function pruneAndAdd(activeSet: Tile[], newTile: Tile, maxSize = MAX_ACTI
   return sorted.slice(sorted.length - maxSize);
 }
 
+function isViewportOverRange(
+  viewport: { start: bigint; end: bigint },
+  visibleTilesPerWindow: number,
+  bucketCount: number,
+): boolean {
+  const spanMs = Number(viewport.end - viewport.start);
+  const perTileSpanMs = spanMs / visibleTilesPerWindow;
+  const bucketS = perTileSpanMs / (bucketCount * 1000);
+  return bucketS > MAX_BUCKET_S;
+}
+
 export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
   const {
     viewport,
@@ -497,10 +508,7 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     // Proactive bucketS guard: skip all fetches when the viewport span would
     // derive a bucketS above the server's cap. Prevents 400 spam in the network
     // tab and server log before the reducer clamp gets a chance to fire.
-    const spanMs = Number(currentSpan);
-    const perTileSpanMs = spanMs / visibleTilesPerWindow;
-    const derivedBucketS = perTileSpanMs / (bucketCount * 1000);
-    if (derivedBucketS > MAX_BUCKET_S) {
+    if (isViewportOverRange(currentViewport, visibleTilesPerWindow, bucketCount)) {
       setRangeExceeded(true);
       return;
     }
@@ -756,6 +764,10 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
   const ensureCovered = useCallback((startMs: bigint, endMs: bigint) => {
     if (levelTransitionPendingRef.current) return;
     if (tagIds.length === 0) return;
+    if (isViewportOverRange({ start: viewportStart, end: viewportEnd }, visibleTilesPerWindow, bucketCount)) {
+      setRangeExceeded(true);
+      return;
+    }
     const active = activeTilesRef.current;
     if (active.length === 0) return;
 
