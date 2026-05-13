@@ -6,6 +6,7 @@ import {
   computeZoomLevelTransition,
   TREND_VIEWER_DEFAULTS,
   TS_BUCKET_ORIGIN_MS,
+  MAX_BUCKET_S,
 } from '../src/level.js';
 import type { Viewport } from '../src/types.js';
 
@@ -60,7 +61,11 @@ describe('alignedTilesInRange', () => {
 
 describe('tilesForViewport', () => {
   const oneHourMs = 3_600_000n;
-  const viewport: Viewport = { start: 0n, end: oneHourMs };
+  // Use TS_BUCKET_ORIGIN_MS as base so the left-prefetch tile is well above epoch.
+  // { start: 0n, end: oneHourMs } would place firstVisibleStart at 0n and the
+  // left-prefetch at -1_800_000n (pre-epoch), which the filter correctly removes.
+  const BASE = TS_BUCKET_ORIGIN_MS;
+  const viewport: Viewport = { start: BASE, end: BASE + oneHourMs };
 
   it('default config: 2 visible + 2 prefetch tiles (1 each side)', () => {
     const { visible, prefetch } = tilesForViewport({ viewport });
@@ -68,13 +73,14 @@ describe('tilesForViewport', () => {
     expect(prefetch).toHaveLength(TREND_VIEWER_DEFAULTS.overfetchPerSide * 2); // 2
   });
 
-  it('visible tiles span the epoch-aligned viewport', () => {
+  it('visible tiles span the tile-grid-aligned viewport', () => {
     const { visible } = tilesForViewport({ viewport });
     const tileSpan = oneHourMs / BigInt(TREND_VIEWER_DEFAULTS.visibleTilesPerWindow); // 1800000n
-    expect(visible[0]!.startTime).toBe(0n);
-    expect(visible[0]!.endTime).toBe(tileSpan);
-    expect(visible[1]!.startTime).toBe(tileSpan);
-    expect(visible[1]!.endTime).toBe(tileSpan * 2n);
+    // BASE (TS_BUCKET_ORIGIN_MS) is the tile-grid origin; firstVisibleStart lands exactly at BASE.
+    expect(visible[0]!.startTime).toBe(BASE);
+    expect(visible[0]!.endTime).toBe(BASE + tileSpan);
+    expect(visible[1]!.startTime).toBe(BASE + tileSpan);
+    expect(visible[1]!.endTime).toBe(BASE + tileSpan * 2n);
   });
 
   it('prefetch[0] is exactly one tile before visible[0]', () => {
@@ -208,19 +214,19 @@ describe('tilesForViewport', () => {
   });
 
   it('nowMs provided at live edge: after-tile within one tileSpanMs is kept (tailing look-ahead)', () => {
-    // viewport ends at oneHourMs; tileSpanMs = 1_800_000n; after-prefetch startTime = oneHourMs.
-    // New filter: startTime < nowMs + tileSpanMs → 3_600_000 < 3_600_000 + 1_800_000 → kept.
+    // viewport ends at BASE + oneHourMs; after-prefetch startTime = BASE + oneHourMs.
+    // Filter: startTime < nowMs + tileSpanMs → BASE+ONE_HOUR < BASE+ONE_HOUR+HALF_HOUR → kept.
     // Both before and after prefetch tiles are included.
-    const { prefetch } = tilesForViewport({ viewport, nowMs: oneHourMs });
+    const { prefetch } = tilesForViewport({ viewport, nowMs: BASE + oneHourMs });
     expect(prefetch).toHaveLength(2);
   });
 
   it('nowMs provided: after-tile more than one tileSpanMs past nowMs is dropped', () => {
-    // after-prefetch startTime = oneHourMs = 3_600_000n; tileSpanMs = 1_800_000n.
-    // Set nowMs = halfTileMs (1_800_000n) so nowMs + tileSpanMs = 3_600_000n.
-    // Filter: 3_600_000n < 3_600_000n → false → after-tile dropped.
+    // after-prefetch startTime = BASE + oneHourMs; tileSpanMs = 1_800_000n.
+    // Set nowMs = BASE + halfTileMs so nowMs + tileSpanMs = BASE + oneHourMs.
+    // Filter: BASE+oneHourMs < BASE+oneHourMs → false → after-tile dropped.
     const halfTileMs = oneHourMs / BigInt(TREND_VIEWER_DEFAULTS.visibleTilesPerWindow); // 1_800_000n
-    const { prefetch } = tilesForViewport({ viewport, nowMs: halfTileMs });
+    const { prefetch } = tilesForViewport({ viewport, nowMs: BASE + halfTileMs });
     expect(prefetch).toHaveLength(1);
     // Only the before-tile remains.
     const { visible } = tilesForViewport({ viewport });
@@ -228,10 +234,9 @@ describe('tilesForViewport', () => {
   });
 
   it('nowMs provided but after-tile is in the past: both tiles kept', () => {
-    // Viewport is entirely in the past; nowMs is far future.
-    // Both prefetch tiles start well before nowMs + tileSpanMs, so neither is filtered.
-    const pastViewport: Viewport = { start: 0n, end: oneHourMs };
-    const farFutureNow = oneHourMs * 1_000_000n;
+    // Viewport is entirely in the past relative to farFutureNow; both prefetch tiles kept.
+    const pastViewport: Viewport = { start: BASE, end: BASE + oneHourMs };
+    const farFutureNow = BASE + oneHourMs * 1_000_000n;
     const { prefetch } = tilesForViewport({ viewport: pastViewport, nowMs: farFutureNow });
     expect(prefetch).toHaveLength(2);
   });
@@ -241,12 +246,32 @@ describe('tilesForViewport', () => {
     // equal nowMs exactly (viewport.end on tile boundary). The new filter keeps it so
     // performSwap does not evict what ensureCovered just fetched on the next tick.
     const tileSpanMs = oneHourMs / BigInt(TREND_VIEWER_DEFAULTS.visibleTilesPerWindow);
-    // Epoch-aligned viewport: lastVisibleEnd = oneHourMs; after-prefetch startTime = oneHourMs.
-    const { prefetch } = tilesForViewport({ viewport, nowMs: oneHourMs });
-    const afterTile = prefetch.find(t => t.startTime >= oneHourMs);
+    // Tile-grid-aligned viewport: lastVisibleEnd = BASE + oneHourMs; after-prefetch startTime = BASE + oneHourMs.
+    const { prefetch } = tilesForViewport({ viewport, nowMs: BASE + oneHourMs });
+    const afterTile = prefetch.find(t => t.startTime >= BASE + oneHourMs);
     expect(afterTile).toBeDefined();
-    expect(afterTile!.startTime).toBe(oneHourMs);
-    expect(afterTile!.endTime).toBe(oneHourMs + tileSpanMs);
+    expect(afterTile!.startTime).toBe(BASE + oneHourMs);
+    expect(afterTile!.endTime).toBe(BASE + oneHourMs + tileSpanMs);
+  });
+
+  it('epoch-adjacent viewport: left-prefetch tile is filtered when it would be pre-epoch', () => {
+    // Diagnostic values: with dataViewport.start=1n at the MAX_BUCKET_S span boundary,
+    // TS_BUCKET_ORIGIN_MS alignment pushes the left-prefetch tile to ~-4.6 billion ms.
+    // After the fix, tilesForViewport must not return any tile with startTime < 0n.
+    const { bucketCount, visibleTilesPerWindow } = TREND_VIEWER_DEFAULTS;
+    const tileSpanMs = BigInt(MAX_BUCKET_S) * BigInt(bucketCount) * 1000n;
+    const epochAdjacentViewport: Viewport = { start: 1n, end: tileSpanMs * BigInt(visibleTilesPerWindow) + 1n };
+    const { visible, prefetch } = tilesForViewport({ viewport: epochAdjacentViewport });
+    // Visible tiles must all have non-negative startTime.
+    for (const t of visible) {
+      expect(t.startTime >= 0n).toBe(true);
+    }
+    // All pre-epoch prefetch tiles must be filtered out.
+    for (const t of prefetch) {
+      expect(t.startTime >= 0n).toBe(true);
+    }
+    // Visible tiles must actually be present — the viewport is valid, just epoch-adjacent.
+    expect(visible.length).toBeGreaterThan(0);
   });
 
   // ── Regression: 7d / 14d preset 500 error (TimescaleDB PG-epoch alignment) ──

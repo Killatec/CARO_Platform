@@ -485,6 +485,14 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
   // before calling fetchTile — any new fetch site added later MUST use this wrapper.
   const gatedFetchTile = useCallback(
     (args: Parameters<typeof fetchTile>[0]) => {
+      // Defense in depth: upstream tilesForViewport and ensureCovered filters should prevent
+      // pre-epoch tiles, but guard here in case a future call site bypasses those filters.
+      if (args.startTime < 0n) {
+        return Promise.reject(
+          Object.assign(new Error('tile start before epoch — skipped client-side'),
+                        { code: 'CLIENT_PRE_EPOCH' }),
+        );
+      }
       const tileSpanMs = Number(args.endTime - args.startTime);
       const bucketS    = tileSpanMs / (args.bucketCount * 1000);
       if (bucketS > MAX_BUCKET_S) {
@@ -562,7 +570,7 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
       }).catch((e: Error & { code?: string }) => {
         if (generationRef.current !== generation) return;
         spineFetchInFlightRef.current = false;
-        if (e.code === 'CLIENT_OVER_RANGE') return;
+        if (e.code === 'CLIENT_OVER_RANGE' || e.code === 'CLIENT_PRE_EPOCH') return;
         console.error('[useTrendData] live spine fetch failed', { tagIds, error: e });
         setHookResult({ data: null, isLoading: false, error: e instanceof Error ? e.message : String(e) });
       });
@@ -705,6 +713,11 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
             onVisibleTileSettled();
             return;
           }
+          if (e.code === 'CLIENT_PRE_EPOCH') {
+            // Defensive: upstream filter should prevent pre-epoch visible tiles; silent skip.
+            onVisibleTileSettled();
+            return;
+          }
           if (e.code === 'INVALID_BUCKET_S') {
             batchHasRangeExceeded = true;
             setRangeExceeded(true);
@@ -746,7 +759,7 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
         })
         .catch((e: Error & { code?: string }) => {
           if (generationRef.current !== generation) return;
-          if (e.code === 'CLIENT_OVER_RANGE') return;
+          if (e.code === 'CLIENT_OVER_RANGE' || e.code === 'CLIENT_PRE_EPOCH') return;
           console.warn('[useTrendData] prefetch fetch failed', {
             tagIds: missing,
             startTime: tile.startTime,
@@ -794,9 +807,10 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
       rightStart += tileSpanMs;
     }
 
-    // Drop tiles whose start is at or past now (future tiles).
+    // Drop tiles that are pre-epoch (TS_BUCKET_ORIGIN_MS alignment can push the left-neighbor
+    // before Unix epoch when active tiles are epoch-adjacent) or in the future.
     const nowMs = BigInt(Date.now());
-    const filtered = candidates.filter(t => t.startTime < nowMs);
+    const filtered = candidates.filter(t => t.startTime >= 0n && t.startTime < nowMs);
 
     const gen = generationRef.current;
 
@@ -853,7 +867,7 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
         })
         .catch((e: Error & { code?: string }) => {
           inFlightTilesRef.current.delete(tileKey);
-          if (e.code === 'CLIENT_OVER_RANGE') return;
+          if (e.code === 'CLIENT_OVER_RANGE' || e.code === 'CLIENT_PRE_EPOCH') return;
           setLastFetchMs(Math.round(performance.now() - tileT0));
           if (generationRef.current !== gen) return;
           console.warn('[useTrendData] dynamic fetch failed', { tile, error: e });

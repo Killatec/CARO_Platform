@@ -231,10 +231,15 @@ export function tilesForViewport(opts: {
     prefetch.push({ startTime: start, endTime: start + tileSpanMs, bucketCount });
   }
 
-  const filteredPrefetch =
+  const futurePrunedPrefetch =
     nowMs === undefined ? prefetch : prefetch.filter(t => t.startTime < nowMs + tileSpanMs);
+  // Pre-epoch tiles (startTime < 0n) are geometrically invalid: TS_BUCKET_ORIGIN_MS alignment
+  // can push the left-prefetch neighbor before Unix epoch when the viewport is epoch-adjacent.
+  // Filter both visible and prefetch so no tile with startTime < 0n reaches the server.
+  const filteredPrefetch = futurePrunedPrefetch.filter(t => t.startTime >= 0n);
+  const filteredVisible   = visible.filter(t => t.startTime >= 0n);
 
-  return { visible, prefetch: filteredPrefetch };
+  return { visible: filteredVisible, prefetch: filteredPrefetch };
 }
 
 /**

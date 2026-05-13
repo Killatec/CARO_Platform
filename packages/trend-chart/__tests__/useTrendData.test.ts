@@ -381,12 +381,13 @@ describe('useTrendData', () => {
   it('prefetch failure: console.warn fires; isLoading and data are unaffected', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-    // First 2 calls = visible tiles (succeed); next 2 = prefetch (fail).
+    // First 2 calls = visible tiles (succeed); 3rd = right-prefetch (fail).
+    // Left-prefetch is pre-epoch for defaultViewport ({start:0n, end:ONE_HOUR}) and is filtered
+    // by tilesForViewport, so only one prefetch tile is fetched.
     mockFetchTile
       .mockResolvedValueOnce(makeAggResponse([1])) // visible[0]
       .mockResolvedValueOnce(makeAggResponse([1])) // visible[1]
-      .mockRejectedValueOnce(new Error('prefetch fail')) // prefetch before
-      .mockRejectedValueOnce(new Error('prefetch fail')); // prefetch after
+      .mockRejectedValueOnce(new Error('prefetch fail')); // right-prefetch after
 
     const { result } = renderHook(() =>
       useTrendData({ viewport: defaultViewport, tagIds: [1] }),
@@ -433,11 +434,11 @@ describe('useTrendData', () => {
     expect(data?.type).toBe('aggregate');
     if (data?.type === 'aggregate') {
       const values = data.series.get(1)!.value;
-      // Assembly includes prefetch tiles: 4 tiles × 500 = 2000 buckets.
-      // Order: prefetch-before (1.0), visible[0] (1.0), visible[1] (null-fill), prefetch-after (1.0).
-      expect(values).toHaveLength(2000);
-      expect(values.slice(500, 1000).every(v => v === 1.0)).toBe(true);  // visible[0]
-      expect(values.slice(1000, 1500).every(v => v === null)).toBe(true); // visible[1] null-fill
+      // 3 tiles: visible[0] (1.0), visible[1] (null-fill), prefetch-after (1.0).
+      // The left-prefetch at -HALF_HOUR is pre-epoch and is filtered by tilesForViewport.
+      expect(values).toHaveLength(1500);
+      expect(values.slice(0, 500).every(v => v === 1.0)).toBe(true);   // visible[0]
+      expect(values.slice(500, 1000).every(v => v === null)).toBe(true); // visible[1] null-fill
     }
 
     // Failure not cached: next opts change will retry the failed tile.
@@ -457,8 +458,8 @@ describe('useTrendData', () => {
 
     mockFetchTile.mockImplementation(async (params) => {
       callCount++;
-      // First 4 calls (gen1 viewport): deferred.
-      if (callCount <= 4) {
+      // First 3 calls (gen1 viewport — 2 visible + 1 right-prefetch; left filtered as pre-epoch).
+      if (callCount <= 3) {
         return new Promise<TileApiResponse>(resolve => gen1Resolvers.push(resolve));
       }
       // Gen2 calls: resolve immediately.
@@ -631,21 +632,23 @@ describe('useTrendData', () => {
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     const callsAfterLoad = mockFetchTile.mock.calls.length;
 
-    // One tile to the left of the prefetch-before tile (tileSpan = HALF_HOUR).
+    // One tile to the right of the prefetch-after tile (tileSpan = HALF_HOUR).
+    // defaultViewport active set ends at ONE_HOUR + HALF_HOUR (3 tiles; left-prefetch
+    // at -HALF_HOUR is pre-epoch and is filtered out by tilesForViewport).
     act(() => {
-      result.current.ensureCovered(-ONE_HOUR, -HALF_HOUR);
+      result.current.ensureCovered(ONE_HOUR + HALF_HOUR, ONE_HOUR * 2n);
     });
 
     // Exactly one new fetch for the new tile.
     expect(mockFetchTile.mock.calls.length).toBe(callsAfterLoad + 1);
 
-    // After the fetch settles: active set grows to 5 tiles (4 initial + 1 new, maxSize=8 → no prune).
-    // Data = 5 × 500 = 2500 values.
+    // After the fetch settles: active set grows to 4 tiles (3 initial + 1 new, maxSize=8 → no prune).
+    // Data = 4 × 500 = 2000 values.
     await waitFor(() => {
       const data = result.current.data;
       expect(data?.type).toBe('aggregate');
       if (data?.type === 'aggregate') {
-        expect(data.series.get(1)!.value.length).toBe(2500);
+        expect(data.series.get(1)!.value.length).toBe(2000);
       }
     });
   });
@@ -683,13 +686,15 @@ describe('useTrendData', () => {
     );
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
-    // Each ensureCovered call covers 1.5 tile-spans to the left, generating 2 candidates.
-    // maxSize=8: no pruning until 9th tile. Tiles grow 4→6→8→8.
+    // Each ensureCovered call covers 2 tile-spans to the right, generating 2 candidates.
+    // Initial load: 3 tiles (left-prefetch at -HALF_HOUR is pre-epoch, filtered).
+    // maxSize=8: no pruning until 9th tile. Tiles grow 3→5→7→8.
     const tileSpan = HALF_HOUR; // defaultViewport: tileSpan = ONE_HOUR / 2
-    const expectedLengths = [3000, 4000, 4000]; // 6, 8, 8 tiles × 500 buckets
+    const initialCachedEnd = ONE_HOUR + HALF_HOUR; // rightmost tile end after initial load
+    const expectedLengths = [2500, 3500, 4000]; // 5, 7, 8 tiles × 500 buckets
     for (let i = 1; i <= 3; i++) {
-      const startMs = -ONE_HOUR * BigInt(i) - tileSpan;
-      const endMs = startMs + tileSpan;
+      const startMs = initialCachedEnd + tileSpan * 2n * BigInt(i - 1);
+      const endMs = startMs + tileSpan * 2n; // exactly 2 tile-spans → 2 right-extension candidates
       act(() => { result.current.ensureCovered(startMs, endMs); });
       const expected = expectedLengths[i - 1]!;
       await waitFor(() => {
@@ -869,11 +874,11 @@ describe('useTrendData', () => {
     expect(data?.type).toBe('aggregate');
     if (data?.type === 'aggregate') {
       const values = data.series.get(1)!.value;
-      // Assembly now includes prefetch tiles: 4 tiles × 500 = 2000 buckets.
-      // Order: prefetch-before (fill 0.0), visible[0] (fill 1.0), visible[1] (fill 2.0), prefetch-after (fill 0.0).
-      expect(values).toHaveLength(2000);
-      expect(values.slice(500, 1000).every(v => v === 1.0)).toBe(true);
-      expect(values.slice(1000, 1500).every(v => v === 2.0)).toBe(true);
+      // 3 tiles: visible[0] (fill 1.0), visible[1] (fill 2.0), prefetch-after (fill 0.0).
+      // The left-prefetch at -HALF_HOUR is pre-epoch and is filtered by tilesForViewport.
+      expect(values).toHaveLength(1500);
+      expect(values.slice(0, 500).every(v => v === 1.0)).toBe(true);
+      expect(values.slice(500, 1000).every(v => v === 2.0)).toBe(true);
     }
     void callIdx;
   });
@@ -1060,9 +1065,11 @@ describe('useTrendData — zoom-level switch', () => {
     // Mock Date.now far into the future so the future-tile filter doesn't block us.
     const dateSpy = vi.spyOn(Date, 'now').mockReturnValue(Number(ONE_HOUR * 100n));
 
+    // Active set after swap to ONE_HOUR*4n viewport: ends at ONE_HOUR*6n (3 tiles).
+    // Use nowMs = ONE_HOUR*100n; request a tile that's well past the active set but
+    // before nowMs so both filters (>= 0n and < nowMs) pass.
     act(() => {
-      // Range far to the left — definitely outside the active set at either level.
-      result.current.ensureCovered(-ONE_HOUR * 10n, -ONE_HOUR * 9n);
+      result.current.ensureCovered(ONE_HOUR * 6n + 1n, ONE_HOUR * 7n);
     });
 
     // ensureCovered must fire a fetch for the out-of-active-set tile.
@@ -1166,7 +1173,8 @@ describe('useTrendData — lastFetchMs', () => {
     });
 
     // Wait for the ensureCovered fetch to resolve and activeTileCount to increase.
-    await waitFor(() => expect(result.current.activeTileCount).toBeGreaterThan(4));
+    // Initial load = 3 tiles (left-prefetch at -HALF_HOUR filtered as pre-epoch).
+    await waitFor(() => expect(result.current.activeTileCount).toBeGreaterThan(3));
 
     // lastFetchMs must have been updated by the ensureCovered tile fetch.
     expect(result.current.lastFetchMs).not.toBeNull();
@@ -1598,6 +1606,30 @@ describe('useTrendData — rangeExceeded', () => {
 
     await waitFor(() => expect(result.current.rangeExceeded).toBe(true));
     expect(mockFetchTile).not.toHaveBeenCalled();
+  });
+
+  it('pre-epoch pan: ensureCovered candidate with startTime < 0n fires no fetch and rangeExceeded stays false', async () => {
+    // defaultViewport = { start: 0n, end: ONE_HOUR }. After the tilesForViewport fix,
+    // visible tiles land at [0n, HALF_HOUR] and [HALF_HOUR, ONE_HOUR]; they're cached
+    // into activeTilesRef. Calling ensureCovered(-ONE_HOUR, ONE_HOUR) would generate
+    // left-extension candidates at [-HALF_HOUR, 0n] and [-ONE_HOUR, -HALF_HOUR] — both
+    // pre-epoch. The ensureCovered filter (startTime >= 0n) must suppress them entirely.
+    const { result } = renderHook(() =>
+      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
+    );
+    await waitFor(() => expect(result.current.data).not.toBeNull());
+    expect(result.current.rangeExceeded).toBe(false);
+    mockFetchTile.mockClear();
+
+    act(() => {
+      result.current.ensureCovered(-ONE_HOUR, ONE_HOUR);
+    });
+
+    // No fetch fired — pre-epoch candidates are silently filtered.
+    expect(mockFetchTile).not.toHaveBeenCalled();
+    // rangeExceeded must remain false: pre-epoch is a tile-alignment artifact,
+    // not a viewport-too-wide condition.
+    expect(result.current.rangeExceeded).toBe(false);
   });
 
   it('ensureCovered: valid-then-over-range transition fires no dynamic fetch during over-range state', async () => {
