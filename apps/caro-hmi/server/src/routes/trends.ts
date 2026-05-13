@@ -119,7 +119,7 @@ router.get('/tile', asyncWrap(async (req, res) => {
   }
 
   try {
-    const tile = await getTrendTile(tagIds, startTime, endTime, bucketCount);
+    const tile = await getTrendTile(tagIds, startTime, endTime, bucketCount, responseTailTs);
     res.json({ ok: true, data: { ...(serializeTile(tile) as Record<string, unknown>), responseTailTs } });
   } catch (e: unknown) {
     const raw    = e as Error & { code?: string };

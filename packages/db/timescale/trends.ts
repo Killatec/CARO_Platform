@@ -552,6 +552,7 @@ export async function getTrendTile(
   startTime: bigint,
   endTime: bigint,
   bucketCount: number,
+  nowMs?: number,
 ): Promise<TrendTile> {
   // ── Validation ──────────────────────────────────────────────────────────────
 
@@ -677,6 +678,24 @@ export async function getTrendTile(
 
   if (!Number.isInteger(bucketSMs)) {
     throw new Error(`getTrendTile: bucketSMs must be integer ms, got ${bucketSMs}`);
+  }
+
+  // Future-bucket nulling (§6.5): any bucket whose startMs > nowMs cannot contain real data —
+  // the server hadn't observed anything past that point at request entry. Null these out so
+  // LOCF gapfill never surfaces phantom flat lines for strictly-future buckets.
+  // Applied after the full watermark-fall-through assembly so it works uniformly on the
+  // stitched result regardless of source mix.
+  const cutoffMs    = BigInt(nowMs ?? Date.now());
+  const bucketSMsBig = BigInt(bucketSMs);
+  for (const s of series) {
+    for (let i = 0; i < s.value.length; i++) {
+      const bucketStartMs = servedStartTime + BigInt(i) * bucketSMsBig;
+      if (bucketStartMs > cutoffMs) {
+        s.value[i] = null;
+        s.min[i]   = null;
+        s.max[i]   = null;
+      }
+    }
   }
 
   return { source, startTime: servedStartTime, endTime: servedEndTime, bucketSMs, n: totalN, series };

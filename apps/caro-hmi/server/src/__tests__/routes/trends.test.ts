@@ -106,7 +106,7 @@ describe('GET /api/v1/trends/tile — unit (mocked)', () => {
     expect(res.body.data.source).toBe('raw');
     expect(res.body.data.startTime).toBe(3_600_000);
     expect(res.body.data.endTime).toBe(3_840_000);
-    expect(mockGet).toHaveBeenCalledWith([1], 3_600_000n, 3_840_000n, 250);
+    expect(mockGet).toHaveBeenCalledWith([1], 3_600_000n, 3_840_000n, 250, expect.any(Number));
   });
 
   it('aggregate happy path: returns 200 with envelope wrapping AggregateTrendTile', async () => {
@@ -402,8 +402,8 @@ describe.skipIf(!HAVE_TIMESCALE)('GET /api/v1/trends/tile — integration (live 
 
   beforeEach(() => {
     mockGet.mockImplementation(
-      (tagIds: number[], startTime: bigint, endTime: bigint, bucketCount: number) =>
-        real.getTrendTile!(tagIds, startTime, endTime, bucketCount),
+      (tagIds: number[], startTime: bigint, endTime: bigint, bucketCount: number, nowMs?: number) =>
+        real.getTrendTile!(tagIds, startTime, endTime, bucketCount, nowMs),
     );
   });
 

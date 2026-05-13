@@ -931,6 +931,193 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — watermark fall-through', asyn
   });
 });
 
+// ── Future-bucket nulling tests ────────────────────────────────────────────────
+//
+// All tests use the 1s CAG dispatch zone (same windows as the 1s_cagg block):
+// START=7_200_000n (2h), END=10_800_000n (3h), COUNT=250, bucketSMs=14_400.
+//
+// nowMs is passed explicitly so tests are deterministic and do not depend on
+// the real Date.now() wall clock.
+//
+// Tag IDs 7001–7099 are reserved for this block.
+
+describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — future-bucket nulling (§6.5)', async () => {
+  const {
+    writeTestSamples, resetTestRange, resetTestRangeExpectClean, refreshTestCagg,
+  } = await import('../helpers/trends-test-range.js');
+
+  const START      = 7_200_000n;   // 2h past epoch
+  const END        = 10_800_000n;  // 3h past epoch
+  const COUNT      = 250;
+  const BUCKET_MS  = 14_400;       // Math.round(14.4 * 1000)
+  const VIEW       = '1s_cagg' as const;
+
+  beforeEach(async () => {
+    await resetTestRangeExpectClean();
+    await refreshTestCagg(VIEW);
+    __test_watermarkOverride.current = new Map([
+      ['tag_samples_1s_cagg', Number(END) + 3_600_000],  // watermark past end — no fall-through
+    ]);
+    __test_clearWatermarkCache();
+  });
+
+  afterEach(async () => {
+    __test_watermarkOverride.current = null;
+    __test_clearWatermarkCache();
+    await resetTestRange();
+    await refreshTestCagg(VIEW);
+  });
+
+  afterAll(async () => {
+    __test_watermarkOverride.current = null;
+    __test_clearWatermarkCache();
+    await resetTestRange();
+    await refreshTestCagg(VIEW);
+  });
+
+  // a) endTime past nowMs: buckets after nowMs are nulled; buckets before are preserved.
+  it('aggregate, endTime past nowMs: future buckets are null; past buckets have real data', async () => {
+    // Write one sample early in the window (bucket 0).
+    await writeTestSamples([{ ts: START + 500n, tagId: 7001, value: 42.0 }]);
+    await refreshTestCagg(VIEW);
+
+    // nowMs = 1ms before the start of bucket 125 → inside bucket 124.
+    // Rule: bucketStartMs > nowMs → nulled.
+    // Bucket 124: start = START + 124*BUCKET_MS < nowMs → preserved.
+    // Bucket 125: start = START + 125*BUCKET_MS > nowMs → nulled.
+    const nowMs = Number(START) + 125 * BUCKET_MS - 1;
+
+    const tile = await getTrendTile([7001], START, END, COUNT, nowMs) as AggregateTrendTile;
+
+    // Buckets 0–124: at or before nowMs → must retain LOCF'd 42.0.
+    expect(tile.series[0].value[0]).toBe(42.0);
+    expect(tile.series[0].value[124]).toBe(42.0);
+    // Bucket 125 onward: bucketStartMs > nowMs → must be null.
+    expect(tile.series[0].value[125]).toBeNull();
+    expect(tile.series[0].value[249]).toBeNull();
+    // min/max nulled in lockstep with value.
+    expect(tile.series[0].min[125]).toBeNull();
+    expect(tile.series[0].max[125]).toBeNull();
+    // Array length unchanged.
+    expect(tile.series[0].value).toHaveLength(COUNT);
+  });
+
+  // b) endTime exactly at nowMs: no buckets nulled (none strictly past nowMs).
+  it('aggregate, endTime exactly at nowMs: no buckets nulled', async () => {
+    await writeTestSamples([{ ts: START + 500n, tagId: 7002, value: 7.0 }]);
+    await refreshTestCagg(VIEW);
+
+    // nowMs = END exactly. All bucket starts are ≤ nowMs (last bucket start = END - BUCKET_MS).
+    const nowMs = Number(END);
+
+    const tile = await getTrendTile([7002], START, END, COUNT, nowMs) as AggregateTrendTile;
+
+    // No future buckets — every bucket start < END = nowMs.
+    expect(tile.series[0].value.every(v => v !== null)).toBe(true);
+    expect(tile.series[0].value[COUNT - 1]).toBe(7.0);
+  });
+
+  // c) endTime entirely before nowMs: no buckets nulled.
+  it('aggregate, endTime before nowMs: no buckets nulled (all in the past)', async () => {
+    await writeTestSamples([{ ts: START + 500n, tagId: 7003, value: 5.0 }]);
+    await refreshTestCagg(VIEW);
+
+    // nowMs well in the future (2 days after END).
+    const nowMs = Number(END) + 2 * 86_400_000;
+
+    const tile = await getTrendTile([7003], START, END, COUNT, nowMs) as AggregateTrendTile;
+
+    expect(tile.series[0].value.every(v => v !== null)).toBe(true);
+    expect(tile.series[0].value[0]).toBe(5.0);
+    expect(tile.series[0].value[COUNT - 1]).toBe(5.0);
+  });
+
+  // d) Bucket containing nowMs is preserved; the next bucket (startMs > nowMs) is nulled.
+  it('bucket containing nowMs preserved; first bucket past nowMs is null', async () => {
+    // Write a sample at bucket 0 so LOCF fills all buckets with 99.0.
+    await writeTestSamples([{ ts: START + 500n, tagId: 7004, value: 99.0 }]);
+    await refreshTestCagg(VIEW);
+
+    // Place nowMs halfway through bucket 10 (startMs = START + 10 * BUCKET_MS).
+    // Bucket 10: start = START + 10*BUCKET_MS, end = START + 11*BUCKET_MS.
+    // nowMs = start_of_bucket_10 + BUCKET_MS/2 → inside bucket 10, which is preserved.
+    // Bucket 11: start > nowMs → nulled.
+    const bucket10Start = Number(START) + 10 * BUCKET_MS;
+    const nowMs = bucket10Start + BUCKET_MS / 2;
+
+    const tile = await getTrendTile([7004], START, END, COUNT, nowMs) as AggregateTrendTile;
+
+    // Bucket 10 (containing nowMs): preserved.
+    expect(tile.series[0].value[10]).toBe(99.0);
+    // Bucket 11 (first strictly past nowMs): null.
+    expect(tile.series[0].value[11]).toBeNull();
+    expect(tile.series[0].min[11]).toBeNull();
+    expect(tile.series[0].max[11]).toBeNull();
+    // Bucket 9 (well in the past): also preserved.
+    expect(tile.series[0].value[9]).toBe(99.0);
+  });
+
+  // e) Raw tile, endTime past nowMs: raw path is unaffected (no future-null pass on raw).
+  it('raw tile, endTime past nowMs: raw response is unchanged (no synthetic nulls)', async () => {
+    // Raw window: bucketS < 1.0.
+    const RAW_START = 3_600_000n;
+    const RAW_END   = 3_840_000n;
+    const RAW_COUNT = 250;
+    // bucketS = 240_000 / 250_000 = 0.96 → raw path.
+
+    await writeTestSamples([
+      { ts: RAW_START + 1_000n, tagId: 7005, value: 11.0 },
+      { ts: RAW_START + 2_000n, tagId: 7005, value: 22.0 },
+    ]);
+
+    // nowMs = well before RAW_END — if raw applied future-null it would strip the second sample.
+    const nowMs = Number(RAW_START) + 500;
+
+    const tile = await getTrendTile([7005], RAW_START, RAW_END, RAW_COUNT, nowMs) as RawTrendTile;
+
+    expect(tile.source).toBe('raw');
+    // Both in-window samples must be present — raw path applies no future-null filtering.
+    expect(tile.series[0].ts).toHaveLength(2);
+    expect(tile.series[0].value).toEqual([11.0, 22.0]);
+  });
+
+  // f) Mixed source (watermark fall-through), endTime past nowMs: future buckets are nulled
+  //    even on the stitched 'mixed' result.
+  it('mixed source, endTime past nowMs: future buckets nulled on the stitched result', async () => {
+    // Override: 1s_cagg covers first 125 buckets; 10s_cagg covers the rest.
+    const splitMs = Number(START) + 125 * BUCKET_MS;
+    __test_clearWatermarkCache();
+    __test_watermarkOverride.current = new Map([
+      ['tag_samples_1s_cagg',   splitMs + 1],             // watermark mid-range → fall-through
+      ['tag_samples_10s_cagg',  Number(END) + 60_000],    // 10s_cagg covers the tail
+    ]);
+
+    // Write data in both halves.
+    await writeTestSamples([
+      { ts: START + 500n,             tagId: 7006, value: 3.0 },
+      { ts: BigInt(splitMs) + 500n,   tagId: 7006, value: 3.0 },
+    ]);
+    await refreshTestCagg(VIEW);
+    await refreshTestCagg('10s_cagg');
+
+    // nowMs cuts at bucket 200 boundary — buckets 200–249 must be nulled.
+    const nowMs = Number(START) + 200 * BUCKET_MS;
+
+    const tile = await getTrendTile([7006], START, END, COUNT, nowMs) as AggregateTrendTile;
+
+    expect(tile.source).toBe('mixed');
+    // Bucket 199 (startMs = nowMs): preserved (startMs === nowMs, not strictly greater).
+    expect(tile.series[0].value[199]).not.toBeNull();
+    // Bucket 200 (startMs = START + 200*BUCKET_MS > nowMs — because nowMs = START + 200*BUCKET_MS,
+    // that's equal, so bucket 200 start === nowMs → NOT strictly greater → also preserved).
+    // Actually bucket 200 start = START + 200*BUCKET_MS = nowMs, so NOT > nowMs. First null is 201.
+    expect(tile.series[0].value[200]).not.toBeNull();
+    expect(tile.series[0].value[201]).toBeNull();
+    expect(tile.series[0].value[249]).toBeNull();
+    expect(tile.series[0].value).toHaveLength(COUNT);
+  });
+});
+
 // ── Seam regression: non-Postgres-epoch-aligned bucketSMs ────────────────────
 //
 // Uses bucketSMs = 6221 ms (not a divisor of POSTGRES_EPOCH_MS = 946_684_800_000).

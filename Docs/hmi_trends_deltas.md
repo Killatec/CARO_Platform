@@ -9,3 +9,4 @@
 - `useTrendData.ts` `pruneAndAdd` warn: now logs `activeSet` and `newTile` epoch-ms ranges alongside the existing message for easier diagnosis.
 - `useLiveSubscription.ts`: `tailToReturn` memoization gates `tail` on mode consistency to prevent one-render mismatch warning in `mergeTrendData`.
 - `render/uplotConfig.ts` `setCursor`: uses `u.posToVal(left, 'x')` for cursor time display instead of `u.data[0]?.[idx]`; idx still forwarded for per-tag legend values.
+- `getTrendTile` gains optional `nowMs` (5th param, defaults to `Date.now()`); post-assembly future-null pass nulls buckets with `startMs > nowMs` on the aggregate path; route passes `responseTailTs`; §6.5, §4.3, §10.1 updated.
