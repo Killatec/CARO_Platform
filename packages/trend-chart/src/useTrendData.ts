@@ -159,6 +159,10 @@ export interface UseTrendDataResult extends HookState {
   /** Forces the main effect to re-run the history fetch path, using an asymmetric
    *  overfetch (1 LEFT, 0 RIGHT) — used on live → fixed transition. */
   refetchHistory: () => void;
+  /** True when the most recent visible-tile fetch failed with INVALID_BUCKET_S
+   *  (viewport span exceeds server's supported range). Cleared on next successful
+   *  fetch. Consumers can render a "Range too wide" message instead of the chart. */
+  rangeExceeded: boolean;
   swapCounter: number;
   activeTileCount: number;
   /** Wall-clock ms of the most recent viewport-change batch (visible tiles only).
@@ -441,6 +445,7 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
   const [lastFetchMs, setLastFetchMs] = useState<number | null>(null);
   const [responseTailTs, setResponseTailTs] = useState<number | null>(null);
   const [historyRefetchVersion, setHistoryRefetchVersion] = useState<number>(0);
+  const [rangeExceeded, setRangeExceeded] = useState(false);
 
   // Tracks the previous viewport span; used to detect preset changes during tailing.
   const prevSpanRef = useRef<bigint | null>(null);
@@ -587,6 +592,7 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     );
 
     const generation = ++generationRef.current;
+    let batchHasRangeExceeded = false;
 
     const getMissing = (tile: Tile): number[] =>
       tagIds.filter(
@@ -633,6 +639,7 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
       levelTransitionPendingRef.current = false;
       setLastFetchMs(Math.round(performance.now() - batchT0));
       setResponseTailTs(computeResponseTailTs(newSorted, tagIds, cache, bucketCount));
+      if (!batchHasRangeExceeded) setRangeExceeded(false);
       finalize();
       setSwapCounter(c => c + 1);
     };
@@ -673,6 +680,10 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
         })
         .catch(e => {
           if (generationRef.current !== generation) return;
+          if ((e as { code?: string }).code === 'INVALID_BUCKET_S') {
+            batchHasRangeExceeded = true;
+            setRangeExceeded(true);
+          }
           console.error('[useTrendData] visible tile fetch failed', {
             tagIds: missing,
             startTime: tile.startTime,
@@ -848,5 +859,5 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     };
   }, []);
 
-  return { ...hookResult, ensureCovered, getActiveRange, evictAll, refetchHistory, swapCounter, activeTileCount, lastFetchMs, responseTailTs };
+  return { ...hookResult, ensureCovered, getActiveRange, evictAll, refetchHistory, rangeExceeded, swapCounter, activeTileCount, lastFetchMs, responseTailTs };
 }

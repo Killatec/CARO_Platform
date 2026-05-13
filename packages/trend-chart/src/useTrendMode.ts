@@ -1,6 +1,7 @@
 import { useReducer } from 'react';
 import type { Dispatch } from 'react';
 import type { Viewport } from './types.js';
+import { MAX_VIEWPORT_SPAN_MS } from './level.js';
 
 const DEFAULT_SIZE_MS = 3_600_000n; // 1 hour default
 
@@ -41,6 +42,19 @@ export type TrendModeAction =
   | { type: 'panApplied'; from: bigint; to: bigint; nowMs: bigint }
   | { type: 'tick'; nowMs: bigint };
 
+/**
+ * Clamp a viewport [from, to] so its span does not exceed MAX_VIEWPORT_SPAN_MS.
+ * Preserves the center of the selection when clamping.
+ * Returns the input unchanged if span is within bounds.
+ */
+function clampToMaxSpan(from: bigint, to: bigint): { from: bigint; to: bigint } {
+  const span = to - from;
+  if (span <= MAX_VIEWPORT_SPAN_MS) return { from, to };
+  const center = (from + to) / 2n;
+  const half = MAX_VIEWPORT_SPAN_MS / 2n;
+  return { from: center - half, to: center + half };
+}
+
 /** Pure reducer — exported for unit testing. */
 export function trendModeReducer(state: ModeState, action: TrendModeAction): ModeState {
   switch (action.type) {
@@ -68,7 +82,7 @@ export function trendModeReducer(state: ModeState, action: TrendModeAction): Mod
     // want tailing. Strict interpretation: no near-now → tailing auto-transition.
     case 'endPickerCommitted': {
       const { to } = action;
-      const { sizeMs } = state;
+      const sizeMs = state.sizeMs > MAX_VIEWPORT_SPAN_MS ? MAX_VIEWPORT_SPAN_MS : state.sizeMs;
       return { mode: 'fixed', from: to - sizeMs, to, sizeMs, lastIntent: 'endPicker' };
     }
 
@@ -77,15 +91,15 @@ export function trendModeReducer(state: ModeState, action: TrendModeAction): Mod
     // edge happens to land near "now" hides intent. Tailing requires a deliberate
     // liveClicked or preset-from-tailing after any zoom.
     case 'zoomApplied': {
-      const { from, to } = action;
-      const sizeMs = to - from;
-      return { mode: 'fixed', from, to, sizeMs, lastIntent: 'zoom' };
+      const clamped = clampToMaxSpan(action.from, action.to);
+      const sizeMs = clamped.to - clamped.from;
+      return { mode: 'fixed', from: clamped.from, to: clamped.to, sizeMs, lastIntent: 'zoom' };
     }
 
     case 'panApplied': {
-      const { from, to } = action;
+      const clamped = clampToMaxSpan(action.from, action.to);
       const sizeMs = state.sizeMs;
-      return { mode: 'fixed', from, to, sizeMs, lastIntent: 'pan' };
+      return { mode: 'fixed', from: clamped.from, to: clamped.to, sizeMs, lastIntent: 'pan' };
     }
 
     case 'tick':

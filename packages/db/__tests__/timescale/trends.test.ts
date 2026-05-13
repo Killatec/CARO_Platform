@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vites
 import {
   getTrendTile,
   getTrendExtent,
+  MAX_BUCKET_S,
   __test_watermarkOverride,
   __test_lastUsedSources,
   __test_getWatermarkMs,
@@ -96,9 +97,9 @@ describe('getTrendTile — INVALID_BUCKET_COUNT', () => {
 
 describe('getTrendTile — INVALID_BUCKET_S', () => {
   // bucketS = Number(endTime - startTime) / (bucketCount * 1000)
-  // bucketS > 14746 → INVALID_BUCKET_S
-  // Range of 3_700_000_000 ms with 250 buckets: 3_700_000_000 / 250_000 = 14_800 > 14746
-  it('throws when derived bucketS exceeds 14746', async () => {
+  // bucketS > MAX_BUCKET_S → INVALID_BUCKET_S
+  // Range of 3_700_000_000 ms with 250 buckets: 3_700_000_000 / 250_000 = 14_800 > MAX_BUCKET_S
+  it('throws when derived bucketS exceeds MAX_BUCKET_S', async () => {
     const start = 1n;
     const end   = start + 3_700_000_000n; // ~42.8 days
     await expect(getTrendTile([1], start, end, 250))

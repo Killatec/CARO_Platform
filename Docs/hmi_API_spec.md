@@ -417,7 +417,7 @@ Validation errors:
 | `INVALID_TAG_IDS` | Empty list, count > 8, non-integer IDs, or ID outside the trendable set |
 | `INVALID_RANGE` | `end_time ≤ start_time` or either timestamp is non-positive |
 | `INVALID_BUCKET_COUNT` | `bucket_count` outside 1..2500 or non-integer |
-| `INVALID_BUCKET_S` | Derived `bucketS` (internal float seconds) outside (0, 14746] — internal sanity check |
+| `INVALID_BUCKET_S` | Derived `bucketS` (internal float seconds) outside (0, MAX_BUCKET_S] (= (0, 14746]) — validated at route level before the DB call; normal clients never trigger this because the trend viewer clamps viewport span client-side |
 | `MISSING_QUERY_PARAM` | Any required query parameter is absent |
 
 ### GET /api/v1/trends/extent
@@ -754,7 +754,7 @@ MODE_CHANGED payload:
 | INVALID_TAG_IDS | 400 | Trends tile: tag_ids empty, count > 8, contains non-integer, or contains IDs outside the trendable set. |
 | INVALID_RANGE | 400 | Trends tile: end_time ≤ start_time, or either timestamp is non-positive. |
 | INVALID_BUCKET_COUNT | 400 | Trends tile: bucket_count outside 1..2500 or non-integer. |
-| INVALID_BUCKET_S | 400 | Trends tile: derived bucketS (internal float seconds) outside (0, 14746] — request spans too large a range for the given bucket count. |
+| INVALID_BUCKET_S | 400 | Trends tile: derived bucketS (internal float seconds) outside (0, MAX_BUCKET_S] (= (0, 14746]) — request spans too large a range for the given bucket count. Normal clients do not trigger this; the trend viewer clamps viewport span to MAX_VIEWPORT_SPAN_MS in the reducer. |
 | MISSING_QUERY_PARAM | 400 | Trends tile: a required query parameter (tag_ids, start_time, end_time, or bucket_count) is absent. |
 | INTERNAL_ERROR | 500 | Unexpected server error. |
 

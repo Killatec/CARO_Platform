@@ -46,6 +46,19 @@ export interface AggregateTrendTile {
 
 export type TrendTile = RawTrendTile | AggregateTrendTile;
 
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+/**
+ * Maximum allowed bucketS (seconds per bucket) accepted by getTrendTile.
+ * Derived from the §6.3 dispatch table's upper edge — 170 days of viewport
+ * span at 1000 total buckets (2 tiles × 500). Bucket widths past this would
+ * be wider than ~4 hours and the 10min CAG doesn't directly serve them.
+ *
+ * Clients are expected to clamp viewport span so this is never hit in normal
+ * operation. The server still validates as defense in depth.
+ */
+export const MAX_BUCKET_S = 14746;
+
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 
@@ -586,9 +599,9 @@ export async function getTrendTile(
   const bucketSMs = Math.round(Number(endTime - startTime) / bucketCount);
   const bucketS   = bucketSMs / 1000;
 
-  if (bucketS <= 0 || bucketS > 14746) {
+  if (bucketS <= 0 || bucketS > MAX_BUCKET_S) {
     throw codeError(
-      `Derived bucketS ${bucketS} is outside the valid range (0, 14746]`,
+      `Derived bucketS ${bucketS} is outside the valid range (0, ${MAX_BUCKET_S}]`,
       'INVALID_BUCKET_S',
     );
   }

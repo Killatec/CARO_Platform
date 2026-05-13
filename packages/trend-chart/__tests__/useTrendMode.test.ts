@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { trendModeReducer, modeToViewport } from '../src/useTrendMode.js';
 import type { ModeState, TrendModeAction } from '../src/useTrendMode.js';
+import { MAX_VIEWPORT_SPAN_MS } from '../src/level.js';
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -317,6 +318,69 @@ describe('tick', () => {
     const nextNow = NOW + 1_000n;
     const next = dispatch(FIXED_1H, { type: 'tick', nowMs: nextNow });
     expect(next).toEqual(FIXED_1H);
+  });
+});
+
+// ── viewport span clamp (MAX_VIEWPORT_SPAN_MS) ────────────────────────────────
+
+describe('clampToMaxSpan — zoomApplied', () => {
+  it('span === MAX_VIEWPORT_SPAN_MS: no clamp applied', () => {
+    const to   = NOW;
+    const from = to - MAX_VIEWPORT_SPAN_MS;
+    const next = dispatch(TAILING_1H, { type: 'zoomApplied', from, to, nowMs: NOW });
+    expect(next.mode).toBe('fixed');
+    if (next.mode !== 'fixed') return;
+    expect(next.to - next.from).toBe(MAX_VIEWPORT_SPAN_MS);
+    expect(next.from).toBe(from);
+    expect(next.to).toBe(to);
+  });
+
+  it('span > MAX_VIEWPORT_SPAN_MS: clamped to MAX, center preserved', () => {
+    const center = NOW - 5_000_000n;
+    const halfOver = MAX_VIEWPORT_SPAN_MS / 2n + 10_000_000n;
+    const from = center - halfOver;
+    const to   = center + halfOver;
+    const next = dispatch(TAILING_1H, { type: 'zoomApplied', from, to, nowMs: NOW });
+    expect(next.mode).toBe('fixed');
+    if (next.mode !== 'fixed') return;
+    expect(next.to - next.from).toBe(MAX_VIEWPORT_SPAN_MS);
+    // center preserved within 1ms (bigint division truncates by 1 in odd-ms spans)
+    const resultCenter = (next.from + next.to) / 2n;
+    expect(Math.abs(Number(resultCenter - center))).toBeLessThanOrEqual(1);
+  });
+
+  it('span < MAX_VIEWPORT_SPAN_MS: passes through unchanged', () => {
+    const from = NOW - 3_600_000n; // 1h — well within bounds
+    const to   = NOW;
+    const next = dispatch(TAILING_1H, { type: 'zoomApplied', from, to, nowMs: NOW });
+    expect(next.mode).toBe('fixed');
+    if (next.mode !== 'fixed') return;
+    expect(next.from).toBe(from);
+    expect(next.to).toBe(to);
+  });
+});
+
+describe('clampToMaxSpan — endPickerCommitted', () => {
+  it('sizeMs > MAX: clamped before computing from = to - sizeMs', () => {
+    const overMax: ModeState = { mode: 'fixed', from: 0n, to: NOW, sizeMs: MAX_VIEWPORT_SPAN_MS + 1_000_000n, lastIntent: 'zoom' };
+    const next = dispatch(overMax, { type: 'endPickerCommitted', to: NOW, nowMs: NOW });
+    expect(next.mode).toBe('fixed');
+    if (next.mode !== 'fixed') return;
+    expect(next.sizeMs).toBe(MAX_VIEWPORT_SPAN_MS);
+    expect(next.to).toBe(NOW);
+    expect(next.from).toBe(NOW - MAX_VIEWPORT_SPAN_MS);
+  });
+});
+
+describe('clampToMaxSpan — panApplied', () => {
+  it('pan within bounds: passes through (span-preserving, so defensive no-op)', () => {
+    const from = NOW - 3_600_000n;
+    const to   = NOW;
+    const next = dispatch(FIXED_1H, { type: 'panApplied', from, to, nowMs: NOW });
+    expect(next.mode).toBe('fixed');
+    if (next.mode !== 'fixed') return;
+    expect(next.from).toBe(from);
+    expect(next.to).toBe(to);
   });
 });
 

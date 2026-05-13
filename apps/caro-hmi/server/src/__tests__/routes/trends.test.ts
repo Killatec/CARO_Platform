@@ -6,7 +6,7 @@ import compression from 'compression';
 import type { ErrorRequestHandler } from 'express';
 import { errorHandler } from '@caro/server';
 import trendsRouter from '../../routes/trends.js';
-import { getTrendTile, getTrendExtent, writeTagSamples, timescalePool } from '@caro/db';
+import { getTrendTile, getTrendExtent, MAX_BUCKET_S, writeTagSamples, timescalePool } from '@caro/db';
 import type { RawTrendTile, AggregateTrendTile } from '@caro/db';
 
 // ── Mock @caro/db, preserving real impl for integration tests ─────────────────
@@ -286,6 +286,33 @@ describe('GET /api/v1/trends/tile — unit (mocked)', () => {
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe('INVALID_BUCKET_S');
     expect(res.body.error.message).toBe('bad bucket');
+  });
+
+  // ── INVALID_BUCKET_S route-level early validation ───────────────────────────
+
+  it('span producing bucketS > MAX_BUCKET_S → 400 INVALID_BUCKET_S, getTrendTile not called', async () => {
+    // MAX_BUCKET_S × 250 buckets × 1000 ms/s + 1 ms → bucketS just over the limit
+    const spanMs = BigInt(MAX_BUCKET_S) * 250n * 1000n + 1n;
+    const startTime = 1_000_000n;
+    const endTime   = startTime + spanMs;
+    const res = await request(app)
+      .get(`/api/v1/trends/tile?tag_ids=1&start_time=${startTime}&end_time=${endTime}&bucket_count=250`);
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('INVALID_BUCKET_S');
+    expect(mockGet).not.toHaveBeenCalled();
+  });
+
+  it('span producing bucketS === MAX_BUCKET_S → route passes through to getTrendTile', async () => {
+    mockGet.mockResolvedValueOnce(AGG_TILE);
+    // Exactly MAX_BUCKET_S seconds per bucket with 250 buckets.
+    const spanMs = BigInt(MAX_BUCKET_S) * 250n * 1000n;
+    const startTime = 1_000_000n;
+    const endTime   = startTime + spanMs;
+    const res = await request(app)
+      .get(`/api/v1/trends/tile?tag_ids=1&start_time=${startTime}&end_time=${endTime}&bucket_count=250`);
+    // Route passes through — DB mock returns AGG_TILE → 200.
+    expect(res.status).toBe(200);
+    expect(mockGet).toHaveBeenCalledOnce();
   });
 
   it('db throws unknown error → 500 INTERNAL_ERROR, console.error called', async () => {

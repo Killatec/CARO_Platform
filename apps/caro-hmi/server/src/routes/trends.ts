@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { asyncWrap } from '@caro/server';
 import type { CaroError } from '@caro/server';
-import { getTrendTile, getTrendExtent } from '@caro/db';
+import { getTrendTile, getTrendExtent, MAX_BUCKET_S } from '@caro/db';
 import type { TrendTile } from '@caro/db';
 
 // HTTP status for known @caro/db error codes; anything else → 500.
@@ -115,6 +115,16 @@ router.get('/tile', asyncWrap(async (req, res) => {
     const err = new Error('bucket_count must be an integer in 1..2500') as CaroError;
     err.status = 400;
     err.code   = 'INVALID_BUCKET_COUNT';
+    throw err;
+  }
+
+  const bucketS = Number(endTime - startTime) / (bucketCount * 1000);
+  if (bucketS <= 0 || bucketS > MAX_BUCKET_S) {
+    const err = new Error(
+      `Derived bucketS ${bucketS} is outside the valid range (0, ${MAX_BUCKET_S}]`,
+    ) as CaroError;
+    err.status = 400;
+    err.code   = 'INVALID_BUCKET_S';
     throw err;
   }
 

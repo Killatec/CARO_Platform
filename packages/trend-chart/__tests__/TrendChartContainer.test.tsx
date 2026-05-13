@@ -115,6 +115,7 @@ function makeResult(tagIds: number[], opts: Partial<UseTrendDataResult> = {}): U
     ensureCovered: vi.fn(),
     evictAll: vi.fn(),
     refetchHistory: vi.fn(),
+    rangeExceeded: false,
     swapCounter: 0,
     activeTileCount: 0,
     lastFetchMs: null,
@@ -241,6 +242,12 @@ describe('TrendChartContainer', () => {
     mockUseTrendData.mockReturnValue(makeResult([], { data: null, isLoading: false }));
     renderContainer([]);
     expect(screen.getByText('No tags selected.')).toBeTruthy();
+  });
+
+  it('rangeExceeded=true renders "Range too wide" message instead of chart or loading', () => {
+    mockUseTrendData.mockReturnValue(makeResult([1], { rangeExceeded: true }));
+    renderContainer([1]);
+    expect(screen.getByText('Range too wide. Zoom in or pick a smaller preset.')).toBeTruthy();
   });
 
   // ── EndPicker integration ─────────────────────────────────────────────────

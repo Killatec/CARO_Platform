@@ -71,7 +71,7 @@ All other layers (Node/Express, WebSocket, `@caro/db`, `@caro/hmi-context`, `@ca
 
 | Component | Location | Role |
 |---|---|---|
-| Trends REST endpoint | `apps/caro-hmi/server/src/routes/trends.ts` | Serves `GET /api/v1/trends/tile`. Validates `tag_ids`, `start_time`, `end_time`, `bucket_count`. Derives `bucketS = Number(endTime - startTime) / (bucketCount * 1000)` server-side and validates it falls within (0, 14746]. Delegates to `getTrendTile()` from `@caro/db`. Returns the standard platform envelope. Stateless — no resolution selection, no window math. |
+| Trends REST endpoint | `apps/caro-hmi/server/src/routes/trends.ts` | Serves `GET /api/v1/trends/tile`. Validates `tag_ids`, `start_time`, `end_time`, `bucket_count`. Derives `bucketS = Number(endTime - startTime) / (bucketCount * 1000)` server-side and validates it falls within (0, MAX_BUCKET_S] (= (0, 14746]). Delegates to `getTrendTile()` from `@caro/db`. Returns the standard platform envelope. Stateless — no resolution selection, no window math. |
 | TrendSnapshotScheduler | `apps/caro-hmi/server/src/trend-snapshot-scheduler.ts` | Already in production. Ensures every trendable tag gets ≥1 DB row per minute via piggyback (on next MQTT ingest) or force-write (silent modules). The 1-minute cadence is a hard contract — the trends query's bounded `prev` subquery (§5.5) depends on it. |
 | `getTrendTile()` | `packages/db/src/timescale/trends.ts` (new file) | Single named function: `getTrendTile(tagIds, startTime, endTime, bucketCount)`. Derives `bucketS = Number(endTime - startTime) / (bucketCount * 1000)` internally, then dispatches on `bucketS` per §6.3: `bucketS < 1.0` → raw `tag_samples`; `1.0 ≤ bucketS < 16` → `1s_cagg`; `16 ≤ bucketS < 160` → `10s_cagg`; `160 ≤ bucketS < 1600` → `1min_cagg`; `≥ 1600` → `10min_cagg`. Returns the actual natural epoch-aligned bucket grid: for aligned requests this matches `(startTime, endTime)` with exactly `bucketCount` rows; for unaligned requests `startTime` and `endTime` in the response reflect the served grid boundary and `n` is `bucketCount + 1` (§6.2). **Watermark-aware fall-through (§4.3):** any query whose `endTime > source.watermark_ts` is split — materialized portion served from the chosen source, trailing portion from the next-finer source (CAG or raw). **Multi-tag batching:** one DB round-trip across all requested tag IDs using `WHERE tag_id = ANY($tagIds)`; results split by `tag_id` into the `series` array. **Per-query tag cap N ≤ 8** (§6.6) — the server rejects requests above this; charts with more tags fan out at the client. Platform rule forbids raw SQL in apps — all queries live here. |
 | `packages/trend-chart/` | New workspace package | Full client-side feature: chart component, data hooks, cache, tag picker, time range bar, legend, saved-views dropdown (Phase B). Owns all window/level math, tile fan-out across the 2-tile parallel pattern (§10.2), and the N≤8 tag fan-out (§10.4). |
@@ -358,7 +358,7 @@ Validation errors:
 | `INVALID_TAG_IDS` | `tag_ids` empty, count > 8, contains non-integer, or contains a tag ID not present in the Tag Registry's trendable set |
 | `INVALID_RANGE` | `end_time ≤ start_time`, or either timestamp is non-positive |
 | `INVALID_BUCKET_COUNT` | `bucket_count` outside 1..2500 or non-integer |
-| `INVALID_BUCKET_S` | derived `bucketS` outside (0, 14746] — an internal sanity check surfaced as a 400; clients should not trigger this if they send valid ranges with valid bucket counts |
+| `INVALID_BUCKET_S` | derived `bucketS` outside (0, MAX_BUCKET_S] (= (0, 14746]) — validated at the route level before the DB call, and again inside `getTrendTile()` as defense in depth. Normal clients do not trigger this because `useTrendMode`'s reducer clamps viewport span to MAX_VIEWPORT_SPAN_MS (see §6.3 Client-side clamp). |
 
 ### 6.3 Bucket Size Selection and Source Dispatch
 
@@ -386,9 +386,11 @@ Where Div = `bucketS / native_bucket_s` of the chosen CAG. The cheap zone is **D
 | 16 min – 4 h | 1s CAG | 1.92 – 14.4 s | 1.92 – 14.4 |
 | 4 h – 32 h | 10s CAG | 28.8 – 115.2 s | 2.88 – 11.52 |
 | 32 h – 10 d | 1min CAG | 230.4 – 921.6 s | 3.84 – 15.36 |
-| 10 d – 170 d | 10min CAG | 1843 – 14746 s | 3.07 – 24.58 |
+| 10 d – 170 d | 10min CAG | 1843 – 14746 s (`MAX_BUCKET_S`) | 3.07 – 24.58 |
 
 Worst-case Div across the operating range is 24.58 (10min CAG at 85–170 d windows) — outside the cheap zone but inside the usable zone. Every other operating point stays Div ≤ 16. If the 10min CAG's worst-case proves too slow once 85+ d of history accumulates, an hourly CAG can be added (Phase B+, see §17.2).
+
+**Client-side clamp.** The trend viewer enforces `MAX_VIEWPORT_SPAN_MS` in `useTrendMode`'s reducer so users cannot drag-zoom past the server's supported range. `MAX_VIEWPORT_SPAN_MS = MAX_BUCKET_S × 1000 × bucketCount × visibleTilesPerWindow` (≈ 170.67 days at defaults). The clamp preserves the center of the user's selection when reducing the span. `MAX_BUCKET_S` is defined in `packages/db/timescale/trends.ts` and duplicated with a cross-reference comment in `packages/trend-chart/src/level.ts` (not imported, to avoid pulling pg-runtime into the browser bundle). Server-side validation (route + `getTrendTile`) remains as defense in depth for non-viewer consumers and edge cases (URL manipulation, saved views).
 
 **Range span uniformity.** Range span is derived from `bucketS` at the trend viewer's fixed `bucketCount=250` — there are no fixed-per-level tile spans. The number of buckets per request is the contract, not the duration. This means at low Div the range span shrinks proportionally; at high Div it grows. The client always fetches the same response shape: 250 values per tag per range (when `bucket_count=250`).
 

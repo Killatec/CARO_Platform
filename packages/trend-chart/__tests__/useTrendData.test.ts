@@ -1496,3 +1496,37 @@ describe('useTrendData — refetchHistory', () => {
     }
   });
 });
+
+// ── rangeExceeded ─────────────────────────────────────────────────────────────
+
+describe('useTrendData — rangeExceeded', () => {
+  it('fetch error with code INVALID_BUCKET_S sets rangeExceeded=true', async () => {
+    const bucketSErr = Object.assign(new Error('too wide'), { code: 'INVALID_BUCKET_S' });
+    mockFetchTile.mockRejectedValue(bucketSErr);
+
+    const { result } = renderHook(() =>
+      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
+    );
+
+    await waitFor(() => expect(result.current.rangeExceeded).toBe(true));
+  });
+
+  it('successful fetch after INVALID_BUCKET_S clears rangeExceeded', async () => {
+    const bucketSErr = Object.assign(new Error('too wide'), { code: 'INVALID_BUCKET_S' });
+    mockFetchTile.mockRejectedValueOnce(bucketSErr);
+
+    const { result, rerender } = renderHook(
+      (props: { viewport: Viewport }) => useTrendData({ ...props, tagIds: [1] }),
+      { initialProps: { viewport: defaultViewport } },
+    );
+
+    await waitFor(() => expect(result.current.rangeExceeded).toBe(true));
+
+    // Rerender with a good mock so the next fetch succeeds.
+    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
+    rerender({ viewport: { start: ONE_HOUR, end: ONE_HOUR * 2n } });
+
+    await waitFor(() => expect(result.current.rangeExceeded).toBe(false));
+    expect(result.current.data).not.toBeNull();
+  });
+});

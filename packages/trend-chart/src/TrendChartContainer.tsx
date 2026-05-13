@@ -78,7 +78,7 @@ export function TrendChartContainer({
 
   // ── Data fetch (driven by explicit dataViewport) ──────────────────────────
   const trendData = useTrendData({ viewport: dataViewport, tagIds, isTailing: modeState.mode === 'tailing' });
-  const { data, isLoading, ensureCovered, getActiveRange, swapCounter, activeTileCount, lastFetchMs } = trendData;
+  const { data, isLoading, ensureCovered, getActiveRange, swapCounter, activeTileCount, lastFetchMs, rangeExceeded } = trendData;
 
   // ── Stable refs for synchronous access from callbacks and cleanup ─────────
   // Updated synchronously during render so callbacks always see the latest values.
@@ -290,6 +290,14 @@ export function TrendChartContainer({
       </div>
     </>
   );
+
+  if (rangeExceeded) {
+    return (
+      <div style={LOADING_HINT}>
+        Range too wide. Zoom in or pick a smaller preset.
+      </div>
+    );
+  }
 
   if (!mergedData) {
     return (

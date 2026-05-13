@@ -51,6 +51,29 @@ export const TREND_VIEWER_DEFAULTS = {
 } as const;
 
 /**
+ * Maximum allowed bucketS (seconds per bucket) accepted by the server.
+ * MUST stay in sync with `MAX_BUCKET_S` in `packages/db/timescale/trends.ts`.
+ * Not imported from @caro/db because doing so would pull pg-loaded runtime
+ * into the browser bundle; duplication with a cross-ref is the pragmatic call
+ * for a single stable number.
+ */
+export const MAX_BUCKET_S = 14746;
+
+/**
+ * Maximum viewport span supported by the trend API at the chart's default
+ * geometry. Computed from MAX_BUCKET_S × per-tile bucket count × visible
+ * tiles per window. ~170.67 days at defaults (14746 × 1000 × 500 × 2).
+ *
+ * Used by useTrendMode's reducer to clamp drag-zoom and other actions that
+ * produce a viewport span. Without this clamp, users can drag past the
+ * server's supported range and every fetch returns 400 INVALID_BUCKET_S.
+ */
+export const MAX_VIEWPORT_SPAN_MS =
+  BigInt(MAX_BUCKET_S) * 1000n
+    * BigInt(TREND_VIEWER_DEFAULTS.bucketCount)
+    * BigInt(TREND_VIEWER_DEFAULTS.visibleTilesPerWindow);
+
+/**
  * Returns bucket-grid-aligned tiles covering [rangeStart, rangeEnd).
  *
  * Alignment strategy: right-anchor on the bucket grid. lastEnd is the first
