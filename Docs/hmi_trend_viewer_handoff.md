@@ -1,5 +1,5 @@
 # CARO_HMI Trend Viewer — Subsystem Handoff
-**Updated:** 2026-05-11 | **Phase A Steps 1–11 Complete** | **Next:** Step 12 (Tag picker)
+**Updated:** 2026-05-13 | **Phase A Steps 1–11 Complete** | **Next:** Step 12 (Tag picker)
 
 ---
 
@@ -19,9 +19,9 @@ Phase A Steps 1–11 are complete. Steps 1–6 delivered the server-side trends 
 | 8 | `useTrendData` hook: 2-visible + 2-prefetch parallelism, ⌈N/8⌉ fan-out, stale-gen guard | ✅ Done |
 | 9 | `TrendChart` static rendering: uPlot wrapper, per-trace Y-scales, legend (vertical right column), cursor display | ✅ Done |
 | 10 | Mode state machine + time-range UI: tailing/fixed transitions, 8-preset strip, End picker (End-only), Live button, pan/zoom interactions | ✅ Done |
-| 11 | Live tail: dedicated trend WS channel, `useLiveSubscription` hook (ring buffer + bucket accumulator + raw buffer), unified `mergeTrendData` (live-wins-on-coverage, no `isTailing`), eviction-on-live-entry cache freshness (Gap B fix), server-side future-bucket nulling in `getTrendTile`, `dispatchModeAction` cleanup wrapper | ✅ Done |
+| 11 | Live tail: dedicated trend WS channel, `useLiveSubscription` hook (ring buffer + bucket accumulator + raw buffer; `commitAndDrain` returns void), unified `mergeTrendData` (live-wins-on-coverage, no `isTailing`), eviction-on-live-entry cache freshness (Gap B fix), server-side future-bucket nulling in `getTrendTile`, no-clamp wheel-zoom + `gatedFetchTile` over-range gating + inline "Range too wide" message in `CursorDisplay`, `dispatchModeAction` cleanup wrapper | ✅ Done |
 
-**Test coverage (2026-05-13):** 561 passing in `@caro/trend-chart` (23 test files), 67 in `@caro/hmi-context`, 115 in `@caro/db`, 256 in the HMI server, 33 in the HMI client.
+**Test coverage (2026-05-13):** 583 passing in `@caro/trend-chart` (23 test files), 67 in `@caro/hmi-context`, 115 in `@caro/db`, 256 in the HMI server, 33 in the HMI client.
 
 ---
 
@@ -35,8 +35,10 @@ packages/trend-chart/
     api.ts                        # fetchTile() — typed REST fetch; TileApiResponse discriminated union
 
     # ── Core primitives (no React) ─────────────────────────────────────────────
-    level.ts                      # alignedTilesInRange, tilesForViewport, deriveBucketSMs,
-                                  # TREND_VIEWER_DEFAULTS, TS_BUCKET_ORIGIN_MS, floorDiv, ceilDiv
+    level.ts                      # alignedTilesInRange, tilesForViewport (filters startTime<0n),
+                                  # deriveBucketSMs, TREND_VIEWER_DEFAULTS, TS_BUCKET_ORIGIN_MS,
+                                  # MAX_BUCKET_S (mirror of @caro/db), MAX_VIEWPORT_SPAN_MS,
+                                  # floorDiv, ceilDiv
     tileCache.ts                  # TileCache (LRU, 50 MB cap), makeTileCacheKey
     colorAssign.ts                # colorAssign(tagId), PALETTE, PALETTE_SIZE
     dateUtils.ts                  # msToDatetimeLocal, datetimeLocalToMs, getTzOffsetMs,
@@ -52,20 +54,26 @@ packages/trend-chart/
                                   # isTailing=true: live-spine path — one tile spanning full
                                   #   viewport, bypassing LRU cache; result via assembleLiveSpine
                                   # isTailing=false: history path — tilesForViewport + LRU cache
+                                  # gatedFetchTile useCallback wraps all 4 fetch sites; rejects
+                                  #   over-range with CLIENT_OVER_RANGE and pre-epoch tiles
+                                  #   (startTime<0n) with CLIENT_PRE_EPOCH sentinels; sets
+                                  #   rangeExceeded on the former, silent skip on the latter
+                                  # isViewportOverRange helper gates ensureCovered
                                   # returns { data, isLoading, error, ensureCovered, getActiveRange,
-                                  #           evictAll, refetchHistory,
+                                  #           evictAll, refetchHistory, rangeExceeded, lastFetchMs,
                                   #           swapCounter, activeTileCount, responseTailTs }
     useTrendMode.ts               # tailing/fixed mode state machine; exports reducer for unit
                                   # testing; tick action dispatched by TrendChartContainer on
                                   # TREND_DELTA receipt
     useLiveSubscription.ts        # Step 11: trend WS subscription + ring buffer + bucket
                                   # accumulator (aggregate) + raw buffer (raw mode);
-                                  # commitAndDrain() for atomic tailing-exit (returns void);
-                                  # TREND_RING_CAPACITY=20 per tag; returns LiveTail
+                                  # commitAndDrain() returns void — clears rings, accumulators,
+                                  # rawBuffers; TREND_RING_CAPACITY=20 per tag; returns LiveTail
                                   # (AggregateTail or RawTail)
     mergeTrendData.ts             # Step 11: merges cached TrendData + LiveTail; unified
                                   # coverage rule — live wins on its range (null included);
-                                  # aggregate clips to liveEndIndex, raw drops ts>=minLiveTs
+                                  # aggregate clips to liveEndIndex, raw drops ts>=minLiveTs;
+                                  # no isTailing parameter
     useZoomState.ts               # zoom level state; exports computeDragZoomViewport (pure,
                                   # tested separately); syncs to modeViewport via useEffect;
                                   # syncDataViewport() bypasses lastIntent skip for live→fixed
@@ -82,7 +90,10 @@ packages/trend-chart/
     EndPicker.tsx                 # footer: End datetime picker button + Live/Go Live button
     Legend.tsx                    # vertical column (right side, 180px); per-trace rows with
                                   # color swatch, value (showLastWhenIdle rule), remove button
-    CursorDisplay.tsx             # cursor-time display in the legend area
+    CursorDisplay.tsx             # cursor-time display in the legend area;
+                                  # rangeExceededMessage prop renders "Range too wide. Zoom in
+                                  # or pick a smaller preset." inline on the right side;
+                                  # lineHeight:16px pinned so toggling does not reflow
 
     render/
       uplotConfig.ts              # builds uPlot Options; onCursorChange callback (idx, tsMs)
@@ -101,7 +112,9 @@ packages/trend-chart/
       dateUtils.test.ts           # timezone-aware date helpers
       useTrendData.test.ts        # fetch orchestration, fan-out, stale-gen, ensureCovered,
                                   # pre-load fallback bucketSMs integer invariant;
-                                  # isTailing skip guard (3 cases)
+                                  # isTailing skip guard (3 cases); gatedFetchTile
+                                  # CLIENT_OVER_RANGE / CLIENT_PRE_EPOCH sentinels;
+                                  # ensureCovered pre-epoch candidate filter
       useTrendMode.test.ts        # trendModeReducer pure unit tests (37 cases)
       useLiveSubscription.test.ts # Step 11: ring buffer lifecycle, bucket accumulator close,
                                   # raw buffer, viewportSpanMs trim, rawBuffers NOT trimmed
@@ -190,7 +203,9 @@ A `useEffect` keyed on `modeViewport.start/end` resets all three on `preset`, `l
 Key behaviors:
 
 - **Tile geometry**: `TREND_VIEWER_DEFAULTS.bucketCount=500`, `visibleTilesPerWindow=2`, `overfetchPerSide=1`. `deriveBucketSMs(viewport)` derives the bucket size from viewport span.
-- **`ensureCovered`**: called by `checkAndExtendXCoverage` in `axisInteractions.ts` to request additional tiles on pan. Reads the current active tile bounds from `getActiveRange()` (not `u.data[0]`) so raw-mode sparse sample timestamps don't distort the threshold check. Anchors candidate tiles outward from `activeTilesRef` edges; short-circuits when `activeTilesRef` is empty (live mode).
+- **`gatedFetchTile` wrapper**: a `useCallback` around `fetchTile` that all four fetch sites (live-spine, history-visible, history-prefetch, `ensureCovered`) delegate through. Rejects with `CLIENT_PRE_EPOCH` when `startTime < 0n` (silent skip) and with `CLIENT_OVER_RANGE` when the derived `bucketS > MAX_BUCKET_S` (sets `rangeExceeded = true`). Catch handlers at each site recognize the sentinels by `error.code` and skip silently; only `CLIENT_OVER_RANGE` propagates to the batch-level `batchHasRangeExceeded` flag (prevents `performSwap` from clearing the state mid-batch).
+- **`rangeExceeded` state**: boolean exposed on the hook result. The main effect short-circuits before constructing tiles when `derivedBucketS > MAX_BUCKET_S`, setting `rangeExceeded = true` and returning. `isViewportOverRange(viewport)` is the shared helper; `ensureCovered` is gated on it before the `active.length === 0` check so pan-extension fetches are also suppressed in the over-range state.
+- **`ensureCovered`**: called by `checkAndExtendXCoverage` in `axisInteractions.ts` to request additional tiles on pan. Reads the current active tile bounds from `getActiveRange()` (not `u.data[0]`) so raw-mode sparse sample timestamps don't distort the threshold check. Anchors candidate tiles outward from `activeTilesRef` edges; short-circuits when `activeTilesRef` is empty (live mode); candidate filter drops `t.startTime < 0n` and `t.startTime >= nowMs`.
 - **`getActiveRange`**: stable callback returning `{ startMs, endMs }` from `activeTilesRef.current`, or `null` if empty. Passed through `TrendChart` via `getActiveRangeRef` to `checkAndExtendXCoverage`.
 - **`refetchHistory()`**: bumps `historyRefetchVersion` state and sets `liveExitRefetchPendingRef`. Forces the main effect to re-run the history path even when `dataViewport` didn't change (the first `panApplied` on live exit carries live-viewport bounds). The history branch reads the flag and passes `overfetchRightCount: 0` to `tilesForViewport`, yielding 2 visible + 1 left prefetch instead of 2 + 1 + 1.
 - **`swapCounter`**: incremented each time the tile set swaps on a bucket-size change (zoom across a §6.3 dispatch threshold). TrendChart uses this to trigger a full uPlot rebuild.
@@ -235,7 +250,7 @@ It renders:
 
 It owns `tagIds` state (initialized from `initialTagIds` prop; removes come from `Legend` via `TrendChart.onTagRemove`). It derives `xRange` (the imperative X-scale update value) from `modeViewport` via `useMemo`. It passes `showLastWhenIdle={modeState.mode === 'tailing'}` to `TrendChart` (forwarded to `Legend`).
 
-`dispatchModeAction` is a wrapper around `dispatch` that handles all actions that can exit tailing mode. On tailing→fixed transitions it: (1) calls `liveSubRef.current.commitAndDrain()` to drain the live buffer; (2) calls `syncDataViewport(modeToViewport(next))` to force `dataViewport` to the post-transition viewport, bypassing the `lastIntent` skip; (3) calls `trendDataRef.current.refetchHistory()` to guarantee the history fetch fires even if `dataViewport` bounds happen to equal the prior value. No `evictAll` is called — live mode never wrote to the LRU cache, so there is nothing to evict.
+`dispatchModeAction` is a wrapper around `dispatch` that handles all actions that can exit or enter tailing mode. On tailing→fixed transitions it: (1) calls `liveSubRef.current.commitAndDrain()` (returns void) to clear rings, accumulators, and rawBuffers; (2) calls `syncDataViewport(modeToViewport(next))` to force `dataViewport` to the post-transition viewport, bypassing the `lastIntent` skip; (3) calls `trendDataRef.current.refetchHistory()` to guarantee the history fetch fires even if `dataViewport` bounds happen to equal the prior value. On fixed→tailing transitions (Live button), it calls `trendDataRef.current.evictAll()` before dispatching — clearing the entire LRU cache to eliminate Gap B (stale CAG-lag nulls accumulating across sessions). See spec §10.8 and §11.B.
 
 Props: `tagIds: number[]`, `siteTimezone?: string`, `width?: number` (default 900), `height?: number` (default 420).
 
@@ -307,7 +322,7 @@ Spec was updated (v1.1) to reflect all items below — this list is for historic
 19. **`tilesForViewport` tile-grid right-anchor (v1.6)** — right anchor changed from bucket grid to tile grid; prefetch filter lookahead extended by one `tileSpanMs`. Eliminates constant fetch→evict cycles during tailing. `alignedTilesInRange` is unchanged.
 20. **Watchdog null marker dropped (v1.6)** — original plan called for `TelemetryIntake.watchdogTick()` to emit a synthetic null event at `lastSeen + 1 ms` to mark the precise gap start. Dropped because LKV null + synthetic-on-flush achieves the same bucket-null result without per-tag +1 ms bookkeeping or bucket-reclassification complexity. Trade-off: gap-start timestamp lags by up to one watchdog-tick interval (~500 ms worst case, `watchdogTickInterval = min(watchdogTimeoutMs, 500)`). Within the tolerance class of the watchdog timeout itself.
 21. **Open-tile model rejected (v1.6)** — spec §10.6 described an "open range commits to LRU cache" model where cached tiles would be mutated as live data accumulated. Rejected in favor of tail-extension: cached tiles are immutable; `useLiveSubscription` owns a separate accumulator; `mergeTrendData` concatenates them at render time. Simpler invariants, no cache-mutation race, `commitAndDrain` on tailing exit is the only interaction point. `evictAll()` on fixed→tailing (Live entry) ensures cache freshness across sessions; see spec §10.8.
-22. **`responseTailTs`-based raw buffer trim dropped for 2×Span (v1.6)** — original plan trimmed raw buffers to `moduleTs >= responseTailTs - 1000` (same threshold as FIFO). Dropped because advancing `trimThreshold` as new tiles loaded would push `minLiveTs` forward in `mergeRaw`, letting LOCF gapfill from after-prefetch tiles leak through the cached-drop filter. Raw buffers now trimmed to `latestTs - 2×viewportSpanMs` in the WS callback (wall-clock bounded) and cleared only on tailing exit. See gotcha in §10.
+22. **`responseTailTs`-based raw buffer trim dropped for 2×Span (v1.6)** — original plan trimmed raw buffers to `moduleTs >= responseTailTs - 1000` (same threshold as the ring). Dropped because advancing `trimThreshold` as new tiles loaded would push `minLiveTs` forward in `mergeRaw`, letting LOCF gapfill from after-prefetch tiles leak through the cached-drop filter. Raw buffers now trimmed to `latestTs - 2×viewportSpanMs` in the WS callback (wall-clock bounded) and cleared only on tailing exit. See gotcha in §10.
 23. **uPlot `range` function must read from `userScaleRef`, not be identity (v1.6)** — original plan used `range: (u, min, max) => [min, max]` (identity) to pass through `setScale` values. Discovered that uPlot clamps the identity return to the data extent, ignoring `setScale` requests that exceed it. Replaced with a `userScaleRef`-backed range function: the ref is updated synchronously before every `setScale` call (imperative path, pan handler, zoom helper), and `range` returns the ref value if set, else defers to uPlot's default autoscale. This makes the imperative X-scale update path reliable across all viewport advance scenarios.
 24. **`setSelectHook` updates `userScaleRef` before calling `u.setScale` (v1.7)** — the drag-zoom completion handler in `uplotConfig.ts` must update `userScaleRef.current` immediately before `u.setScale`. If the ref is stale when `setScale` fires, `u.scales['x']` ends up locked at the previous range (the range function returns the old ref value). This is a subtle ordering dependency within the same callback frame; calling `setScale` first then updating the ref is wrong.
 25. **Live mode bypasses LRU cache entirely; `evictAll` removed from mode transitions (v1.7)** — supersedes divergences 17 and 21. Fixed→live transition fires one spine fetch spanning the full viewport at `visibleTilesPerWindow × bucketCount` buckets (1000 at defaults), using `viewport.start`/`viewport.end` exactly (no tile-grid alignment). Result goes directly to `hookResult.data` via `assembleLiveSpine`; cache is neither read nor written; `activeTilesRef` stays empty. On tailing→fixed, `commitAndDrain()` drains the live buffer, then `syncDataViewport` + `refetchHistory()` kick off the history fetch. No cache eviction needed or performed. The LRU cache is history-mode-only.
@@ -316,6 +331,14 @@ Spec was updated (v1.1) to reflect all items below — this list is for historic
 26. **`isTailingRef` replaces `isTailing` in effect dep array; `spineFetchInFlightRef` gates re-entry (v1.7)** — putting `isTailing` in the main-effect dep array caused the live-spine effect to fire with the stale `dataViewport` from the prior mode on mode flip (mode and viewport cascade arrive in separate renders). `isTailingRef` is synced every render and read from inside the effect. `spineFetchInFlightRef` prevents 4 Hz tick re-fires from launching duplicate spine fetches: set `true` before `Promise.all`, cleared in `.then`/`.catch` after the generation check.
 27. **`refetchHistory()` + asymmetric overfetch for live→fixed (v1.7)** — `useTrendData` exposes `refetchHistory()` which bumps `historyRefetchVersion` state and sets `liveExitRefetchPendingRef`. The main effect's history branch reads the flag and passes `overfetchRightCount: 0` to `tilesForViewport`, yielding 2 visible + 1 left prefetch = 3 tiles instead of the normal 4. The right prefetch is omitted because the user is panning back in time — the next future-side tile is useless. `tilesForViewport` now accepts `overfetchLeftCount`/`overfetchRightCount` as optional per-call overrides (default to `overfetchPerSide`), preserving existing call-site behavior.
 28. **`checkAndExtendXCoverage` reads active tile bounds via `getActiveRange`, not `u.data[0]` (v1.7)** — in raw mode, `u.data[0]` contains actual sample timestamps which may be well inside tile boundaries (device data gaps). Using `xs[last]` as `cachedEnd` produced spurious right-extension requests for tiles past `nowMs` (always filtered out, never fetched, but triggered every onXMove) while leaving legitimate left-extension triggers suppressed until the user panned further than expected. `useTrendData` now exposes `getActiveRange()` returning `{ startMs, endMs }` from `activeTilesRef.current`. `checkAndExtendXCoverage` accepts it as a third argument; `TrendChart` stores it in `getActiveRangeRef` and passes it through from both the onXMove handler and the `bucketSMsKey` coverage effect.
+29. **`MAX_BUCKET_S` / `MAX_VIEWPORT_SPAN_MS` constants (v1.8)** — `MAX_BUCKET_S = 14746` is the canonical constant exported from `@caro/db` (defined in `packages/db/timescale/trends.ts`, re-exported from the barrel) and replaces the literal in route-level and DB-level validation. `packages/trend-chart/src/level.ts` duplicates the value with a cross-reference comment (not imported, to avoid pulling pg-runtime into the browser bundle) and derives `MAX_VIEWPORT_SPAN_MS = MAX_BUCKET_S × 1000 × bucketCount × visibleTilesPerWindow` (≈ 170.67 days at defaults).
+30. **No span clamp on wheel-zoom / pan; lower-bound only (v1.8)** — `useTrendMode`'s reducer applies `clampLowerBound` (renamed from `clampToMaxSpan`) which enforces `from >= 1n` and shifts the viewport rightward to preserve span when `from < 1n`. The earlier span-centering clamp at `MAX_VIEWPORT_SPAN_MS` was dropped because it caused snap-back jitter during continuous wheel-zoom past MAX. Over-range UX is now handled entirely by the client-side `gatedFetchTile` + `placeholderData` path. `MAX_VIEWPORT_SPAN_MS` is still applied as a `sizeMs` cap inside `endPickerCommitted` (discrete End-picker commit, snap-to-cap acceptable there).
+31. **`gatedFetchTile` unified over-range / pre-epoch gate (v1.8)** — `useTrendData` exposes a single `gatedFetchTile` `useCallback` wrapper around `fetchTile`; all four fetch sites (live-spine, history-visible, history-prefetch, `ensureCovered`) delegate through it. Rejects with `CLIENT_OVER_RANGE` when derived `bucketS > MAX_BUCKET_S` (sets `rangeExceeded = true` and `batchHasRangeExceeded`) and with `CLIENT_PRE_EPOCH` when `startTime < 0n` (silent skip, no `rangeExceeded`). Catch handlers at each site recognize the sentinels by `error.code` and skip silently. Replaces two earlier discrete gate blocks (main-effect early-return and `ensureCovered` guard) — adding a fifth fetch site automatically inherits the gate.
+32. **Pre-epoch tile filter in `tilesForViewport` and `ensureCovered` (v1.8)** — `tilesForViewport` filters `startTime < 0n` from both visible and prefetch arrays (TS_BUCKET_ORIGIN_MS alignment can push the left-prefetch before Unix epoch on epoch-adjacent viewports); `ensureCovered`'s candidate filter adds `t.startTime >= 0n`. `gatedFetchTile`'s `CLIENT_PRE_EPOCH` sentinel is defensive — ensures any future call site that bypasses these filters still cannot reach the server with a negative `start_time`.
+33. **`placeholderData` for `rangeExceeded` render branch (v1.8)** — `TrendChartContainer` collapses to a single `<TrendChart>` render: `chartData = rangeExceeded ? placeholderData : mergedData`. `placeholderData` carries `n = 2`, `bucketSMs = Number(span)`, and one null-filled series entry per `tagId` with two stub x-values at `modeViewport.start` and `modeViewport.end`. This lets uPlot autoscale its xScale to the user's selected range, preventing the `[0,1]` fallback that produced negative-timestamp feedback on subsequent wheel events when the chart rendered with `n = 0`.
+34. **`TrendChart` `rangeExceeded` prop + over-range imperative setScale (v1.8)** — `TrendChart` accepts a `rangeExceeded` prop. The imperative `setScale` effect's dep array includes `rangeExceeded`, and the `lastIntent === 'zoom' | 'pan'` bypass gate is suppressed when `rangeExceeded === true`. This keeps uPlot's xScale aligned with `modeViewport` during continuous wheel-zoom in the over-range state — without this, the chart's visible window drifts away from the cursor anchor on each wheel tick.
+35. **Inline "Range too wide" message in `CursorDisplay` (v1.8)** — moved from a banner `<div>` above the chart into the cursor row via a new `rangeExceededMessage?: string | null` prop on `CursorDisplay`. The message renders on the right side of the row; `lineHeight: 16px` is pinned so toggling the message does not reflow the row. The `OVER_RANGE_BANNER` constant and its wrapper `<div>` in `TrendChartContainer` were deleted; the two render branches (`rangeExceeded` vs normal) collapse to one.
+36. **Server-side future-bucket nulling in `getTrendTile` (v1.8)** — `getTrendTile` accepts an optional `nowMs?: number` argument; buckets whose `bucketStartMs > BigInt(nowMs ?? Date.now())` are emitted as `(null, null, null)` regardless of three-case outcome (§6.5). The route in `apps/caro-hmi/server/src/routes/trends.ts` captures `responseTailTs = Date.now()` before invoking `getTrendTile` and passes it as the `nowMs` argument. Prevents server-side LOCF from synthesizing phantom values for buckets the server provably had not yet observed at request entry.
 
 ---
 
