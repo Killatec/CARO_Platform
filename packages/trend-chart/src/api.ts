@@ -12,7 +12,7 @@ export type TileApiResponse =
       source: 'raw';
       startTime: number;
       endTime: number;
-      /** Server Date.now() captured before SQL; client uses (responseTailTs - 1000) as FIFO trim threshold. */
+      /** Server Date.now() captured before SQL; client uses (responseTailTs - 1000) as ring trim threshold. */
       responseTailTs: number;
       series: Array<{
         tagId: number;
@@ -26,7 +26,7 @@ export type TileApiResponse =
       source: '1s_cagg' | '10s_cagg' | '1min_cagg' | '10min_cagg' | 'mixed';
       startTime: number;
       endTime: number;
-      /** Server Date.now() captured before SQL; client uses (responseTailTs - 1000) as FIFO trim threshold. */
+      /** Server Date.now() captured before SQL; client uses (responseTailTs - 1000) as ring trim threshold. */
       responseTailTs: number;
       bucketSMs: number;
       n: number;

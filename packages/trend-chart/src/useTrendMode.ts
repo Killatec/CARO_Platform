@@ -3,16 +3,6 @@ import type { Dispatch } from 'react';
 import type { Viewport } from './types.js';
 import { MAX_VIEWPORT_SPAN_MS } from './level.js';
 
-// ── Diagnostic instrumentation (temporary) ───────────────────────────────────
-const _fmt = (b: bigint): string => {
-  const n = Number(b);
-  if (Number.isFinite(n) && n > 0 && n < 10_000_000_000_000) {
-    return `${b.toString()} (${new Date(n).toISOString()})`;
-  }
-  return b.toString();
-};
-// ─────────────────────────────────────────────────────────────────────────────
-
 const DEFAULT_SIZE_MS = 3_600_000n; // 1 hour default
 
 /**
@@ -52,19 +42,11 @@ export type TrendModeAction =
   | { type: 'panApplied'; from: bigint; to: bigint; nowMs: bigint }
   | { type: 'tick'; nowMs: bigint };
 
-// Was: clampToMaxSpan — centered the window when span > MAX_VIEWPORT_SPAN_MS.
-// Now: clampLowerBound — only enforces from >= 1n (server rejects startTime <= 0).
-// The over-range case is handled entirely by gatedFetchTile + placeholderData;
-// the reducer no longer rewrites the user's requested span. This eliminates the
-// snap-back jitter when wheeling past MAX_VIEWPORT_SPAN_MS.
+// Server rejects startTime <= 0, so we shift any sub-1n viewport rightward
+// while preserving span. Span-cap enforcement lives in gatedFetchTile.
 function clampLowerBound(from: bigint, to: bigint): { from: bigint; to: bigint } {
   if (from >= 1n) return { from, to };
   const shift = 1n - from;
-  console.log('[viewport-trace] clampLowerBound', {
-    inputFrom: _fmt(from),
-    inputTo:   _fmt(to),
-    shift:     shift.toString(),
-  });
   return { from: 1n, to: to + shift };
 }
 
@@ -72,12 +54,6 @@ function clampLowerBound(from: bigint, to: bigint): { from: bigint; to: bigint }
 export function trendModeReducer(state: ModeState, action: TrendModeAction): ModeState {
   switch (action.type) {
     case 'presetClicked':
-      console.log('[viewport-trace] reducer presetClicked', {
-        sizeMs: action.sizeMs.toString(),
-        currentMode: state.mode,
-        currentFrom: state.mode === 'fixed' ? _fmt(state.from) : `nowMs-${state.sizeMs}`,
-        currentTo:   state.mode === 'fixed' ? _fmt(state.to)   : _fmt(state.nowMs),
-      });
       // From fixed: stay fixed, preserve End (to), re-anchor Start = End - newSize.
       // From tailing: stay tailing with new span anchored to now.
       if (state.mode === 'fixed') {
@@ -92,10 +68,6 @@ export function trendModeReducer(state: ModeState, action: TrendModeAction): Mod
       return { mode: 'tailing', sizeMs: action.sizeMs, nowMs: action.nowMs, lastIntent: 'preset' };
 
     case 'liveClicked':
-      console.log('[viewport-trace] reducer liveClicked', {
-        currentMode: state.mode,
-        nowMs: _fmt(action.nowMs),
-      });
       if (state.mode === 'fixed') {
         return { mode: 'tailing', sizeMs: state.sizeMs, nowMs: action.nowMs, lastIntent: 'live' };
       }
@@ -104,10 +76,6 @@ export function trendModeReducer(state: ModeState, action: TrendModeAction): Mod
     // End picker commits End only; always goes fixed — user clicks Live if they
     // want tailing. Strict interpretation: no near-now → tailing auto-transition.
     case 'endPickerCommitted': {
-      console.log('[viewport-trace] reducer endPickerCommitted', {
-        to: _fmt(action.to),
-        currentMode: state.mode,
-      });
       const { to } = action;
       const sizeMs = state.sizeMs > MAX_VIEWPORT_SPAN_MS ? MAX_VIEWPORT_SPAN_MS : state.sizeMs;
       return { mode: 'fixed', from: to - sizeMs, to, sizeMs, lastIntent: 'endPicker' };
@@ -118,25 +86,12 @@ export function trendModeReducer(state: ModeState, action: TrendModeAction): Mod
     // edge happens to land near "now" hides intent. Tailing requires a deliberate
     // liveClicked or preset-from-tailing after any zoom.
     case 'zoomApplied': {
-      console.log('[viewport-trace] reducer zoomApplied', {
-        inputFrom: _fmt(action.from),
-        inputTo:   _fmt(action.to),
-        inputSpanMs: (action.to - action.from).toString(),
-        currentFrom: state.mode === 'fixed' ? _fmt(state.from) : 'tailing',
-        currentTo:   state.mode === 'fixed' ? _fmt(state.to)   : 'tailing',
-      });
       const clamped = clampLowerBound(action.from, action.to);
       const sizeMs = clamped.to - clamped.from;
       return { mode: 'fixed', from: clamped.from, to: clamped.to, sizeMs, lastIntent: 'zoom' };
     }
 
     case 'panApplied': {
-      console.log('[viewport-trace] reducer panApplied', {
-        inputFrom: _fmt(action.from),
-        inputTo:   _fmt(action.to),
-        currentFrom: state.mode === 'fixed' ? _fmt(state.from) : 'tailing',
-        currentTo:   state.mode === 'fixed' ? _fmt(state.to)   : 'tailing',
-      });
       const clamped = clampLowerBound(action.from, action.to);
       const sizeMs = state.sizeMs;
       return { mode: 'fixed', from: clamped.from, to: clamped.to, sizeMs, lastIntent: 'pan' };
