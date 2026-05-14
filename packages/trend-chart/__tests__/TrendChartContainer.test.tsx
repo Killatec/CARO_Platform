@@ -248,14 +248,14 @@ describe('TrendChartContainer', () => {
     expect(screen.getByText('No tags selected.')).toBeTruthy();
   });
 
-  it('rangeExceeded=true: shows red banner above a live TrendChart; axes and controls stay interactive', () => {
+  it('rangeExceeded=true: shows red message in cursor row; chart and controls remain interactive', () => {
     mockUseTrendData.mockReturnValue(makeResult([1], { rangeExceeded: true }));
     renderContainer([1]);
-    // Banner text present.
+    // Message text present (now in cursor row, not above chart).
     expect(screen.getByText('Range too wide. Zoom in or pick a smaller preset.')).toBeTruthy();
-    // TrendChart was rendered — mock emits a × button per tagId (not a placeholder div).
+    // TrendChart was rendered (single branch) — mock emits × button per tagId.
     expect(screen.getByTitle('Remove trace')).toBeTruthy();
-    // Footer controls present via TrendChart's footer prop — operator can recover.
+    // Footer controls accessible via TrendChart footer prop — operator can recover.
     expect(screen.getByText('1m')).toBeTruthy();
     expect(screen.getByText('● Live')).toBeTruthy();
   });
@@ -358,7 +358,7 @@ describe('TrendChartContainer', () => {
 
   it('cursor row renders above the footer (preset buttons row)', () => {
     renderContainer();
-    const cursorEl = screen.getByText(/^Cursor:/);
+    const cursorEl = screen.getByText(/^Cursor:/, { selector: 'span' });
     const firstPreset = screen.getByText('1m');
     // DOCUMENT_POSITION_FOLLOWING (4) means firstPreset comes after cursorEl in DOM.
     expect(cursorEl.compareDocumentPosition(firstPreset) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();

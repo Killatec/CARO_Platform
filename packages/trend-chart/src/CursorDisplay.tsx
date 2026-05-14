@@ -4,19 +4,36 @@ import { formatDateTime } from './dateUtils.js';
 export interface CursorDisplayProps {
   cursorTsMs: number | null;
   siteTimezone?: string;
+  /** When set, rendered on the right side of the cursor row (e.g. "Range too wide…"). */
+  rangeExceededMessage?: string | null;
 }
 
-const STYLE: CSSProperties = {
+const ROW: CSSProperties = {
+  display: 'flex',
+  alignItems: 'baseline',
+  justifyContent: 'space-between',
+  padding: '0 0 4px 0',
   fontSize: 12,
   fontFamily: 'monospace',
-  color: '#374151',
-  padding: '0 0 4px 0',
+  lineHeight: '16px', // fixed: right-side message must not grow the row
 };
 
-export function CursorDisplay({ cursorTsMs, siteTimezone }: CursorDisplayProps) {
+const CURSOR_TEXT: CSSProperties = {
+  color: '#374151',
+};
+
+const RANGE_MSG: CSSProperties = {
+  color: '#dc2626',
+  fontWeight: 700,
+};
+
+export function CursorDisplay({ cursorTsMs, siteTimezone, rangeExceededMessage }: CursorDisplayProps) {
   return (
-    <div style={STYLE}>
-      Cursor: {cursorTsMs == null ? '--' : formatDateTime(cursorTsMs, siteTimezone)}
+    <div style={ROW}>
+      <span style={CURSOR_TEXT}>
+        Cursor: {cursorTsMs == null ? '--' : formatDateTime(cursorTsMs, siteTimezone)}
+      </span>
+      {rangeExceededMessage && <span style={RANGE_MSG}>{rangeExceededMessage}</span>}
     </div>
   );
 }

@@ -65,14 +65,6 @@ const LOADING_HINT: CSSProperties = {
   fontFamily: 'monospace',
 };
 
-const OVER_RANGE_BANNER: CSSProperties = {
-  padding: '4px 0 8px 0',
-  color: '#dc2626',
-  fontWeight: 700,
-  fontSize: 13,
-  fontFamily: 'monospace',
-  textAlign: 'center',
-};
 
 export function TrendChartContainer({
   tagIds: initialTagIds,
@@ -317,9 +309,17 @@ export function TrendChartContainer({
     [_handleZoomLevelSwitch],
   );
 
+  const overRangeMessage = rangeExceeded
+    ? 'Range too wide. Zoom in or pick a smaller preset.'
+    : null;
+
   const footerJsx = (
     <>
-      <CursorDisplay cursorTsMs={cursorTsMs} siteTimezone={siteTimezone} />
+      <CursorDisplay
+        cursorTsMs={cursorTsMs}
+        siteTimezone={siteTimezone}
+        rangeExceededMessage={overRangeMessage}
+      />
       <div style={FOOTER}>
         <div style={FOOTER_LEFT}>
           <SpanPresets state={modeState} onPreset={handlePreset} />
@@ -338,56 +338,28 @@ export function TrendChartContainer({
     </>
   );
 
-  if (rangeExceeded) {
-    const span = modeViewport.end - modeViewport.start;
-    const placeholderData: AggregateSeriesData = {
-      type: 'aggregate',
-      source: 'mixed',
-      startTime: modeViewport.start,
-      endTime:   modeViewport.end,
-      bucketSMs: Number(span),
-      n: 2,
-      series: new Map(
-        tagIds.map(tagId => [tagId, {
-          value: [null, null],
-          min:   [null, null],
-          max:   [null, null],
-        }]),
-      ),
-    };
+  const chartData = rangeExceeded
+    ? (() => {
+        const span = modeViewport.end - modeViewport.start;
+        return {
+          type: 'aggregate',
+          source: 'mixed',
+          startTime: modeViewport.start,
+          endTime:   modeViewport.end,
+          bucketSMs: Number(span),
+          n: 2,
+          series: new Map(
+            tagIds.map(tagId => [tagId, {
+              value: [null, null],
+              min:   [null, null],
+              max:   [null, null],
+            }]),
+          ),
+        } as AggregateSeriesData;
+      })()
+    : mergedData;
 
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column' }}>
-        <div style={OVER_RANGE_BANNER}>
-          Range too wide. Zoom in or pick a smaller preset.
-        </div>
-        <TrendChart
-          data={placeholderData}
-          tagIds={tagIds}
-          siteTimezone={siteTimezone}
-          height={height}
-          xRange={xRange}
-          onTagRemove={handleTagRemove}
-          ensureCovered={ensureCovered}
-          getActiveRange={getActiveRange}
-          zoomAnchorSpan={zoomAnchorSpan}
-          onZoomLevelSwitch={handleZoomLevelSwitch}
-          swapCounter={swapCounter}
-          activeTileCount={activeTileCount}
-          onDragZoom={handleDragZoom}
-          footer={footerJsx}
-          onCursorTsChange={setCursorTsMs}
-          showLastWhenIdle={modeState.mode === 'tailing'}
-          onXRangeChange={handleXRangeChange}
-          onXPan={handleXPan}
-          lastIntent={modeState.lastIntent}
-          rangeExceeded={rangeExceeded}
-        />
-      </div>
-    );
-  }
-
-  if (!mergedData) {
+  if (!chartData) {
     return (
       <div style={LOADING_HINT}>
         {isLoading ? 'Loading…' : tagIds.length === 0 ? 'No tags selected.' : null}
@@ -397,7 +369,7 @@ export function TrendChartContainer({
 
   return (
     <TrendChart
-      data={mergedData}
+      data={chartData}
       tagIds={tagIds}
       siteTimezone={siteTimezone}
       height={height}
@@ -416,6 +388,7 @@ export function TrendChartContainer({
       onXRangeChange={handleXRangeChange}
       onXPan={handleXPan}
       lastIntent={modeState.lastIntent}
+      rangeExceeded={rangeExceeded}
     />
   );
 }
