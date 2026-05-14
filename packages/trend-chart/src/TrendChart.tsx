@@ -53,6 +53,9 @@ export interface TrendChartProps {
   onXPan?: (min: bigint, max: bigint) => void;
   /** When 'zoom' or 'pan', the imperative setScale effect is skipped so wheel/pan don't fight modeViewport updates. */
   lastIntent?: LastIntent;
+  /** When true, the imperative setScale always fires regardless of lastIntent — uPlot must be
+   *  aligned to modeViewport even during continuous wheel-zoom in the over-range state. */
+  rangeExceeded?: boolean;
   /** Returns the time bounds of the current active tile set. Passed to checkAndExtendXCoverage
    *  so the threshold check uses tile metadata rather than sparse u.data[0] sample timestamps. */
   getActiveRange?: () => { startMs: bigint; endMs: bigint } | null;
@@ -109,6 +112,7 @@ export function TrendChart({
   onXRangeChange,
   onXPan,
   lastIntent,
+  rangeExceeded = false,
   getActiveRange,
 }: TrendChartProps) {
   const tagMap = useTagMap();
@@ -531,6 +535,9 @@ export function TrendChart({
   // ── Imperative X-scale update — does NOT rebuild uPlot ───────────────────
   // Skipped when lastIntent === 'zoom' or 'pan': uPlot already has the right
   // scale from the gesture handler; firing here would overwrite it or cause jitter.
+  // Exception: rangeExceeded forces alignment on every render — when the placeholder
+  // has been touched by wheel events, uPlot's auto-fit no longer re-fits to the stub
+  // points, so imperative setScale is the only authoritative correction path.
   useEffect(() => {
     if (!uplotRef.current || !xRange) return;
     const sentMin = Number(xRange.startMs) / 1000;
@@ -538,10 +545,10 @@ export function TrendChart({
     // Always update the ref so the range function returns current values even
     // when setScale is skipped (zoom/pan paths handle the scale directly).
     userScaleRef.current = { min: sentMin, max: sentMax };
-    if (lastIntentRef.current === 'zoom' || lastIntentRef.current === 'pan') return;
+    if ((lastIntentRef.current === 'zoom' || lastIntentRef.current === 'pan') && !rangeExceeded) return;
     uplotRef.current.setScale('x', { min: sentMin, max: sentMax });
     uplotRef.current.redraw(false, true);
-  }, [xRange]);
+  }, [xRange, rangeExceeded]);
 
   // ── Prune Y-scale overrides when tags are removed ─────────────────────────
   // Runs on every tagIds change. Re-adding a previously removed tag starts fresh.

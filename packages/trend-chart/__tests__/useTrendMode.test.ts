@@ -384,6 +384,60 @@ describe('clampToMaxSpan — panApplied', () => {
   });
 });
 
+// ── clampToMaxSpan lower-bound guard (from >= 1n) ─────────────────────────────
+// Tested through zoomApplied because clampToMaxSpan is internal to the reducer.
+
+describe('clampToMaxSpan lower-bound guard', () => {
+  it('from < 1n (span within MAX): shifts viewport right so from = 1n, span preserved', () => {
+    // from=-1000n, to=1000n: span=2000n ≤ MAX; lower-bound clamp fires: shift=1001n
+    const next = dispatch(TAILING_1H, { type: 'zoomApplied', from: -1000n, to: 1000n, nowMs: NOW });
+    expect(next.mode).toBe('fixed');
+    if (next.mode !== 'fixed') return;
+    expect(next.from).toBe(1n);
+    expect(next.to).toBe(2001n);       // 1000n + 1001n shift
+    expect(next.sizeMs).toBe(2000n);  // span unchanged
+  });
+
+  it('from < 1n with to = 0n: both bounds shifted right so from = 1n', () => {
+    // from=-5n, to=0n: span=5n ≤ MAX; lower-bound clamp: shift=6n
+    const next = dispatch(TAILING_1H, { type: 'zoomApplied', from: -5n, to: 0n, nowMs: NOW });
+    expect(next.mode).toBe('fixed');
+    if (next.mode !== 'fixed') return;
+    expect(next.from).toBe(1n);
+    expect(next.to).toBe(6n);
+    expect(next.sizeMs).toBe(5n);
+  });
+
+  it('from >= 1n (positive bounds): no lower-bound clamp', () => {
+    const next = dispatch(TAILING_1H, { type: 'zoomApplied', from: 100n, to: 200n, nowMs: NOW });
+    expect(next.mode).toBe('fixed');
+    if (next.mode !== 'fixed') return;
+    expect(next.from).toBe(100n);
+    expect(next.to).toBe(200n);
+  });
+
+  it('span > MAX AND from still < 1n after span-clamp: both clamps apply', () => {
+    // Scenario: from well-negative, to = MAX_VIEWPORT_SPAN_MS.
+    // After span clamp: center = (from+to)/2n; half = MAX/2n; clampedFrom = center-half < 1n.
+    // Lower-bound then shifts rightward, preserving span (= MAX).
+    const MAX = MAX_VIEWPORT_SPAN_MS;
+    const from = -5_000_000_000n;
+    const to   = MAX; // span = MAX + 5G > MAX
+    const next = dispatch(TAILING_1H, { type: 'zoomApplied', from, to, nowMs: NOW });
+    expect(next.mode).toBe('fixed');
+    if (next.mode !== 'fixed') return;
+    expect(next.from).toBe(1n);
+    expect(next.sizeMs).toBe(MAX); // span clamped to MAX, then shift preserves it
+    // to = 1n + MAX (lower-bound shifted everything right)
+    const center = (from + to) / 2n;       // 4_873_000_000n
+    const half   = MAX / 2n;               // 7_373_000_000n
+    const afterSpanFrom = center - half;   // -2_500_000_000n
+    const afterSpanTo   = center + half;   // 12_246_000_000n
+    const shift = 1n - afterSpanFrom;      // 2_500_000_001n
+    expect(next.to).toBe(afterSpanTo + shift); // 14_746_000_001n
+  });
+});
+
 // ── modeToViewport ─────────────────────────────────────────────────────────────
 
 describe('modeToViewport', () => {

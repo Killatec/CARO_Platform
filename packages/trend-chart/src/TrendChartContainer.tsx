@@ -381,6 +381,7 @@ export function TrendChartContainer({
           onXRangeChange={handleXRangeChange}
           onXPan={handleXPan}
           lastIntent={modeState.lastIntent}
+          rangeExceeded={rangeExceeded}
         />
       </div>
     );

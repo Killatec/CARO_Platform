@@ -376,4 +376,101 @@ describe('TrendChart', () => {
     );
     expect(vi.mocked(checkAndExtendXCoverage).mock.calls.length).toBe(callsAfterMount + 1);
   });
+
+  // ── Imperative setScale: rangeExceeded overrides zoom gate ───────────────────
+  //
+  // Strategy: count total setScale calls across ALL MockUPlot instances before and
+  // after each rerender. This is robust against React's effect unmount/remount cycle
+  // (strict-mode or cleanup-driven), which can create multiple instances so that
+  // `mock.results[0]?.value` is not always the live uPlot in `uplotRef.current`.
+
+  function totalSetScaleCalls(MockUPlot: ReturnType<typeof vi.fn>): number {
+    return MockUPlot.mock.results.reduce(
+      (n, r) => n + (r.value?.setScale.mock.calls.length ?? 0),
+      0,
+    );
+  }
+
+  it('rangeExceeded=true forces setScale even when lastIntent is zoom', async () => {
+    const { default: MockUPlot } = await import('uplot');
+    const xRange = { startMs: 1_700_000_000_000n, endMs: 1_700_003_600_000n };
+    const stableTagIds = [1];
+
+    const { rerender } = render(
+      <MockHmiProvider tagDefs={TAG_DEFS}>
+        <TrendChart
+          data={makeData(stableTagIds)}
+          tagIds={stableTagIds}
+          siteTimezone="UTC"
+          height={400}
+          xRange={xRange}
+          lastIntent="zoom"
+          rangeExceeded={false}
+        />
+      </MockHmiProvider>,
+    );
+
+    const callsBefore = totalSetScaleCalls(MockUPlot as ReturnType<typeof vi.fn>);
+
+    // rangeExceeded becomes true — same xRange, same lastIntent='zoom'.
+    // Effect re-runs due to rangeExceeded dep change; zoom gate bypassed → setScale fires.
+    rerender(
+      <MockHmiProvider tagDefs={TAG_DEFS}>
+        <TrendChart
+          data={makeData(stableTagIds)}
+          tagIds={stableTagIds}
+          siteTimezone="UTC"
+          height={400}
+          xRange={xRange}
+          lastIntent="zoom"
+          rangeExceeded={true}
+        />
+      </MockHmiProvider>,
+    );
+
+    const callsAfter = totalSetScaleCalls(MockUPlot as ReturnType<typeof vi.fn>);
+    expect(callsAfter).toBeGreaterThan(callsBefore);
+  });
+
+  it('lastIntent=zoom without rangeExceeded suppresses setScale on xRange change', async () => {
+    const { default: MockUPlot } = await import('uplot');
+    const stableTagIds = [1];
+    const xRange1 = { startMs: 1_700_000_000_000n, endMs: 1_700_003_600_000n };
+
+    const { rerender } = render(
+      <MockHmiProvider tagDefs={TAG_DEFS}>
+        <TrendChart
+          data={makeData(stableTagIds)}
+          tagIds={stableTagIds}
+          siteTimezone="UTC"
+          height={400}
+          xRange={xRange1}
+          lastIntent="zoom"
+          rangeExceeded={false}
+        />
+      </MockHmiProvider>,
+    );
+
+    const callsBefore = totalSetScaleCalls(MockUPlot as ReturnType<typeof vi.fn>);
+
+    // New xRange object → effect fires (dep changed); rangeExceeded=false → zoom gate fires.
+    const xRange2 = { startMs: 1_700_003_600_000n, endMs: 1_700_007_200_000n };
+    rerender(
+      <MockHmiProvider tagDefs={TAG_DEFS}>
+        <TrendChart
+          data={makeData(stableTagIds)}
+          tagIds={stableTagIds}
+          siteTimezone="UTC"
+          height={400}
+          xRange={xRange2}
+          lastIntent="zoom"
+          rangeExceeded={false}
+        />
+      </MockHmiProvider>,
+    );
+
+    // Zoom gate active, rangeExceeded=false: no new setScale calls.
+    const callsAfter = totalSetScaleCalls(MockUPlot as ReturnType<typeof vi.fn>);
+    expect(callsAfter).toBe(callsBefore);
+  });
 });

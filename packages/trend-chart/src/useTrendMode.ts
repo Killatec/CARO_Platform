@@ -53,33 +53,41 @@ export type TrendModeAction =
   | { type: 'tick'; nowMs: bigint };
 
 /**
- * Clamp a viewport [from, to] so its span does not exceed MAX_VIEWPORT_SPAN_MS.
- * Preserves the center of the selection when clamping.
- * Returns the input unchanged if span is within bounds.
+ * Clamp a viewport [from, to] so its span does not exceed MAX_VIEWPORT_SPAN_MS
+ * and its left edge never falls below 1n (server rejects startTime ≤ 0n).
+ * Span clamp preserves center; lower-bound clamp shifts rightward, preserving span.
  */
 function clampToMaxSpan(from: bigint, to: bigint): { from: bigint; to: bigint } {
   const span = to - from;
-  if (span <= MAX_VIEWPORT_SPAN_MS) {
-    console.log('[viewport-trace] clampToMaxSpan', {
-      inputFrom:   _fmt(from),
-      inputTo:     _fmt(to),
-      inputSpanMs: span.toString(),
-      clamped:     false,
-    });
-    return { from, to };
+  let clampedFrom = from;
+  let clampedTo   = to;
+
+  const spanClamped = span > MAX_VIEWPORT_SPAN_MS;
+  if (spanClamped) {
+    const center = (from + to) / 2n;
+    const half   = MAX_VIEWPORT_SPAN_MS / 2n;
+    clampedFrom  = center - half;
+    clampedTo    = center + half;
   }
-  const center = (from + to) / 2n;
-  const half = MAX_VIEWPORT_SPAN_MS / 2n;
-  const clampedFrom = center - half;
-  const clampedTo   = center + half;
-  console.log('[viewport-trace] clampToMaxSpan CLAMPED', {
-    inputFrom:    _fmt(from),
-    inputTo:      _fmt(to),
-    inputSpanMs:  span.toString(),
-    outputFrom:   _fmt(clampedFrom),
-    outputTo:     _fmt(clampedTo),
-    clamped:      true,
+
+  const lowerBoundClamped = clampedFrom < 1n;
+  if (lowerBoundClamped) {
+    const shift = 1n - clampedFrom;
+    clampedFrom = 1n;
+    clampedTo  += shift;
+  }
+
+  console.log('[viewport-trace] clampToMaxSpan', {
+    inputFrom:         _fmt(from),
+    inputTo:           _fmt(to),
+    inputSpanMs:       span.toString(),
+    outputFrom:        _fmt(clampedFrom),
+    outputTo:          _fmt(clampedTo),
+    clamped:           spanClamped || lowerBoundClamped,
+    spanClamped,
+    lowerBoundClamped,
   });
+
   return { from: clampedFrom, to: clampedTo };
 }
 
