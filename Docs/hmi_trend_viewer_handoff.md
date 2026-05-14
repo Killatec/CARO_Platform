@@ -48,16 +48,24 @@ packages/trend-chart/
                                   # zoomYScale, panThresholdCheck, isInXAxisHitZone,
                                   # panXScale, zoomXScale, checkAndExtendXCoverage
 
+    # ── useTrendData sub-modules (F15, 2026-05-14) ───────────────────────────
+    tileActiveSet.ts              # MAX_ACTIVE_TILES, chunkArray, CachedEntry, HookState,
+                                  # estimateCachedEntrySize, storeTileResult, assembleData,
+                                  # computeResponseTailTs, pruneAndAdd — pure functions / types
+    gatedFetchTile.ts             # buildGatedFetchTile(setRangeExceeded) factory —
+                                  # CLIENT_OVER_RANGE / CLIENT_PRE_EPOCH sentinel logic;
+                                  # GatedFetchFn type alias
+    liveSpineFetch.ts             # assembleLiveSpine (pure assembly), runLiveSpineFetch —
+                                  # isTailing=true branch called from inside the main useEffect
+    historyTileFetch.ts           # runHistoryTileFetch — isTailing=false branch:
+                                  # tilesForViewport, parallel fetch orchestration, performSwap,
+                                  # stale-generation tracking, liveExitRefetch flag handling
+
     # ── React hooks ───────────────────────────────────────────────────────────
-    useTrendData.ts               # REST fetch orchestration; owns the TileCache instance;
-                                  # isTailing=true: live-spine path — one tile spanning full
-                                  #   viewport, bypassing LRU cache; result via assembleLiveSpine
-                                  # isTailing=false: history path — tilesForViewport + LRU cache
-                                  # gatedFetchTile useCallback wraps all 4 fetch sites; rejects
-                                  #   over-range with CLIENT_OVER_RANGE and pre-epoch tiles
-                                  #   (startTime<0n) with CLIENT_PRE_EPOCH sentinels; sets
-                                  #   rangeExceeded on the former, silent skip on the latter
-                                  # isViewportOverRange helper gates ensureCovered
+    useTrendData.ts               # hook shell (~150 lines): state/ref allocation, useEffect
+                                  # orchestration (calls runLiveSpineFetch or runHistoryTileFetch),
+                                  # ensureCovered, getActiveRange, evictAll, refetchHistory,
+                                  # return value; re-exports pruneAndAdd + assembleLiveSpine
                                   # returns { data, isLoading, error, ensureCovered, getActiveRange,
                                   #           evictAll, refetchHistory, rangeExceeded, lastFetchMs,
                                   #           swapCounter, activeTileCount, responseTailTs }
@@ -109,6 +117,8 @@ packages/trend-chart/
       tileCache.test.ts           # LRU eviction, cache key, size accounting
       colorAssign.test.ts         # deterministic palette assignment
       api.test.ts                 # fetchTile wire format + error handling
+      tileActiveSet.test.ts       # direct-seam: pruneAndAdd geometry (empty, below-capacity,
+                                  # left-end, right-end, middle gap-fill at capacity — no warn)
       useTrendData.test.ts        # fetch orchestration, fan-out, stale-gen, ensureCovered,
                                   # pre-load fallback bucketSMs integer invariant;
                                   # isTailing skip guard (3 cases); gatedFetchTile
@@ -201,10 +211,10 @@ A `useEffect` keyed on `modeViewport.start/end` resets all three on `preset`, `l
 Key behaviors:
 
 - **Tile geometry**: `TREND_VIEWER_DEFAULTS.bucketCount=500`, `visibleTilesPerWindow=2`, `overfetchPerSide=1`. `deriveBucketSMs(viewport)` derives the bucket size from viewport span.
-- **`gatedFetchTile` wrapper**: a `useCallback` around `fetchTile` that all four fetch sites (live-spine, history-visible, history-prefetch, `ensureCovered`) delegate through. Rejects with `CLIENT_PRE_EPOCH` when `startTime < 0n` (silent skip) and with `CLIENT_OVER_RANGE` when the derived `bucketS > MAX_BUCKET_S` (sets `rangeExceeded = true`). Catch handlers at each site recognize the sentinels by `error.code` and skip silently; only `CLIENT_OVER_RANGE` propagates to the batch-level `batchHasRangeExceeded` flag (prevents `performSwap` from clearing the state mid-batch).
-- **`rangeExceeded` state**: boolean exposed on the hook result. The main effect short-circuits before constructing tiles when `derivedBucketS > MAX_BUCKET_S`, setting `rangeExceeded = true` and returning. `isViewportOverRange(viewport)` is the shared helper; `ensureCovered` is gated on it before the `active.length === 0` check so pan-extension fetches are also suppressed in the over-range state.
-- **`ensureCovered`**: called by `checkAndExtendXCoverage` in `axisInteractions.ts` to request additional tiles on pan. Reads the current active tile bounds from `getActiveRange()` (not `u.data[0]`) so raw-mode sparse sample timestamps don't distort the threshold check. Anchors candidate tiles outward from `activeTilesRef` edges; short-circuits when `activeTilesRef` is empty (live mode); candidate filter drops `t.startTime < 0n` and `t.startTime >= nowMs`.
-- **`getActiveRange`**: stable callback returning `{ startMs, endMs }` from `activeTilesRef.current`, or `null` if empty. Passed through `TrendChart` via `getActiveRangeRef` to `checkAndExtendXCoverage`.
+- **`gatedFetchTile` wrapper**: built via `buildGatedFetchTile(setRangeExceeded)` in `gatedFetchTile.ts`; all four fetch sites (live-spine, history-visible, history-prefetch, `ensureCovered`) delegate through it. Rejects with `CLIENT_PRE_EPOCH` when `startTime < 0n` (silent skip) and with `CLIENT_OVER_RANGE` when the derived `bucketS > MAX_BUCKET_S` (sets `rangeExceeded = true`). Catch handlers at each site recognize the sentinels by `error.code` and skip silently; only `CLIENT_OVER_RANGE` propagates to the batch-level `batchHasRangeExceeded` flag (prevents `performSwap` from clearing the state mid-batch).
+- **`rangeExceeded` state**: boolean exposed on the hook result. `gatedFetchTile` sets `rangeExceeded = true` when `bucketS > MAX_BUCKET_S` and clears it on a clean fetch. `ensureCovered` is gated on `levelTransitionPendingRef` and `active.length === 0` (live-mode short-circuit).
+- **`ensureCovered`**: lives in the shell; called by `checkAndExtendXCoverage` in `axisInteractions.ts` to request additional tiles on pan. Anchors candidate tiles outward from `activeTilesRef` edges using `tileSpanMs` derived from the active set's actual tile width (not the viewport span). Short-circuits when `activeTilesRef` is empty (live mode); candidate filter drops `t.startTime < 0n` and `t.startTime >= nowMs`.
+- **`getActiveRange`**: stable callback returning `{ startMs, endMs, tileSpanMs }` from `activeTilesRef.current`, or `null` if empty. `tileSpanMs = active[0].endTime - active[0].startTime` — the active set's actual tile width, used by both `panThresholdCheck` and `ensureCovered` to ensure the requested extension range matches the active grid (§10.5). Passed through `TrendChart` via `getActiveRangeRef` to `checkAndExtendXCoverage`.
 - **`refetchHistory()`**: bumps `historyRefetchVersion` state and sets `liveExitRefetchPendingRef`. Forces the main effect to re-run the history path even when `dataViewport` didn't change (the first `panApplied` on live exit carries live-viewport bounds). The history branch reads the flag and passes `overfetchRightCount: 0` to `tilesForViewport`, yielding 2 visible + 1 left prefetch instead of 2 + 1 + 1.
 - **`swapCounter`**: incremented each time the tile set swaps on a bucket-size change (zoom across a §6.3 dispatch threshold). TrendChart uses this to trigger a full uPlot rebuild.
 - **`activeTileCount`**: count of tiles currently in the active set — used by `SpanBucketIndicator` and tests.
@@ -406,7 +416,7 @@ Observations from production behavior. Not divergences from spec — document he
 *Gap B (cross-session frozen cache nulls) — closed (2026-05-13).* In the prior architecture, CAG-lag nulls could be written to the tile cache and frozen there indefinitely. Users who toggled between live and fixed would see stale nulls accumulate across sessions. Eliminated by eviction-on-live-entry: `dispatchModeAction` calls `evictAll()` on every fixed→tailing (Live button) transition, clearing the cache so each live session starts with a clean slate. See `hmi_trend_viewer_spec.md` §10.8.
 
 **C. ~~`pruneAndAdd` may overwrite real data with flat-line data during drag-zoom-then-pan.~~**
-Closed (2026-05-14). Root cause: `ensureCovered` derived `tileSpanMs` from the current viewport rather than the active set's actual tile widths, producing misaligned candidates during the in-flight window of zoom commits. Fixed by anchoring `tileSpanMs` to `active[0]!.endTime - active[0]!.startTime` in `useTrendData.ts` (`ensureCovered`). Manual regression checklist: drag-zoom to non-preset span → pan 50% right → verify no flat-line artifact replaces real data.
+Closed (2026-05-14). Root cause: `ensureCovered` derived `tileSpanMs` from the current viewport rather than the active set's actual tile widths, producing misaligned candidates during the in-flight window of zoom commits. Fixed by anchoring `tileSpanMs` to `active[0]!.endTime - active[0]!.startTime` in `useTrendData.ts` `ensureCovered` (commit 873e2cb). Follow-up b599003 restored `panThresholdCheck` symmetry — both `ensureCovered` and `panThresholdCheck` now use the active set's tile width (via `getActiveRange().tileSpanMs`), eliminating multi-candidate fan-out when wheel-zoom diverges from `dataViewport`. Manual verification: drag-zoom-then-pan, wheel-zoom-then-pan, pan-prefetch at 50%, live→fixed transitions, and over-range suppression all pass with no flat-line artifacts.
 
 **D. Synthetic-on-flush uses HMI server `Date.now()` for `moduleTs` (mixed clock domains).** The synthetic-on-flush mechanism (spec §4.4) exists to propagate LOCF (last-observation-carried-forward) values from the server's LKV to the client's bucket accumulator at `TREND_FLUSH_HZ` cadence. For flatline tags, the LKV is constant by definition — the value at any flush moment equals the value at any other flush moment in the flatline window — so the **synthetic's exact `moduleTs` is not critical**, only that it advances the client's bucket boundaries. Real samples in the same `TREND_DELTA` frame carry the device's `moduleTs` (from MQTT ingest); synthetics carry `Date.now()`. At well-NTP-synced installations the drift is <100 ms — bucket boundary placement for synthetics may shift by that amount relative to real events, but the *value* placed in those buckets is identical regardless of which side of the boundary the synthetic lands. The 1-second `responseTailTs - 1000ms` trim margin (spec §6.2) absorbs typical drift comfortably. Not a fix-target; documented so future readers understand the design intent.
 

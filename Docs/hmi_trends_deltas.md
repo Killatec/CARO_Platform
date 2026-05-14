@@ -127,11 +127,14 @@ Original handoff §11.D ("Past-LOCF on dormant signals") and the corresponding `
 
 ---
 
-## Pending audit findings (Phases 3–5)
+## 2026-05-14 — Phase 4 F15 useTrendData.ts split
+
+- F15: `packages/trend-chart/src/useTrendData.ts` (~900 lines) split into 5 modules: `useTrendData.ts` (shell, ~150 lines), `liveSpineFetch.ts`, `historyTileFetch.ts`, `tileActiveSet.ts`, `gatedFetchTile.ts`. Pure refactor, behavior-preserving — all 573 existing useTrendData tests pass unchanged. 6 new direct-seam tests added for `tileActiveSet` (579 total).
+
+---
+
+## Pending audit findings
 
 Self-contained Claude Code prompts under `Docs/prompts/`. Each Phase lands in its own PR.
 
-- **Phase 2.5 — `@caro/ui` dateFormat consolidation (cross-app PR):** B3#2.
-- **Phase 3 — F7 (high-risk, manual test):** `ensureCovered` tileSpanMs derived from active set.
-- **Phase 4 — F15 (refactor, behavior-preserving):** `useTrendData.ts` split into 5 modules.
 - **Phase 5 — Cleanup polish:** handoff §10 divergence audit per "current-state-only" principle.
