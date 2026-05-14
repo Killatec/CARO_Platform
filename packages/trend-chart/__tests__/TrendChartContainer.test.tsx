@@ -260,7 +260,7 @@ describe('TrendChartContainer', () => {
     expect(screen.getByText('● Live')).toBeTruthy();
   });
 
-  it('rangeExceeded=true: emptyData uses modeViewport bounds, not dataViewport bounds', () => {
+  it('rangeExceeded=true: placeholderData uses modeViewport bounds with n=2 stub points', () => {
     // Set a known system time so modeViewport.start is a real timestamp, not epoch.
     // dataViewport (managed by useZoomState) can saturate to 1n during aggressive
     // wheel-zoom-out — if emptyData used dataViewport bounds the chart would show
@@ -269,11 +269,11 @@ describe('TrendChartContainer', () => {
     mockUseTrendData.mockReturnValue(makeResult([1], { rangeExceeded: true }));
     renderContainer([1]);
 
-    // emptyData is the placeholder passed to TrendChart in the over-range branch.
+    // placeholderData is the stub passed to TrendChart in the over-range branch.
     expect(capturedData).toBeDefined();
-    // n=0 and empty series — it's the empty placeholder, not real tile data.
-    expect(capturedData!.n).toBe(0);
-    expect(capturedData!.series!.size).toBe(0);
+    // n=2 with one series entry per tagId — gives uPlot two x-values to auto-fit on.
+    expect(capturedData!.n).toBe(2);
+    expect(capturedData!.series!.size).toBe(1);
     // startTime must be a real timestamp from modeViewport, NOT near Unix epoch.
     // With fake time at 2024-06-01T12:00:00Z (1717243200000ms) and the default 1h
     // preset, modeViewport.start ≈ 1717239600000n. A dataViewport saturation guard
@@ -282,6 +282,32 @@ describe('TrendChartContainer', () => {
     const expectedNow = BigInt(new Date('2024-06-01T12:00:00Z').getTime());
     expect(capturedData!.startTime).toBeGreaterThanOrEqual(expectedNow - ONE_HOUR_MS);
     expect(capturedData!.endTime).toBeLessThanOrEqual(expectedNow + ONE_HOUR_MS);
+  });
+
+  it('rangeExceeded=true: placeholderData x-values span exactly modeViewport bounds', () => {
+    // The x-values uPlot derives from AggregateSeriesData:
+    //   xs[k] = startTime/1000 + k * (bucketSMs/1000)  (in seconds)
+    // With n=2 and bucketSMs = Number(endTime - startTime):
+    //   xs[0] = startTime/1000   (= modeViewport.start in seconds)
+    //   xs[1] = endTime/1000     (= modeViewport.end in seconds)
+    // uPlot auto-fits to this range, keeping the x-axis anchored at the
+    // clamped modeViewport rather than drifting to epoch.
+    vi.setSystemTime(new Date('2024-06-01T12:00:00Z'));
+    mockUseTrendData.mockReturnValue(makeResult([1], { rangeExceeded: true }));
+    renderContainer([1]);
+
+    expect(capturedData).toBeDefined();
+    const d = capturedData!;
+    const startTimeMs = d.startTime;
+    const endTimeMs   = d.endTime;
+    const bucketSMs   = (d as { bucketSMs?: number }).bucketSMs!;
+    // bucketSMs should equal the full span (endTime - startTime in ms).
+    expect(BigInt(bucketSMs)).toBe(endTimeMs - startTimeMs);
+    // Derived xs[0] and xs[1] in ms.
+    const xs0Ms = startTimeMs;                    // k=0: startTime + 0 * bucketSMs
+    const xs1Ms = startTimeMs + BigInt(bucketSMs); // k=1: startTime + 1 * bucketSMs = endTime
+    expect(xs0Ms).toBe(startTimeMs);
+    expect(xs1Ms).toBe(endTimeMs);
   });
 
   // ── EndPicker integration ─────────────────────────────────────────────────

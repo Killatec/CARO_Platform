@@ -339,14 +339,21 @@ export function TrendChartContainer({
   );
 
   if (rangeExceeded) {
-    const emptyData: AggregateSeriesData = {
+    const span = modeViewport.end - modeViewport.start;
+    const placeholderData: AggregateSeriesData = {
       type: 'aggregate',
       source: 'mixed',
       startTime: modeViewport.start,
       endTime:   modeViewport.end,
-      bucketSMs: 1,
-      n: 0,
-      series: new Map(),
+      bucketSMs: Number(span),
+      n: 2,
+      series: new Map(
+        tagIds.map(tagId => [tagId, {
+          value: [null, null],
+          min:   [null, null],
+          max:   [null, null],
+        }]),
+      ),
     };
 
     return (
@@ -355,7 +362,7 @@ export function TrendChartContainer({
           Range too wide. Zoom in or pick a smaller preset.
         </div>
         <TrendChart
-          data={emptyData}
+          data={placeholderData}
           tagIds={tagIds}
           siteTimezone={siteTimezone}
           height={height}
