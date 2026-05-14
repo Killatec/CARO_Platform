@@ -23,7 +23,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "echo \"No tests yet\""
+    "test": "vitest run"
   },
   "peerDependencies": {
     "react": "^18.0.0",

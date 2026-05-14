@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Table, TableHeader, TableBody, TableRow, TableHeaderCell, TableCell } from '@caro/ui/primitives';
 import { fetchRevisions } from '../api/registry.js';
-import { formatDateTime } from '../utils/formatDate.js';
+import { formatDateTime } from '@caro/ui';
 import type { RevisionRow } from '@caro/db';
 
 const COL_BORDER = 'border-r border-black/30';

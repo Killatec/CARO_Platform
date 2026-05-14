@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { EndPicker } from '../src/EndPicker.js';
-import { formatDateTime } from '../src/dateUtils.js';
+import { formatDateTime } from '@caro/ui';
 import type { ModeState } from '../src/useTrendMode.js';
 import type { Viewport } from '../src/types.js';
 
@@ -61,7 +61,7 @@ beforeEach(() => {
 describe('EndPicker — initial render', () => {
   it('display button shows viewport.end in dd-mmm-yyyy HH:mm:ss format', () => {
     renderPicker();
-    const expected = formatDateTime(VIEWPORT.end, 'UTC');
+    const expected = formatDateTime(VIEWPORT.end, { timezone: 'UTC' });
     const btn = screen.getByRole('button', { name: /pick end time/i });
     expect(btn.textContent).toContain(expected);
   });
@@ -180,7 +180,7 @@ describe('EndPicker — viewport.end sync', () => {
       />,
     );
     const btn = screen.getByRole('button', { name: /pick end time/i });
-    expect(btn.textContent).toContain(formatDateTime(newEnd, 'UTC'));
+    expect(btn.textContent).toContain(formatDateTime(newEnd, { timezone: 'UTC' }));
   });
 });
 

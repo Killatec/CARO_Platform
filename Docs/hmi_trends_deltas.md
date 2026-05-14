@@ -98,6 +98,17 @@ Original handoff §11.D ("Past-LOCF on dormant signals") and the corresponding `
 
 ---
 
+## 2026-05-14 — Phase 2.5 @caro/ui dateFormat consolidation
+
+- B3#2: created `packages/ui/src/dateFormat.ts` with unified `formatDateTime` + `formatDate`
+  (options bag: `timezone`, `fallback`, `seconds`). Migrated `packages/trend-chart` consumers
+  (`CursorDisplay`, `EndPicker`) and `apps/tag-registry/client` (`HistoryPage`). Deleted
+  legacy `packages/trend-chart/src/dateUtils.ts` and `apps/tag-registry/client/src/utils/formatDate.ts`
+  and their respective test files. Test coverage merged into `packages/ui/__tests__/dateFormat.test.ts`.
+  Call sites updated from positional `(ms, timezone?)` to options bag `(value, { timezone })`.
+
+---
+
 ## Pending audit findings (Phases 2.5–5)
 
 Self-contained Claude Code prompts under `Docs/prompts/`. Each Phase lands in its own PR.

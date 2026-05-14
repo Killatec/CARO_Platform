@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import type { KeyboardEvent, CSSProperties } from 'react';
 import type { ModeState } from './useTrendMode.js';
 import type { Viewport } from './types.js';
-import { formatDateTime } from './dateUtils.js';
+import { formatDateTime } from '@caro/ui';
 
 // ── Private helpers ────────────────────────────────────────────────────────────
 
@@ -170,12 +170,12 @@ export interface EndPickerProps {
 }
 
 export function EndPicker({ state, viewport, siteTimezone, onEndCommitted, onLive }: EndPickerProps) {
-  const [displayText, setDisplayText] = useState(() => formatDateTime(viewport.end, siteTimezone));
+  const [displayText, setDisplayText] = useState(() => formatDateTime(viewport.end, { timezone: siteTimezone }));
   const hiddenInputRef = useRef<HTMLInputElement>(null);
 
   // Re-sync display when viewport.end changes (zoom, preset, Live, tick).
   useEffect(() => {
-    setDisplayText(formatDateTime(viewport.end, siteTimezone));
+    setDisplayText(formatDateTime(viewport.end, { timezone: siteTimezone }));
   }, [viewport.end, siteTimezone]);
 
   function openPicker() {

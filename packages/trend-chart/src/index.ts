@@ -37,4 +37,3 @@ export { EndPicker } from './EndPicker.js';
 export type { EndPickerProps } from './EndPicker.js';
 export { mergeTrendData } from './mergeTrendData.js';
 export { formatSpanMs } from './render/formatSpanMs.js';
-export { formatDateTime } from './dateUtils.js';

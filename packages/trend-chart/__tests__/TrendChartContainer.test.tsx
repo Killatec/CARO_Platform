@@ -6,7 +6,7 @@ import type { TagDef } from '@caro/hmi-context';
 import { TrendChartContainer } from '../src/TrendChartContainer.js';
 import { computeDragZoomViewport } from '../src/useZoomState.js';
 import { useTrendData } from '../src/useTrendData.js';
-import { formatDateTime } from '../src/dateUtils.js';
+import { formatDateTime } from '@caro/ui';
 import type { UseTrendDataResult } from '../src/useTrendData.js';
 
 // ── useLiveSubscription mock (hoisted so vi.mock factory can close over it) ───

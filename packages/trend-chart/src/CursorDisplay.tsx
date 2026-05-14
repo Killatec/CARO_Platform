@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'react';
-import { formatDateTime } from './dateUtils.js';
+import { formatDateTime } from '@caro/ui';
 
 export interface CursorDisplayProps {
   cursorTsMs: number | null;
@@ -31,7 +31,7 @@ export function CursorDisplay({ cursorTsMs, siteTimezone, rangeExceededMessage }
   return (
     <div style={ROW}>
       <span style={CURSOR_TEXT}>
-        Cursor: {cursorTsMs == null ? '--' : formatDateTime(cursorTsMs, siteTimezone)}
+        Cursor: {cursorTsMs == null ? '--' : formatDateTime(cursorTsMs, { timezone: siteTimezone })}
       </span>
       {rangeExceededMessage && <span style={RANGE_MSG}>{rangeExceededMessage}</span>}
     </div>
