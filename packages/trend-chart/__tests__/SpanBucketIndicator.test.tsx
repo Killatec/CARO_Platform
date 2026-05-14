@@ -10,7 +10,7 @@ describe('SpanBucketIndicator', () => {
 
   it('renders Bucket Size line with formatted bucket', () => {
     render(<SpanBucketIndicator spanMs={3_600_000n} bucketSMs={3_600n} lastFetchMs={null} />);
-    expect(screen.getByText('Bucket Size: 3.6 s')).toBeTruthy();
+    expect(screen.getByText('Bucket Size: 3.6 s buckets')).toBeTruthy();
   });
 
   it('shows em-dash for Bucket Size when bucketSMs is null', () => {
@@ -20,12 +20,12 @@ describe('SpanBucketIndicator', () => {
 
   it('formats minute-range buckets correctly', () => {
     render(<SpanBucketIndicator spanMs={86_400_000n} bucketSMs={60_000n} lastFetchMs={null} />);
-    expect(screen.getByText('Bucket Size: 1 min')).toBeTruthy();
+    expect(screen.getByText('Bucket Size: 1 min buckets')).toBeTruthy();
   });
 
   it('formats hour-range buckets correctly', () => {
     render(<SpanBucketIndicator spanMs={604_800_000n} bucketSMs={3_600_000n} lastFetchMs={null} />);
-    expect(screen.getByText('Bucket Size: 1 h')).toBeTruthy();
+    expect(screen.getByText('Bucket Size: 1 h buckets')).toBeTruthy();
   });
 
   it('updates both lines when props change', () => {
@@ -33,7 +33,7 @@ describe('SpanBucketIndicator', () => {
     expect(screen.getByText('Span: 1 h')).toBeTruthy();
     rerender(<SpanBucketIndicator spanMs={14_400_000n} bucketSMs={14_400n} lastFetchMs={null} />);
     expect(screen.getByText('Span: 4 h')).toBeTruthy();
-    expect(screen.getByText('Bucket Size: 14.4 s')).toBeTruthy();
+    expect(screen.getByText('Bucket Size: 14.4 s buckets')).toBeTruthy();
   });
 
   // ── Last Fetch line ─────────────────────────────────────────────────────────
@@ -46,7 +46,7 @@ describe('SpanBucketIndicator', () => {
   it('renders all three lines with non-null lastFetchMs', () => {
     render(<SpanBucketIndicator spanMs={3_600_000n} bucketSMs={3_600n} lastFetchMs={234} />);
     expect(screen.getByText('Span: 1 h')).toBeTruthy();
-    expect(screen.getByText('Bucket Size: 3.6 s')).toBeTruthy();
+    expect(screen.getByText('Bucket Size: 3.6 s buckets')).toBeTruthy();
     expect(screen.getByText('Last Fetch: 234 ms')).toBeTruthy();
   });
 

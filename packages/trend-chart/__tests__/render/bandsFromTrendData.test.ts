@@ -51,7 +51,7 @@ describe('bandsFromTrendData — aggregate', () => {
     expect(result.xs).toEqual([0, 1, 2]);
   });
 
-  it('xs match seriesFromTrendData xs', () => {
+  it('xs are epoch-aligned bucket start times matching expected grid', () => {
     const data = makeAggregate();
     const bands = bandsFromTrendData(data, [1]);
     expect(bands.xs).toHaveLength(3);

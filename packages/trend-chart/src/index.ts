@@ -2,12 +2,15 @@ export type { Tile, Viewport, AggregateSeriesData, RawSeriesData, TrendData } fr
 export {
   TREND_VIEWER_DEFAULTS,
   TS_BUCKET_ORIGIN_MS,
+  MAX_BUCKET_S,
+  MAX_VIEWPORT_SPAN_MS,
   floorDiv,
   ceilDiv,
   alignedTilesInRange,
   tilesForViewport,
   deriveBucketSMs,
 } from './level.js';
+export { clampLowerBound } from './bigintMath.js';
 export { TileCache, makeTileCacheKey } from './tileCache.js';
 export { colorAssign, PALETTE, PALETTE_SIZE } from './colorAssign.js';
 export { useTrendData } from './useTrendData.js';

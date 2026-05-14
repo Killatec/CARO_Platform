@@ -25,7 +25,6 @@ export class TrendSnapshotScheduler {
   private readonly intervalMs: number;
 
   private intervalHandle: NodeJS.Timeout | null = null;
-  private lastWarnMs = 0;
 
   constructor(
     intake: TelemetryIntake,
@@ -67,11 +66,7 @@ export class TrendSnapshotScheduler {
           this.intake.markTrendSnapshotPending(moduleId);
         }
       } catch (err) {
-        const now = Date.now();
-        if (now - this.lastWarnMs > 60_000) {
-          console.error('[TrendSnapshot] tick error:', (err as Error).message);
-          this.lastWarnMs = now;
-        }
+        console.error('[TrendSnapshot] tick error:', (err as Error).message);
       }
     });
   }

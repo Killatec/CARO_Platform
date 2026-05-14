@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { Viewport } from './types.js';
 import type { LastIntent } from './useTrendMode.js';
+import { clampLowerBound } from './bigintMath.js';
 
 /** Pure snap-and-center math for drag-zoom. Exported for testing. */
 export function computeDragZoomViewport(
@@ -98,10 +99,7 @@ export function useZoomState({
       if (newBucketSMs <= 0n) return;
       const newSpan = newBucketSMs * BigInt(visibleTilesPerWindow * bucketCount);
       const unsaturatedStart = cursorTimeMs - newSpan / 2n;
-      let newStart = unsaturatedStart;
-      const saturated = newStart < 1n;
-      if (saturated) newStart = 1n;
-      const newEnd = newStart + newSpan;
+      const { from: newStart, to: newEnd } = clampLowerBound(unsaturatedStart, unsaturatedStart + newSpan);
       setCurrentBucketSMs(newBucketSMs);
       setZoomAnchorSpan(newSpan);
       setDataViewport({ start: newStart, end: newEnd });

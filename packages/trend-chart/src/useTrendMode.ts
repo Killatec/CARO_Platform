@@ -2,6 +2,7 @@ import { useReducer } from 'react';
 import type { Dispatch } from 'react';
 import type { Viewport } from './types.js';
 import { MAX_VIEWPORT_SPAN_MS } from './level.js';
+import { clampLowerBound } from './bigintMath.js';
 
 const DEFAULT_SIZE_MS = 3_600_000n; // 1 hour default
 
@@ -42,14 +43,6 @@ export type TrendModeAction =
   | { type: 'panApplied'; from: bigint; to: bigint; nowMs: bigint }
   | { type: 'tick'; nowMs: bigint };
 
-// Server rejects startTime <= 0, so we shift any sub-1n viewport rightward
-// while preserving span. Span-cap enforcement lives in gatedFetchTile.
-function clampLowerBound(from: bigint, to: bigint): { from: bigint; to: bigint } {
-  if (from >= 1n) return { from, to };
-  const shift = 1n - from;
-  return { from: 1n, to: to + shift };
-}
-
 /** Pure reducer — exported for unit testing. */
 export function trendModeReducer(state: ModeState, action: TrendModeAction): ModeState {
   switch (action.type) {
@@ -77,7 +70,13 @@ export function trendModeReducer(state: ModeState, action: TrendModeAction): Mod
     // want tailing. Strict interpretation: no near-now → tailing auto-transition.
     case 'endPickerCommitted': {
       const { to } = action;
-      const sizeMs = state.sizeMs > MAX_VIEWPORT_SPAN_MS ? MAX_VIEWPORT_SPAN_MS : state.sizeMs;
+      // Defensive: require at least 1 ms of span. EndPicker UI prevents this; reducer
+      // stays self-consistent for any caller.
+      if (to < 2n) return state;
+      const cappedSize = state.sizeMs > MAX_VIEWPORT_SPAN_MS ? MAX_VIEWPORT_SPAN_MS : state.sizeMs;
+      // Ensure from >= 1n. End picker contract preserves the chosen End, so we shrink
+      // the span rather than shifting End forward (unlike clampLowerBound for zoom/pan).
+      const sizeMs = to - cappedSize >= 1n ? cappedSize : to - 1n;
       return { mode: 'fixed', from: to - sizeMs, to, sizeMs, lastIntent: 'endPicker' };
     }
 

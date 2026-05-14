@@ -28,6 +28,7 @@ export class WsServer {
   private readonly tickMs: number;
   private readonly dutyTracker: DutyTracker;
   private readonly trendableTagsByModule: Map<string, Set<number>>;
+  private readonly trendableTagIds: Set<number>;
   private readonly trendFlushMs: number;
 
   constructor({
@@ -35,18 +36,21 @@ export class WsServer {
     tickMs,
     dutyTracker,
     trendableTagsByModule = new Map(),
+    trendableTagIds = new Set(),
     trendFlushHz = 4,
   }: {
     lkv: LkvCache;
     tickMs: number;
     dutyTracker: DutyTracker;
     trendableTagsByModule?: Map<string, Set<number>>;
+    trendableTagIds?: Set<number>;
     trendFlushHz?: number;
   }) {
     this.lkv = lkv;
     this.tickMs = tickMs;
     this.dutyTracker = dutyTracker;
     this.trendableTagsByModule = trendableTagsByModule;
+    this.trendableTagIds = trendableTagIds;
     this.trendFlushMs = Math.round(1000 / trendFlushHz);
   }
 
@@ -121,6 +125,14 @@ export class WsServer {
     }
   }
 
+  private parseTagIdsArray(value: unknown): number[] | null {
+    if (!Array.isArray(value)) return null;
+    for (const v of value) {
+      if (typeof v !== 'number' || !Number.isInteger(v) || v <= 0) return null;
+    }
+    return value as number[];
+  }
+
   private handleMessage(client: WsClient, raw: Buffer): void {
     let msg: InboundMessage;
     try {
@@ -131,10 +143,10 @@ export class WsServer {
 
     switch (msg.type) {
       case 'SUBSCRIBE': {
-        const newTagIds = msg.tagIds.filter(id => !client.subscriptions.has(id));
-        for (const id of msg.tagIds) client.subscriptions.add(id);
-
-        // Snapshot only the newly subscribed tags
+        const tagIds = this.parseTagIdsArray((msg as { tagIds?: unknown }).tagIds);
+        if (!tagIds) { console.warn('[WsServer] SUBSCRIBE: ignored malformed tagIds payload'); return; }
+        const newTagIds = tagIds.filter(id => !client.subscriptions.has(id));
+        for (const id of tagIds) client.subscriptions.add(id);
         const values: Record<string, LkvValue> = {};
         for (const id of newTagIds) {
           values[String(id)] = this.lkv.getValue(id);
@@ -145,7 +157,9 @@ export class WsServer {
       }
 
       case 'UNSUBSCRIBE': {
-        for (const id of msg.tagIds) {
+        const tagIds = this.parseTagIdsArray((msg as { tagIds?: unknown }).tagIds);
+        if (!tagIds) { console.warn('[WsServer] UNSUBSCRIBE: ignored malformed tagIds payload'); return; }
+        for (const id of tagIds) {
           client.subscriptions.delete(id);
           client.lastSentGen.delete(id);
         }
@@ -153,12 +167,28 @@ export class WsServer {
       }
 
       case 'SUBSCRIBE_TREND': {
-        for (const id of msg.tagIds) client.trendSubscriptions.add(id);
+        const tagIds = this.parseTagIdsArray((msg as { tagIds?: unknown }).tagIds);
+        if (!tagIds) { console.warn('[WsServer] SUBSCRIBE_TREND: ignored malformed tagIds payload'); return; }
+        const rejected: number[] = [];
+        for (const id of tagIds) {
+          if (this.trendableTagIds.has(id)) {
+            client.trendSubscriptions.add(id);
+          } else {
+            rejected.push(id);
+          }
+        }
+        if (rejected.length > 0) {
+          console.warn(
+            `[WsServer] SUBSCRIBE_TREND: ignored ${rejected.length} non-trendable (or non-existing) tagId(s): ${rejected.join(', ')}`,
+          );
+        }
         break;
       }
 
       case 'UNSUBSCRIBE_TREND': {
-        for (const id of msg.tagIds) {
+        const tagIds = this.parseTagIdsArray((msg as { tagIds?: unknown }).tagIds);
+        if (!tagIds) { console.warn('[WsServer] UNSUBSCRIBE_TREND: ignored malformed tagIds payload'); return; }
+        for (const id of tagIds) {
           client.trendSubscriptions.delete(id);
           client.trendOutbox.delete(id);
         }

@@ -156,6 +156,7 @@ async function start(): Promise<void> {
     tickMs: config.wsTickMs,
     dutyTracker,
     trendableTagsByModule,
+    trendableTagIds,
     trendFlushHz: config.trendFlushHz,
   });
   wsServer.attach(httpServer);

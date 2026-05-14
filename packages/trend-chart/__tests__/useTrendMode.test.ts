@@ -368,6 +368,57 @@ describe('endPickerCommitted — sizeMs clamp', () => {
   });
 });
 
+// ── F8: endPickerCommitted lower-bound guard ──────────────────────────────────
+
+describe('endPickerCommitted — lower-bound guard (F8)', () => {
+  it('to < 2n: state unchanged (no-op)', () => {
+    // to=1n would place from=0n after subtracting any span; to=0n is invalid.
+    // Guard: if to < 2n return state as-is.
+    const next = dispatch(TAILING_1H, { type: 'endPickerCommitted', to: 1n, nowMs: NOW });
+    expect(next).toBe(TAILING_1H); // exact same reference — no state change
+  });
+
+  it('to = 0n: state unchanged (no-op)', () => {
+    const next = dispatch(FIXED_1H, { type: 'endPickerCommitted', to: 0n, nowMs: NOW });
+    expect(next).toBe(FIXED_1H);
+  });
+
+  it('to - sizeMs < 1n: span shrinks to preserve from = 1n, End (to) is unchanged', () => {
+    // to=500n, sizeMs=3_600_000n (1 h): to - sizeMs would be deeply negative.
+    // Expected: from=1n, to=500n, sizeMs=499n (= to - 1n).
+    const next = dispatch(TAILING_1H, { type: 'endPickerCommitted', to: 500n, nowMs: NOW });
+    expect(next.mode).toBe('fixed');
+    if (next.mode !== 'fixed') return;
+    expect(next.to).toBe(500n);       // End preserved
+    expect(next.from).toBe(1n);       // lower bound respected
+    expect(next.sizeMs).toBe(499n);   // shrunk span = to - 1n
+  });
+
+  it('to - sizeMs = 0n (exactly): from = 1n, to unchanged, sizeMs = to - 1n', () => {
+    // to = sizeMs: from would be 0n without guard.
+    const sizeMs = 3_600_000n;
+    const to = sizeMs; // exactly equal
+    const state: ModeState = { mode: 'fixed', from: 0n, to: NOW, sizeMs, lastIntent: 'zoom' };
+    const next = dispatch(state, { type: 'endPickerCommitted', to, nowMs: NOW });
+    expect(next.mode).toBe('fixed');
+    if (next.mode !== 'fixed') return;
+    expect(next.to).toBe(to);
+    expect(next.from).toBe(1n);
+    expect(next.sizeMs).toBe(to - 1n);
+  });
+
+  it('to - sizeMs >= 1n: normal case — from = to - sizeMs, span unchanged', () => {
+    // to large enough that no span shrink is needed.
+    const to = NOW;
+    const next = dispatch(TAILING_1H, { type: 'endPickerCommitted', to, nowMs: NOW });
+    expect(next.mode).toBe('fixed');
+    if (next.mode !== 'fixed') return;
+    expect(next.to).toBe(to);
+    expect(next.sizeMs).toBe(TAILING_1H.sizeMs);
+    expect(next.from).toBe(to - TAILING_1H.sizeMs);
+  });
+});
+
 describe('clampLowerBound — panApplied', () => {
   it('pan within bounds: passes through (span-preserving, so defensive no-op)', () => {
     const from = NOW - 3_600_000n;

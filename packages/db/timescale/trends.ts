@@ -23,6 +23,10 @@ export interface RawTrendTile {
   source: 'raw';
   startTime: bigint;
   endTime: bigint;
+  /** Server Date.now() at request entry. Clients use (responseTailTs - 1000ms)
+   *  as the live-ring trim threshold. Same value drives the future-bucket-nulling
+   *  cutoff inside getTrendTile (spec §6.5). */
+  responseTailTs: number;
   series: RawTrendSeries[];
 }
 
@@ -41,6 +45,10 @@ export interface AggregateTrendTile {
   endTime: bigint;
   bucketSMs: number;
   n: number;
+  /** Server Date.now() at request entry. Clients use (responseTailTs - 1000ms)
+   *  as the live-ring trim threshold. Same value drives the future-bucket-nulling
+   *  cutoff inside getTrendTile (spec §6.5). */
+  responseTailTs: number;
   series: AggregateTrendSeries[];
 }
 
@@ -59,8 +67,27 @@ export type TrendTile = RawTrendTile | AggregateTrendTile;
  */
 export const MAX_BUCKET_S = 14746;
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
+/**
+ * Canonical derivation of bucketSMs and bucketS from a tile range.
+ * Used identically by the REST route and getTrendTile to prevent precision-boundary
+ * disagreements between the two validation layers.
+ *
+ * Integer ms first (Math.round), then bucketS = bucketSMs / 1000. Computing the float
+ * form directly (Number(endTime - startTime) / (bucketCount * 1000)) risks fractional
+ * intermediates that round-trip imperfectly (e.g. 1_555_250 ms / 250_000 = 6.221
+ * yielding bucketSMs = 6220.8 via float error).
+ */
+export function deriveBucketSMs(
+  startTime: bigint,
+  endTime: bigint,
+  bucketCount: number,
+): { bucketSMs: number; bucketS: number } {
+  const bucketSMs = Math.round(Number(endTime - startTime) / bucketCount);
+  const bucketS = bucketSMs / 1000;
+  return { bucketSMs, bucketS };
+}
 
+// ── Helpers ────────────────────────────────────────────────────────────────────
 
 function codeError(message: string, code: string): Error {
   const err = new Error(message);
@@ -70,28 +97,26 @@ function codeError(message: string, code: string): Error {
 
 // ── Source types and fallthrough ladder ───────────────────────────────────────
 //
-// CaggSource: one of the four CAG view names.
-// AggregateSource: CaggSource | 'tag_samples' (raw is the terminal fall-through target).
-//
-// nextFinerSource() maps each level to the next smaller-bucket source.
+// SOURCES: ordered finest→coarsest. nextFinerSource walks toward the head.
+// AggregateSource: any SOURCES entry. CaggSource: excludes 'tag_samples'.
 // sourceDisplayName() maps to the response's source label.
 
-type CaggSource =
-  | 'tag_samples_1s_cagg'
-  | 'tag_samples_10s_cagg'
-  | 'tag_samples_1min_cagg'
-  | 'tag_samples_10min_cagg';
+/** Source ladder from finest to coarsest. nextFinerSource walks toward the head. */
+const SOURCES = [
+  'tag_samples',                // finest (raw)
+  'tag_samples_1s_cagg',
+  'tag_samples_10s_cagg',
+  'tag_samples_1min_cagg',
+  'tag_samples_10min_cagg',     // coarsest
+] as const;
 
-type AggregateSource = CaggSource | 'tag_samples';
+type AggregateSource = typeof SOURCES[number];
+type CaggSource = Exclude<AggregateSource, 'tag_samples'>;
 
 function nextFinerSource(s: AggregateSource): AggregateSource {
-  switch (s) {
-    case 'tag_samples_10min_cagg': return 'tag_samples_1min_cagg';
-    case 'tag_samples_1min_cagg':  return 'tag_samples_10s_cagg';
-    case 'tag_samples_10s_cagg':   return 'tag_samples_1s_cagg';
-    case 'tag_samples_1s_cagg':    return 'tag_samples';
-    case 'tag_samples':            throw new Error('no finer source than tag_samples (raw)');
-  }
+  const i = SOURCES.indexOf(s);
+  if (i <= 0) throw new Error(`no finer source than ${s}`);
+  return SOURCES[i - 1]!;
 }
 
 function sourceDisplayName(s: AggregateSource): '1s_cagg' | '10s_cagg' | '1min_cagg' | '10min_cagg' | 'raw' {
@@ -207,7 +232,7 @@ async function queryRaw(
   tagIds: number[],
   startTime: bigint,
   endTime: bigint,
-): Promise<RawTrendTile> {
+): Promise<Omit<RawTrendTile, 'responseTailTs'>> {
   const t0 = LOG_TILE_QUERIES ? performance.now() : 0;
 
   // Single query: in-window samples + bounded-prev (one per tag, [startTime-5min, startTime))
@@ -281,6 +306,14 @@ async function queryRaw(
 
 // ── Segment result ─────────────────────────────────────────────────────────────
 
+/**
+ * Internal segment representation. Timestamps stored as `number` (ms) because
+ * all segment-internal arithmetic happens against `bucketSMs` (number, derived
+ * via Math.round in deriveBucketSMs). The Number→BigInt boundary crossing
+ * happens once at the merge site in getTrendTile (the servedStart/End conversion
+ * around the final return). Number ms timestamps are safe through year ~285,000
+ * (well within Number.MAX_SAFE_INTEGER); no precision concerns at runtime.
+ */
 interface SegmentResult {
   servedStart: number;  // ms — start of first bucket
   servedEnd: number;    // ms — end of last bucket
@@ -592,12 +625,8 @@ export async function getTrendTile(
     throw codeError('bucketCount must be an integer in 1..2500', 'INVALID_BUCKET_COUNT');
   }
 
-  // Derive bucketSMs as an integer first; bucketS follows exactly from it.
-  // Computing bucketS = spanMs / (bucketCount * 1000) directly risks a fractional
-  // result — e.g., 1_555_250 ms / 250_000 = 6.221 which round-trips to
-  // bucketSMs = 6220.8 (float error). Computing integer ms first eliminates this.
-  const bucketSMs = Math.round(Number(endTime - startTime) / bucketCount);
-  const bucketS   = bucketSMs / 1000;
+  const { bucketSMs, bucketS } = deriveBucketSMs(startTime, endTime, bucketCount);
+  const responseTailTs = nowMs ?? Date.now();
 
   if (bucketS <= 0 || bucketS > MAX_BUCKET_S) {
     throw codeError(
@@ -609,7 +638,8 @@ export async function getTrendTile(
   // ── Raw dispatch (bucketS < 1.0) — no watermark fall-through ────────────────
 
   if (bucketS < 1.0) {
-    return queryRaw(tagIds, startTime, endTime);
+    const rawTile = await queryRaw(tagIds, startTime, endTime);
+    return { ...rawTile, responseTailTs };
   }
 
   // ── Aggregate dispatch (§6.3) ────────────────────────────────────────────────
@@ -689,16 +719,12 @@ export async function getTrendTile(
       ? (sourceDisplayName(dispatchSource) as Exclude<AggregateTrendTile['source'], 'mixed'>)
       : 'mixed';
 
-  if (!Number.isInteger(bucketSMs)) {
-    throw new Error(`getTrendTile: bucketSMs must be integer ms, got ${bucketSMs}`);
-  }
-
-  // Future-bucket nulling (§6.5): any bucket whose startMs > nowMs cannot contain real data —
-  // the server hadn't observed anything past that point at request entry. Null these out so
-  // LOCF gapfill never surfaces phantom flat lines for strictly-future buckets.
+  // Future-bucket nulling (§6.5): any bucket whose startMs > responseTailTs cannot contain
+  // real data — the server hadn't observed anything past that point at request entry. Null
+  // these out so LOCF gapfill never surfaces phantom flat lines for strictly-future buckets.
   // Applied after the full watermark-fall-through assembly so it works uniformly on the
   // stitched result regardless of source mix.
-  const cutoffMs    = BigInt(nowMs ?? Date.now());
+  const cutoffMs    = BigInt(responseTailTs);
   const bucketSMsBig = BigInt(bucketSMs);
   for (const s of series) {
     for (let i = 0; i < s.value.length; i++) {
@@ -711,7 +737,7 @@ export async function getTrendTile(
     }
   }
 
-  return { source, startTime: servedStartTime, endTime: servedEndTime, bucketSMs, n: totalN, series };
+  return { source, startTime: servedStartTime, endTime: servedEndTime, bucketSMs, n: totalN, responseTailTs, series };
 }
 
 // ── getTrendExtent ─────────────────────────────────────────────────────────────

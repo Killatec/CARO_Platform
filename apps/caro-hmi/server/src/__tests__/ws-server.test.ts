@@ -266,6 +266,7 @@ beforeEach(async () => {
     tickMs: TICK_MS,
     dutyTracker: new DutyTracker(),
     trendableTagsByModule: TRENDABLE_BY_MODULE,
+    trendableTagIds: new Set([TREND_TAG_1, TREND_TAG_2]),
     trendFlushHz: TREND_FLUSH_HZ,
   });
   trendHttp = http.createServer();
@@ -487,5 +488,148 @@ describe('WsServer — trend channel', () => {
 
     // No assertion needed beyond "no uncaught error during wait"
     // The test passes if nothing throws
+  });
+});
+
+// ── F4: Shape validation and trendable-set filter ────────────────────────────
+
+/** WsServer with no trendableTagIds (default empty set) — used for filter tests. */
+let filterServer: WsServer;
+let filterHttp: http.Server;
+let filterPort: number;
+const filterClients: WebSocket[] = [];
+
+beforeEach(async () => {
+  filterServer = new WsServer({
+    lkv: new LkvCache(),
+    tickMs: TICK_MS,
+    dutyTracker: new DutyTracker(),
+    trendableTagsByModule: TRENDABLE_BY_MODULE,
+    // trendableTagIds intentionally omitted → defaults to empty Set
+    trendFlushHz: TREND_FLUSH_HZ,
+  });
+  filterHttp = http.createServer();
+  filterServer.attach(filterHttp);
+  await new Promise<void>(r => filterHttp.listen(0, r));
+  filterPort = (filterHttp.address() as { port: number }).port;
+});
+
+afterEach(async () => {
+  for (const ws of filterClients.splice(0)) {
+    if (ws.readyState === WebSocket.OPEN) ws.terminate();
+  }
+  filterServer.stop();
+  await new Promise<void>(r => filterHttp.close(() => r()));
+});
+
+async function makeFilterClient(): Promise<WebSocket> {
+  const ws = await openClient(filterPort);
+  filterClients.push(ws);
+  return ws;
+}
+
+describe('WsServer — F4 shape validation', () => {
+  it('SUBSCRIBE with null tagIds is ignored — no SNAPSHOT received', async () => {
+    const ws = await makeFilterClient();
+    const p = collect(ws, 1, 150).catch(() => null);
+    ws.send(JSON.stringify({ type: 'SUBSCRIBE', tagIds: null }));
+    const result = await p;
+    expect(result).toBeNull(); // timed out → no response
+  });
+
+  it('SUBSCRIBE with non-integer tagId is ignored — no SNAPSHOT received', async () => {
+    const ws = await makeFilterClient();
+    const p = collect(ws, 1, 150).catch(() => null);
+    ws.send(JSON.stringify({ type: 'SUBSCRIBE', tagIds: [1.5, 2] }));
+    const result = await p;
+    expect(result).toBeNull();
+  });
+
+  it('SUBSCRIBE with negative tagId is ignored — no SNAPSHOT received', async () => {
+    const ws = await makeFilterClient();
+    const p = collect(ws, 1, 150).catch(() => null);
+    ws.send(JSON.stringify({ type: 'SUBSCRIBE', tagIds: [-1] }));
+    const result = await p;
+    expect(result).toBeNull();
+  });
+
+  it('UNSUBSCRIBE with non-array tagIds is ignored — no crash', async () => {
+    const ws = await makeFilterClient();
+    // Subscribe first so there's state to unsubscribe from
+    ws.send(JSON.stringify({ type: 'SUBSCRIBE', tagIds: [1] }));
+    await wait(50);
+    // Malformed unsubscribe — should not throw or crash
+    ws.send(JSON.stringify({ type: 'UNSUBSCRIBE', tagIds: 'all' }));
+    await wait(50);
+    // Server still alive — connection remains open
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+  });
+
+  it('SUBSCRIBE_TREND with non-array tagIds is ignored — no TREND_DELTA emitted', async () => {
+    const ws = await makeTrendClient(); // uses trendServer which has trendableTagIds set
+    trendLkv.set(TREND_TAG_1, 55);
+    ws.send(JSON.stringify({ type: 'SUBSCRIBE_TREND', tagIds: 'bad' }));
+    const frames = await collectTrendDeltas(ws, TREND_FLUSH_WAIT_MS);
+    expect(frames).toHaveLength(0);
+  });
+
+  it('SUBSCRIBE_TREND with string tagId element is ignored — no TREND_DELTA emitted', async () => {
+    const ws = await makeTrendClient();
+    trendLkv.set(TREND_TAG_1, 55);
+    ws.send(JSON.stringify({ type: 'SUBSCRIBE_TREND', tagIds: ['10'] }));
+    const frames = await collectTrendDeltas(ws, TREND_FLUSH_WAIT_MS);
+    expect(frames).toHaveLength(0);
+  });
+
+  it('UNSUBSCRIBE_TREND with non-array tagIds is ignored — no crash', async () => {
+    const ws = await makeTrendClient();
+    ws.send(JSON.stringify({ type: 'SUBSCRIBE_TREND', tagIds: [TREND_TAG_1] }));
+    await wait(50);
+    ws.send(JSON.stringify({ type: 'UNSUBSCRIBE_TREND', tagIds: null }));
+    await wait(50);
+    // Server still alive — connection remains open
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+  });
+});
+
+describe('WsServer — F4 trendable-set filter', () => {
+  it('SUBSCRIBE_TREND with all non-trendable IDs delivers no TREND_DELTA frames', async () => {
+    // filterServer has empty trendableTagIds — all IDs are rejected
+    const ws = await makeFilterClient();
+    const lkv = (filterServer as unknown as { lkv: LkvCache }).lkv;
+    lkv?.set(TREND_TAG_1, 99);
+    ws.send(JSON.stringify({ type: 'SUBSCRIBE_TREND', tagIds: [TREND_TAG_1] }));
+    await wait(50);
+    filterServer.handleTrendDelta(Date.now(), TREND_MODULE);
+    const frames = await collectTrendDeltas(ws, TREND_FLUSH_WAIT_MS);
+    expect(frames).toHaveLength(0);
+  });
+
+  it('SUBSCRIBE_TREND with IDs in trendableTagIds delivers TREND_DELTA frames', async () => {
+    // trendServer has trendableTagIds = {TREND_TAG_1, TREND_TAG_2}
+    trendLkv.set(TREND_TAG_1, 77);
+    const ws = await makeTrendClient();
+    ws.send(JSON.stringify({ type: 'SUBSCRIBE_TREND', tagIds: [TREND_TAG_1] }));
+    await wait(50);
+    trendServer.handleTrendDelta(Date.now(), TREND_MODULE);
+    const frames = await collectTrendDeltas(ws, TREND_FLUSH_WAIT_MS);
+    const hasDelta = frames.some(f => f.samples.some(s => s.tagId === TREND_TAG_1));
+    expect(hasDelta).toBe(true);
+  });
+
+  it('SUBSCRIBE_TREND silently drops non-trendable IDs, keeps trendable ones', async () => {
+    // trendServer: TREND_TAG_1 and TREND_TAG_2 are trendable; 999 is not
+    trendLkv.set(TREND_TAG_1, 5);
+    const ws = await makeTrendClient();
+    ws.send(JSON.stringify({ type: 'SUBSCRIBE_TREND', tagIds: [TREND_TAG_1, 999] }));
+    await wait(50);
+    trendServer.handleTrendDelta(Date.now(), TREND_MODULE);
+    const frames = await collectTrendDeltas(ws, TREND_FLUSH_WAIT_MS);
+    // Tag 999 never appears in any frame
+    const has999 = frames.some(f => f.samples.some(s => s.tagId === 999));
+    expect(has999).toBe(false);
+    // Tag 1 does appear
+    const has1 = frames.some(f => f.samples.some(s => s.tagId === TREND_TAG_1));
+    expect(has1).toBe(true);
   });
 });

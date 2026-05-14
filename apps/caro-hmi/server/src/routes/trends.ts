@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { asyncWrap } from '@caro/server';
 import type { CaroError } from '@caro/server';
-import { getTrendTile, getTrendExtent, MAX_BUCKET_S } from '@caro/db';
+import { getTrendTile, getTrendExtent, MAX_BUCKET_S, deriveBucketSMs } from '@caro/db';
 import type { TrendTile } from '@caro/db';
 
 // HTTP status for known @caro/db error codes; anything else → 500.
@@ -20,9 +20,10 @@ const router = Router();
 function serializeTile(tile: TrendTile): unknown {
   if (tile.source === 'raw') {
     return {
-      source: tile.source,
-      startTime: Number(tile.startTime),
-      endTime:   Number(tile.endTime),
+      source:         tile.source,
+      startTime:      Number(tile.startTime),
+      endTime:        Number(tile.endTime),
+      responseTailTs: tile.responseTailTs,
       series: tile.series.map(s => ({
         tagId:  s.tagId,
         ts:     s.ts.map(t => Number(t)),
@@ -32,11 +33,12 @@ function serializeTile(tile: TrendTile): unknown {
     };
   }
   return {
-    source:    tile.source,
-    startTime: Number(tile.startTime),
-    endTime:   Number(tile.endTime),
-    bucketSMs: tile.bucketSMs,
-    n:         tile.n,
+    source:         tile.source,
+    startTime:      Number(tile.startTime),
+    endTime:        Number(tile.endTime),
+    bucketSMs:      tile.bucketSMs,
+    n:              tile.n,
+    responseTailTs: tile.responseTailTs,
     series: tile.series.map(s => ({
       tagId: s.tagId,
       value: s.value,
@@ -47,8 +49,9 @@ function serializeTile(tile: TrendTile): unknown {
 }
 
 router.get('/tile', asyncWrap(async (req, res) => {
-  // Captured before any validation or SQL — clients use this as the FIFO trim threshold (§3.4).
-  const responseTailTs = Date.now();
+  // Captured at request entry — passed as nowMs to getTrendTile which uses it as
+  // both the future-bucket-nulling cutoff and the responseTailTs field on the tile (§6.2).
+  const nowMs = Date.now();
 
   const q = req.query as Record<string, string | undefined>;
 
@@ -118,7 +121,7 @@ router.get('/tile', asyncWrap(async (req, res) => {
     throw err;
   }
 
-  const bucketS = Number(endTime - startTime) / (bucketCount * 1000);
+  const { bucketS } = deriveBucketSMs(startTime, endTime, bucketCount);
   if (bucketS <= 0 || bucketS > MAX_BUCKET_S) {
     const err = new Error(
       `Derived bucketS ${bucketS} is outside the valid range (0, ${MAX_BUCKET_S}]`,
@@ -129,16 +132,16 @@ router.get('/tile', asyncWrap(async (req, res) => {
   }
 
   try {
-    const tile = await getTrendTile(tagIds, startTime, endTime, bucketCount, responseTailTs);
-    res.json({ ok: true, data: { ...(serializeTile(tile) as Record<string, unknown>), responseTailTs } });
+    const tile = await getTrendTile(tagIds, startTime, endTime, bucketCount, nowMs);
+    res.json({ ok: true, data: serializeTile(tile) });
   } catch (e: unknown) {
-    const raw    = e as Error & { code?: string };
+    const raw = e as Error & { code?: string };
     const status = raw.code !== undefined ? (DB_CODE_STATUS[raw.code] ?? 500) : 500;
-    const caroErr = raw as CaroError;
-    caroErr.status = status;
-    if (!caroErr.code) caroErr.code = 'INTERNAL_ERROR';
     if (status >= 500) console.error('[trends/tile] internal error', raw);
-    throw caroErr;
+    const wrapped = new Error(raw.message) as CaroError;
+    wrapped.status = status;
+    wrapped.code = raw.code ?? 'INTERNAL_ERROR';
+    throw wrapped;
   }
 }));
 

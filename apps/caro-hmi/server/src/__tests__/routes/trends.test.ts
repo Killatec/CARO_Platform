@@ -6,7 +6,7 @@ import compression from 'compression';
 import type { ErrorRequestHandler } from 'express';
 import { errorHandler } from '@caro/server';
 import trendsRouter from '../../routes/trends.js';
-import { getTrendTile, getTrendExtent, MAX_BUCKET_S, writeTagSamples, timescalePool } from '@caro/db';
+import { getTrendTile, getTrendExtent, MAX_BUCKET_S, deriveBucketSMs, writeTagSamples, timescalePool } from '@caro/db';
 import type { RawTrendTile, AggregateTrendTile } from '@caro/db';
 
 // ── Mock @caro/db, preserving real impl for integration tests ─────────────────
@@ -61,6 +61,7 @@ const RAW_TILE: RawTrendTile = {
   source: 'raw',
   startTime: 3_600_000n,
   endTime:   3_840_000n,
+  responseTailTs: 9_000_000,
   series: [{ tagId: 1, ts: [3_601_000n, 3_602_000n], value: [1.5, 2.0], prev: { ts: 3_540_000n, value: 0.5 } }],
 };
 
@@ -68,6 +69,7 @@ const RAW_TILE_NO_PREV: RawTrendTile = {
   source: 'raw',
   startTime: 3_600_000n,
   endTime:   3_840_000n,
+  responseTailTs: 9_000_000,
   series: [{ tagId: 1, ts: [3_601_000n, 3_602_000n], value: [1.5, 2.0] }],
 };
 
@@ -77,6 +79,7 @@ const AGG_TILE: AggregateTrendTile = {
   endTime:   10_800_000n,
   bucketSMs: 14_400,
   n:         250,
+  responseTailTs: 9_000_000,
   series: [{
     tagId: 1,
     value: new Array(250).fill(1.0),
@@ -291,8 +294,9 @@ describe('GET /api/v1/trends/tile — unit (mocked)', () => {
   // ── INVALID_BUCKET_S route-level early validation ───────────────────────────
 
   it('span producing bucketS > MAX_BUCKET_S → 400 INVALID_BUCKET_S, getTrendTile not called', async () => {
-    // MAX_BUCKET_S × 250 buckets × 1000 ms/s + 1 ms → bucketS just over the limit
-    const spanMs = BigInt(MAX_BUCKET_S) * 250n * 1000n + 1n;
+    // deriveBucketSMs uses Math.round, so we need +125 ms with bucketCount=250
+    // to push bucketSMs over MAX_BUCKET_S * 1000 (rounds: 0.5 → 1).
+    const spanMs = BigInt(MAX_BUCKET_S) * 250n * 1000n + 125n;
     const startTime = 1_000_000n;
     const endTime   = startTime + spanMs;
     const res = await request(app)
@@ -329,7 +333,9 @@ describe('GET /api/v1/trends/tile — unit (mocked)', () => {
   // ── JSON round-trip (BigInt guard) ──────────────────────────────────────────
 
   it('responseTailTs present on raw response — is a number close to Date.now()', async () => {
-    mockGet.mockResolvedValueOnce(RAW_TILE);
+    mockGet.mockImplementationOnce(async (_t, _s, _e, _bc, nowMs) => ({
+      ...RAW_TILE, responseTailTs: nowMs ?? Date.now(),
+    }));
     const before = Date.now();
     const res = await request(app)
       .get('/api/v1/trends/tile?tag_ids=1&start_time=3600000&end_time=3840000&bucket_count=250');
@@ -341,7 +347,9 @@ describe('GET /api/v1/trends/tile — unit (mocked)', () => {
   });
 
   it('responseTailTs present on aggregate response — is a number close to Date.now()', async () => {
-    mockGet.mockResolvedValueOnce(AGG_TILE);
+    mockGet.mockImplementationOnce(async (_t, _s, _e, _bc, nowMs) => ({
+      ...AGG_TILE, responseTailTs: nowMs ?? Date.now(),
+    }));
     const before = Date.now();
     const res = await request(app)
       .get('/api/v1/trends/tile?tag_ids=1&start_time=7200000&end_time=10800000&bucket_count=250');
@@ -353,19 +361,19 @@ describe('GET /api/v1/trends/tile — unit (mocked)', () => {
   });
 
   it('responseTailTs is captured before getTrendTile resolves (pre-SQL timestamp)', async () => {
-    let capturedResponseTailTs = 0;
-    mockGet.mockImplementationOnce(async () => {
-      // Record when getTrendTile is called — responseTailTs must precede this
-      capturedResponseTailTs = Date.now();
+    let capturedInsideMock = 0;
+    mockGet.mockImplementationOnce(async (_t, _s, _e, _bc, nowMs) => {
+      // Record when getTrendTile body executes — nowMs was captured before this
+      capturedInsideMock = Date.now();
       await new Promise(r => setTimeout(r, 80));
-      return RAW_TILE;
+      return { ...RAW_TILE, responseTailTs: nowMs ?? Date.now() };
     });
     const before = Date.now();
     const res = await request(app)
       .get('/api/v1/trends/tile?tag_ids=1&start_time=3600000&end_time=3840000&bucket_count=250');
     expect(res.status).toBe(200);
-    // responseTailTs must be ≤ when getTrendTile was entered (since it's captured before the call)
-    expect(res.body.data.responseTailTs).toBeLessThanOrEqual(capturedResponseTailTs);
+    // nowMs (= responseTailTs) was captured at route entry, before getTrendTile was called
+    expect(res.body.data.responseTailTs).toBeLessThanOrEqual(capturedInsideMock);
     expect(res.body.data.responseTailTs).toBeGreaterThanOrEqual(before);
   });
 
@@ -375,6 +383,39 @@ describe('GET /api/v1/trends/tile — unit (mocked)', () => {
       .get('/api/v1/trends/tile?tag_ids=1&start_time=3600000&end_time=3840000&bucket_count=250');
     expect(() => JSON.stringify(res.body)).not.toThrow();
     expect(JSON.parse(JSON.stringify(res.body))).toMatchObject(res.body);
+  });
+});
+
+// ── F9: deriveBucketSMs helper parity ────────────────────────────────────────
+// Verifies that deriveBucketSMs produces integer ms (Math.round semantics) and
+// that bucketS === bucketSMs / 1000 exactly. Both the route and getTrendTile use
+// this identical helper so there can be no precision-boundary disagreement.
+
+describe('deriveBucketSMs — F9 parity', () => {
+  it('produces integer bucketSMs via Math.round', () => {
+    // 1_555_250 ms / 250 = 6221 ms exactly
+    const { bucketSMs, bucketS } = deriveBucketSMs(1_000_000n, 2_555_250n, 250);
+    expect(Number.isInteger(bucketSMs)).toBe(true);
+    expect(bucketSMs).toBe(6221);
+    expect(bucketS).toBe(6.221);
+  });
+
+  it('bucketS === bucketSMs / 1000 exactly', () => {
+    const { bucketSMs, bucketS } = deriveBucketSMs(0n, 3_600_000n, 250);
+    expect(bucketS).toBe(bucketSMs / 1000);
+  });
+
+  it('standard 1h preset at 500 buckets → bucketSMs = 7200', () => {
+    const { bucketSMs, bucketS } = deriveBucketSMs(0n, 3_600_000n, 500);
+    expect(bucketSMs).toBe(7200);
+    expect(bucketS).toBe(7.2);
+  });
+
+  it('MAX_BUCKET_S boundary: spanMs = MAX_BUCKET_S × 1000 × 250 → bucketS = MAX_BUCKET_S', () => {
+    const spanMs = BigInt(MAX_BUCKET_S) * 1000n * 250n;
+    const { bucketSMs, bucketS } = deriveBucketSMs(1_000_000n, 1_000_000n + spanMs, 250);
+    expect(bucketSMs).toBe(MAX_BUCKET_S * 1000);
+    expect(bucketS).toBe(MAX_BUCKET_S);
   });
 });
 
