@@ -36,13 +36,12 @@ packages/trend-chart/
 
     # ── Core primitives (no React) ─────────────────────────────────────────────
     level.ts                      # alignedTilesInRange, tilesForViewport (filters startTime<0n),
-                                  # deriveBucketSMs, TREND_VIEWER_DEFAULTS, TS_BUCKET_ORIGIN_MS,
+                                  # TREND_VIEWER_DEFAULTS, TS_BUCKET_ORIGIN_MS,
                                   # MAX_BUCKET_S (mirror of @caro/db), MAX_VIEWPORT_SPAN_MS,
                                   # floorDiv, ceilDiv
     tileCache.ts                  # TileCache (LRU, 50 MB cap), makeTileCacheKey
     colorAssign.ts                # colorAssign(tagId), PALETTE, PALETTE_SIZE
-    dateUtils.ts                  # msToDatetimeLocal, datetimeLocalToMs, getTzOffsetMs,
-                                  # formatDateTime — timezone-aware date helpers
+                                  # (date formatting lives in @caro/ui — formatDateTime / formatDate)
 
     # ── Axis interaction helpers (pure, no React) ─────────────────────────────
     axisInteractions.ts           # pruneRemovedTagOverrides, isInYAxisHitZone, panYScale,
@@ -86,7 +85,8 @@ packages/trend-chart/
                                   # useTrendData + TrendChart + footer row components
     SpanBucketIndicator.tsx       # footer: viewport span + bucket size display
     SpanPresets.tsx               # footer: 8-preset strip (1m/5m/15m/1h/4h/24h/7d/14d);
-                                  # highlight rule: (lastIntent==='preset'||'pan') && sizeMs match
+                                  # highlight: lastIntent!==null && lastIntent!=='zoom' && sizeMs match
+                                  # (any size-preserving intent stays highlighted; zoom excluded)
     EndPicker.tsx                 # footer: End datetime picker button + Live/Go Live button
     Legend.tsx                    # vertical column (right side, 180px); per-trace rows with
                                   # color swatch, value (showLastWhenIdle rule), remove button
@@ -109,13 +109,12 @@ packages/trend-chart/
       tileCache.test.ts           # LRU eviction, cache key, size accounting
       colorAssign.test.ts         # deterministic palette assignment
       api.test.ts                 # fetchTile wire format + error handling
-      dateUtils.test.ts           # timezone-aware date helpers
       useTrendData.test.ts        # fetch orchestration, fan-out, stale-gen, ensureCovered,
                                   # pre-load fallback bucketSMs integer invariant;
                                   # isTailing skip guard (3 cases); gatedFetchTile
                                   # CLIENT_OVER_RANGE / CLIENT_PRE_EPOCH sentinels;
                                   # ensureCovered pre-epoch candidate filter
-      useTrendMode.test.ts        # trendModeReducer pure unit tests (37 cases)
+      useTrendMode.test.ts        # trendModeReducer pure unit tests
       useLiveSubscription.test.ts # Step 11: ring buffer lifecycle, bucket accumulator close,
                                   # raw buffer, viewportSpanMs trim, rawBuffers NOT trimmed
                                   # on threshold, boolean coercion, commitAndDrain (void)
@@ -132,7 +131,6 @@ packages/trend-chart/
       EndPicker.test.tsx          # End picker interaction, snap-back on invalid input
       CursorDisplay.test.tsx      # cursor-time display
       render/formatters.test.ts   # formatBucketS, formatValue, formatSpanMs
-      render/seriesFromTrendData.test.ts
       render/uplotConfig.test.ts
       render/yScales.test.ts      # Y-scale defaults
 ```
@@ -164,7 +162,7 @@ Both branches carry `sizeMs` — required so `liveClicked` can restore the prior
 | `panApplied { from, to, nowMs }` | Always → fixed | Preserves `sizeMs` from state (not `to - from`). Pan can never enter tailing. |
 | `tick { nowMs }` | Advances `nowMs` in tailing only | Preserves `lastIntent`. Dispatched by `TrendChartContainer.handleDataReceived` on each `TREND_DELTA` frame received while in tailing mode. |
 
-**`lastIntent` and preset highlight rule.** `lastIntent` tracks the most recent user action and drives the `SpanPresets` active-button highlight: `(lastIntent === 'preset' || lastIntent === 'pan') && sizeMs === preset.sizeMs`. Pan preserves `sizeMs`, so the active preset stays highlighted after a pan gesture. `tick` spreads the existing `lastIntent`.
+**`lastIntent` and preset highlight rule.** `lastIntent` tracks the most recent user action and drives the `SpanPresets` active-button highlight: `lastIntent !== null && lastIntent !== 'zoom' && sizeMs === preset.sizeMs`. The highlight reflects current viewport span match, not the click source — any size-preserving intent (`preset`, `pan`, `live`, `endPicker`) keeps it lit when `sizeMs` aligns; `zoom` is excluded because it produces arbitrary span values. `tick` spreads the existing `lastIntent`. See spec §9.3 for full rationale.
 
 `modeToViewport(state)` derives `Viewport { start: bigint; end: bigint }`:
 - Tailing: `{ start: nowMs - sizeMs, end: nowMs }`
@@ -250,9 +248,9 @@ It renders:
 
 It owns `tagIds` state (initialized from `initialTagIds` prop; removes come from `Legend` via `TrendChart.onTagRemove`). It derives `xRange` (the imperative X-scale update value) from `modeViewport` via `useMemo`. It passes `showLastWhenIdle={modeState.mode === 'tailing'}` to `TrendChart` (forwarded to `Legend`).
 
-`dispatchModeAction` is a wrapper around `dispatch` that handles all actions that can exit or enter tailing mode. On tailing→fixed transitions it: (1) calls `liveSubRef.current.commitAndDrain()` (returns void) to clear rings, accumulators, and rawBuffers; (2) calls `syncDataViewport(modeToViewport(next))` to force `dataViewport` to the post-transition viewport, bypassing the `lastIntent` skip; (3) calls `trendDataRef.current.refetchHistory()` to guarantee the history fetch fires even if `dataViewport` bounds happen to equal the prior value. On fixed→tailing transitions (Live button), it calls `trendDataRef.current.evictAll()` before dispatching — clearing the entire LRU cache to eliminate Gap B (stale CAG-lag nulls accumulating across sessions). See spec §10.8 and §11.B.
+`dispatchModeAction` wraps `dispatch` for actions that can exit or enter tailing mode. Lifecycle is defined in spec §10.6 (dispatchModeAction wrapper) and §10.8 (eviction-on-live-entry). Briefly: tailing→fixed runs commitAndDrain → syncDataViewport → refetchHistory; fixed→tailing runs evictAll before dispatching.
 
-Props: `tagIds: number[]`, `siteTimezone?: string`, `width?: number` (default 900), `height?: number` (default 420).
+Props: `tagIds: number[]`, `siteTimezone?: string`, `height?: number` (default 420). Width is measured via `ResizeObserver` inside `TrendChart`.
 
 ---
 
@@ -290,8 +288,7 @@ onDataReceived(maxModuleTs):
 **Key invariants:**
 - `rawBuffersRef` is never trimmed by `trimThreshold`. Trimming it moves `minLiveTs` forward, allowing LOCF gapfill from after-prefetch tiles to leak through `mergeRaw`'s cached-drop filter as a flatline gap at tile boundaries.
 - `useTrendData` in live mode fires one spine fetch per viewport span; the LRU cache is never read or written. `activeTilesRef` stays empty, so `ensureCovered` is a no-op. The live-spine effect is gated by `isTailingRef` (ref-synced, not a dep) and `spineFetchInFlightRef` (in-flight deduplication).
-- On fixed→tailing (Live button), `dispatchModeAction` calls `evictAll()` before dispatching, clearing the entire LRU cache. This eliminates Gap B (stale CAG-lag nulls accumulating across sessions). See §10.8 of the spec.
-- On tailing→fixed, `dispatchModeAction` calls `commitAndDrain()` (returns `void`) to drain the live buffer, then `syncDataViewport` to force `dataViewport` to the post-transition viewport, then `refetchHistory()` to kick off the history fetch. The LRU cache was already cleared on the preceding Live entry; the refetch always fetches fresh tiles.
+- Mode transition behavior is fully specified in spec §10.6 (`dispatchModeAction` wrapper) and §10.8 (eviction-on-live-entry / Gap B fix). Subscription lifecycle in spec §10.7.
 
 **Stable refs pattern.** `modeStateRef`, `trendDataRef`, `liveSubRef` are updated synchronously during render (not in `useEffect`) so all callbacks read current values without stale closures.
 
@@ -325,9 +322,13 @@ Spec was updated (v1.1) to reflect all items below — this list is for historic
 22. **`responseTailTs`-based raw buffer trim dropped for 2×Span (v1.6)** — original plan trimmed raw buffers to `moduleTs >= responseTailTs - 1000` (same threshold as the ring). Dropped because advancing `trimThreshold` as new tiles loaded would push `minLiveTs` forward in `mergeRaw`, letting LOCF gapfill from after-prefetch tiles leak through the cached-drop filter. Raw buffers now trimmed to `latestTs - 2×viewportSpanMs` in the WS callback (wall-clock bounded) and cleared only on tailing exit. See gotcha in §10.
 23. **uPlot `range` function must read from `userScaleRef`, not be identity (v1.6)** — original plan used `range: (u, min, max) => [min, max]` (identity) to pass through `setScale` values. Discovered that uPlot clamps the identity return to the data extent, ignoring `setScale` requests that exceed it. Replaced with a `userScaleRef`-backed range function: the ref is updated synchronously before every `setScale` call (imperative path, pan handler, zoom helper), and `range` returns the ref value if set, else defers to uPlot's default autoscale. This makes the imperative X-scale update path reliable across all viewport advance scenarios.
 24. **`setSelectHook` updates `userScaleRef` before calling `u.setScale` (v1.7)** — the drag-zoom completion handler in `uplotConfig.ts` must update `userScaleRef.current` immediately before `u.setScale`. If the ref is stale when `setScale` fires, `u.scales['x']` ends up locked at the previous range (the range function returns the old ref value). This is a subtle ordering dependency within the same callback frame; calling `setScale` first then updating the ref is wrong.
-25. **Live mode bypasses LRU cache entirely; `evictAll` removed from mode transitions (v1.7)** — supersedes divergences 17 and 21. Fixed→live transition fires one spine fetch spanning the full viewport at `visibleTilesPerWindow × bucketCount` buckets (1000 at defaults), using `viewport.start`/`viewport.end` exactly (no tile-grid alignment). Result goes directly to `hookResult.data` via `assembleLiveSpine`; cache is neither read nor written; `activeTilesRef` stays empty. On tailing→fixed, `commitAndDrain()` drains the live buffer, then `syncDataViewport` + `refetchHistory()` kick off the history fetch. No cache eviction needed or performed. The LRU cache is history-mode-only.
+25. **Live mode bypasses LRU cache; `evictAll` clears it on Live entry (Gap B fix)** — supersedes divergences 17 and 21.
 
-    *Update (post-Gap-B fix, 2026-05-13):* `evictAll` was re-introduced on fixed→tailing as the primary mechanism for cache freshness across live sessions (eliminates Gap B — stale CAG-lag nulls accumulating in the LRU cache). The "no cache eviction needed or performed" claim above applies to the tailing→fixed direction only; fixed→tailing now clears the cache. See spec §10.8 and §11.B in this file.
+    **Fixed → tailing (Live button):** `dispatchModeAction` calls `trendDataRef.current.evictAll()` before dispatching `liveClicked`. The LRU cache is fully cleared on every live entry — this is the primary mechanism for cross-session cache freshness (eliminates Gap B, stale CAG-lag nulls that would otherwise accumulate across repeated live sessions; see spec §10.8 and §11.B). After transition, a single spine fetch fires spanning the full viewport at `visibleTilesPerWindow × bucketCount` buckets (1000 at defaults), using `viewport.start`/`viewport.end` exactly (no tile-grid alignment). Result goes directly to `hookResult.data` via `assembleLiveSpine`; the LRU cache is neither read nor written during live mode. `activeTilesRef` stays empty.
+
+    **Tailing → fixed (any tailing-exit action):** `dispatchModeAction` calls `commitAndDrain()` (clears rings, accumulators, raw buffers — does NOT unsubscribe; subscriptions stay warm per spec §10.7), then `syncDataViewport(modeToViewport(next))` (forces `dataViewport` to post-transition value), then `refetchHistory()` with `overfetchRightCount: 0` (2 visible + 1 left prefetch). No cache eviction here — the cache was cleared on the preceding Live entry, so the refetch always fetches fresh tiles.
+
+    **The LRU cache is history-mode-only**, gets cleared on every Live entry, and gets repopulated by the next-fixed-mode fetch. This asymmetric clear-on-entry pattern provides cache reuse during exploratory history navigation (multiple zooms/pans within a fixed session share cached tiles) while preventing CAG-lag staleness from surviving across live sessions.
 26. **`isTailingRef` replaces `isTailing` in effect dep array; `spineFetchInFlightRef` gates re-entry (v1.7)** — putting `isTailing` in the main-effect dep array caused the live-spine effect to fire with the stale `dataViewport` from the prior mode on mode flip (mode and viewport cascade arrive in separate renders). `isTailingRef` is synced every render and read from inside the effect. `spineFetchInFlightRef` prevents 4 Hz tick re-fires from launching duplicate spine fetches: set `true` before `Promise.all`, cleared in `.then`/`.catch` after the generation check.
 27. **`refetchHistory()` + asymmetric overfetch for live→fixed (v1.7)** — `useTrendData` exposes `refetchHistory()` which bumps `historyRefetchVersion` state and sets `liveExitRefetchPendingRef`. The main effect's history branch reads the flag and passes `overfetchRightCount: 0` to `tilesForViewport`, yielding 2 visible + 1 left prefetch = 3 tiles instead of the normal 4. The right prefetch is omitted because the user is panning back in time — the next future-side tile is useless. `tilesForViewport` now accepts `overfetchLeftCount`/`overfetchRightCount` as optional per-call overrides (default to `overfetchPerSide`), preserving existing call-site behavior.
 28. **`checkAndExtendXCoverage` reads active tile bounds via `getActiveRange`, not `u.data[0]` (v1.7)** — in raw mode, `u.data[0]` contains actual sample timestamps which may be well inside tile boundaries (device data gaps). Using `xs[last]` as `cachedEnd` produced spurious right-extension requests for tiles past `nowMs` (always filtered out, never fetched, but triggered every onXMove) while leaving legitimate left-extension triggers suppressed until the user panned further than expected. `useTrendData` now exposes `getActiveRange()` returning `{ startMs, endMs }` from `activeTilesRef.current`. `checkAndExtendXCoverage` accepts it as a third argument; `TrendChart` stores it in `getActiveRangeRef` and passes it through from both the onXMove handler and the `bucketSMsKey` coverage effect.
@@ -404,11 +405,10 @@ Observations from production behavior. Not divergences from spec — document he
 
 *Gap B (cross-session frozen cache nulls) — closed (2026-05-13).* In the prior architecture, CAG-lag nulls could be written to the tile cache and frozen there indefinitely. Users who toggled between live and fixed would see stale nulls accumulate across sessions. Eliminated by eviction-on-live-entry: `dispatchModeAction` calls `evictAll()` on every fixed→tailing (Live button) transition, clearing the cache so each live session starts with a clean slate. See `hmi_trend_viewer_spec.md` §10.8.
 
-**C. `pruneAndAdd` may overwrite real data with flat-line data during drag-zoom-then-pan.** Intermittent symptom: after drag-zooming to a non-preset span (producing a non-standard `tileSpanMs`) and then panning, some regions that rendered real data briefly show flat lines. Likely caused by a pan-extension fetch returning a tile whose geometry (start/end alignment) differs from a previously cached tile covering the same range; the new tile is added to the active set via `pruneAndAdd` and `assembleData` now reads the new (sparse/null) data over the old. Possible fix: reject pan-extension tiles whose `tileSpanMs` doesn't match the current viewport's `tileSpanMs`, or evict mismatched tiles before adding. Needs separate investigation.
+**C. ~~`pruneAndAdd` may overwrite real data with flat-line data during drag-zoom-then-pan.~~**
+Closed (2026-05-14). Root cause: `ensureCovered` derived `tileSpanMs` from the current viewport rather than the active set's actual tile widths, producing misaligned candidates during the in-flight window of zoom commits. Fixed by anchoring `tileSpanMs` to `active[0]!.endTime - active[0]!.startTime` in `useTrendData.ts` (`ensureCovered`). Manual regression checklist: drag-zoom to non-preset span → pan 50% right → verify no flat-line artifact replaces real data.
 
-**D. Past-LOCF on dormant signals in CAG path.** When a device stops publishing MQTT packets but `TrendSnapshotScheduler` continues writing the last-known value as a force-write snapshot, the 1s/10s CAG buckets between snapshot rows contain no samples and are LOCF-gapfilled to the LKV. The chart shows a flat line at the last known value even though the underlying signal is genuinely stale. Distinct from Gap A/B — those concern recent materialization lag; this concerns persistent-signal rendering for modules that went silent.
-
-Fix path: `TrendSnapshotScheduler` should write a null sentinel when a module has been silent for the full snapshot interval, rather than carrying the LKV forward. This would propagate as `mixed-null` through the CAG three-case rule (§6.5), rendering as a gap rather than a flat line. Deferred until a user-facing complaint is observed. Tracked in `Docs/platform_todo.md`.
+**D. Synthetic-on-flush uses HMI server `Date.now()` for `moduleTs` (mixed clock domains).** The synthetic-on-flush mechanism (spec §4.4) exists to propagate LOCF (last-observation-carried-forward) values from the server's LKV to the client's bucket accumulator at `TREND_FLUSH_HZ` cadence. For flatline tags, the LKV is constant by definition — the value at any flush moment equals the value at any other flush moment in the flatline window — so the **synthetic's exact `moduleTs` is not critical**, only that it advances the client's bucket boundaries. Real samples in the same `TREND_DELTA` frame carry the device's `moduleTs` (from MQTT ingest); synthetics carry `Date.now()`. At well-NTP-synced installations the drift is <100 ms — bucket boundary placement for synthetics may shift by that amount relative to real events, but the *value* placed in those buckets is identical regardless of which side of the boundary the synthetic lands. The 1-second `responseTailTs - 1000ms` trim margin (spec §6.2) absorbs typical drift comfortably. Not a fix-target; documented so future readers understand the design intent.
 
 ---
 
@@ -419,7 +419,8 @@ Fix path: `TrendSnapshotScheduler` should write a null sentinel when a module ha
 | Step | Summary | Spec reference |
 |---|---|---|
 | 12 | **Tag picker drawer**: tree + search (§11.2), multi-select commit (§11.3), trendable filter (§11.4). | §11 |
-| 13 | **Connection pool resize**: bump `@caro/db` Timescale pool from 10 to 20–30 before multi-operator production rollout. | §15 |
+
+> Pool sizing and other operational monitoring watchlist items live in `Docs/platform_todo.md`, not as development steps.
 
 **Reading order for Step 12:**
 1. This file (orientation, especially §7 Container Wiring)

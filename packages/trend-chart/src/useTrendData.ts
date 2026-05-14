@@ -787,7 +787,12 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     const active = activeTilesRef.current;
     if (active.length === 0) return;
 
-    const tileSpanMs = (viewportEnd - viewportStart) / BigInt(visibleTilesPerWindow);
+    // Derive tileSpanMs from the active set's tile widths, NOT from the current viewport.
+    // Active set tiles are uniform-width by construction (one tilesForViewport call), so
+    // active[0] is reliable. Using viewport-derived width during the in-flight window of
+    // a zoom commit produces candidates that don't align with the active set's grid,
+    // which then overlap existing tiles when added — handoff §11.C regression.
+    const tileSpanMs = active[0]!.endTime - active[0]!.startTime;
     if (tileSpanMs === 0n) return;
 
     const cachedStart = active[0]!.startTime;

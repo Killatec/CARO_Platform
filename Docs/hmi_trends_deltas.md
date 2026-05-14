@@ -109,7 +109,13 @@ Original handoff §11.D ("Past-LOCF on dormant signals") and the corresponding `
 
 ---
 
-## Pending audit findings (Phases 2.5–5)
+## 2026-05-14 — Phase 3 F7 ensureCovered tileSpanMs fix
+
+- F7: `useTrendData.ensureCovered` derives `tileSpanMs` from `active[0]!.endTime - active[0]!.startTime` (active set's actual tile width), not from the current viewport formula. Prevents misaligned candidate tiles during the in-flight window of zoom commits. Closes handoff §11.C.
+
+---
+
+## Pending audit findings (Phases 3–5)
 
 Self-contained Claude Code prompts under `Docs/prompts/`. Each Phase lands in its own PR.
 

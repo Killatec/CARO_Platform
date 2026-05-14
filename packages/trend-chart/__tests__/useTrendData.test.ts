@@ -827,6 +827,59 @@ describe('useTrendData', () => {
     dateSpy.mockRestore();
   });
 
+  it('ensureCovered: candidate geometry matches active-set tile width (same-geometry pan)', async () => {
+    // After initial load with visibleTilesPerWindow=2, active set has 3 tiles each HALF_HOUR wide.
+    // Pan 50% right: ensureCovered asks for [cachedEnd, cachedEnd + HALF_HOUR/2).
+    // The candidate must start at cachedEnd and have width = HALF_HOUR (active set tile width),
+    // NOT derived from the viewport formula.
+    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
+
+    const { result } = renderHook(() =>
+      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
+    );
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    const callsAfterLoad = mockFetchTile.mock.calls.length;
+
+    const cachedEnd = ONE_HOUR + HALF_HOUR; // 3 HALF_HOUR tiles: [-HALF_HOUR, 0), [0, HALF_HOUR), [HALF_HOUR, ONE_HOUR), + prefetch [ONE_HOUR, cachedEnd)
+    act(() => {
+      result.current.ensureCovered(HALF_HOUR, cachedEnd + HALF_HOUR / 2n);
+    });
+
+    expect(mockFetchTile.mock.calls.length).toBe(callsAfterLoad + 1);
+    const fetchParams = mockFetchTile.mock.calls[callsAfterLoad]![0] as Parameters<typeof fetchTile>[0];
+    // Candidate must start at the active set's right edge.
+    expect(fetchParams.startTime).toBe(cachedEnd);
+    // Candidate width must equal the active set's tile width (HALF_HOUR), not the viewport width.
+    expect(fetchParams.endTime - fetchParams.startTime).toBe(HALF_HOUR);
+  });
+
+  it('ensureCovered: candidate geometry tracks active-set width after zoom (mismatched-viewport scenario)', async () => {
+    // Simulate a zoom that would change the viewport-derived tileSpanMs but the active set
+    // still has the old geometry. With N=2 visible tiles and ONE_HOUR viewport, active tiles
+    // are HALF_HOUR wide. If the viewport were doubled to 2*ONE_HOUR, the old formula would
+    // produce ONE_HOUR-wide candidates — wrong. The fix anchors on active[0] width instead.
+    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
+
+    const { result } = renderHook(() =>
+      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
+    );
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    const callsAfterLoad = mockFetchTile.mock.calls.length;
+
+    // Ask ensureCovered with a range 2x wider than the original viewport — mimics the
+    // in-flight window after a zoom commit where viewport jumped but active set didn't.
+    const cachedEnd = ONE_HOUR + HALF_HOUR;
+    act(() => {
+      result.current.ensureCovered(0n, cachedEnd + ONE_HOUR);
+    });
+
+    // At least one fetch fires for the gap past cachedEnd.
+    expect(mockFetchTile.mock.calls.length).toBeGreaterThan(callsAfterLoad);
+    const fetchParams = mockFetchTile.mock.calls[callsAfterLoad]![0] as Parameters<typeof fetchTile>[0];
+    // Regardless of the range width passed in, each candidate must use the active set's tile width.
+    expect(fetchParams.endTime - fetchParams.startTime).toBe(HALF_HOUR);
+  });
+
   it('empty tagIds: hook returns data:null with isLoading=false (no fetch)', async () => {
     const { result } = renderHook(() =>
       useTrendData({ viewport: defaultViewport, tagIds: [] }),
