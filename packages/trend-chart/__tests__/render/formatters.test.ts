@@ -13,28 +13,28 @@ describe('formatBucketS', () => {
   });
 
   it('formats sub-second raw (< 1s) as raw', () => {
-    expect(formatBucketS(0.5)).toBe('0.5 s buckets');
+    expect(formatBucketS(0.5)).toBe('0.5 s');
   });
 
   it('formats seconds accurately (1.92)', () => {
-    expect(formatBucketS(1.92)).toBe('1.92 s buckets');
+    expect(formatBucketS(1.92)).toBe('1.92 s');
   });
 
   it('formats seconds for whole number (14.4)', () => {
-    expect(formatBucketS(14.4)).toBe('14.4 s buckets');
+    expect(formatBucketS(14.4)).toBe('14.4 s');
   });
 
   it('formats sub-minute seconds (28.8)', () => {
-    expect(formatBucketS(28.8)).toBe('28.8 s buckets');
+    expect(formatBucketS(28.8)).toBe('28.8 s');
   });
 
   it('converts to minutes (230.4 s = 3.84 min)', () => {
-    expect(formatBucketS(230.4)).toBe('3.84 min buckets');
+    expect(formatBucketS(230.4)).toBe('3.84 min');
   });
 
   it('converts to hours (14746 s ≈ 4.1 h)', () => {
     const result = formatBucketS(14746);
-    expect(result).toMatch(/h buckets$/);
+    expect(result).toMatch(/h$/);
     expect(result).toContain('4.1');
   });
 });

@@ -81,6 +81,23 @@ Change manifest for the Phase 1 doc PR. Spec and handoff have been edited in pla
 
 ---
 
+## 2026-05-14 — Post-audit correction: TrendSnapshotScheduler dormant-module behavior
+
+Original handoff §11.D ("Past-LOCF on dormant signals") and the corresponding `platform_todo.md` heartbeat-vs-null entry described a non-issue. The module watchdog already nulls the LKV on stall transition, so subsequent `TrendSnapshotScheduler.forceTrendSnapshot()` ticks force-write nulls (not stale LKV), which propagate as `mixed-null` through the CAG three-case rule and render as gaps per §5.4 null-as-gap.
+
+- Deleted handoff §11.D ("Past-LOCF on dormant signals in CAG path") — no current limitation; watchdog handles full-module silence.
+- Deleted `platform_todo.md` "TrendSnapshotScheduler heartbeat-vs-null" entry — fix proposed there is what the watchdog already does.
+- Renumbered handoff §11.E (synthetic-on-flush clock-domain note) to §11.D. Updated cross-reference in spec §4.4.
+- No edit to `CARO_Trending_Reference.md` — the proposed §15.6 addition would have introduced a false limitation; not applied.
+
+---
+
+## 2026-05-14 — formatBucketS suffix removal
+
+- `formatBucketS` now returns only the size ("3.6 s") without the " buckets" suffix. `SpanBucketIndicator`'s footer reads "Bucket Size: 3.6 s" (no redundancy). Callers that need the labeled form should append context at their site.
+
+---
+
 ## Pending audit findings (Phases 2.5–5)
 
 Self-contained Claude Code prompts under `Docs/prompts/`. Each Phase lands in its own PR.

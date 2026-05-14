@@ -332,7 +332,7 @@ describe('TrendChartContainer', () => {
     renderContainer();
     // Default sizeMs = 1h; bucketSMs = 3600ms = 3.6 s
     expect(screen.getByText('Span: 1 h')).toBeTruthy();
-    expect(screen.getByText('Bucket Size: 3.6 s buckets')).toBeTruthy();
+    expect(screen.getByText('Bucket Size: 3.6 s')).toBeTruthy();
   });
 
   it('after preset click, SpanBucketIndicator span line updates to match the new span', () => {
