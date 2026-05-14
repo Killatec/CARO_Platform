@@ -133,8 +133,12 @@ Original handoff §11.D ("Past-LOCF on dormant signals") and the corresponding `
 
 ---
 
+## 2026-05-14 — Phase 5 handoff §10 cleanup
+
+- Handoff §10 rewritten to current-state-only: 30 entries deleted (absorbed into spec §4.3, §4.4, §5.5, §6.2, §6.3, §6.5, §7.1, §8.5, §9.3, §9.5, §10.4–§10.8); 3 kept and trimmed (#14 raw-path SQL, #23 uPlot range/userScaleRef, #24 setSelectHook ordering); 3 moved to new "Historical decisions" subsection (#20 watchdog null marker, #21 open-tile model, #22 responseTailTs buffer trim). Preamble updated. Numbering gaps intentional to preserve external cross-references.
+
+---
+
 ## Pending audit findings
 
-Self-contained Claude Code prompts under `Docs/prompts/`. Each Phase lands in its own PR.
-
-- **Phase 5 — Cleanup polish:** handoff §10 divergence audit per "current-state-only" principle.
+(none)
