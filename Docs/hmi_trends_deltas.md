@@ -109,6 +109,12 @@ Original handoff §11.D ("Past-LOCF on dormant signals") and the corresponding `
 
 ---
 
+## 2026-05-14 — pruneAndAdd middle-insertion warn removed
+
+- Removed `console.warn` from `pruneAndAdd`'s middle-insertion branch. Post-F7, clean gap-fill (newTile slots into a gap with no overlap) is a legitimate scenario, not "unexpected" — the warn was noise. Behavior unchanged: middle insertion still drops the leftmost tile at capacity. Collapsed `isRightEnd` check into the default branch (same outcome).
+
+---
+
 ## 2026-05-14 — Phase 3 F7 ensureCovered tileSpanMs fix
 
 - F7: `useTrendData.ensureCovered` derives `tileSpanMs` from `active[0]!.endTime - active[0]!.startTime` (active set's actual tile width), not from the current viewport formula. Prevents misaligned candidate tiles during the in-flight window of zoom commits. Closes handoff §11.C.

@@ -106,20 +106,20 @@ describe('pruneAndAdd', () => {
     expect(result.some(t => t.startTime === 0n)).toBe(false);
   });
 
-  it('active set of 8 + middle tile → 8 tiles, warn logged, leftmost dropped', () => {
+  it('active set of 8 + middle tile (gap-fill) → 8 tiles, leftmost dropped, no warn', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const tiles = [
       makeTile(0n, SPAN * 2n), makeTile(SPAN * 2n, SPAN * 4n), makeTile(SPAN * 4n, SPAN * 6n), makeTile(SPAN * 6n, SPAN * 8n),
       makeTile(SPAN * 8n, SPAN * 10n), makeTile(SPAN * 10n, SPAN * 12n), makeTile(SPAN * 12n, SPAN * 14n), makeTile(SPAN * 14n, SPAN * 16n),
     ];
-    // Middle tile: startTime > tiles[0].startTime, endTime < tiles[last].endTime.
+    // Middle tile: startTime > tiles[0].startTime, endTime < tiles[last].endTime (gap-fill).
     const newTile = makeTile(SPAN, SPAN * 3n);
     const result = pruneAndAdd(tiles, newTile);
     expect(result).toHaveLength(8);
-    expect(warnSpy).toHaveBeenCalledWith(
-      '[useTrendData] pruneAndAdd: newTile is in the middle of activeSet — unexpected',
-      expect.any(String), expect.any(String), expect.any(String), expect.any(String),
-    );
+    // Leftmost tile (0n:SPAN*2n) must be dropped.
+    expect(result.some(t => t.startTime === 0n)).toBe(false);
+    // No warn — middle insertion is a legitimate gap-fill scenario post-F7.
+    expect(warnSpy).not.toHaveBeenCalled();
     warnSpy.mockRestore();
   });
 

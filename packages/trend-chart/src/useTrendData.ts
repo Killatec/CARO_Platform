@@ -394,12 +394,12 @@ function computeResponseTailTs(
 }
 
 /**
- * Add `newTile` to `activeSet` and prune to `maxSize`, dropping from the side
- * farthest from `newTile`. Returns the new sorted active set.
+ * Add `newTile` to `activeSet` and prune to `maxSize`.
  *
  * - newTile left of extent  → drop rightmost tile.
  * - newTile right of extent → drop leftmost tile.
- * - newTile in the middle (defensive, shouldn't happen) → drop leftmost, warn.
+ * - newTile in the middle (gap-fill or extension into a discontiguous region)
+ *   → drop leftmost tile.
  */
 export function pruneAndAdd(activeSet: Tile[], newTile: Tile, maxSize = MAX_ACTIVE_TILES): Tile[] {
   if (activeSet.length === 0) return [newTile];
@@ -407,12 +407,7 @@ export function pruneAndAdd(activeSet: Tile[], newTile: Tile, maxSize = MAX_ACTI
   if (sorted.length <= maxSize) return sorted;
 
   const isLeftEnd = newTile.startTime < activeSet[0]!.startTime;
-  const isRightEnd = newTile.endTime > activeSet[activeSet.length - 1]!.endTime;
   if (isLeftEnd) return sorted.slice(0, maxSize);
-  if (isRightEnd) return sorted.slice(sorted.length - maxSize);
-  console.warn('[useTrendData] pruneAndAdd: newTile is in the middle of activeSet — unexpected',
-    'activeSet=', activeSet.map(t => `[${Number(t.startTime)},${Number(t.endTime)}]`).join(' '),
-    'newTile=', `[${Number(newTile.startTime)},${Number(newTile.endTime)}]`);
   return sorted.slice(sorted.length - maxSize);
 }
 
