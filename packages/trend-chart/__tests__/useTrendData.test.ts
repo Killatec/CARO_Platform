@@ -880,6 +880,25 @@ describe('useTrendData', () => {
     expect(fetchParams.endTime - fetchParams.startTime).toBe(HALF_HOUR);
   });
 
+  it('getActiveRange: returns tileSpanMs equal to active-set tile width', async () => {
+    // panThresholdCheck reads tileSpanMs from getActiveRange() to stay symmetric with
+    // ensureCovered (both use the active set's actual tile width, not visible-span/2).
+    // This test verifies getActiveRange exposes the correct field.
+    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
+
+    const { result } = renderHook(() =>
+      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
+    );
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    const range = result.current.getActiveRange();
+    expect(range).not.toBeNull();
+    // With visibleTilesPerWindow=2 and ONE_HOUR viewport, each active tile is HALF_HOUR wide.
+    expect(range!.tileSpanMs).toBe(HALF_HOUR);
+    expect(range!.startMs).toBeDefined();
+    expect(range!.endMs).toBeDefined();
+  });
+
   it('empty tagIds: hook returns data:null with isLoading=false (no fetch)', async () => {
     const { result } = renderHook(() =>
       useTrendData({ viewport: defaultViewport, tagIds: [] }),

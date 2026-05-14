@@ -58,7 +58,7 @@ export interface TrendChartProps {
   rangeExceeded?: boolean;
   /** Returns the time bounds of the current active tile set. Passed to checkAndExtendXCoverage
    *  so the threshold check uses tile metadata rather than sparse u.data[0] sample timestamps. */
-  getActiveRange?: () => { startMs: bigint; endMs: bigint } | null;
+  getActiveRange?: () => { startMs: bigint; endMs: bigint; tileSpanMs: bigint } | null;
 }
 
 const WRAPPER: CSSProperties = {

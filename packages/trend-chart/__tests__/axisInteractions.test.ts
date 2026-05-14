@@ -368,23 +368,23 @@ describe('panXScale', () => {
 
 // ── panThresholdCheck ─────────────────────────────────────────────────────────
 //
-// Setup: visSpan = 3600s, tileSpan = visSpan/2 = 1800s, halfTile = visSpan/4 = 900s.
-// (All values in ms throughout.) Cached extent: [0, 7200000).
+// Setup: tileSpan = 1800s, halfTile = 900s. Cached extent: [0, 7200000).
+// tileSpanMs is passed explicitly (sourced from the active set, not from visSpan).
 
 describe('panThresholdCheck', () => {
   // Cached extent spans 4 tiles × 1800 s = 7200 s.
   const cachedStart = 0n;
   const cachedEnd = 7_200_000n;
-  // Visible window = 2 tiles = 3600 s. halfTileMs = 900 000 ms.
+  const TILE_SPAN = 1_800_000n; // active-set tile width; halfTile = 900_000n.
 
   it('returns null when visible window is comfortably inside the cached extent', () => {
     // vis=[1800000, 5400000]: visMin(1800000) >= 0+900000 and visMax(5400000) <= 7200000-900000=6300000.
-    expect(panThresholdCheck(1_800_000n, 5_400_000n, cachedStart, cachedEnd)).toBeNull();
+    expect(panThresholdCheck(1_800_000n, 5_400_000n, cachedStart, cachedEnd, TILE_SPAN)).toBeNull();
   });
 
   it('returns left-side range when visible left edge approaches cached start', () => {
     // vis=[500000, 4100000]: visMin(500000) < 0+900000 → triggers left prefetch.
-    const result = panThresholdCheck(500_000n, 4_100_000n, cachedStart, cachedEnd);
+    const result = panThresholdCheck(500_000n, 4_100_000n, cachedStart, cachedEnd, TILE_SPAN);
     expect(result).not.toBeNull();
     expect(result!.startMs).toBe(-1_800_000n); // cachedStart - tileSpan
     expect(result!.endMs).toBe(0n);            // cachedStart
@@ -392,7 +392,7 @@ describe('panThresholdCheck', () => {
 
   it('returns right-side range when visible right edge approaches cached end', () => {
     // vis=[3500000, 7100000]: visMax(7100000) > 7200000-900000=6300000 → right prefetch.
-    const result = panThresholdCheck(3_500_000n, 7_100_000n, cachedStart, cachedEnd);
+    const result = panThresholdCheck(3_500_000n, 7_100_000n, cachedStart, cachedEnd, TILE_SPAN);
     expect(result).not.toBeNull();
     expect(result!.startMs).toBe(7_200_000n);  // cachedEnd
     expect(result!.endMs).toBe(9_000_000n);    // cachedEnd + tileSpan
@@ -400,26 +400,40 @@ describe('panThresholdCheck', () => {
 
   it('returns null when visMin is exactly cachedStart + halfTileMs (boundary is strict <)', () => {
     // vis=[900000, 4500000]: visMin === cachedStart + halfTile — NOT strictly less, so null.
-    expect(panThresholdCheck(900_000n, 4_500_000n, cachedStart, cachedEnd)).toBeNull();
+    expect(panThresholdCheck(900_000n, 4_500_000n, cachedStart, cachedEnd, TILE_SPAN)).toBeNull();
   });
 
   it('returns null when visMax is exactly cachedEnd - halfTileMs (boundary is strict >)', () => {
     // vis=[2700000, 6300000]: visMax === cachedEnd - halfTile — NOT strictly greater, so null.
-    expect(panThresholdCheck(2_700_000n, 6_300_000n, cachedStart, cachedEnd)).toBeNull();
+    expect(panThresholdCheck(2_700_000n, 6_300_000n, cachedStart, cachedEnd, TILE_SPAN)).toBeNull();
   });
 
   it('left trigger fires one bucket before the exact boundary', () => {
     // visMin = 900000 - 1 = 899999 < 900000 → triggers.
-    const result = panThresholdCheck(899_999n, 4_499_999n, cachedStart, cachedEnd);
+    const result = panThresholdCheck(899_999n, 4_499_999n, cachedStart, cachedEnd, TILE_SPAN);
     expect(result).not.toBeNull();
     expect(result!.endMs).toBe(0n);
   });
 
   it('right trigger fires one bucket before the exact boundary', () => {
     // visMax = 6300000 + 1 = 6300001 > 6300000 → triggers.
-    const result = panThresholdCheck(2_700_001n, 6_300_001n, cachedStart, cachedEnd);
+    const result = panThresholdCheck(2_700_001n, 6_300_001n, cachedStart, cachedEnd, TILE_SPAN);
     expect(result).not.toBeNull();
     expect(result!.startMs).toBe(7_200_000n);
+  });
+
+  it('mismatched tileSpanMs: returned range width equals tileSpanMs, not visible-derived width', () => {
+    // Simulates wheel-zoom-out where visible span > 2 × active tileSpan (dataViewport unchanged).
+    // visSpan = 3_000_000n (3000s). If tileSpanMs were derived from visSpan: tileSpan = 1_500_000n.
+    // But active set has tileSpanMs = 1_000_000n (1000s). Passing active-set width must win.
+    const activeTileSpan = 1_000_000n; // active-set actual tile width
+    const halfTile = activeTileSpan / 2n; // 500_000n
+    // Trigger right: visMax(7_100_000n) > cachedEnd(7_200_000n) - halfTile(500_000n) = 6_700_000n → true.
+    const result = panThresholdCheck(4_100_000n, 7_100_000n, cachedStart, cachedEnd, activeTileSpan);
+    expect(result).not.toBeNull();
+    expect(result!.startMs).toBe(7_200_000n);
+    // Range width must equal the active set's tileSpanMs (1_000_000n), not visSpan/2 (1_500_000n).
+    expect(result!.endMs - result!.startMs).toBe(activeTileSpan);
   });
 });
 
@@ -496,7 +510,7 @@ describe('zoomXScale', () => {
 // ── checkAndExtendXCoverage ───────────────────────────────────────────────────
 //
 // Tile covers [1_000_000_000_000 ms, 1_000_000_060_000 ms] (60 s).
-// Visible window = 60 s, so tileSpan = visSpan/2 = 30 s, halfTile = 15 s.
+// Active set tileSpanMs = 30 s (half tile); halfTile = 15 s.
 // Threshold: visMin must be < tileStart + 15 s to trigger left, visMax > tileEnd - 15 s for right.
 // In the raw-data test, u.data[0] only spans a narrow window *inside* the tile; the function
 // must use getActiveRange (tile bounds) rather than u.data[0] to compute the extent.
@@ -517,9 +531,11 @@ describe('checkAndExtendXCoverage', () => {
     } as unknown as uPlot;
   }
 
+  // tileSpanMs = 30_000n (30 s) — active set's actual tile width, not derived from visible span.
   const getActiveRange = () => ({
-    startMs: BigInt(TILE_START_S) * 1000n,
-    endMs:   BigInt(TILE_END_S)   * 1000n,
+    startMs:    BigInt(TILE_START_S) * 1000n,
+    endMs:      BigInt(TILE_END_S)   * 1000n,
+    tileSpanMs: 30_000n,
   });
 
   it('returns early and does not call ensureCovered when ensureCovered is absent', () => {

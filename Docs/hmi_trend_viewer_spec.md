@@ -71,9 +71,9 @@ All other layers (Node/Express, WebSocket, `@caro/db`, `@caro/hmi-context`, `@ca
 
 | Component | Location | Role |
 |---|---|---|
-| Trends REST endpoint | `apps/caro-hmi/server/src/routes/trends.ts` | Serves `GET /api/v1/trends/tile`. Validates `tag_ids`, `start_time`, `end_time`, `bucket_count`. Derives `bucketS = Number(endTime - startTime) / (bucketCount * 1000)` server-side and validates it falls within (0, MAX_BUCKET_S] (= (0, 14746]). Delegates to `getTrendTile()` from `@caro/db`. Returns the standard platform envelope. Stateless — no resolution selection, no window math. |
+| Trends REST endpoint | `apps/caro-hmi/server/src/routes/trends.ts` | Serves `GET /api/v1/trends/tile`. Validates `tag_ids`, `start_time`, `end_time`, `bucket_count`. Derives `bucketSMs` and `bucketS` via the shared `deriveBucketSMs` helper (`@caro/db`) and validates `bucketS` falls within `(0, MAX_BUCKET_S]` (§6.3). Delegates to `getTrendTile()` from `@caro/db`. Returns the standard platform envelope. Stateless — no resolution selection, no window math. |
 | TrendSnapshotScheduler | `apps/caro-hmi/server/src/trend-snapshot-scheduler.ts` | Already in production. Ensures every trendable tag gets ≥1 DB row per minute via piggyback (on next MQTT ingest) or force-write (silent modules). The 1-minute cadence is a hard contract — the trends query's bounded `prev` subquery (§5.5) depends on it. |
-| `getTrendTile()` | `packages/db/src/timescale/trends.ts` (new file) | Single named function: `getTrendTile(tagIds, startTime, endTime, bucketCount)`. Derives `bucketS = Number(endTime - startTime) / (bucketCount * 1000)` internally, then dispatches on `bucketS` per §6.3: `bucketS < 1.0` → raw `tag_samples`; `1.0 ≤ bucketS < 16` → `1s_cagg`; `16 ≤ bucketS < 160` → `10s_cagg`; `160 ≤ bucketS < 1600` → `1min_cagg`; `≥ 1600` → `10min_cagg`. Returns the actual natural epoch-aligned bucket grid: for aligned requests this matches `(startTime, endTime)` with exactly `bucketCount` rows; for unaligned requests `startTime` and `endTime` in the response reflect the served grid boundary and `n` is `bucketCount + 1` (§6.2). **Watermark-aware fall-through (§4.3):** any query whose `endTime > source.watermark_ts` is split — materialized portion served from the chosen source, trailing portion from the next-finer source (CAG or raw). **Multi-tag batching:** one DB round-trip across all requested tag IDs using `WHERE tag_id = ANY($tagIds)`; results split by `tag_id` into the `series` array. **Per-query tag cap N ≤ 8** (§6.6) — the server rejects requests above this; charts with more tags fan out at the client. Platform rule forbids raw SQL in apps — all queries live here. |
+| `getTrendTile()` | `packages/db/timescale/trends.ts` | Single named function: `getTrendTile(tagIds, startTime, endTime, bucketCount, nowMs?)`. Derives `bucketSMs` and `bucketS` via `deriveBucketSMs`, then dispatches on `bucketS` per §6.3. Returns the actual natural epoch-aligned bucket grid: for aligned requests this matches `(startTime, endTime)` with exactly `bucketCount` rows; for unaligned requests `startTime` and `endTime` in the response reflect the served grid boundary and `n` is `bucketCount + 1` (§6.2). `responseTailTs` is populated from `nowMs ?? Date.now()` and used as the future-bucket-nulling cutoff (§6.5). **Watermark-aware fall-through (§4.3):** any query whose `endTime > source.watermark_ts` is split — materialized portion served from the chosen source, trailing portion from the next-finer source (CAG or raw). **Multi-tag batching:** one DB round-trip across all requested tag IDs using `WHERE tag_id = ANY($tagIds)`; results split by `tag_id` into the `series` array. **Per-query tag cap N ≤ 8** (§6.6) — the server rejects requests above this; charts with more tags fan out at the client. Platform rule forbids raw SQL in apps — all queries live here. |
 | `packages/trend-chart/` | New workspace package | Full client-side feature: chart component, data hooks, cache, tag picker, time range bar, legend, saved-views dropdown (Phase B). Owns all window/level math, tile fan-out across the 2-tile parallel pattern (§10.2), and the N≤8 tag fan-out (§10.4). |
 
 **Phase A migrations:** `T001_create_tag_samples.sql` (raw hypertable, already applied), plus four CAG migrations — `T005_create_cag_1s.sql` (already applied but **must be re-migrated**, see Open Questions §18 and `Docs/platform_todo.md`), `T00X_create_cag_10s.sql`, `T00X_create_cag_1min.sql`, `T00X_create_cag_10min.sql` (numbering TBD). Each CAG materializes `last(value ORDER BY ts)`, `null_count`, `min(value)`, `max(value)` (§3.2 of `DB_Config_Usage_And_Perf.md`). The `null_count` column is non-negotiable — it carries the null-as-gap signal through aggregation (§5.4). The `min`/`max` columns are consumed by the v0.8 read path (§6.2, §6.5) — surfaced as per-series `min`/`max` arrays in the aggregate tile response and rendered as filled bands by `@caro/trend-chart`.
@@ -107,7 +107,7 @@ Client                                           Server                         
   │◀─────────────────────────────────────────────────┤                              │
 ```
 
-For each visible window the client fires **2 tile-fetches in parallel** via `Promise.all` (§10.2), each spanning `windowSec / 2` with `bucketCount=500`, plus ±1 async prefetch tile on each side (not render-blocking), plus tag-group fan-out for charts with > 8 plotted tags (§10.4). Ranges are epoch-aligned — `startTime` is always an integer multiple of `tileSpanMs` from epoch — so identical logical ranges produce identical wire requests across clients and share the cache.
+For each visible window the client fires **2 tile-fetches in parallel** via `Promise.all`, plus ±1 async prefetch tile on each side (not render-blocking), plus tag-group fan-out for charts with > 8 plotted tags (§10.4). Tile geometry constants live in §10.2 (`TREND_VIEWER_DEFAULTS`). Ranges are epoch-aligned — `startTime` is always an integer multiple of `tileSpanMs` from epoch — so identical logical ranges produce identical wire requests across clients and share the cache.
 
 ### 4.3 Watermark-Aware Dispatch and Fallthrough
 
@@ -115,7 +115,16 @@ Each CAG carries a `watermark_ts` reflecting how far materialization has advance
 
 **Dispatch rule for fallthrough.** For any tile whose `[range_start, range_end)` overlaps `(watermark_ts, ∞)`:
 
-1. Compute `splitBoundaryMs = floor(watermarkMs / bucketSMs) * bucketSMs` — the largest bucket-aligned timestamp at or below the watermark. This ensures the stitch falls on a clean bucket boundary.
+1. Compute `splitBoundaryMs` as the start time of the TimescaleDB bucket containing `watermarkMs`, queried via a small SQL round-trip:
+
+   ```sql
+   SELECT extract(epoch from
+             time_bucket($1::int * INTERVAL '1 millisecond',
+                         to_timestamp($2::bigint / 1000.0))
+           ) * 1000 AS split_ms
+   ```
+
+   A naive JS-side `floor(watermarkMs / bucketSMs) * bucketSMs` is **not equivalent**. For fixed-width intervals < 1 day, TimescaleDB's `time_bucket()` uses origin 2000-01-03 00:00:00 UTC, not the Unix epoch. The two grids coincide only when `bucketSMs` evenly divides `TS_BUCKET_ORIGIN_MS` (946,857,600,000 ms) — true for "round" widths (1s/10s/1min/10min/1h) but false for the arbitrary `bucketSMs` produced by `Math.round(spanMs / bucketCount)` on unaligned viewports. If the JS formula were used the stitch boundary would land mid-bucket, causing the left segment's CAG query to return a partial bucket and the right segment to re-query the same partial bucket from the finer source. Querying the actual TimescaleDB grid guarantees disjoint, fully-formed buckets.
 2. Serve `[range_start, splitBoundaryMs)` from the chosen source (CAG).
 3. Serve `[splitBoundaryMs, range_end)` from the **next-finer source** (a smaller-bucket CAG, or raw if the chosen source is already the 1s CAG and `watermark_ts` is recent enough).
 4. Concatenate results in `getTrendTile()` before applying the gapfill+locf merge.
@@ -153,13 +162,14 @@ Client (tailing mode)                              Server
   │  into bucket accumulator (aggregate) or          │
   │  raw buffer (raw mode); emits LiveTail           │
   │  merged by TrendChartContainer via               │
-  │  mergeTrendData(cachedData, liveSub.tail,         │
-  │                 isTailing)                       │
+  │  mergeTrendData(cachedData, liveSub.tail)        │
 ```
 
 The trend live tail uses a **dedicated WS channel** — not the existing `useLiveValue` / SUBSCRIBE/DELTA path. Three reasons the LKV path is unsuitable: (1) **coalescing** — the pull-based 8 Hz DELTA tick only delivers the latest value per tag per tick, silently dropping intermediate samples; (2) **no module timestamp** — the DELTA payload carries no `ts`, so the client would have to use `Date.now()` at WS receipt, introducing 100–500 ms of variable clock skew against the module-timestamped historical axis; (3) **only-changed semantics** — flatlines produce no events, making bucket closure on COV-silent tags impossible without heuristics. The shared `ws` connection is reused; a parallel subscription set and per-client outbox are maintained by `WsServer` alongside the existing LKV subscription.
 
-`TelemetryIntake.setTrendDeltaListener(fn)` wires the ingest path to the WS server's outbox accumulator. The flush at `TREND_FLUSH_HZ` emits one `TREND_DELTA` frame per client containing all buffered samples plus one synthetic event per subscribed tag that had no real event in the flush window (keeping bucket accumulators advancing on flatlines). `responseTailTs` in the tile response (§6.2) is the stitch point — live data only enters the accumulator for `moduleTs > responseTailTs`.
+**Server-side membership filter.** The server silently filters incoming `SUBSCRIBE_TREND` tag IDs against the boot-time trendable set. Non-trendable IDs are dropped without error (one batched `console.warn` per ignored subscribe message identifies the offending IDs). The Tag Picker (§11.4) is the UX-layer gate; this is server-side defense against stale saved views and a guard against the detrendified-tag synthetic-flatline regression (a non-trendable subscription would otherwise receive synthetic LKV samples every flush that masquerade as live trend data with no historian backing). Asymmetric with `/api/v1/trends/tile` (§6.1), which is permissive — REST reads serve whatever the historian has; WS serves only current live trend updates.
+
+`TelemetryIntake.setTrendDeltaListener(fn)` wires the ingest path to the WS server's outbox accumulator. The flush at `TREND_FLUSH_HZ` emits one `TREND_DELTA` frame per client containing all buffered samples plus one synthetic event per subscribed tag that had no real event in the flush window. **Purpose of the synthetic event: propagate the LKV as the LOCF value into the client's bucket accumulator at the flush cadence — it advances bucket boundaries on flatline tags.** `moduleTs: now` resolves to the HMI server's `Date.now()`. Exact timestamp precision is not critical: by LOCF semantics the value is the same at any moment in the flatline window, so a bucket-boundary shift due to clock-domain skew between server and module places identical content in the resulting bucket. See handoff §11.D. `responseTailTs` in the tile response (§6.2) gates the client's ring trim threshold (`responseTailTs - 1000 ms`) — events older than that are pruned as already covered by cached data.
 
 ---
 
@@ -187,9 +197,7 @@ Two mechanisms together solve this, and they apply identically to raw and CAG re
 
 This 1-minute cadence is a **load-bearing contract** for the trends API: the bounded `prev` correlated subquery in §5.5 looks back exactly 5 minutes, providing 5× safety margin against writer hiccups, deployment restarts, or transient gaps. Empirically validated at 0 NULL `prev` results across 1,600,000 lookups in gate testing.
 
-**v0.3 historical note.** Earlier drafts of this spec proposed a separate 5-minute `SnapshotEmitter` component. That design has been superseded — the 1-minute `TrendSnapshotScheduler` already in production satisfies the same need with tighter bounds, and the `SnapshotEmitter` work item has been removed from the build order (§17.1.1).
-
-**Rationale (preserved from v0.3 with updated numbers):**
+**Rationale:**
 
 - *Force-publish on flatline.* Tracking a per-tag "last written timestamp" and emitting a synthetic sample when it exceeds a threshold is conceptually purer but more complex. The piggyback-then-force-write design accepted here keeps the synthetic-sample code path small and rare.
 - *COV purity.* A snapshot is equivalent to a "time-since-last-COV" event and does not violate the COV principle — it simply bounds the maximum interval. Booleans that flatline for hours of operation are common; snapshots ensure the historian always has recent evidence the tag exists.
@@ -289,6 +297,7 @@ The response shape is a discriminated union on `source`:
     "source": "raw",
     "startTime": 1776864000000,
     "endTime": 1776864480000,
+    "responseTailTs": 1776864480123,
     "series": [
       { "tagId": 42, "ts": [1776864001234, 1776864003445], "value": [1.9, 1.8, null] },
       { "tagId": 87, "ts": [1776864001890],                "value": [0.0] }
@@ -333,7 +342,7 @@ Raw responses carry per-sample timestamps (COV samples are irregular). `ts[]` an
 
 `source` is one of `'1s_cagg'`, `'10s_cagg'`, `'1min_cagg'`, `'10min_cagg'`, or `'mixed'`. `source: 'mixed'` appears when watermark fall-through (§4.3) stitched portions from multiple sources. `bucketSMs` is the bucket size in integer milliseconds, returned for client rendering; the server derives it as `Math.round((endTime - startTime) / bucketCount)`.
 
-`responseTailTs` is the `moduleTs` of the last real sample in the response (the maximum `moduleTs` across all series in the tile closest to now). `useLiveSubscription` in the client uses this as the stitch point — live WS events with `moduleTs > responseTailTs` are fed into the accumulator; events at or before it are ignored as already covered by cached data. Absent from raw responses (raw tiles carry their own `ts[]` arrays per series).
+`responseTailTs` is the server's `Date.now()` captured at request entry, before SQL execution. Present on **both** raw and aggregate responses. Clients use `(responseTailTs - 1000 ms)` as the live-ring-buffer trim threshold: WS events older than that are pruned as already covered by the cached tile; newer events remain in the accumulator/raw buffer for stitching. The 1-second margin absorbs `DbPipeline` writer-pipeline lag (`TIMESCALE_DB_TICK_MS = 500 ms` + writer round-trip) plus network and clock-skew. The same value also serves as the future-bucket-nulling cutoff inside `getTrendTile` (§6.5) — single source of truth, no separate `nowMs` field on the wire.
 
 `n` is the **actual** row count in each `value` array. For aligned requests (`request_startTime` is an integer multiple of `bucketSMs` from epoch) `n === bucket_count`. For unaligned requests TimescaleDB's `time_bucket_gapfill` emits one extra leading bucket whose natural start precedes `request_startTime`, so `n === bucket_count + 1`.
 
@@ -355,14 +364,17 @@ Validation errors:
 
 | Code | Trigger |
 |---|---|
-| `INVALID_TAG_IDS` | `tag_ids` empty, count > 8, contains non-integer, or contains a tag ID not present in the Tag Registry's trendable set |
+| `MISSING_QUERY_PARAM` | any of `tag_ids`, `start_time`, `end_time`, `bucket_count` is absent |
+| `INVALID_TAG_IDS` | `tag_ids` empty, count > 8, or contains non-integer |
 | `INVALID_RANGE` | `end_time ≤ start_time`, or either timestamp is non-positive |
 | `INVALID_BUCKET_COUNT` | `bucket_count` outside 1..2500 or non-integer |
-| `INVALID_BUCKET_S` | derived `bucketS` outside (0, MAX_BUCKET_S] (= (0, 14746]) — validated at the route level before the DB call, and again inside `getTrendTile()` as defense in depth. Normal clients do not trigger this because `useTrendMode`'s reducer clamps viewport span to MAX_VIEWPORT_SPAN_MS (see §6.3 Client-side clamp). |
+| `INVALID_BUCKET_S` | derived `bucketS` outside `(0, MAX_BUCKET_S]` (§6.3) — validated at the route level before the DB call, and again inside `getTrendTile()` as defense in depth. Normal clients do not trigger this because over-range UX is handled by the client-side `gatedFetchTile` gate (§6.3 Over-range UX). |
+
+> **Note: the trends API does not enforce trendable-tag membership.** `trendable` is a write-side flag (it controls `TrendSnapshotScheduler` and the COV enqueue path in `TelemetryIntake`); reads return whatever data exists in `tag_samples` and its CAGs. A tag toggled `trend=false` after data was written still serves that data through retention — preserving access to legitimate historian data is preferred over symbol-table strictness. The Tag Picker (§11.4) is the UX-layer gate against adding non-trendable tags to a chart. Direct API consumers (saved views, scripted callers) are responsible for their own appropriateness checks. The WS live channel is asymmetric — `SUBSCRIBE_TREND` filters against the trendable set (§4.4); see that section for the rationale.
 
 ### 6.3 Bucket Size Selection and Source Dispatch
 
-`bucketS` is a server-internal derived value. The server computes `bucketS = Number(endTime - startTime) / (bucketCount * 1000)` from each request's range and bucket count, then dispatches on it alone. The client never sends `bucketS` directly. The interactive trend viewer's approach to computing ranges that land in the desired dispatch zone is described in §10 (Cache Strategy, Trend viewer client policy).
+`bucketS` is a server-internal derived value. The server uses the shared `deriveBucketSMs` helper (exported from `@caro/db`) at both the route layer and inside `getTrendTile()` — `bucketSMs = Math.round(Number(endTime - startTime) / bucketCount)` first (integer-ms, used for downstream arithmetic and the response wire field), then `bucketS = bucketSMs / 1000`. Identical derivation across route and DB layers prevents precision-boundary disagreements. Dispatch is on `bucketS` alone. The client never sends `bucketS` directly. The interactive trend viewer's approach to computing ranges that land in the desired dispatch zone is described in §10 (Cache Strategy, Trend viewer client policy).
 
 The dispatch table below is unchanged by the v0.6 alignment contract. Alignment only affects how many rows the `time_bucket_gapfill` call emits and what `startTime`/`endTime` the response carries (§6.2); it does not affect which source is chosen.
 
@@ -468,13 +480,13 @@ packages/trend-chart/
     api.ts                        # fetchTile() — typed REST fetch; TileApiResponse discriminated union
 
     # ── Core primitives (no React) ──────────────────────────────────────────
-    level.ts                      # alignedTilesInRange, tilesForViewport, deriveBucketSMs,
-                                  # TREND_VIEWER_DEFAULTS, TS_BUCKET_ORIGIN_MS, floorDiv, ceilDiv
+    level.ts                      # alignedTilesInRange, tilesForViewport, TREND_VIEWER_DEFAULTS,
+                                  # TS_BUCKET_ORIGIN_MS, MAX_BUCKET_S (mirror of @caro/db),
+                                  # MAX_VIEWPORT_SPAN_MS, floorDiv, ceilDiv
     tileCache.ts                  # TileCache (LRU, 50 MB cap), makeTileCacheKey
     colorAssign.ts                # colorAssign(tagId), PALETTE, PALETTE_SIZE
-    dateUtils.ts                  # msToDatetimeLocal, datetimeLocalToMs, getTzOffsetMs,
-                                  # formatDateTime — timezone-aware date helpers
     axisInteractions.ts           # pure axis pan/zoom helpers (9 exported functions)
+    (date formatting lives in @caro/ui — see formatDateTime / formatDate)
 
     # ── React hooks ─────────────────────────────────────────────────────────
     useTrendData.ts               # REST fetch orchestration; owns TileCache instance
@@ -490,12 +502,10 @@ packages/trend-chart/
     EndPicker.tsx                 # footer: End datetime picker button + Live/Go Live button
     Legend.tsx                    # vertical column on the right side of the chart
     CursorDisplay.tsx             # cursor-time display in the legend area
-    Tooltip.tsx                   # preserved but not wired in Phase A
 
     render/
       uplotConfig.ts
       yScales.ts
-      seriesFromTrendData.ts
       bandsFromTrendData.ts       # per-tag {mins, maxs} extraction; raw path returns same array
                                   # reference for zero-area band collapse
       formatBucketS.ts            # bucket size → human-readable (e.g. "3.8 min buckets")
@@ -577,19 +587,15 @@ Click on a legend entry selects that trace. Selected trace is highlighted (e.g.,
 
 ### 8.5 Cursor Time in Legend
 
-> **Implementation note (v1.0):** A separate floating per-trace tooltip is not rendered. Cursor-time is surfaced in the `Legend` strip below the chart instead.
+The `Legend` strip contains a `Cursor:` field at its left edge (rendered by `CursorDisplay.tsx`). When the cursor is over the plot area, the field displays the timestamp of the data bucket under the cursor, rendered in the **fixed site timezone** (sourced from the `siteTimezone` prop, ultimately from `HMI_SITE_TIMEZONE` env var). When the cursor is outside the plot area the field shows `Cursor: --`. The `CursorDisplay` component also renders an inline "Range too wide. Zoom in or pick a smaller preset." message on the right side of the row when the viewport is in over-range state (see §6.3 Over-range UX).
 
-The `Legend` strip contains a `Time:` field at its left edge. When the cursor is over the plot area, the field displays the timestamp of the data bucket under the cursor, rendered in the **fixed site timezone** (sourced from the `siteTimezone` prop, ultimately from `HMI_SITE_TIMEZONE` env var). When the cursor is outside the plot area the field shows `Time: --`.
+Format: full date + time via the `formatDateTime` helper in `@caro/ui` (e.g. `01-May-2026 14:30:42`). Timestamps describe the plant — a remote engineer VPNed in from another region sees the same wall-clock values an on-site operator sees. Falls back to browser-local time when `siteTimezone` is absent.
 
-Format: full date + time via `Intl.DateTimeFormat` with the `timeZone` option (e.g. `2026-05-01 14:30:42`). Timestamps describe the plant — a remote engineer VPNed in from another region sees the same wall-clock values an on-site operator sees. Falls back to browser-local time when `siteTimezone` is absent.
-
-The Legend's per-tag rows display each trace's value at the cursor index when the cursor is over the plot, and fall back to the idle-value rule (§8.4) when it is not. A separate floating cursor overlay is a Phase B UX decision. The `Tooltip.tsx` component file is preserved in the package but is not wired in Phase A.
+The Legend's per-tag rows display each trace's value at the cursor index when the cursor is over the plot, and fall back to the idle-value rule (§8.4) when it is not. A separate floating cursor overlay is a Phase B UX decision.
 
 ### 8.6 Span, Bucket, and Fetch Indicator
 
-> **Implementation note (v1.0):** `ResolutionIndicator` was replaced by `SpanBucketIndicator`. The new component shows two values in the footer row: the current viewport span (e.g. `Span: 4 h`) and the current bucket size (e.g. `Bucket Size: 3.8 min`). This exposes more context than bucket size alone and lives in the footer alongside `SpanPresets` and `EndPicker` rather than in the chart header.
-
-`SpanBucketIndicator` shows three values in the footer: the current viewport span (e.g. `Span: 4 h`), the current `bucketSMs` in human-readable form (e.g. `Bucket Size: 3.8 min`), and the wall-clock duration of the most recent viewport-change batch (e.g. `Last Fetch: 234 ms`). The Last Fetch line is null-displayed (`—`) until the first fetch completes. Low real estate cost, high diagnostic value for correlation with band render quality.
+`SpanBucketIndicator` shows three values in the footer alongside `SpanPresets` and `EndPicker`: the current viewport span (e.g. `Span: 4 h`), the current `bucketSMs` in human-readable form (e.g. `Bucket Size: 3.8 min`), and the wall-clock duration of the most recent viewport-change batch (e.g. `Last Fetch: 234 ms`). The Last Fetch line is null-displayed (`—`) until the first fetch completes. Low real estate cost, high diagnostic value for correlation with band render quality.
 
 ### 8.7 Always-Band Render Architecture
 
@@ -662,9 +668,9 @@ Both branches carry `sizeMs` — required so `liveClicked` can restore the prior
 - `panApplied { from, to, nowMs }` — always → fixed. `sizeMs` preserved from prior state (not derived from `to - from`). Pan can never enter tailing.
 - `tick { nowMs }` — advances `nowMs` in tailing only. Preserves `lastIntent` (clock advance is not a user intent). Dispatched by `TrendChartContainer.handleDataReceived` on each `TREND_DELTA` frame received while in tailing mode.
 
-**`lastIntent` and preset highlight rule.** `lastIntent` tracks the most recent user action. `SpanPresets` highlights the active preset when `(lastIntent === 'preset' || lastIntent === 'pan') && sizeMs === preset.sizeMs`. Pan preserves `sizeMs`, so the preset stays highlighted after a pan gesture. `tick` spreads the existing `lastIntent`.
+**`lastIntent` and preset highlight rule.** `lastIntent` tracks the most recent user action. `SpanPresets` highlights the active preset when `lastIntent !== null && lastIntent !== 'zoom' && sizeMs === preset.sizeMs`. The highlight communicates *current viewport span matches this preset width*, not *you clicked this preset* — any size-preserving intent (`preset`, `pan`, `live`, `endPicker`) keeps the highlight as long as `sizeMs` aligns. `zoom` is excluded because it produces arbitrary `sizeMs` values; coincidental alignment with a preset width during continuous wheel-zoom would cause visual flicker. `null` (initial state, before any user intent) suppresses the highlight at first render. `tick` spreads the existing `lastIntent`.
 
-Tailing enables the TREND WS subscription (`SUBSCRIBE_TREND`); fixed disables it (`UNSUBSCRIBE_TREND`). One shared WebSocket connection, trend subscription lifecycle managed by `useLiveSubscription` keyed on `isTailing`.
+Trend WS subscription lifecycle (`SUBSCRIBE_TREND`/`UNSUBSCRIBE_TREND`) is keyed on **tag-list membership and chart mount**, not on `isTailing` — `useLiveSubscription` keeps subscriptions warm across tailing/fixed flips so the ring buffer continues receiving samples in fixed mode and seeds the accumulator on Live re-entry. UNSUBSCRIBE_TREND fires on tag removal or chart unmount. See §10.7.
 
 ### 9.4 Selected Trace
 
@@ -689,6 +695,8 @@ Edge-case guards added during the bands and over-range implementations:
 
 - **`endPickerCommitted` sizeMs cap.** `useTrendMode`'s reducer caps `state.sizeMs` at `MAX_VIEWPORT_SPAN_MS` on `endPickerCommitted` only. End-picker commits are discrete user actions where snap-to-cap is acceptable, unlike continuous wheel-zoom.
 
+- **`endPickerCommitted` lower-bound clamp.** If the user-picked `to` would produce `from < 1n` (combining a near-epoch End with a max-span prior `sizeMs`), the reducer shrinks `sizeMs` so `from` lands at exactly `1n`. End-picker semantics preserve the chosen End by contract; the span shrinks rather than the End shifting forward (unlike `zoomApplied`/`panApplied`'s `clampLowerBound`, which preserves span and shifts the viewport). `to < 2n` is rejected outright as a no-op since the EndPicker UI prevents sub-1-ms spans (§12.2).
+
 - **Pre-epoch tile filter in `tilesForViewport` and `ensureCovered`.** Both filter `startTime < 0n` from candidate tiles; `gatedFetchTile` carries a defensive `CLIENT_PRE_EPOCH` sentinel check ahead of the `CLIENT_OVER_RANGE` check (silent skip). See §6.3 Over-range UX.
 
 ---
@@ -697,7 +705,7 @@ Edge-case guards added during the bands and over-range implementations:
 
 ### 10.1 Model
 
-The client cache is keyed by `(tagId, startTime, endTime, bucketCount)` — keyed on the **request** values, not the served grid. The trend viewer client policy is to align `startTime` to integer multiples of `tileSpanMs` from epoch and to use `bucketCount=500` with `visibleTilesPerWindow=2` and `overfetchPerSide=1` (§10.2). This ensures that `n === bucketCount`, the response's `startTime`/`endTime` match the request's exactly (§6.2, aligned case), and two requests for the same logical tile from different clients produce identical wire values and share the cache key without a separate coordination layer.
+The client cache is keyed by `(tagId, startTime, endTime, bucketCount)` — keyed on the **request** values, not the served grid. The trend viewer client policy is to align `startTime` to integer multiples of `tileSpanMs` from epoch and to use the defaults defined in §10.2 (`TREND_VIEWER_DEFAULTS`). This ensures that `n === bucketCount`, the response's `startTime`/`endTime` match the request's exactly (§6.2, aligned case), and two requests for the same logical tile from different clients produce identical wire values and share the cache key without a separate coordination layer.
 
 > **Cache key and future-bucket nulling (§6.5).** Two requests for the same logical tile from different clients at different times may differ by up to one bucket width in their future-nulled region: an earlier request will have more buckets past its `responseTailTs` nulled than a later request for the same range. The cache key does not capture `responseTailTs`, so a cached tile served to a subsequent client may be stale-but-consistent in this respect — the cached tile has more nulls than a fresh fetch would. This is acceptable: it errs on the side of showing gaps rather than phantom values, and it self-corrects on the next cache eviction. The eviction-on-live-entry behavior (`TrendChartContainer.dispatchModeAction`) mitigates this for live-exit fetches; ordinary history-mode pans are unaffected because their `endTime < responseTailTs` by construction.
 
@@ -735,7 +743,7 @@ Rationale for range-tile caching over alternatives:
 
 ### 10.4 Tile-Aligned Fetches
 
-Given visible viewport `[viewportStart, viewportEnd)` and policy values `bucketCount=500`, `visibleTilesPerWindow=2`:
+Given visible viewport `[viewportStart, viewportEnd)` and `TREND_VIEWER_DEFAULTS` (§10.2):
 
 ```
 tileSpanMs        = (viewportEnd - viewportStart) / visibleTilesPerWindow   // bigint floor division
@@ -777,7 +785,7 @@ The N ≤ 8 cap derives from the heap-scatter cliff (§6.6) and is enforced serv
 - **Debounce.** Pan events debounce at ~100 ms to avoid issuing a new fetch on every frame of a drag.
 - **Bridge render.** When `bucketS` changes, render the old level's data scaled into the new pixels until the new visible fetches resolve. Bridge data may span a watermark fall-through transition (§4.3) silently — the client does not need to inspect the `source` field of a cached response to render it.
 
-> **Implementation note (v1.0):** `ensureCovered` (the function called by `TrendChart`'s wheel/pan handlers to request additional tiles for the new viewport) anchors candidate tile computation to the *active-set edges* (`cachedStart`/`cachedEnd`) and walks outward from them, rather than re-deriving from the `TS_BUCKET_ORIGIN_MS` grid. This avoids a dependency on the origin constant inside `useTrendData.ts` and ensures candidates are contiguous with what's already cached regardless of how `viewport` was derived. `TS_BUCKET_ORIGIN_MS`, `floorDiv`, and `ceilDiv` are not imported by `useTrendData.ts`.
+`ensureCovered` (the function called by `TrendChart`'s wheel/pan handlers to request additional tiles for the new viewport) anchors candidate tile computation to the active set: both the edges (`cachedStart`/`cachedEnd`) **and** the tile width are read from `activeTilesRef`, so candidates always align with the existing grid regardless of any pending viewport changes. This avoids a dependency on the origin constant inside `useTrendData.ts` and ensures candidates are contiguous with what's already cached. `TS_BUCKET_ORIGIN_MS`, `floorDiv`, and `ceilDiv` are not imported by `useTrendData.ts`. `panThresholdCheck` is symmetric: it also derives `tileSpanMs` from the active set (passed in by `checkAndExtendXCoverage` via `getActiveRange().tileSpanMs`), not from the visible viewport span. This ensures the requested extension range matches the active set's tile grid exactly, so `ensureCovered`'s loop produces exactly one candidate per pan threshold crossing regardless of visible-vs-dataViewport divergence (e.g., after wheel-zoom that stays within the 1.5× threshold).
 
 > **Implementation note (pan-threshold fix):** The `checkAndExtendXCoverage` function in `axisInteractions.ts` — called on every X-scale move to decide whether to fire `ensureCovered` — reads the cached extent via `getActiveRange()` (a stable callback on `UseTrendDataResult` that reads `activeTilesRef.current`) rather than from `u.data[0]`. In raw mode, `u.data[0]` contains actual COV sample timestamps, which can end many seconds before the tile's true right boundary when the device has data gaps. Using sample timestamps as the cached-extent proxy caused spurious right-extension requests (always filtered as future tiles) and suppressed left-extension triggers until the user panned much further than expected. `getActiveRange()` returns `activeTilesRef.current[last].endTime`, which is always the true tile boundary. It returns `null` in live mode (activeTilesRef stays empty on the live path), and `checkAndExtendXCoverage` early-returns in that case — live mode drives rendering from the WS buffer, not tile cache.
 
@@ -791,7 +799,7 @@ The N ≤ 8 cap derives from the heap-scatter cliff (§6.6) and is enforced serv
 
 **Single-fetch guarantee.** `spineLoadedRef` and `spineFetchInFlightRef` together gate re-entry into the live branch: `spineLoadedRef` prevents refetching when the spine is already loaded for the current span, and `spineFetchInFlightRef` prevents 4 Hz `tick`-driven effect re-fires from launching duplicate spine requests. `isTailing` is read via `isTailingRef.current` inside the effect body rather than declared as an effect dependency — the effect fires only when `dataViewport` actually changes, not on every `isTailing` flip. This produces exactly 1 spine fetch on fixed→live transition, even under React StrictMode and the ~4 Hz `nowMs` cadence from the trend channel.
 
-**`useLiveSubscription` hook.** The live tail is owned by `useLiveSubscription`, a dedicated hook that manages the `SUBSCRIBE_TREND`/`UNSUBSCRIBE_TREND` lifecycle and the client-side accumulator. It is active only while `isTailing === true`. On tailing entry it issues `SUBSCRIBE_TREND` for all current `tagIds`; on tailing exit (via `commitAndDrain`) it issues `UNSUBSCRIBE_TREND` and clears the in-progress bucket/buffer state.
+**`useLiveSubscription` hook.** The live tail is owned by `useLiveSubscription`, a dedicated hook that manages the `SUBSCRIBE_TREND`/`UNSUBSCRIBE_TREND` lifecycle and the client-side accumulator. **Subscription lifecycle is keyed on tag-list membership and chart mount, not on `isTailing`.** The hook keeps subscriptions warm across tailing/fixed flips so the ring buffer continues receiving samples in fixed mode — this seeds the accumulator on the next Live re-entry without waiting for a fresh SUBSCRIBE_TREND round-trip or a flush window. UNSUBSCRIBE_TREND fires on tag removal or chart unmount only. `commitAndDrain` clears in-memory ring/accumulator/raw-buffer state but does NOT touch subscriptions. Bucketing/accumulator processing is gated on `isTailing` — samples land in the ring but are not bucketed while in fixed mode. See §10.7.
 
 **Aggregate tail (bucketS ≥ 1.0).** One ring buffer per tag (capacity `TREND_RING_CAPACITY = 20` entries — sized to span the fetch-in-flight window at 4 Hz flush cadence). Each sample from a `TREND_DELTA` frame is appended to the tag's ring. A bucket accumulator closes a bucket whenever `moduleTs` crosses a `bucketSMs` boundary; it emits `{ ts, value, min, max, null_count }` matching the server's three-case rule (§6.5). `seedFromCachedTile` initializes the accumulator's `lastKnownValue` from the last entry in the cached tile so that the first live bucket's LOCF seeds correctly (aggregate mode only — raw mode has no LOCF seeding). The ring is trimmed by `trimThreshold` (= `responseTailTs - 1000`) when it advances — entries older than the threshold are pruned. **`rawBuffersRef` is never trimmed on `trimThreshold` advance** (see below).
 
@@ -803,21 +811,25 @@ The N ≤ 8 cap derives from the heap-scatter cliff (§6.6) and is enforced serv
 
 **`dispatchModeAction` wrapper.** `TrendChartContainer` wraps all mode transitions that can exit tailing (zoom, pan, endPicker) in `dispatchModeAction`. It pre-computes the next state, and if it detects a tailing→fixed transition, calls three things synchronously before dispatching:
 
-1. `liveSubRef.current.commitAndDrain()` — clears WS accumulator state (ring, accumulator, raw buffers). Returns `void`.
-2. `syncDataViewport(modeToViewport(next))` — forces `dataViewport` to the post-transition modeViewport, bypassing `useZoomState`'s reset-effect `lastIntent` skip. Necessary because drag-zoom-out-of-live and end-picker commits have bounds genuinely different from the live-mode viewport; without this the main fetch effect would not fire.
-3. `trendDataRef.current.refetchHistory()` — bumps `historyRefetchVersion` and sets `liveExitRefetchPendingRef`. The main effect's history branch then runs with `overfetchRightCount: 0`, producing 2 visible + 1 left-prefetch = 3 tiles. The LRU cache was cleared by `evictAll()` on the preceding Live entry (see Fixed→tailing below), so this refetch always fetches fresh tiles from the server.
+1. `liveSubRef.current.commitAndDrain()` — clears in-memory WS state (ring, accumulator, raw buffers). Does NOT unsubscribe. Returns `void`.
+2. `syncDataViewport(modeToViewport(next))` — forces `dataViewport` to the post-transition modeViewport, bypassing `useZoomState`'s reset-effect `lastIntent` skip.
+3. `trendDataRef.current.refetchHistory()` — bumps `historyRefetchVersion` and sets `liveExitRefetchPendingRef`. The main effect's history branch then runs with `overfetchRightCount: 0` (2 visible + 1 left-prefetch). The LRU cache was cleared by `evictAll()` on the preceding Live entry (§10.8), so this refetch always fetches fresh tiles.
 
 Fixed → tailing: `dispatchModeAction` calls `trendDataRef.current.evictAll()` before dispatching the action, clearing the entire LRU cache. This is the primary mechanism for ensuring fresh data on every Live entry — it eliminates Gap B (stale CAG-lag nulls accumulating in cache across sessions). See §10.8. After eviction, the live-spine fetch overwrites `hookResult.data` on the first effective `dataViewport` change after the transition.
 
-### 10.7 Per-Tag Subscription Lifecycle
+### 10.7 Subscription Lifecycle
 
-`useLiveSubscription` manages subscription by tracking `tagIds` and `isTailing`. On tag add or remove, the hook's effect re-runs: it sends `UNSUBSCRIBE_TREND` for removed tags and `SUBSCRIBE_TREND` for added tags. Ring entries for removed tags are pruned at the start of the new effect body (not in cleanup), because cleanup closures only see the old `tagIds` set.
+`useLiveSubscription` manages subscription by tracking `tagIds` only. The subscribe-lifecycle effect re-runs on tag-list changes (and on `subscribeTrend` identity changes). It does **not** re-run on `isTailing` flip — the WS subscription stays warm across mode transitions.
 
-**Add tag while tailing.** `TrendChartContainer` updates its `tagIds` state; `useLiveSubscription`'s effect fires on the next render and sends `SUBSCRIBE_TREND` for the new tag. Concurrently, `useTrendData` detects the empty active set for the new tag and issues a single-tag REST tile fetch. Samples arriving on the WS before the REST response lands are held in the ring/accumulator and stitched at `responseTailTs` when the cached data arrives.
+**Add tag (any mode).** `TrendChartContainer` updates its `tagIds` state; `useLiveSubscription`'s effect fires on the next render and sends `SUBSCRIBE_TREND` for the new tag. Ring entries for removed tags are pruned at the start of the new effect body. In tailing mode, samples arriving on the WS before the REST tile lands are held in the ring/accumulator and stitched into the merge at render time.
 
-**Remove tag while tailing.** `useLiveSubscription` sends `UNSUBSCRIBE_TREND` and prunes the ring/rawBuffer for the removed tag. Cached tiles age out via LRU.
+**Remove tag (any mode).** Cleanup unsubscribes the per-tag callback. When that's the last callback for the tag, `HmiContextProvider` sends `UNSUBSCRIBE_TREND` to the server.
 
-**Tailing → fixed.** `commitAndDrain()` is called synchronously via `dispatchModeAction` before the mode transition dispatches. It issues `UNSUBSCRIBE_TREND` for all current tags and clears all internal buffers (ring, accumulator, raw buffers) synchronously. Returns `void`. The live path never wrote to the LRU cache, so there is nothing to evict here (the LRU cache was already cleared on the preceding Live entry — see §10.8). `syncDataViewport` and `refetchHistory` drive the subsequent fixed-mode fetch directly (see §10.6).
+**Tailing → fixed.** `commitAndDrain()` clears in-memory ring/accumulator/rawBuffer state. **Subscriptions are not touched** — they stay open so the ring continues to fill in fixed mode, seeding the accumulator on the next Live entry. Sample-processing is suppressed via the `isTailingRef` guard inside the subscribe callback; only the ring-append + microtask scheduling happens in fixed mode (bounded by `TREND_RING_CAPACITY = 20` per tag).
+
+**Fixed → tailing.** `dispatchModeAction` calls `evictAll()` first (§10.8), then dispatches `liveClicked`. The Tailing/tailMode effect re-allocates the accumulator/rawBuffer for the current `tagIds` and replays the ring (filtered by `trimThreshold`) into it. Result: immediate live tail data without waiting for a fresh subscribe round-trip or the first post-Live flush window.
+
+**Chart unmount.** Effect cleanup unsubscribes all current tags. Last-callback-per-tag triggers UNSUBSCRIBE_TREND.
 
 ### 10.8 Cache Freshness on Mode Transition
 
@@ -1027,28 +1039,24 @@ The `source` field matches the `source` field in the API response (§6.2) — `r
 
 ---
 
-## 15. Multi-Client Behavior and Connection Pool Sizing
+## 15. Multi-Client Behavior
 
 Every HMI client instance is fully independent:
 
 - **Tile cache** is in-memory per browser. Two clients fetching overlapping windows maintain separate caches.
 - **WebSocket subscription.** Each client opens its own WS connection to the HMI server. Existing infrastructure (`@caro/hmi-context`) handles N concurrent clients.
 - **REST endpoint.** Stateless. Every request is self-contained `(tag_ids, start_time, end_time, bucket_count)` and the response is a deterministic function of those inputs. Identical requests from different clients are cacheable at any shared layer (query cache, future server LRU). Scales with normal web concerns.
-- **Chart state** (mode, window, selected trace, zoom) lives in client-local `TrendChartProvider`. No cross-client synchronization.
+- **Chart state** (mode, window, selected trace, zoom) lives in client-local `TrendChartContainer`. No cross-client synchronization.
 
-**Server-side load with CAG dispatch.** With four CAGs serving the bulk of operating windows, per-range DB cost is materially lower than v0.3's on-the-fly design (measured 2.21× CAG-vs-raw speedup on cag-compressed paths, `DB_Config_Usage_And_Perf.md` §7.2). Each range is still a single grouped query (`WHERE tag_id = ANY($1)`) but capped at N ≤ 8 tags per query. TimescaleDB's query cache absorbs identical repeated requests from different clients. A server-side LRU keyed on `(tag_ids, start_time, end_time, bucket_count, watermark_ts)` is a natural future optimization if needed.
+**Server-side load with CAG dispatch.** With four CAGs serving the bulk of operating windows, per-range DB cost is materially lower than v0.3's on-the-fly design (measured 2.21× CAG-vs-raw speedup on cag-compressed paths, `DB_Config_Usage_And_Perf.md` §7.2). Each range is still a single grouped query (`WHERE tag_id = ANY($1)`) capped at N ≤ 8 tags per query. TimescaleDB's query cache absorbs identical repeated requests from different clients. A server-side LRU keyed on `(tag_ids, start_time, end_time, bucket_count, watermark_ts)` is a natural future optimization if needed.
 
-**Connection pool sizing.** This is now a load-bearing parameter, not an afterthought. Per-operator outbound DB demand:
+**Connection pool demand.** Per-operator outbound DB demand:
 
-- 1 active window × 4 time-tiles × ⌈N/8⌉ tag-groups parallel connections during fetch
-- Plus ±1 overfetch (so 6 tile fetches in flight in steady state, but bursty 4 at window changes)
-- Multiply by concurrent operators
+- Per active window: `visibleTilesPerWindow × ⌈N/8⌉` connections during fetch (e.g., 4 connections for a 16-tag chart with `visibleTilesPerWindow=2`).
+- Plus prefetch tiles asynchronously (`overfetchPerSide=1` per side).
+- Multiplied by concurrent operators.
 
-Worked example: a single operator viewing a 16-tag chart consumes 8 connections during a window change. Five operators doing the same simultaneously demand 40 connections.
-
-The HMI's `@caro/db` Timescale pool currently defaults to **`max = 10`**, which is inadequate for production. **Recommended for production: 20–30**, with monitoring on pool utilization. Sizing measurement is open item §10.5 of `DB_Config_Usage_And_Perf.md`.
-
-If pool sizing becomes the actual bottleneck before measurement completes, time-tile parallelism can be reduced from 4 to 2 as a relief valve — the perf gates cover both configurations and the wall-clock penalty is small.
+The `@caro/db` Timescale pool's `max` is a configurable parameter; current default and any pending re-tuning live in `Docs/platform_todo.md`. Empirical perf-page testing has not surfaced the pool as a bottleneck (`platform_todo.md` watchlist entry); sizing methodology in `Docs/DB_Config_Usage_And_Perf.md §10.5` if a measurement campaign becomes warranted. If pool capacity becomes the actual bottleneck, `visibleTilesPerWindow` is a relief-valve knob — perf gates cover both 2-tile and 4-tile configurations.
 
 Saved views are server-persisted and user-scoped. Two clients signed in as the same user share personal views; a save on one is visible on the other on next read. Last-write-wins on concurrent edits.
 
@@ -1129,7 +1137,6 @@ No formal percentage target. Every public function in `cache/` and `hooks/` has 
 - Watermark-aware fall-through (§4.3) — mandatory before the API is exposed to live tailing
 - Server-side `null_count > 0 → null` merge for aggregate levels
 - `TrendSnapshotScheduler` is **already in production** — no new component needed; spec relies on its 1-min cadence guarantee
-- Connection pool bumped to 20–30 (§15) before production rollout
 
 **Client**
 
@@ -1174,19 +1181,17 @@ Non-binding, but each step is landable independently and its tests pass in isola
 | A.5 | **v0.8 min/max bands (feature/trends-min-max-bands).** DB aggregate path returns `min`/`max` per series; three-case JS post-pass (§6.5); REST v0.8 serializes both arrays; `@caro/trend-chart` always-band 2-series render (§8.7); `bandsFromTrendData` helper; `bucketSMs === 0n` + `newStart >= 1n` defensive guards (§9.5); SpanBucketIndicator `lastFetchMs` / Last Fetch line. ✓ Done — `@caro/db` 102 passing, HMI server 233 passing, `@caro/trend-chart` 424 passing. | 1–10 | full band pipeline, defensive guards |
 | 11 | **Live tail**: dedicated trend WS channel (`SUBSCRIBE_TREND`/`UNSUBSCRIBE_TREND`/`TREND_DELTA`), `useLiveSubscription` hook (ring buffer + bucket accumulator for aggregate; raw buffer for raw mode; 2×viewportSpanMs trim; `commitAndDrain` returns void), unified `mergeTrendData` (live-wins-on-coverage, no isTailing parameter), `isTailing` tile-fetch suppression in `useTrendData`, eviction-on-live-entry cache freshness (`evictAll` on fixed→tailing, eliminates Gap B), server-side future-bucket nulling in `getTrendTile`, no-clamp wheel-zoom + `gatedFetchTile` over-range gating + inline "Range too wide" message in `CursorDisplay`, `dispatchModeAction` wrapper for atomic tailing-exit cleanup. ✓ Done — 583 `@caro/trend-chart` + 67 `@caro/hmi-context` tests passing. | 10 | live stitching, subscription correctness, mode-transition cleanup, over-range UX |
 | 12 | **Tag picker drawer**: tree + search (§11.2), multi-select commit (§11.3), trendable filter (§11.4). | 11 | picker UX, trendable filtering |
-| 13 | **Connection pool resize and monitoring**: bump `@caro/db` Timescale pool from 10 to 20–30; add NULL `prev` rate monitoring per `DB_Config_Usage_And_Perf.md` §8.1; add per-CAG latency dashboards. | runs alongside production rollout | pool sufficiency, writer-cadence monitoring |
 
 **Landable checkpoints.** Step 1 unblocks every CAG-touching step downstream. Step 5 gives you a working API with no UI — demoable via curl. Step 9 gives you a working historical chart — demoable with a hardcoded tag list. Step 11 gives you live tail. Step 12 completes the operator-facing Phase A surface.
 
-**Skippable-but-discouraged reorderings.** Step 1 must come before any CAG-touching step (3, 4, 6). Steps 7–9 can be built in parallel with the server work past step 5 (only types are shared). Step 13 can slot anywhere after the API is in front of users; it's a deployment task, not a development blocker.
+**Skippable-but-discouraged reorderings.** Step 1 must come before any CAG-touching step (3, 4, 6). Steps 7–9 can be built in parallel with the server work past step 5 (only types are shared).
+
+**Operational monitoring** (separate from build steps): NULL `prev` rate per `DB_Config_Usage_And_Perf.md §8.1`, per-CAG latency dashboards, and pool-utilization monitoring are all tracked in `Docs/platform_todo.md`. None are development blockers.
 
 ### 17.2 Phase B — v1.1 (After MVP)
 
-Items below were originally scheduled in §17.1.1 build steps 5 and 13 but were deferred from Phase A by explicit decision (2026-04-29).
+Backlog items currently parked. Operational/observability watchlist items (pool sizing, perf-log enhancement, EXPLAIN-plan gate) live in `Docs/platform_todo.md`.
 
-- **Server-side per-tile perf log enhancement (§14.7):** Update the existing `TIMESCALE_LOG_TILE_QUERIES` gate in `packages/db/timescale/trends.ts` to emit the spec-compliant log line including the `source` field (covers raw / each CAG name / 'mixed' for fall-through). Currently emits a v0.3-era format that predates the `source` discriminant.
-- **Connection pool sizing measurement and bump (§15):** Increase `@caro/db` Timescale pool from `max = 10` to 20–30 with empirical validation per `Docs/DB_Config_Usage_And_Perf.md` §10.5. Recommended before multi-operator production rollout.
-- **EXPLAIN-plan validation gate (§5.5):** One-shot milestone check — run `EXPLAIN (BUFFERS, ANALYZE)` on a representative bounded-prev query against the production-state Timescale and confirm ≤ 2 chunks in the prev SubPlan ChunkAppend, planning time < 5 ms. Run once `tag_samples` has ≥ ~100 chunks (~4 days of production writes); not ongoing CI.
 - Saved views (personal only, `hmi_trend_views` table, dropdown UX)
 - Additional CAG (e.g. hourly) if the 10min CAG's worst-case (Div ≈ 24.58 at 85+ d windows) measures over budget once that much history accumulates
 - Shared views with role-based edit (waits on HMI auth/role work)
@@ -1248,7 +1253,6 @@ Questions resolved during v0.1–v0.4 design:
 
 **Open (Phase A):**
 
-- **Pool sizing measurement.** §10.5 of `DB_Config_Usage_And_Perf.md` calls for an empirical sizing test before settling on the production pool size in the 20–30 range. Currently a soft guideline; should be hardened before production rollout.
 - **Re-measure 10min CAG at 85+ d window** once sufficient history accumulates. Confirms or refutes the only operating point with Div > 16. If actual latency exceeds budget, add a 1h CAG.
 - **End-to-end smoke test through the trends API.** All gates measured raw SQL latency only. The full API path adds ~10 ms pg-node serialization at N=8 × 250 buckets, which should be confirmed empirically once the API is built.
 

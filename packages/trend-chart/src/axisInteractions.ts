@@ -70,17 +70,19 @@ export function zoomYScale(
 /**
  * Returns the range to pass to ensureCovered if the visible window has panned
  * within halfTileMs of the cached extent's edge, or null if comfortable inside.
- * halfTileMs = visSpanMs / 4 (since tileSpan = visSpan / visibleTilesPerWindow = visSpan/2).
+ * tileSpanMs must be the active set's actual tile width (from getActiveRange().tileSpanMs),
+ * not derived from the visible viewport — those can diverge after wheel-zoom that stays
+ * within the 1.5× dataViewport threshold (spec §9.3), producing multiple candidates per
+ * pan trigger if the visible-derived width is wider than the active set's tile width.
  */
 export function panThresholdCheck(
   visMinMs: bigint,
   visMaxMs: bigint,
   cachedStartMs: bigint,
   cachedEndMs: bigint,
+  tileSpanMs: bigint,
 ): { startMs: bigint; endMs: bigint } | null {
-  const visSpanMs = visMaxMs - visMinMs;
-  const halfTileMs = visSpanMs / 4n;
-  const tileSpanMs = visSpanMs / 2n;
+  const halfTileMs = tileSpanMs / 2n;
   if (visMinMs < cachedStartMs + halfTileMs) {
     return { startMs: cachedStartMs - tileSpanMs, endMs: cachedStartMs };
   }
@@ -145,7 +147,7 @@ export function zoomXScale(
 export function checkAndExtendXCoverage(
   u: uPlot,
   ensureCovered?: (startMs: bigint, endMs: bigint) => void,
-  getActiveRange?: () => { startMs: bigint; endMs: bigint } | null,
+  getActiveRange?: () => { startMs: bigint; endMs: bigint; tileSpanMs: bigint } | null,
 ): void {
   if (!ensureCovered || !getActiveRange) return;
   const xScale = u.scales['x'];
@@ -154,6 +156,6 @@ export function checkAndExtendXCoverage(
   if (!range) return;
   const visMinMs = BigInt(Math.round((xScale.min ?? 0) * 1000));
   const visMaxMs = BigInt(Math.round((xScale.max ?? 1) * 1000));
-  const need = panThresholdCheck(visMinMs, visMaxMs, range.startMs, range.endMs);
+  const need = panThresholdCheck(visMinMs, visMaxMs, range.startMs, range.endMs, range.tileSpanMs);
   if (need) ensureCovered(need.startMs, need.endMs);
 }

@@ -109,6 +109,12 @@ Original handoff §11.D ("Past-LOCF on dormant signals") and the corresponding `
 
 ---
 
+## 2026-05-14 — panThresholdCheck active-tileSpan symmetry
+
+- `panThresholdCheck` now takes `tileSpanMs` explicitly; `checkAndExtendXCoverage` passes the active set's tile width via `getActiveRange().tileSpanMs`. Closes the F7 follow-up asymmetry where `panThresholdCheck` used `visibleSpan/2` while `ensureCovered` used `active[0].width`, producing multiple candidates per pan when wheel-zoom diverged from `dataViewport`. One fetch per pan trigger restored. Spec §10.5 updated.
+
+---
+
 ## 2026-05-14 — pruneAndAdd middle-insertion warn removed
 
 - Removed `console.warn` from `pruneAndAdd`'s middle-insertion branch. Post-F7, clean gap-fill (newTile slots into a gap with no overlap) is a legitimate scenario, not "unexpected" — the warn was noise. Behavior unchanged: middle insertion still drops the leftmost tile at capacity. Collapsed `isRightEnd` check into the default branch (same outcome).

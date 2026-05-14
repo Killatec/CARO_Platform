@@ -146,10 +146,10 @@ interface HookState {
 
 export interface UseTrendDataResult extends HookState {
   ensureCovered: (startMs: bigint, endMs: bigint) => void;
-  /** Returns the time bounds of the current active tile set, or null if no tiles are active.
-   *  Used by checkAndExtendXCoverage to derive cached extent from tile metadata rather than
-   *  u.data[0], which is unreliable in raw mode when samples don't reach tile edges. */
-  getActiveRange: () => { startMs: bigint; endMs: bigint } | null;
+  /** Returns the time bounds and tile width of the current active tile set, or null if empty.
+   *  Used by checkAndExtendXCoverage so both the threshold check (panThresholdCheck) and the
+   *  candidate loop (ensureCovered) use the same tile width — the active set's actual geometry. */
+  getActiveRange: () => { startMs: bigint; endMs: bigint; tileSpanMs: bigint } | null;
   /**
    * Clears the entire LRU cache and resets activeTilesRef. Called on every
    * fixed→tailing transition (TrendChartContainer.dispatchModeAction) to ensure
@@ -892,12 +892,13 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     setHistoryRefetchVersion(v => v + 1);
   }, []);
 
-  const getActiveRange = useCallback((): { startMs: bigint; endMs: bigint } | null => {
+  const getActiveRange = useCallback((): { startMs: bigint; endMs: bigint; tileSpanMs: bigint } | null => {
     const active = activeTilesRef.current;
     if (active.length === 0) return null;
     return {
-      startMs: active[0]!.startTime,
-      endMs: active[active.length - 1]!.endTime,
+      startMs:    active[0]!.startTime,
+      endMs:      active[active.length - 1]!.endTime,
+      tileSpanMs: active[0]!.endTime - active[0]!.startTime,
     };
   }, []);
 
