@@ -321,32 +321,28 @@ describe('tick', () => {
   });
 });
 
-// ── viewport span clamp (MAX_VIEWPORT_SPAN_MS) ────────────────────────────────
+// ── viewport lower-bound clamp via zoomApplied/panApplied ────────────────────
 
-describe('clampToMaxSpan — zoomApplied', () => {
-  it('span === MAX_VIEWPORT_SPAN_MS: no clamp applied', () => {
+describe('clampLowerBound — zoomApplied', () => {
+  it('span === MAX_VIEWPORT_SPAN_MS: passes through (from is large positive)', () => {
     const to   = NOW;
     const from = to - MAX_VIEWPORT_SPAN_MS;
     const next = dispatch(TAILING_1H, { type: 'zoomApplied', from, to, nowMs: NOW });
     expect(next.mode).toBe('fixed');
     if (next.mode !== 'fixed') return;
-    expect(next.to - next.from).toBe(MAX_VIEWPORT_SPAN_MS);
     expect(next.from).toBe(from);
     expect(next.to).toBe(to);
   });
 
-  it('span > MAX_VIEWPORT_SPAN_MS: clamped to MAX, center preserved', () => {
-    const center = NOW - 5_000_000n;
-    const halfOver = MAX_VIEWPORT_SPAN_MS / 2n + 10_000_000n;
-    const from = center - halfOver;
-    const to   = center + halfOver;
+  it('span > MAX_VIEWPORT_SPAN_MS: passes through unchanged (no span clamp)', () => {
+    const from = NOW - MAX_VIEWPORT_SPAN_MS * 2n;
+    const to   = NOW;
     const next = dispatch(TAILING_1H, { type: 'zoomApplied', from, to, nowMs: NOW });
     expect(next.mode).toBe('fixed');
     if (next.mode !== 'fixed') return;
-    expect(next.to - next.from).toBe(MAX_VIEWPORT_SPAN_MS);
-    // center preserved within 1ms (bigint division truncates by 1 in odd-ms spans)
-    const resultCenter = (next.from + next.to) / 2n;
-    expect(Math.abs(Number(resultCenter - center))).toBeLessThanOrEqual(1);
+    expect(next.from).toBe(from);
+    expect(next.to).toBe(to);
+    expect(next.sizeMs).toBe(to - from);
   });
 
   it('span < MAX_VIEWPORT_SPAN_MS: passes through unchanged', () => {
@@ -360,7 +356,7 @@ describe('clampToMaxSpan — zoomApplied', () => {
   });
 });
 
-describe('clampToMaxSpan — endPickerCommitted', () => {
+describe('endPickerCommitted — sizeMs clamp', () => {
   it('sizeMs > MAX: clamped before computing from = to - sizeMs', () => {
     const overMax: ModeState = { mode: 'fixed', from: 0n, to: NOW, sizeMs: MAX_VIEWPORT_SPAN_MS + 1_000_000n, lastIntent: 'zoom' };
     const next = dispatch(overMax, { type: 'endPickerCommitted', to: NOW, nowMs: NOW });
@@ -372,7 +368,7 @@ describe('clampToMaxSpan — endPickerCommitted', () => {
   });
 });
 
-describe('clampToMaxSpan — panApplied', () => {
+describe('clampLowerBound — panApplied', () => {
   it('pan within bounds: passes through (span-preserving, so defensive no-op)', () => {
     const from = NOW - 3_600_000n;
     const to   = NOW;
@@ -384,22 +380,22 @@ describe('clampToMaxSpan — panApplied', () => {
   });
 });
 
-// ── clampToMaxSpan lower-bound guard (from >= 1n) ─────────────────────────────
-// Tested through zoomApplied because clampToMaxSpan is internal to the reducer.
+// ── clampLowerBound guard (from >= 1n) ────────────────────────────────────────
+// Tested through zoomApplied because clampLowerBound is internal to the reducer.
 
-describe('clampToMaxSpan lower-bound guard', () => {
+describe('clampLowerBound guard', () => {
   it('from < 1n (span within MAX): shifts viewport right so from = 1n, span preserved', () => {
-    // from=-1000n, to=1000n: span=2000n ≤ MAX; lower-bound clamp fires: shift=1001n
+    // from=-1000n, to=1000n: span=2000n; lower-bound clamp fires: shift=1001n
     const next = dispatch(TAILING_1H, { type: 'zoomApplied', from: -1000n, to: 1000n, nowMs: NOW });
     expect(next.mode).toBe('fixed');
     if (next.mode !== 'fixed') return;
     expect(next.from).toBe(1n);
-    expect(next.to).toBe(2001n);       // 1000n + 1001n shift
-    expect(next.sizeMs).toBe(2000n);  // span unchanged
+    expect(next.to).toBe(2001n);      // 1000n + 1001n shift
+    expect(next.sizeMs).toBe(2000n); // span unchanged
   });
 
   it('from < 1n with to = 0n: both bounds shifted right so from = 1n', () => {
-    // from=-5n, to=0n: span=5n ≤ MAX; lower-bound clamp: shift=6n
+    // from=-5n, to=0n: span=5n; lower-bound clamp: shift=6n
     const next = dispatch(TAILING_1H, { type: 'zoomApplied', from: -5n, to: 0n, nowMs: NOW });
     expect(next.mode).toBe('fixed');
     if (next.mode !== 'fixed') return;
@@ -416,25 +412,17 @@ describe('clampToMaxSpan lower-bound guard', () => {
     expect(next.to).toBe(200n);
   });
 
-  it('span > MAX AND from still < 1n after span-clamp: both clamps apply', () => {
-    // Scenario: from well-negative, to = MAX_VIEWPORT_SPAN_MS.
-    // After span clamp: center = (from+to)/2n; half = MAX/2n; clampedFrom = center-half < 1n.
-    // Lower-bound then shifts rightward, preserving span (= MAX).
-    const MAX = MAX_VIEWPORT_SPAN_MS;
+  it('from < 1n with span > MAX: passes through span unchanged, shifts to from = 1n', () => {
+    // No span clamp; only lower-bound applies. Span is preserved at original size.
     const from = -5_000_000_000n;
-    const to   = MAX; // span = MAX + 5G > MAX
+    const to   = MAX_VIEWPORT_SPAN_MS; // span = MAX + 5G > MAX
     const next = dispatch(TAILING_1H, { type: 'zoomApplied', from, to, nowMs: NOW });
     expect(next.mode).toBe('fixed');
     if (next.mode !== 'fixed') return;
     expect(next.from).toBe(1n);
-    expect(next.sizeMs).toBe(MAX); // span clamped to MAX, then shift preserves it
-    // to = 1n + MAX (lower-bound shifted everything right)
-    const center = (from + to) / 2n;       // 4_873_000_000n
-    const half   = MAX / 2n;               // 7_373_000_000n
-    const afterSpanFrom = center - half;   // -2_500_000_000n
-    const afterSpanTo   = center + half;   // 12_246_000_000n
-    const shift = 1n - afterSpanFrom;      // 2_500_000_001n
-    expect(next.to).toBe(afterSpanTo + shift); // 14_746_000_001n
+    const expectedSpan = to - from;
+    expect(next.sizeMs).toBe(expectedSpan); // span NOT clamped
+    expect(next.to).toBe(to + (1n - from)); // to + shift
   });
 });
 

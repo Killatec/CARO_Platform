@@ -52,43 +52,20 @@ export type TrendModeAction =
   | { type: 'panApplied'; from: bigint; to: bigint; nowMs: bigint }
   | { type: 'tick'; nowMs: bigint };
 
-/**
- * Clamp a viewport [from, to] so its span does not exceed MAX_VIEWPORT_SPAN_MS
- * and its left edge never falls below 1n (server rejects startTime ≤ 0n).
- * Span clamp preserves center; lower-bound clamp shifts rightward, preserving span.
- */
-function clampToMaxSpan(from: bigint, to: bigint): { from: bigint; to: bigint } {
-  const span = to - from;
-  let clampedFrom = from;
-  let clampedTo   = to;
-
-  const spanClamped = span > MAX_VIEWPORT_SPAN_MS;
-  if (spanClamped) {
-    const center = (from + to) / 2n;
-    const half   = MAX_VIEWPORT_SPAN_MS / 2n;
-    clampedFrom  = center - half;
-    clampedTo    = center + half;
-  }
-
-  const lowerBoundClamped = clampedFrom < 1n;
-  if (lowerBoundClamped) {
-    const shift = 1n - clampedFrom;
-    clampedFrom = 1n;
-    clampedTo  += shift;
-  }
-
-  console.log('[viewport-trace] clampToMaxSpan', {
-    inputFrom:         _fmt(from),
-    inputTo:           _fmt(to),
-    inputSpanMs:       span.toString(),
-    outputFrom:        _fmt(clampedFrom),
-    outputTo:          _fmt(clampedTo),
-    clamped:           spanClamped || lowerBoundClamped,
-    spanClamped,
-    lowerBoundClamped,
+// Was: clampToMaxSpan — centered the window when span > MAX_VIEWPORT_SPAN_MS.
+// Now: clampLowerBound — only enforces from >= 1n (server rejects startTime <= 0).
+// The over-range case is handled entirely by gatedFetchTile + placeholderData;
+// the reducer no longer rewrites the user's requested span. This eliminates the
+// snap-back jitter when wheeling past MAX_VIEWPORT_SPAN_MS.
+function clampLowerBound(from: bigint, to: bigint): { from: bigint; to: bigint } {
+  if (from >= 1n) return { from, to };
+  const shift = 1n - from;
+  console.log('[viewport-trace] clampLowerBound', {
+    inputFrom: _fmt(from),
+    inputTo:   _fmt(to),
+    shift:     shift.toString(),
   });
-
-  return { from: clampedFrom, to: clampedTo };
+  return { from: 1n, to: to + shift };
 }
 
 /** Pure reducer — exported for unit testing. */
@@ -148,7 +125,7 @@ export function trendModeReducer(state: ModeState, action: TrendModeAction): Mod
         currentFrom: state.mode === 'fixed' ? _fmt(state.from) : 'tailing',
         currentTo:   state.mode === 'fixed' ? _fmt(state.to)   : 'tailing',
       });
-      const clamped = clampToMaxSpan(action.from, action.to);
+      const clamped = clampLowerBound(action.from, action.to);
       const sizeMs = clamped.to - clamped.from;
       return { mode: 'fixed', from: clamped.from, to: clamped.to, sizeMs, lastIntent: 'zoom' };
     }
@@ -160,7 +137,7 @@ export function trendModeReducer(state: ModeState, action: TrendModeAction): Mod
         currentFrom: state.mode === 'fixed' ? _fmt(state.from) : 'tailing',
         currentTo:   state.mode === 'fixed' ? _fmt(state.to)   : 'tailing',
       });
-      const clamped = clampToMaxSpan(action.from, action.to);
+      const clamped = clampLowerBound(action.from, action.to);
       const sizeMs = state.sizeMs;
       return { mode: 'fixed', from: clamped.from, to: clamped.to, sizeMs, lastIntent: 'pan' };
     }
