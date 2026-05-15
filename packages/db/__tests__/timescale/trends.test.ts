@@ -97,10 +97,11 @@ describe('getTrendTile — INVALID_BUCKET_COUNT', () => {
   });
 });
 
-describe('getTrendTile — INVALID_BUCKET_S', () => {
-  // bucketS = Number(endTime - startTime) / (bucketCount * 1000)
-  // bucketS > MAX_BUCKET_S → INVALID_BUCKET_S
-  // Range of 3_700_000_000 ms with 250 buckets: 3_700_000_000 / 250_000 = 14_800 > MAX_BUCKET_S
+describe('getTrendTile — INVALID_BUCKET_S (bucketed path only)', () => {
+  // bucketS validation runs only after dispatchShape returns 'bucketed' (Phase 6).
+  // Raw COV requests skip bucketSMs derivation entirely — this describe block covers
+  // the bucketed path. Range of 3_700_000_000 ms / 250_000 = 14_800 > MAX_BUCKET_S.
+  // dispatchShape: expectedPoints = 3_700_000 × 10 = 37_000_000 >> 250 → bucketed.
   it('throws when derived bucketS exceeds MAX_BUCKET_S', async () => {
     const start = 1n;
     const end   = start + 3_700_000_000n; // ~42.8 days
@@ -1420,6 +1421,43 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: raw-source bucke
     expect(tile.series[0].max.every(m => m === null)).toBe(true);
   });
 });
+
+// ── Sub-second window — Phase 6 bucketS=0 regression ────────────────────────
+//
+// For very small tile windows (e.g., 205ms at bucketCount=1000), the old
+// unconditional INVALID_BUCKET_S check fired before the dispatch decision:
+//   Math.round(205 / 1000) = 0 → bucketS = 0 → threw INVALID_BUCKET_S
+// even though dispatchShape returns 'raw' and queryRaw never uses bucketSMs.
+//
+// After Phase 6 fix: dispatch runs first; raw path returns early, bucketSMs
+// derivation is skipped entirely. Tag IDs 13001–13099 reserved for this block.
+
+describe.skipIf(!HAVE_TIMESCALE)(
+  'getTrendTile — sub-second window via raw COV (Phase 6 bucketS=0 regression)',
+  async () => {
+    const { writeTestSamples, resetTestRange, resetTestRangeExpectClean, TEST_RANGE_START } =
+      await import('../helpers/trends-test-range.js');
+
+    beforeEach(async () => { await resetTestRangeExpectClean(); });
+    afterEach(async ()  => { await resetTestRange(); });
+    afterAll(async ()   => { await resetTestRange(); });
+
+    it('205ms window at bucketCount=1000 succeeds via raw COV (bucketSMs=0 never evaluated)', async () => {
+      // span=205ms → Math.round(205/1000)=0 → old check would throw INVALID_BUCKET_S.
+      // dispatchShape: expectedPoints=0.205×10=2.05 ≤ 1000 → raw. bucketSMs skipped.
+      const START = TEST_RANGE_START + 1_000_000n; // 1s past epoch — satisfies startTime > 0n
+      const END   = START + 205n;                  // 205ms window
+      await writeTestSamples([
+        { ts: START + 50n,  tagId: 13001, value: 1.0 },
+        { ts: START + 100n, tagId: 13001, value: 2.0 },
+      ]);
+      const tile = await getTrendTile([13001], START, END, 1000) as RawTrendTile;
+      expect(tile.source).toBe('raw');
+      expect(tile.series[0].value).toHaveLength(2);
+      expect(tile.series[0].value).toEqual([1.0, 2.0]);
+    });
+  },
+);
 
 // ── Bucket-count alignment variance — Phase 6 hotfix regression ─────────────
 //

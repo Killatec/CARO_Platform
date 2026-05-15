@@ -648,27 +648,30 @@ export async function getTrendTile(
     throw codeError('bucketCount must be an integer in 1..2500', 'INVALID_BUCKET_COUNT');
   }
 
-  const { bucketSMs, bucketS } = deriveBucketSMs(startTime, endTime, bucketCount);
   const responseTailTs = nowMs ?? Date.now();
 
-  if (bucketS <= 0 || bucketS > MAX_BUCKET_S) {
-    throw codeError(
-      `Derived bucketS ${bucketS} is outside the valid range (0, ${MAX_BUCKET_S}]`,
-      'INVALID_BUCKET_S',
-    );
-  }
-
   // ── Shape dispatch — Step 1: raw vs bucketed by window size (unified rule §4.1) ─
-  // Raw path: no watermark fall-through; COV samples returned directly.
+  // Raw COV skips bucketSMs derivation entirely — bucketS is unused for this path.
+  // For very small windows (e.g., 205ms at bucketCount=1000), Math.round(span/count)=0
+  // which would fail INVALID_BUCKET_S; dispatch to raw first so that check never fires.
 
   if (dispatchShape(startTime, endTime, bucketCount) === 'raw') {
     const rawTile = await queryRaw(tagIds, startTime, endTime);
     return { ...rawTile, responseTailTs };
   }
 
-  // ── Step 2: bucketed — source table by bucketS (§4.2) ────────────────────────
-  // bucketS < 1.0: raw-source bucketed (tag_samples gapfill+locf; Infinity watermark,
-  // no fall-through). bucketS ≥ 1.0: existing CAG ladder unchanged.
+  // ── Step 2: bucketed — derive and validate bucketSMs ────────────────────────
+  // Only reached when dispatch is 'bucketed'. bucketS < 1.0: raw-source bucketed
+  // (tag_samples gapfill+locf; Infinity watermark, no fall-through). bucketS ≥ 1.0:
+  // existing CAG ladder unchanged.
+
+  const { bucketSMs, bucketS } = deriveBucketSMs(startTime, endTime, bucketCount);
+  if (bucketS <= 0 || bucketS > MAX_BUCKET_S) {
+    throw codeError(
+      `Derived bucketS ${bucketS} is outside the valid range (0, ${MAX_BUCKET_S}]`,
+      'INVALID_BUCKET_S',
+    );
+  }
 
   let dispatchSource: AggregateSource;
   if      (bucketS < 1.0)   dispatchSource = 'tag_samples';

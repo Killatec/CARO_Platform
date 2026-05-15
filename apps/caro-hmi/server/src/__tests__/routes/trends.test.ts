@@ -291,32 +291,20 @@ describe('GET /api/v1/trends/tile — unit (mocked)', () => {
     expect(res.body.error.message).toBe('bad bucket');
   });
 
-  // ── INVALID_BUCKET_S route-level early validation ───────────────────────────
+  // ── bucketS is now a DB-layer concern (Phase 6 dispatch) ───────────────────
+  // The route no longer derives or validates bucketS. Raw COV requests skip
+  // bucketSMs entirely; the DB layer validates only for the bucketed path.
 
-  it('span producing bucketS > MAX_BUCKET_S → 400 INVALID_BUCKET_S, getTrendTile not called', async () => {
-    // deriveBucketSMs uses Math.round, so we need +125 ms with bucketCount=250
-    // to push bucketSMs over MAX_BUCKET_S * 1000 (rounds: 0.5 → 1).
-    const spanMs = BigInt(MAX_BUCKET_S) * 250n * 1000n + 125n;
-    const startTime = 1_000_000n;
-    const endTime   = startTime + spanMs;
+  it('205ms span at bucket_count=1000 (bucketSMs=0) is no longer rejected by the route', async () => {
+    // Before: Math.round(205/1000)=0 → route threw 400 INVALID_BUCKET_S.
+    // After: route passes through; DB layer dispatches to raw COV (no bucketSMs needed).
+    mockGet.mockResolvedValueOnce(RAW_TILE);
     const res = await request(app)
-      .get(`/api/v1/trends/tile?tag_ids=1&start_time=${startTime}&end_time=${endTime}&bucket_count=250`);
-    expect(res.status).toBe(400);
-    expect(res.body.error.code).toBe('INVALID_BUCKET_S');
-    expect(mockGet).not.toHaveBeenCalled();
-  });
-
-  it('span producing bucketS === MAX_BUCKET_S → route passes through to getTrendTile', async () => {
-    mockGet.mockResolvedValueOnce(AGG_TILE);
-    // Exactly MAX_BUCKET_S seconds per bucket with 250 buckets.
-    const spanMs = BigInt(MAX_BUCKET_S) * 250n * 1000n;
-    const startTime = 1_000_000n;
-    const endTime   = startTime + spanMs;
-    const res = await request(app)
-      .get(`/api/v1/trends/tile?tag_ids=1&start_time=${startTime}&end_time=${endTime}&bucket_count=250`);
-    // Route passes through — DB mock returns AGG_TILE → 200.
+      .get('/api/v1/trends/tile?tag_ids=1&start_time=1778861359020&end_time=1778861359225&bucket_count=1000');
     expect(res.status).toBe(200);
-    expect(mockGet).toHaveBeenCalledOnce();
+    expect(mockGet).toHaveBeenCalledWith(
+      [1], 1778861359020n, 1778861359225n, 1000, expect.any(Number),
+    );
   });
 
   it('db throws unknown error → 500 INTERNAL_ERROR, console.error called', async () => {
@@ -460,13 +448,15 @@ describe('GET /api/v1/trends/extent — unit (mocked)', () => {
 });
 
 // ── Integration tests (live Timescale, gated) ─────────────────────────────────
-// Uses the raw path (bucketS < 1.0): 4-minute window with 250 buckets → bucketS=0.96.
+// Uses the raw COV path: 20-second window with 250 buckets.
+// dispatchShape: expectedPoints = 20 × 10 = 200 ≤ 250 → raw COV.
 
 describe.skipIf(!HAVE_TIMESCALE)('GET /api/v1/trends/tile — integration (live Timescale)', () => {
   const TEST_TAG   = 9901;
-  // Raw window: start=3_600_000 ms (1h), end=3_840_000 ms (1h4m), 250 buckets
+  // Raw COV window: start=3_600_000 ms (1h past epoch), end=3_620_000 ms (+20s), 250 buckets.
+  // expectedPoints = 20 × 10 = 200 ≤ 250 → raw COV (Phase 6 dispatch).
   const START_MS   = 3_600_000;
-  const END_MS     = 3_840_000;
+  const END_MS     = 3_620_000;
 
   beforeEach(() => {
     mockGet.mockImplementation(

@@ -96,9 +96,10 @@ const AGG_END    = 10_800_000n;  // 3h past epoch
 const COUNT      = 250;
 const BUCKET_MS  = 14_400;       // Math.round(14.4 * 1000)
 
-// Raw window: sub-1-second bucketS (bucketS = 0.96 < 1.0).
+// Raw window: 20-second span at 250 buckets → expectedPoints=200 ≤ 250 → raw COV (Phase 6 dispatch).
+// Old constant was 3_840_000n (4-minute window) which dispatches to bucketed after Phase 6.
 const RAW_START  = 3_600_000n;
-const RAW_END    = 3_840_000n;
+const RAW_END    = 3_620_000n;
 
 // ── E2E tests ─────────────────────────────────────────────────────────────────
 
@@ -289,9 +290,10 @@ describe.skipIf(!HAVE_TIMESCALE)('GET /api/v1/trends/tile — E2E (real DB, no m
   // survive the BigInt→Number serialization path without precision loss.
 
   it('BigInt round-trip: 13-digit timestamps survive JSON serialization', async () => {
-    const startMs = Date.now() - 60_000;
+    const startMs = Date.now() - 20_000;
     const endMs   = Date.now();
-    // bucketS = 60_000 / (250 * 1000) = 0.24 → raw path (startTime echoed exactly).
+    // 20s window at 250 buckets: expectedPoints = 20 × 10 = 200 ≤ 250 → raw COV (Phase 6 dispatch).
+    // startTime/endTime are echoed exactly on the raw path.
 
     const res = await request(app).get(
       `/api/v1/trends/tile?tag_ids=7099` +

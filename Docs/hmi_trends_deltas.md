@@ -6,7 +6,7 @@
 
 ## Pending propagation
 
-- `trends.ts` defensive bucket-count assertion removed entirely. Original assertion (n ∈ {bucketCount, bucketCount+1}) assumed CAG alignment; first loosening to [bucketCount, bucketCount+3] missed the case where Math.round rounds bucketSMs UP, producing n < bucketCount. Two production failures: start=1778856766968 → n=1003=bucketCount+3; start=1778859681100 → n=997=bucketCount-3. True range is approximately [bucketCount-3, bucketCount+3] for sub-second bucket widths; clients consume response.n directly so no tight bound is needed. Assertion removed; spec §6.2 simplified; regression tests cover both n>bucketCount and n<bucketCount directions.
+- `trends.ts` defensive bucket-count assertion removed entirely (commit 9899028; see history). `getTrendTile` and route restructured to skip bucketS validation when dispatchShape returns 'raw'. Pre-fix, small viewports (e.g., 205ms span at bucketCount=1000) produced bucketSMs=Math.round(205/1000)=0 → 400 INVALID_BUCKET_S, even though Phase 6 dispatch routes them to queryRaw where bucketSMs is unused. Fixed by moving bucketS validation into the bucketed branch only; route no longer derives bucketSMs at all (DB layer is authoritative). Spec §4.1, §6.1, §6.3 updated; regression test added (205ms window via raw COV succeeds).
 
 ---
 
