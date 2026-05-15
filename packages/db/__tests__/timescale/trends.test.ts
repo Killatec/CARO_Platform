@@ -1421,55 +1421,64 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: raw-source bucke
   });
 });
 
-// ── Bucket-count assertion bounds — Phase 6 hotfix regression ────────────────
+// ── Bucket-count alignment variance — Phase 6 hotfix regression ─────────────
 //
-// The defensive assertion was tuned for CAG sources (n ∈ {bucketCount, bucketCount+1}).
-// The raw-source bucketed path uses Math.round(span/bucketCount) for bucketSMs, which
-// can produce sub-second widths that don't align cleanly to the TimescaleDB interval
-// bucket origin (PostgreSQL epoch, 2000-01-01 UTC). In that case gapfill can emit up to
-// bucketCount+3 buckets — mathematically correct (floor(q)+2 where q=span/bucketSMs),
-// but the old assertion threw.
+// For the raw-source bucketed path, bucketSMs = Math.round(span/bucketCount) can
+// produce sub-second widths that don't align cleanly to TS_BUCKET_ORIGIN_MS
+// (2000-01-03 UTC). The actual n from time_bucket_gapfill can deviate from
+// bucketCount in either direction:
 //
-// Inputs are constructed to guarantee n=bucketCount+3 analytically:
-//   span=162292ms, bucketCount=1000, B=round(162292/1000)=162ms
-//   q = 162292/162 = 1001.8; (start−PG_EPOCH) mod 162 = 102; span mod 162 = 130
-//   102 + 130 = 232 ≥ 162 → floor diff = floor(q)+1 = 1002 → n = 1003 = bucketCount+3
-// The start (900_000_000_066ms = 1998-07-06) is within the pre-2000 sandbox to avoid
-// triggering background CAG auto-refresh cycles.
+// Round DOWN (fractional < 0.5): bucketSMs < span/bucketCount → q > bucketCount
+//   → n can reach bucketCount+3.
+//   span=162292ms, B=162ms, q=1001.8; (start−TS_BUCKET_ORIGIN_MS) mod 162=156; 156+130≥162
+//   → floor_diff=floor(q)+1=1002 → n=1003=bucketCount+3.
+//   start=900_000_000_066ms (1998).
 //
+// Round UP (fractional ≥ 0.5): bucketSMs > span/bucketCount → q < bucketCount
+//   → n can fall to bucketCount-3.
+//   span=130517ms, B=131ms, q=996.3; (start−TS_BUCKET_ORIGIN_MS) mod 131=89; 89+41<131
+//   → floor_diff=floor(q)=996 → n=997=bucketCount-3.
+//   start=900_000_000_096ms (1998).
+//
+// Both are mathematically correct gapfill outputs; no assertion exists to reject them.
 // Tag IDs 12001–12099 are reserved for this block.
 
 describe.skipIf(!HAVE_TIMESCALE)(
-  'getTrendTile — bucket-count assertion bounds (raw-source bucketed hotfix)',
+  'getTrendTile — bucket-count alignment variance (raw-source bucketed)',
   async () => {
     const { writeTestSamples, resetTestRange, resetTestRangeExpectClean } =
       await import('../helpers/trends-test-range.js');
-
-    const TAG_ID = 12001;
-    // (START − PG_EPOCH) mod 162 = 102; same mod as production failing inputs;
-    // guarantees gapfill emits floor(q)+2 = 1003 = bucketCount+3 buckets.
-    const START = 900_000_000_066n;   // 1998-07-06 ~13:20:00 UTC
-    const END   = 900_000_162_358n;   // span = 162,292 ms
-    const COUNT = 1000;
-    // bucketSMs = round(162292/1000) = 162 ms
-    // expectedPoints = 162.292 s × 10 Hz = 1622.92 > 1000 → dispatchShape='bucketed'
-    // bucketS = 0.162 < 1.0 → source='tag_samples' (raw-as-aggregate)
 
     beforeEach(async () => { await resetTestRangeExpectClean(); });
     afterEach(async ()  => { await resetTestRange(); });
     afterAll(async ()   => { await resetTestRange(); });
 
-    it('worst-case alignment produces n=bucketCount+3 without throwing', async () => {
-      // Old assertion: n===1000||n===1001 → threw for n=1003.
-      // New assertion: n in [1000, 1003] → passes.
-      await writeTestSamples([{ ts: START + 81_146n, tagId: TAG_ID, value: 1.0 }]);
-      const tile = await getTrendTile([TAG_ID], START, END, COUNT) as AggregateTrendTile;
+    it('round-down alignment: n=bucketCount+3 succeeds without throwing', async () => {
+      // span=162292ms, B=round(162292/1000)=162ms, q=1001.8
+      // (start−TS_BUCKET_ORIGIN_MS) mod 162=156; span mod 162=130; 156+130=286≥162
+      // → floor_diff=floor(q)+1=1002 → n=1003=bucketCount+3
+      const START = 900_000_000_066n;   // 1998-07-06; (START−TS_BUCKET_ORIGIN_MS) mod 162 = 156
+      const END   = 900_000_162_358n;   // span = 162,292 ms
+      const COUNT = 1000;
+      await writeTestSamples([{ ts: START + 81_146n, tagId: 12001, value: 1.0 }]);
+      const tile = await getTrendTile([12001], START, END, COUNT) as AggregateTrendTile;
       expect(tile.source).toBe('tag_samples');
       expect(tile.bucketSMs).toBe(162);
-      expect(tile.n).toBeGreaterThanOrEqual(COUNT);
-      expect(tile.n).toBeLessThanOrEqual(COUNT + 3);
-      // Confirm the specific alignment actually exercises bucketCount+3.
       expect(tile.n).toBe(COUNT + 3);
+    });
+
+    it('round-up alignment: n=bucketCount-3 succeeds without throwing', async () => {
+      // span=130517ms, B=round(130517/1000)=131ms, q=996.3
+      // (start−TS_BUCKET_ORIGIN_MS) mod 131=89; span mod 131=41; 89+41=130<131
+      // → floor_diff=floor(q)=996 → n=997=bucketCount-3
+      const START = 900_000_000_096n;   // 1998-07-06; (START−TS_BUCKET_ORIGIN_MS) mod 131 = 89
+      const END   = 900_000_130_613n;   // span = 130,517 ms
+      const COUNT = 1000;
+      await writeTestSamples([{ ts: START + 65_258n, tagId: 12002, value: 1.0 }]);
+      const tile = await getTrendTile([12002], START, END, COUNT) as AggregateTrendTile;
+      expect(tile.source).toBe('tag_samples');
+      expect(tile.bucketSMs).toBe(131);
+      expect(tile.n).toBe(COUNT - 3);
     });
   },
 );

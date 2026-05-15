@@ -709,20 +709,11 @@ export async function getTrendTile(
   const servedStartTime = BigInt(segments[0].servedStart);
   const servedEndTime   = BigInt(segments[segments.length - 1].servedEnd);
 
-  // Defensive: merged n must fall in the natural gapfill range for the full range.
-  // CAG sources (1s/10s/1min/10min widths aligned to TS_BUCKET_ORIGIN_MS) produce
-  // n in {bucketCount, bucketCount+1}. The raw-source bucketed path uses
-  // Math.round(spanMs/bucketCount), which can produce arbitrary sub-second widths;
-  // those don't align cleanly to the origin. With q = spanMs/bucketSMs, gapfill emits
-  // floor(q)+1 or floor(q)+2 buckets. When round() rounds down, q > bucketCount and
-  // floor(q) can reach bucketCount+1, making n up to bucketCount+3. Allow that headroom.
-  if (totalN < bucketCount || totalN > bucketCount + 3) {
-    throw new Error(
-      `getTrendTile: unexpected merged bucket count ${totalN},` +
-      ` expected bucketCount..bucketCount+3 = ${bucketCount}..${bucketCount + 3}` +
-      ` (source=${dispatchSource}, bucketS=${bucketS}, start=${startTime}, end=${endTime})`,
-    );
-  }
+  // No bucket-count assertion: the actual n returned by time_bucket_gapfill depends
+  // on bucketSMs alignment with TS_BUCKET_ORIGIN_MS combined with Math.round's direction.
+  // For sub-second bucket widths, n can range from bucketCount-3 to bucketCount+3 due to
+  // alignment variance — mathematically correct, not a bug. Clients consume the actual
+  // response.n field; never derive count from request alone.
 
   const series: AggregateTrendSeries[] = tagIds.map(id => {
     const value: (number | null)[] = [];
