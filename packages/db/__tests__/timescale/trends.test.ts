@@ -1421,6 +1421,59 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: raw-source bucke
   });
 });
 
+// ── Bucket-count assertion bounds — Phase 6 hotfix regression ────────────────
+//
+// The defensive assertion was tuned for CAG sources (n ∈ {bucketCount, bucketCount+1}).
+// The raw-source bucketed path uses Math.round(span/bucketCount) for bucketSMs, which
+// can produce sub-second widths that don't align cleanly to the TimescaleDB interval
+// bucket origin (PostgreSQL epoch, 2000-01-01 UTC). In that case gapfill can emit up to
+// bucketCount+3 buckets — mathematically correct (floor(q)+2 where q=span/bucketSMs),
+// but the old assertion threw.
+//
+// Inputs are constructed to guarantee n=bucketCount+3 analytically:
+//   span=162292ms, bucketCount=1000, B=round(162292/1000)=162ms
+//   q = 162292/162 = 1001.8; (start−PG_EPOCH) mod 162 = 102; span mod 162 = 130
+//   102 + 130 = 232 ≥ 162 → floor diff = floor(q)+1 = 1002 → n = 1003 = bucketCount+3
+// The start (900_000_000_066ms = 1998-07-06) is within the pre-2000 sandbox to avoid
+// triggering background CAG auto-refresh cycles.
+//
+// Tag IDs 12001–12099 are reserved for this block.
+
+describe.skipIf(!HAVE_TIMESCALE)(
+  'getTrendTile — bucket-count assertion bounds (raw-source bucketed hotfix)',
+  async () => {
+    const { writeTestSamples, resetTestRange, resetTestRangeExpectClean } =
+      await import('../helpers/trends-test-range.js');
+
+    const TAG_ID = 12001;
+    // (START − PG_EPOCH) mod 162 = 102; same mod as production failing inputs;
+    // guarantees gapfill emits floor(q)+2 = 1003 = bucketCount+3 buckets.
+    const START = 900_000_000_066n;   // 1998-07-06 ~13:20:00 UTC
+    const END   = 900_000_162_358n;   // span = 162,292 ms
+    const COUNT = 1000;
+    // bucketSMs = round(162292/1000) = 162 ms
+    // expectedPoints = 162.292 s × 10 Hz = 1622.92 > 1000 → dispatchShape='bucketed'
+    // bucketS = 0.162 < 1.0 → source='tag_samples' (raw-as-aggregate)
+
+    beforeEach(async () => { await resetTestRangeExpectClean(); });
+    afterEach(async ()  => { await resetTestRange(); });
+    afterAll(async ()   => { await resetTestRange(); });
+
+    it('worst-case alignment produces n=bucketCount+3 without throwing', async () => {
+      // Old assertion: n===1000||n===1001 → threw for n=1003.
+      // New assertion: n in [1000, 1003] → passes.
+      await writeTestSamples([{ ts: START + 81_146n, tagId: TAG_ID, value: 1.0 }]);
+      const tile = await getTrendTile([TAG_ID], START, END, COUNT) as AggregateTrendTile;
+      expect(tile.source).toBe('tag_samples');
+      expect(tile.bucketSMs).toBe(162);
+      expect(tile.n).toBeGreaterThanOrEqual(COUNT);
+      expect(tile.n).toBeLessThanOrEqual(COUNT + 3);
+      // Confirm the specific alignment actually exercises bucketCount+3.
+      expect(tile.n).toBe(COUNT + 3);
+    });
+  },
+);
+
 // NOTE: The LOCF data-extent cutoff (MAX(ts) query + past-extent CASE wrapper) was removed
 // for performance. It paid 814ms of planning time per CAG request on production-scale
 // tag_samples (251 chunks × 8 tag_ids → catalog enumeration). LOCF now runs unbounded

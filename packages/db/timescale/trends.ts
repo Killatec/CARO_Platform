@@ -709,11 +709,17 @@ export async function getTrendTile(
   const servedStartTime = BigInt(segments[0].servedStart);
   const servedEndTime   = BigInt(segments[segments.length - 1].servedEnd);
 
-  // Defensive: merged n must match the natural gapfill grid for the full range.
-  if (totalN !== bucketCount && totalN !== bucketCount + 1) {
+  // Defensive: merged n must fall in the natural gapfill range for the full range.
+  // CAG sources (1s/10s/1min/10min widths aligned to TS_BUCKET_ORIGIN_MS) produce
+  // n in {bucketCount, bucketCount+1}. The raw-source bucketed path uses
+  // Math.round(spanMs/bucketCount), which can produce arbitrary sub-second widths;
+  // those don't align cleanly to the origin. With q = spanMs/bucketSMs, gapfill emits
+  // floor(q)+1 or floor(q)+2 buckets. When round() rounds down, q > bucketCount and
+  // floor(q) can reach bucketCount+1, making n up to bucketCount+3. Allow that headroom.
+  if (totalN < bucketCount || totalN > bucketCount + 3) {
     throw new Error(
       `getTrendTile: unexpected merged bucket count ${totalN},` +
-      ` expected ${bucketCount} or ${bucketCount + 1}` +
+      ` expected bucketCount..bucketCount+3 = ${bucketCount}..${bucketCount + 3}` +
       ` (source=${dispatchSource}, bucketS=${bucketS}, start=${startTime}, end=${endTime})`,
     );
   }
