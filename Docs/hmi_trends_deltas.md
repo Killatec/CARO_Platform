@@ -98,35 +98,6 @@ Original handoff §11.D ("Past-LOCF on dormant signals") and the corresponding `
 
 ---
 
-## 2026-05-14 — Phase 2.5 @caro/ui dateFormat consolidation
-
-- B3#2: created `packages/ui/src/dateFormat.ts` with unified `formatDateTime` + `formatDate`
-  (options bag: `timezone`, `fallback`, `seconds`). Migrated `packages/trend-chart` consumers
-  (`CursorDisplay`, `EndPicker`) and `apps/tag-registry/client` (`HistoryPage`). Deleted
-  legacy `packages/trend-chart/src/dateUtils.ts` and `apps/tag-registry/client/src/utils/formatDate.ts`
-  and their respective test files. Test coverage merged into `packages/ui/__tests__/dateFormat.test.ts`.
-  Call sites updated from positional `(ms, timezone?)` to options bag `(value, { timezone })`.
-
----
-
-## 2026-05-14 — panThresholdCheck active-tileSpan symmetry
-
-- `panThresholdCheck` now takes `tileSpanMs` explicitly; `checkAndExtendXCoverage` passes the active set's tile width via `getActiveRange().tileSpanMs`. Closes the F7 follow-up asymmetry where `panThresholdCheck` used `visibleSpan/2` while `ensureCovered` used `active[0].width`, producing multiple candidates per pan when wheel-zoom diverged from `dataViewport`. One fetch per pan trigger restored. Spec §10.5 updated.
-
----
-
-## 2026-05-14 — pruneAndAdd middle-insertion warn removed
-
-- Removed `console.warn` from `pruneAndAdd`'s middle-insertion branch. Post-F7, clean gap-fill (newTile slots into a gap with no overlap) is a legitimate scenario, not "unexpected" — the warn was noise. Behavior unchanged: middle insertion still drops the leftmost tile at capacity. Collapsed `isRightEnd` check into the default branch (same outcome).
-
----
-
-## 2026-05-14 — Phase 3 F7 ensureCovered tileSpanMs fix
-
-- F7: `useTrendData.ensureCovered` derives `tileSpanMs` from `active[0]!.endTime - active[0]!.startTime` (active set's actual tile width), not from the current viewport formula. Prevents misaligned candidate tiles during the in-flight window of zoom commits. Closes handoff §11.C.
-
----
-
 ## 2026-05-14 — Phase 4 F15 useTrendData.ts split
 
 - F15: `packages/trend-chart/src/useTrendData.ts` (~900 lines) split into 5 modules: `useTrendData.ts` (shell, ~150 lines), `liveSpineFetch.ts`, `historyTileFetch.ts`, `tileActiveSet.ts`, `gatedFetchTile.ts`. Pure refactor, behavior-preserving — all 573 existing useTrendData tests pass unchanged. 6 new direct-seam tests added for `tileActiveSet` (579 total).
