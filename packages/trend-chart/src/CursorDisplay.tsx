@@ -4,8 +4,8 @@ import { formatDateTime } from '@caro/ui';
 export interface CursorDisplayProps {
   cursorTsMs: number | null;
   siteTimezone?: string;
-  /** When set, rendered on the right side of the cursor row (e.g. "Range too wide…"). */
-  rangeExceededMessage?: string | null;
+  /** When set, rendered on the right side of the cursor row (e.g. "Range too wide…" or "Range too narrow…"). */
+  rangeMessage?: string | null;
 }
 
 const ROW: CSSProperties = {
@@ -27,13 +27,13 @@ const RANGE_MSG: CSSProperties = {
   fontWeight: 700,
 };
 
-export function CursorDisplay({ cursorTsMs, siteTimezone, rangeExceededMessage }: CursorDisplayProps) {
+export function CursorDisplay({ cursorTsMs, siteTimezone, rangeMessage }: CursorDisplayProps) {
   return (
     <div style={ROW}>
       <span style={CURSOR_TEXT}>
         Cursor: {cursorTsMs == null ? '--' : formatDateTime(cursorTsMs, { timezone: siteTimezone })}
       </span>
-      {rangeExceededMessage && <span style={RANGE_MSG}>{rangeExceededMessage}</span>}
+      {rangeMessage && <span style={RANGE_MSG}>{rangeMessage}</span>}
     </div>
   );
 }

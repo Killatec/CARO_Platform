@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { TREND_VIEWER_DEFAULTS } from './level.js';
+import { TREND_VIEWER_DEFAULTS, MIN_VIEWPORT_SPAN_MS, MAX_VIEWPORT_SPAN_MS } from './level.js';
 import { TileCache, makeTileCacheKey } from './tileCache.js';
 import type { Tile, Viewport, TrendData } from './types.js';
 import {
@@ -53,6 +53,9 @@ export interface UseTrendDataResult extends HookState {
    *  (viewport span exceeds server's supported range). Cleared on next successful
    *  fetch. Consumers can render a "Range too wide" message instead of the chart. */
   rangeExceeded: boolean;
+  /** True when the viewport span is below MIN_VIEWPORT_SPAN_MS (< 1 second).
+   *  Cleared on next successful fetch. Consumers render "Range too narrow" message. */
+  rangeTooNarrow: boolean;
   swapCounter: number;
   activeTileCount: number;
   /** Wall-clock ms of the most recent viewport-change batch (visible tiles only).
@@ -60,6 +63,14 @@ export interface UseTrendDataResult extends HookState {
   lastFetchMs: number | null;
   /** Most recent server-captured tail timestamp across active tiles. null until first fetch resolves. */
   responseTailTs: number | null;
+}
+
+function isViewportOverRange(viewport: Viewport): boolean {
+  return (viewport.end - viewport.start) > MAX_VIEWPORT_SPAN_MS;
+}
+
+function isViewportUnderRange(viewport: Viewport): boolean {
+  return (viewport.end - viewport.start) < MIN_VIEWPORT_SPAN_MS;
 }
 
 export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
@@ -93,6 +104,7 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
   const [responseTailTs, setResponseTailTs] = useState<number | null>(null);
   const [historyRefetchVersion, setHistoryRefetchVersion] = useState<number>(0);
   const [rangeExceeded, setRangeExceeded] = useState(false);
+  const [rangeTooNarrow, setRangeTooNarrow] = useState(false);
 
   // Tracks the previous viewport span; used to detect preset changes during tailing.
   const prevSpanRef = useRef<bigint | null>(null);
@@ -129,7 +141,7 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
 
   // Single chokepoint for all tile fetches. Every fetch site MUST use this wrapper.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const gatedFetchTile = useCallback(buildGatedFetchTile(setRangeExceeded), []);
+  const gatedFetchTile = useCallback(buildGatedFetchTile(setRangeExceeded, setRangeTooNarrow), []);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -165,6 +177,15 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     spineLoadedRef.current = false;
     spineFetchInFlightRef.current = false;
 
+    if (isViewportOverRange(currentViewport)) {
+      setRangeExceeded(true);
+      return;
+    }
+    if (isViewportUnderRange(currentViewport)) {
+      setRangeTooNarrow(true);
+      return;
+    }
+
     // Live → fixed refetch: skip the right-side prefetch tile. The flag is reset
     // here so subsequent normal-history fetches use the default overfetch.
     const isLiveExitRefetch = liveExitRefetchPendingRef.current;
@@ -176,7 +197,7 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
       tagIds, bucketCount, visibleTilesPerWindow, overfetchPerSide,
       viewport: currentViewport, isLiveExitRefetch, cache, oldActiveTiles,
       generationRef, activeTilesRef, inFlightTilesRef, finalizeRef, levelTransitionPendingRef,
-      setHookResult, setSwapCounter, setActiveTileCount, setLastFetchMs, setResponseTailTs, setRangeExceeded,
+      setHookResult, setSwapCounter, setActiveTileCount, setLastFetchMs, setResponseTailTs, setRangeExceeded, setRangeTooNarrow,
       gatedFetchTile,
     });
 
@@ -190,6 +211,13 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     if (tagIds.length === 0) return;
     const active = activeTilesRef.current;
     if (active.length === 0) return;
+
+    // Gate out-of-range viewports — the pre-check in the main effect returns early
+    // before populating activeTilesRef with the new out-of-range tile spans, so
+    // active tiles may have stale small/large spans from the previous valid viewport.
+    // Without this guard those stale spans would pass gatedFetchTile and fire fetches.
+    const cv: Viewport = { start: viewportStart, end: viewportEnd };
+    if (isViewportOverRange(cv) || isViewportUnderRange(cv)) return;
 
     // Derive tileSpanMs from the active set's tile widths, NOT from the current viewport.
     // Active set tiles are uniform-width by construction (one tilesForViewport call), so
@@ -276,7 +304,7 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
         })
         .catch((e: Error & { code?: string }) => {
           inFlightTilesRef.current.delete(tileKey);
-          if (e.code === 'CLIENT_OVER_RANGE' || e.code === 'CLIENT_PRE_EPOCH') return;
+          if (e.code === 'CLIENT_UNDER_RANGE' || e.code === 'CLIENT_OVER_RANGE' || e.code === 'CLIENT_PRE_EPOCH') return;
           setLastFetchMs(Math.round(performance.now() - tileT0));
           if (generationRef.current !== gen) return;
           console.warn('[useTrendData] dynamic fetch failed', { tile, error: e });
@@ -310,5 +338,5 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     };
   }, []);
 
-  return { ...hookResult, ensureCovered, getActiveRange, evictAll, refetchHistory, rangeExceeded, swapCounter, activeTileCount, lastFetchMs, responseTailTs };
+  return { ...hookResult, ensureCovered, getActiveRange, evictAll, refetchHistory, rangeExceeded, rangeTooNarrow, swapCounter, activeTileCount, lastFetchMs, responseTailTs };
 }

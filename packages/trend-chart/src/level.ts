@@ -74,6 +74,21 @@ export const MAX_VIEWPORT_SPAN_MS =
     * BigInt(TREND_VIEWER_DEFAULTS.visibleTilesPerWindow);
 
 /**
+ * Smallest viewport span the chart will fetch for (mirrors
+ * @caro/db.MIN_VIEWPORT_SPAN_MS, not imported to avoid pulling pg-runtime
+ * into the browser bundle). Derived to keep bucketSMs ≥ 1ms in the
+ * live-spine path (bucketCount=1000): below 1s, Math.round produces 0
+ * and the chart breaks visually downstream.
+ *
+ * Below this threshold the chart enters the "range too narrow" UX state
+ * (parallel to MAX_VIEWPORT_SPAN_MS → "range too wide"): gatedFetchTile
+ * rejects with CLIENT_UNDER_RANGE; TrendChartContainer renders
+ * placeholderData; CursorDisplay shows "Range too narrow. Zoom out or
+ * pick a wider preset." See spec §6.3.
+ */
+export const MIN_VIEWPORT_SPAN_MS = 1000n;
+
+/**
  * Returns bucket-grid-aligned tiles covering [rangeStart, rangeEnd).
  *
  * Alignment strategy: right-anchor on the bucket grid. lastEnd is the first

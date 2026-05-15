@@ -167,7 +167,7 @@ export function runLiveSpineFetch(args: LiveSpineFetchArgs): void {
   }).catch((e: Error & { code?: string }) => {
     if (generationRef.current !== generation) return;
     spineFetchInFlightRef.current = false;
-    if (e.code === 'CLIENT_OVER_RANGE' || e.code === 'CLIENT_PRE_EPOCH') return;
+    if (e.code === 'CLIENT_UNDER_RANGE' || e.code === 'CLIENT_OVER_RANGE' || e.code === 'CLIENT_PRE_EPOCH') return;
     console.error('[useTrendData] live spine fetch failed', { tagIds, error: e });
     setHookResult({ data: null, isLoading: false, error: e instanceof Error ? e.message : String(e) });
   });

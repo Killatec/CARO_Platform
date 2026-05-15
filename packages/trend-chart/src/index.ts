@@ -4,6 +4,7 @@ export {
   TS_BUCKET_ORIGIN_MS,
   MAX_BUCKET_S,
   MAX_VIEWPORT_SPAN_MS,
+  MIN_VIEWPORT_SPAN_MS,
   floorDiv,
   ceilDiv,
   alignedTilesInRange,

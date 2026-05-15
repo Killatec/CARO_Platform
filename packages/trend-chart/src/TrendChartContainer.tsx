@@ -80,7 +80,7 @@ export function TrendChartContainer({
 
   // ── Data fetch (driven by explicit dataViewport) ──────────────────────────
   const trendData = useTrendData({ viewport: dataViewport, tagIds, isTailing: modeState.mode === 'tailing' });
-  const { data, isLoading, ensureCovered, getActiveRange, swapCounter, activeTileCount, lastFetchMs, rangeExceeded } = trendData;
+  const { data, isLoading, ensureCovered, getActiveRange, swapCounter, activeTileCount, lastFetchMs, rangeExceeded, rangeTooNarrow } = trendData;
 
   // ── Stable refs for synchronous access from callbacks and cleanup ─────────
   // Updated synchronously during render so callbacks always see the latest values.
@@ -276,8 +276,10 @@ export function TrendChartContainer({
     [_handleZoomLevelSwitch],
   );
 
-  const overRangeMessage = rangeExceeded
+  const rangeMessage = rangeExceeded
     ? 'Range too wide. Zoom in or pick a smaller preset.'
+    : rangeTooNarrow
+    ? 'Range too narrow. Zoom out or pick a wider preset.'
     : null;
 
   const footerJsx = (
@@ -285,7 +287,7 @@ export function TrendChartContainer({
       <CursorDisplay
         cursorTsMs={cursorTsMs}
         siteTimezone={siteTimezone}
-        rangeExceededMessage={overRangeMessage}
+        rangeMessage={rangeMessage}
       />
       <div style={FOOTER}>
         <div style={FOOTER_LEFT}>
@@ -305,7 +307,7 @@ export function TrendChartContainer({
     </>
   );
 
-  const chartData = rangeExceeded
+  const chartData = (rangeExceeded || rangeTooNarrow)
     ? (() => {
         const span = modeViewport.end - modeViewport.start;
         return {
@@ -356,6 +358,7 @@ export function TrendChartContainer({
       onXPan={handleXPan}
       lastIntent={modeState.lastIntent}
       rangeExceeded={rangeExceeded}
+      rangeTooNarrow={rangeTooNarrow}
     />
   );
 }

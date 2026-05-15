@@ -2,7 +2,7 @@ import { renderHook, waitFor, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useTrendData, pruneAndAdd, assembleLiveSpine } from '../src/useTrendData.js';
 import { fetchTile } from '../src/api.js';
-import { MAX_BUCKET_S, TREND_VIEWER_DEFAULTS } from '../src/level.js';
+import { MAX_BUCKET_S, MIN_VIEWPORT_SPAN_MS, TREND_VIEWER_DEFAULTS } from '../src/level.js';
 import type { Viewport, Tile } from '../src/types.js';
 import type { TileApiResponse } from '../src/api.js';
 
@@ -1727,6 +1727,86 @@ describe('useTrendData — rangeExceeded', () => {
       result.current.ensureCovered(-OVER_RANGE_SPAN, OVER_RANGE_SPAN * 2n);
     });
 
+    expect(mockFetchTile).not.toHaveBeenCalled();
+  });
+});
+
+// ── rangeTooNarrow ─────────────────────────────────────────────────────────────
+
+describe('useTrendData — rangeTooNarrow', () => {
+  it('under-range viewport: proactive skip fires no fetch and sets rangeTooNarrow=true', async () => {
+    // Any span < MIN_VIEWPORT_SPAN_MS (1000n ms = 1 second) triggers the guard.
+    const underViewport: Viewport = { start: 1_000_000n, end: 1_000_999n }; // 999ms
+
+    const { result } = renderHook(() =>
+      useTrendData({ viewport: underViewport, tagIds: [1] }),
+    );
+
+    await waitFor(() => expect(result.current.rangeTooNarrow).toBe(true));
+    expect(mockFetchTile).not.toHaveBeenCalled();
+    expect(result.current.rangeExceeded).toBe(false);
+  });
+
+  it('exactly MIN_VIEWPORT_SPAN_MS passes the guard, fires fetch, rangeTooNarrow stays false', async () => {
+    const atThresholdViewport: Viewport = { start: 1_000_000n, end: 1_001_000n }; // exactly 1000ms
+
+    const { result } = renderHook(() =>
+      useTrendData({ viewport: atThresholdViewport, tagIds: [1] }),
+    );
+
+    await waitFor(() => expect(result.current.rangeTooNarrow).toBe(false));
+    await waitFor(() => expect(result.current.data).not.toBeNull());
+    expect(mockFetchTile).toHaveBeenCalled();
+  });
+
+  it('viewport change from under-range to valid clears rangeTooNarrow and fires fetch', async () => {
+    const underViewport: Viewport = { start: 1_000_000n, end: 1_000_500n }; // 500ms
+
+    const { result, rerender } = renderHook(
+      (props: { viewport: Viewport }) => useTrendData({ ...props, tagIds: [1] }),
+      { initialProps: { viewport: underViewport } },
+    );
+
+    await waitFor(() => expect(result.current.rangeTooNarrow).toBe(true));
+    expect(mockFetchTile).not.toHaveBeenCalled();
+
+    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
+    rerender({ viewport: defaultViewport });
+
+    await waitFor(() => expect(result.current.rangeTooNarrow).toBe(false));
+    expect(mockFetchTile).toHaveBeenCalled();
+  });
+
+  it('ensureCovered: under-range viewport — viewport guard prevents dynamic fetch', async () => {
+    // First render with valid viewport so activeTiles populate.
+    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
+    const { result, rerender } = renderHook(
+      (props: { viewport: Viewport }) => useTrendData({ ...props, tagIds: [1] }),
+      { initialProps: { viewport: defaultViewport } },
+    );
+    await waitFor(() => expect(result.current.data).not.toBeNull());
+
+    // Switch to under-range.
+    const underViewport: Viewport = { start: 1_000_000n, end: 1_000_500n };
+    rerender({ viewport: underViewport });
+    await waitFor(() => expect(result.current.rangeTooNarrow).toBe(true));
+    mockFetchTile.mockClear();
+
+    // ensureCovered must not fire a fetch for the under-range state.
+    // The viewport guard (isViewportUnderRange) exits early before any tile lookup.
+    act(() => { result.current.ensureCovered(0n, 1_000_500n); });
+
+    expect(mockFetchTile).not.toHaveBeenCalled();
+  });
+
+  it('under-range viewport: isTailing=true also sets rangeTooNarrow via gatedFetchTile', async () => {
+    const underViewport: Viewport = { start: 1_000_000n, end: 1_000_500n }; // 500ms
+
+    const { result } = renderHook(() =>
+      useTrendData({ viewport: underViewport, tagIds: [1], isTailing: true }),
+    );
+
+    await waitFor(() => expect(result.current.rangeTooNarrow).toBe(true));
     expect(mockFetchTile).not.toHaveBeenCalled();
   });
 });

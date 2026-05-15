@@ -4,18 +4,21 @@ import type { FetchTileParams, TileApiResponse } from './api.js';
 
 export type GatedFetchFn = (args: FetchTileParams) => Promise<TileApiResponse>;
 
+export const CLIENT_UNDER_RANGE = 'CLIENT_UNDER_RANGE' as const;
+
 /**
  * Builds the gated fetch tile callback used throughout the hook.
  *
  * Checks per-tile bucketS against the server cap before calling fetchTile.
- * Rejects with a sentinel error code on CLIENT_OVER_RANGE or CLIENT_PRE_EPOCH
- * so callers can silently skip without logging.
+ * Rejects with a sentinel error code on CLIENT_UNDER_RANGE, CLIENT_OVER_RANGE,
+ * or CLIENT_PRE_EPOCH so callers can silently skip without logging.
  *
  * Every fetch site in the hook MUST use this wrapper — it is the single
  * chokepoint for all tile fetches.
  */
 export function buildGatedFetchTile(
   setRangeExceeded: (exceeded: boolean) => void,
+  setRangeTooNarrow: (narrow: boolean) => void,
 ): GatedFetchFn {
   return (args: FetchTileParams): Promise<TileApiResponse> => {
     // Defense in depth: upstream tilesForViewport and ensureCovered filters should prevent
@@ -26,7 +29,24 @@ export function buildGatedFetchTile(
                       { code: 'CLIENT_PRE_EPOCH' }),
       );
     }
-    const tileSpanMs = Number(args.endTime - args.startTime);
+
+    const tileSpanBigint = args.endTime - args.startTime;
+
+    // Check that bucketSMs (bigint integer division) is non-zero.
+    // Below this, the server's time_bucket receives a 0-second interval and
+    // breaks. Equivalent to tile span < bucketCount ms.
+    // For the live-spine (bucketCount=2×500=1000): triggers at span < 1000n ms = MIN_VIEWPORT_SPAN_MS.
+    // For history tiles (bucketCount=500): triggers at span < 500n ms (viewport < MIN_VIEWPORT_SPAN_MS
+    // is caught by the main-effect pre-check; this guards any bypass path).
+    if (tileSpanBigint / BigInt(args.bucketCount) === 0n) {
+      setRangeTooNarrow(true);
+      return Promise.reject(
+        Object.assign(new Error('tile bucketSMs would be 0 — fetch skipped client-side'),
+                      { code: CLIENT_UNDER_RANGE }),
+      );
+    }
+
+    const tileSpanMs = Number(tileSpanBigint);
     const bucketS    = tileSpanMs / (args.bucketCount * 1000);
     if (bucketS > MAX_BUCKET_S) {
       setRangeExceeded(true);
@@ -35,7 +55,9 @@ export function buildGatedFetchTile(
                       { code: 'CLIENT_OVER_RANGE' }),
       );
     }
+
     setRangeExceeded(false);
+    setRangeTooNarrow(false);
     return fetchTile(args);
   };
 }

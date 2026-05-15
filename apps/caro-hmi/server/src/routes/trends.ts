@@ -1,15 +1,16 @@
 import { Router } from 'express';
 import { asyncWrap } from '@caro/server';
 import type { CaroError } from '@caro/server';
-import { getTrendTile, getTrendExtent } from '@caro/db';
+import { getTrendTile, getTrendExtent, MIN_VIEWPORT_SPAN_MS } from '@caro/db';
 import type { TrendTile } from '@caro/db';
 
 // HTTP status for known @caro/db error codes; anything else → 500.
 const DB_CODE_STATUS: Record<string, number> = {
-  INVALID_TAG_IDS:      400,
-  INVALID_RANGE:        400,
-  INVALID_BUCKET_COUNT: 400,
-  INVALID_BUCKET_S:     400,
+  INVALID_TAG_IDS:           400,
+  INVALID_RANGE:             400,
+  INVALID_RANGE_TOO_NARROW:  400,
+  INVALID_BUCKET_COUNT:      400,
+  INVALID_BUCKET_S:          400,
 };
 
 const router = Router();
@@ -109,6 +110,15 @@ router.get('/tile', asyncWrap(async (req, res) => {
     const err = new Error('end_time must be greater than start_time') as CaroError;
     err.status = 400;
     err.code   = 'INVALID_RANGE';
+    throw err;
+  }
+
+  if (endTime - startTime < MIN_VIEWPORT_SPAN_MS) {
+    const err = new Error(
+      `viewport span (${endTime - startTime}ms) is below MIN_VIEWPORT_SPAN_MS (${MIN_VIEWPORT_SPAN_MS}ms)`,
+    ) as CaroError;
+    err.status = 400;
+    err.code   = 'INVALID_RANGE_TOO_NARROW';
     throw err;
   }
 

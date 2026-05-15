@@ -56,6 +56,10 @@ export interface TrendChartProps {
   /** When true, the imperative setScale always fires regardless of lastIntent — uPlot must be
    *  aligned to modeViewport even during continuous wheel-zoom in the over-range state. */
   rangeExceeded?: boolean;
+  /** When true, the imperative setScale always fires regardless of lastIntent — parallel to
+   *  rangeExceeded; keeps xScale aligned with modeViewport during continuous wheel-zoom in
+   *  the under-range (< 1 second) state. */
+  rangeTooNarrow?: boolean;
   /** Returns the time bounds of the current active tile set. Passed to checkAndExtendXCoverage
    *  so the threshold check uses tile metadata rather than sparse u.data[0] sample timestamps. */
   getActiveRange?: () => { startMs: bigint; endMs: bigint; tileSpanMs: bigint } | null;
@@ -103,6 +107,7 @@ export function TrendChart({
   onXPan,
   lastIntent,
   rangeExceeded = false,
+  rangeTooNarrow = false,
   getActiveRange,
 }: TrendChartProps) {
   const tagMap = useTagMap();
@@ -523,10 +528,10 @@ export function TrendChart({
     // Always update the ref so the range function returns current values even
     // when setScale is skipped (zoom/pan paths handle the scale directly).
     userScaleRef.current = { min: sentMin, max: sentMax };
-    if ((lastIntentRef.current === 'zoom' || lastIntentRef.current === 'pan') && !rangeExceeded) return;
+    if ((lastIntentRef.current === 'zoom' || lastIntentRef.current === 'pan') && !rangeExceeded && !rangeTooNarrow) return;
     uplotRef.current.setScale('x', { min: sentMin, max: sentMax });
     uplotRef.current.redraw(false, true);
-  }, [xRange, rangeExceeded]);
+  }, [xRange, rangeExceeded, rangeTooNarrow]);
 
   // ── Prune Y-scale overrides when tags are removed ─────────────────────────
   // Runs on every tagIds change. Re-adding a previously removed tag starts fresh.

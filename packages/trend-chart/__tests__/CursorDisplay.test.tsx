@@ -39,24 +39,32 @@ describe('CursorDisplay', () => {
     expect(chicagoText).not.toBe(tokyoText);
   });
 
-  // ── rangeExceededMessage prop ─────────────────────────────────────────────
+  // ── rangeMessage prop ─────────────────────────────────────────────────────
 
-  it('without rangeExceededMessage: only cursor span present, no range text', () => {
+  it('without rangeMessage: only cursor span present, no range text', () => {
     render(<CursorDisplay cursorTsMs={null} />);
     expect(screen.queryByText(/Range too wide/)).toBeNull();
     expect(screen.getByText(/^Cursor:/, { selector: 'span' })).toBeTruthy();
   });
 
-  it('with rangeExceededMessage: both cursor text and message text present', () => {
+  it('with over-range rangeMessage: both cursor text and message text present', () => {
     const msg = 'Range too wide. Zoom in or pick a smaller preset.';
-    render(<CursorDisplay cursorTsMs={null} rangeExceededMessage={msg} />);
+    render(<CursorDisplay cursorTsMs={null} rangeMessage={msg} />);
     expect(screen.getByText(/^Cursor:/, { selector: 'span' }).textContent).toBe('Cursor: --');
     expect(screen.getByText(msg)).toBeTruthy();
   });
 
-  it('rangeExceededMessage=null: message span absent', () => {
-    render(<CursorDisplay cursorTsMs={null} rangeExceededMessage={null} />);
+  it('with under-range rangeMessage: both cursor text and message text present', () => {
+    const msg = 'Range too narrow. Zoom out or pick a wider preset.';
+    render(<CursorDisplay cursorTsMs={null} rangeMessage={msg} />);
+    expect(screen.getByText(/^Cursor:/, { selector: 'span' }).textContent).toBe('Cursor: --');
+    expect(screen.getByText(msg)).toBeTruthy();
+  });
+
+  it('rangeMessage=null: message span absent', () => {
+    render(<CursorDisplay cursorTsMs={null} rangeMessage={null} />);
     expect(screen.queryByText(/Range too wide/)).toBeNull();
+    expect(screen.queryByText(/Range too narrow/)).toBeNull();
   });
 
   it('row lineHeight is 16px — no layout reflow when message toggles', () => {

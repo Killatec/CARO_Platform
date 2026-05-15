@@ -6,7 +6,7 @@
 
 ## Pending propagation
 
-- `trends.ts` defensive bucket-count assertion removed entirely (commit 9899028; see history). `getTrendTile` and route restructured to skip bucketS validation when dispatchShape returns 'raw'. Pre-fix, small viewports (e.g., 205ms span at bucketCount=1000) produced bucketSMs=Math.round(205/1000)=0 → 400 INVALID_BUCKET_S, even though Phase 6 dispatch routes them to queryRaw where bucketSMs is unused. Fixed by moving bucketS validation into the bucketed branch only; route no longer derives bucketSMs at all (DB layer is authoritative). Spec §4.1, §6.1, §6.3 updated; regression test added (205ms window via raw COV succeeds).
+- Symmetric out-of-range UX guard: client-side `CLIENT_UNDER_RANGE` sentinel (parallel to existing `CLIENT_OVER_RANGE`) prevents fetches when viewport span < MIN_VIEWPORT_SPAN_MS=1000n (1 second; derived to keep bucketSMs ≥ 1ms in live-spine bucketCount=1000 path). `useTrendData` exposes `rangeTooNarrow`; `TrendChartContainer` renders `placeholderData`; `CursorDisplay`'s `rangeMessage` prop shows "Range too narrow. Zoom out or pick a wider preset." inline. Server-side defense-in-depth: route rejects bypass requests with 400 `INVALID_RANGE_TOO_NARROW` so `errorHandler` logs them (mirrors existing `INVALID_BUCKET_S` over-range logging). Server now responds explicitly to all out-of-range cases instead of silently returning empty data. Spec §6.1 error table extended; §6.3 retitled "Out-of-range UX" covering both directions. MIN_VIEWPORT_SPAN_MS exported from both `@caro/db` (server-authoritative) and `@caro/trend-chart` (mirrored, with cross-reference). Replaces the prior 10efccd entry (also propagated).
 
 ---
 
