@@ -68,20 +68,6 @@ export type TrendTile = RawTrendTile | AggregateTrendTile;
 export const MAX_BUCKET_S = 14746;
 
 /**
- * Smallest viewport span the server will serve. Below this, the route
- * rejects with INVALID_RANGE_TOO_NARROW (400) — defense-in-depth against
- * client-side gate bypass (saved views, scripted callers, URL manipulation).
- *
- * Threshold: 1000ms = 1 second. Derived to keep bucketSMs ≥ 1ms in the
- * live-spine path (bucketCount=1000): below 1s, Math.round produces 0.
- *
- * Mirrored at `packages/trend-chart/src/level.ts` (with cross-reference);
- * not imported there to avoid pulling pg-runtime into the browser bundle.
- * See spec §6.3 Out-of-range UX.
- */
-export const MIN_VIEWPORT_SPAN_MS = 1000n;
-
-/**
  * Worst-case sample rate used for raw-vs-bucketed shape dispatch.
  * At 10 Hz with bucketCount=500 per tile, crossover is at tile window > 50 s
  * (visible window > 100 s at visibleTilesPerWindow=2).

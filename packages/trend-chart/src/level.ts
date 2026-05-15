@@ -74,17 +74,19 @@ export const MAX_VIEWPORT_SPAN_MS =
     * BigInt(TREND_VIEWER_DEFAULTS.visibleTilesPerWindow);
 
 /**
- * Smallest viewport span the chart will fetch for (mirrors
- * @caro/db.MIN_VIEWPORT_SPAN_MS, not imported to avoid pulling pg-runtime
- * into the browser bundle). Derived to keep bucketSMs ≥ 1ms in the
- * live-spine path (bucketCount=1000): below 1s, Math.round produces 0
- * and the chart breaks visually downstream.
+ * Smallest viewport span the chart will fetch for. Below this threshold,
+ * gatedFetchTile rejects with CLIENT_UNDER_RANGE; useTrendData sets
+ * rangeTooNarrow=true; TrendChartContainer renders placeholderData;
+ * CursorDisplay shows "Range too narrow. Zoom out or pick a wider preset."
  *
- * Below this threshold the chart enters the "range too narrow" UX state
- * (parallel to MAX_VIEWPORT_SPAN_MS → "range too wide"): gatedFetchTile
- * rejects with CLIENT_UNDER_RANGE; TrendChartContainer renders
- * placeholderData; CursorDisplay shows "Range too narrow. Zoom out or
- * pick a wider preset." See spec §6.3.
+ * Derived to keep bucketSMs ≥ 1ms in the live-spine path (bucketCount=1000):
+ * below 1s, Math.round produces 0 and the chart breaks visually downstream.
+ *
+ * Client-side concept only. The server does not enforce a corresponding
+ * threshold — sub-100s windows route to queryRaw via Phase 6 dispatch and
+ * return correctly (raw COV samples, possibly empty); the bucketed branch's
+ * INVALID_BUCKET_S check catches genuinely invalid cases. See spec §6.3
+ * Out-of-range UX.
  */
 export const MIN_VIEWPORT_SPAN_MS = 1000n;
 

@@ -263,37 +263,6 @@ describe('GET /api/v1/trends/tile — unit (mocked)', () => {
     expect(res.body.error.code).toBe('INVALID_RANGE');
   });
 
-  // ── INVALID_RANGE_TOO_NARROW ────────────────────────────────────────────────
-
-  it('sub-MIN_VIEWPORT_SPAN_MS window (500ms) → 400 INVALID_RANGE_TOO_NARROW', async () => {
-    const res = await request(app)
-      .get('/api/v1/trends/tile?tag_ids=1&start_time=1000000&end_time=1000500&bucket_count=1000');
-    expect(res.status).toBe(400);
-    expect(res.body.ok).toBe(false);
-    expect(res.body.error.code).toBe('INVALID_RANGE_TOO_NARROW');
-  });
-
-  it('1ms window → 400 INVALID_RANGE_TOO_NARROW', async () => {
-    const res = await request(app)
-      .get('/api/v1/trends/tile?tag_ids=1&start_time=1000000&end_time=1000001&bucket_count=1000');
-    expect(res.status).toBe(400);
-    expect(res.body.error.code).toBe('INVALID_RANGE_TOO_NARROW');
-  });
-
-  it('exactly MIN_VIEWPORT_SPAN_MS (1000ms) is NOT rejected as too narrow', async () => {
-    mockGet.mockResolvedValueOnce(AGG_TILE);
-    const res = await request(app)
-      .get('/api/v1/trends/tile?tag_ids=1&start_time=1000000000&end_time=1000001000&bucket_count=1000');
-    expect(res.body.error?.code).not.toBe('INVALID_RANGE_TOO_NARROW');
-  });
-
-  it('1001ms window is NOT rejected as too narrow', async () => {
-    mockGet.mockResolvedValueOnce(AGG_TILE);
-    const res = await request(app)
-      .get('/api/v1/trends/tile?tag_ids=1&start_time=1000000000&end_time=1000001001&bucket_count=1000');
-    expect(res.body.error?.code).not.toBe('INVALID_RANGE_TOO_NARROW');
-  });
-
   // ── INVALID_BUCKET_COUNT ────────────────────────────────────────────────────
 
   it('bucket_count = 0 → 400 INVALID_BUCKET_COUNT', async () => {
@@ -322,18 +291,30 @@ describe('GET /api/v1/trends/tile — unit (mocked)', () => {
     expect(res.body.error.message).toBe('bad bucket');
   });
 
-  // ── 205ms window: now rejected by INVALID_RANGE_TOO_NARROW (MIN_VIEWPORT_SPAN_MS = 1000ms) ──
-  // Phase 6 removed the old route-level bucketSMs=0 check (INVALID_BUCKET_S).
-  // The under-range guard added later rejects all windows < 1s with INVALID_RANGE_TOO_NARROW,
-  // which covers the 205ms case (and gives an explicit error rather than a silent bad-data response).
+  // ── Short windows: Phase 6 dispatch routes to queryRaw → 200 raw COV ──────
+  // Route-level INVALID_RANGE_TOO_NARROW was removed (had wrong threshold
+  // semantics — applied MIN_VIEWPORT_SPAN_MS against per-tile span, not
+  // viewport; tiles are viewport/visibleTilesPerWindow = half-viewport).
+  // Phase 6 dispatch handles sub-100s windows correctly via queryRaw.
 
-  it('205ms span at bucket_count=1000 is rejected as INVALID_RANGE_TOO_NARROW (below MIN_VIEWPORT_SPAN_MS)', async () => {
+  it('205ms span at bucket_count=1000 → 200 raw COV via Phase 6 dispatch', async () => {
+    mockGet.mockResolvedValueOnce(RAW_TILE_NO_PREV);
     const res = await request(app)
       .get('/api/v1/trends/tile?tag_ids=1&start_time=1778861359020&end_time=1778861359225&bucket_count=1000');
-    expect(res.status).toBe(400);
-    expect(res.body.error.code).toBe('INVALID_RANGE_TOO_NARROW');
-    // Rejected at route level before reaching DB layer.
-    expect(mockGet).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.data.source).toBe('raw');
+    expect(mockGet).toHaveBeenCalled();
+  });
+
+  it('500ms span at bucket_count=500 → 200 raw COV (tile width client sends at 1s viewport threshold)', async () => {
+    mockGet.mockResolvedValueOnce(RAW_TILE_NO_PREV);
+    const res = await request(app)
+      .get('/api/v1/trends/tile?tag_ids=1&start_time=1000000000&end_time=1000000500&bucket_count=500');
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.data.source).toBe('raw');
+    expect(mockGet).toHaveBeenCalled();
   });
 
   it('db throws unknown error → 500 INTERNAL_ERROR, console.error called', async () => {
