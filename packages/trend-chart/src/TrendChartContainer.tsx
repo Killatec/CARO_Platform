@@ -13,7 +13,7 @@ import { SpanBucketIndicator } from './SpanBucketIndicator.js';
 import { SpanPresets } from './SpanPresets.js';
 import { EndPicker } from './EndPicker.js';
 import { CursorDisplay } from './CursorDisplay.js';
-import { TREND_VIEWER_DEFAULTS } from './level.js';
+import { TREND_VIEWER_DEFAULTS, MIN_VIEWPORT_SPAN_MS, MAX_VIEWPORT_SPAN_MS } from './level.js';
 import type { AggregateSeriesData } from './types.js';
 
 const VISIBLE_TILES_PER_WINDOW = TREND_VIEWER_DEFAULTS.visibleTilesPerWindow;
@@ -64,6 +64,22 @@ export function TrendChartContainer({
   // ── Mode state machine ────────────────────────────────────────────────────
   const { state: modeState, viewport: modeViewport, dispatch } = useTrendMode();
 
+  // ── modeViewport-derived out-of-range booleans ────────────────────────────
+  // Drive render decisions (placeholderData, CursorDisplay message, TrendChart
+  // setScale bypass) from modeViewport, which updates on every wheel/pan tick
+  // via the RAF-coalesced zoomApplied/panApplied actions.
+  // useTrendData's internal rangeExceeded/rangeTooNarrow flags are keyed on
+  // dataViewport (which doesn't update on every wheel tick because useZoomState
+  // skips the reset on lastIntent='zoom') and are retained for fetch suppression.
+  const uxRangeTooNarrow = useMemo(
+    () => modeViewport.end - modeViewport.start < MIN_VIEWPORT_SPAN_MS,
+    [modeViewport.start, modeViewport.end],
+  );
+  const uxRangeExceeded = useMemo(
+    () => modeViewport.end - modeViewport.start > MAX_VIEWPORT_SPAN_MS,
+    [modeViewport.start, modeViewport.end],
+  );
+
   // ── Tag list (container owns; removes come from Legend via TrendChart) ────
   const [tagIds, setTagIds] = useState<number[]>(initialTagIds);
 
@@ -80,7 +96,7 @@ export function TrendChartContainer({
 
   // ── Data fetch (driven by explicit dataViewport) ──────────────────────────
   const trendData = useTrendData({ viewport: dataViewport, tagIds, isTailing: modeState.mode === 'tailing' });
-  const { data, isLoading, ensureCovered, getActiveRange, swapCounter, activeTileCount, lastFetchMs, rangeExceeded, rangeTooNarrow } = trendData;
+  const { data, isLoading, ensureCovered, getActiveRange, swapCounter, activeTileCount, lastFetchMs } = trendData;
 
   // ── Stable refs for synchronous access from callbacks and cleanup ─────────
   // Updated synchronously during render so callbacks always see the latest values.
@@ -276,9 +292,9 @@ export function TrendChartContainer({
     [_handleZoomLevelSwitch],
   );
 
-  const rangeMessage = rangeExceeded
+  const rangeMessage = uxRangeExceeded
     ? 'Range too wide. Zoom in or pick a smaller preset.'
-    : rangeTooNarrow
+    : uxRangeTooNarrow
     ? 'Range too narrow. Zoom out or pick a wider preset.'
     : null;
 
@@ -307,7 +323,7 @@ export function TrendChartContainer({
     </>
   );
 
-  const chartData = (rangeExceeded || rangeTooNarrow)
+  const chartData = (uxRangeExceeded || uxRangeTooNarrow)
     ? (() => {
         const span = modeViewport.end - modeViewport.start;
         return {
@@ -357,8 +373,8 @@ export function TrendChartContainer({
       onXRangeChange={handleXRangeChange}
       onXPan={handleXPan}
       lastIntent={modeState.lastIntent}
-      rangeExceeded={rangeExceeded}
-      rangeTooNarrow={rangeTooNarrow}
+      rangeExceeded={uxRangeExceeded}
+      rangeTooNarrow={uxRangeTooNarrow}
     />
   );
 }

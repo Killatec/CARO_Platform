@@ -8,6 +8,7 @@ import { computeDragZoomViewport } from '../src/useZoomState.js';
 import { useTrendData } from '../src/useTrendData.js';
 import { formatDateTime } from '@caro/ui';
 import type { UseTrendDataResult } from '../src/useTrendData.js';
+import { MIN_VIEWPORT_SPAN_MS, MAX_VIEWPORT_SPAN_MS } from '../src/level.js';
 
 // ── useLiveSubscription mock (hoisted so vi.mock factory can close over it) ───
 
@@ -56,6 +57,8 @@ vi.mock('../src/TrendChart.js', () => ({
     onXPan?: (min: bigint, max: bigint) => void;
     onDragZoom?: (startMs: bigint, endMs: bigint) => void;
     showLastWhenIdle?: boolean;
+    rangeExceeded?: boolean;
+    rangeTooNarrow?: boolean;
   }) => {
     capturedOnXRangeChange = props.onXRangeChange;
     capturedOnXPan = props.onXPan;
@@ -116,9 +119,11 @@ function makeResult(tagIds: number[], opts: Partial<UseTrendDataResult> = {}): U
     isLoading: false,
     error: null,
     ensureCovered: vi.fn(),
+    getActiveRange: vi.fn().mockReturnValue(null),
     evictAll: vi.fn(),
     refetchHistory: vi.fn(),
     rangeExceeded: false,
+    rangeTooNarrow: false,
     swapCounter: 0,
     activeTileCount: 0,
     lastFetchMs: null,
@@ -249,39 +254,44 @@ describe('TrendChartContainer', () => {
   });
 
   it('rangeExceeded=true: shows red message in cursor row; chart and controls remain interactive', () => {
-    mockUseTrendData.mockReturnValue(makeResult([1], { rangeExceeded: true }));
     renderContainer([1]);
-    // Message text present (now in cursor row, not above chart).
+    // Trigger over-range via zoom (modeViewport-derived path, not hook flag).
+    const end = 1_700_000_000_000n;
+    const start = end - (MAX_VIEWPORT_SPAN_MS + 1n);
+    act(() => {
+      capturedOnXRangeChange?.(start, end);
+      vi.runAllTimers();
+    });
+    // Message text present in cursor row.
     expect(screen.getByText('Range too wide. Zoom in or pick a smaller preset.')).toBeTruthy();
-    // TrendChart was rendered (single branch) — mock emits × button per tagId.
+    // TrendChart was rendered — mock emits × button per tagId.
     expect(screen.getByTitle('Remove trace')).toBeTruthy();
-    // Footer controls accessible via TrendChart footer prop — operator can recover.
+    // Footer controls accessible — operator can recover.
     expect(screen.getByText('1m')).toBeTruthy();
-    expect(screen.getByText('● Live')).toBeTruthy();
+    // Zoom → fixed transition: "Go Live" (not "● Live").
+    expect(screen.getByText('Go Live')).toBeTruthy();
   });
 
   it('rangeExceeded=true: placeholderData uses modeViewport bounds with n=2 stub points', () => {
-    // Set a known system time so modeViewport.start is a real timestamp, not epoch.
-    // dataViewport (managed by useZoomState) can saturate to 1n during aggressive
-    // wheel-zoom-out — if emptyData used dataViewport bounds the chart would show
-    // epoch labels (Dec 31 1969). modeViewport is reducer-clamped and stays sensible.
-    vi.setSystemTime(new Date('2024-06-01T12:00:00Z'));
-    mockUseTrendData.mockReturnValue(makeResult([1], { rangeExceeded: true }));
+    // Trigger over-range via zoom (modeViewport-derived path). Uses a far-past
+    // realistic timestamp (Nov 2023) — verifies placeholder startTime comes from
+    // modeViewport, not a dataViewport that might saturate to 1n on aggressive
+    // wheel-zoom-out.
     renderContainer([1]);
+    const end = 1_700_000_000_000n;
+    const start = end - (MAX_VIEWPORT_SPAN_MS + 1n);
+    act(() => {
+      capturedOnXRangeChange?.(start, end);
+      vi.runAllTimers();
+    });
 
-    // placeholderData is the stub passed to TrendChart in the over-range branch.
     expect(capturedData).toBeDefined();
     // n=2 with one series entry per tagId — gives uPlot two x-values to auto-fit on.
     expect(capturedData!.n).toBe(2);
     expect(capturedData!.series!.size).toBe(1);
-    // startTime must be a real timestamp from modeViewport, NOT near Unix epoch.
-    // With fake time at 2024-06-01T12:00:00Z (1717243200000ms) and the default 1h
-    // preset, modeViewport.start ≈ 1717239600000n. A dataViewport saturation guard
-    // would produce startTime = 1n — orders of magnitude smaller.
-    const ONE_HOUR_MS = 3_600_000n;
-    const expectedNow = BigInt(new Date('2024-06-01T12:00:00Z').getTime());
-    expect(capturedData!.startTime).toBeGreaterThanOrEqual(expectedNow - ONE_HOUR_MS);
-    expect(capturedData!.endTime).toBeLessThanOrEqual(expectedNow + ONE_HOUR_MS);
+    // Bounds must match the zoom target (modeViewport), not a saturated dataViewport.
+    expect(capturedData!.startTime).toBe(start);
+    expect(capturedData!.endTime).toBe(end);
   });
 
   it('rangeExceeded=true: placeholderData x-values span exactly modeViewport bounds', () => {
@@ -291,10 +301,14 @@ describe('TrendChartContainer', () => {
     //   xs[0] = startTime/1000   (= modeViewport.start in seconds)
     //   xs[1] = endTime/1000     (= modeViewport.end in seconds)
     // uPlot auto-fits to this range, keeping the x-axis anchored at the
-    // clamped modeViewport rather than drifting to epoch.
-    vi.setSystemTime(new Date('2024-06-01T12:00:00Z'));
-    mockUseTrendData.mockReturnValue(makeResult([1], { rangeExceeded: true }));
+    // modeViewport rather than drifting to epoch.
     renderContainer([1]);
+    const end = 1_700_000_000_000n;
+    const start = end - (MAX_VIEWPORT_SPAN_MS + 1n);
+    act(() => {
+      capturedOnXRangeChange?.(start, end);
+      vi.runAllTimers();
+    });
 
     expect(capturedData).toBeDefined();
     const d = capturedData!;
@@ -304,10 +318,47 @@ describe('TrendChartContainer', () => {
     // bucketSMs should equal the full span (endTime - startTime in ms).
     expect(BigInt(bucketSMs)).toBe(endTimeMs - startTimeMs);
     // Derived xs[0] and xs[1] in ms.
-    const xs0Ms = startTimeMs;                    // k=0: startTime + 0 * bucketSMs
+    const xs0Ms = startTimeMs;                     // k=0: startTime + 0 * bucketSMs
     const xs1Ms = startTimeMs + BigInt(bucketSMs); // k=1: startTime + 1 * bucketSMs = endTime
     expect(xs0Ms).toBe(startTimeMs);
     expect(xs1Ms).toBe(endTimeMs);
+  });
+
+  it('uxRangeTooNarrow: narrow modeViewport span shows "Range too narrow" and placeholderData, independent of hook', () => {
+    // Verify the container derives rangeTooNarrow from modeViewport, not the hook
+    // flag — the hook mock returns rangeTooNarrow: false (default makeResult).
+    renderContainer([1]);
+    // Trigger narrow span via zoom: 999ms < MIN_VIEWPORT_SPAN_MS (1000ms).
+    const end = 1_700_000_000_000n;
+    const start = end - (MIN_VIEWPORT_SPAN_MS - 1n);
+    act(() => {
+      capturedOnXRangeChange?.(start, end);
+      vi.runAllTimers();
+    });
+
+    expect(screen.getByText('Range too narrow. Zoom out or pick a wider preset.')).toBeTruthy();
+    expect(capturedData!.n).toBe(2);
+    expect(capturedData!.series!.size).toBe(1);
+    expect(capturedData!.startTime).toBe(start);
+    expect(capturedData!.endTime).toBe(end);
+  });
+
+  it('uxRangeTooNarrow → preset click clears message and restores real data', () => {
+    renderContainer([1]);
+    // Enter narrow state.
+    const end = 1_700_000_000_000n;
+    const start = end - (MIN_VIEWPORT_SPAN_MS - 1n);
+    act(() => {
+      capturedOnXRangeChange?.(start, end);
+      vi.runAllTimers();
+    });
+    expect(screen.getByText('Range too narrow. Zoom out or pick a wider preset.')).toBeTruthy();
+
+    // Click 1h preset → modeViewport span becomes 1h → uxRangeTooNarrow clears.
+    fireEvent.click(screen.getByText('1h'));
+    expect(screen.queryByText('Range too narrow. Zoom out or pick a wider preset.')).toBeNull();
+    // Real data from hook mock (n=500) restored — placeholder discarded.
+    expect(capturedData!.n).toBe(500);
   });
 
   // ── EndPicker integration ─────────────────────────────────────────────────

@@ -103,6 +103,11 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
   const [lastFetchMs, setLastFetchMs] = useState<number | null>(null);
   const [responseTailTs, setResponseTailTs] = useState<number | null>(null);
   const [historyRefetchVersion, setHistoryRefetchVersion] = useState<number>(0);
+  // These flags drive fetch suppression (gated by dataViewport).
+  // TrendChartContainer maintains its own modeViewport-derived booleans
+  // (uxRangeExceeded / uxRangeTooNarrow) for the placeholder render and
+  // CursorDisplay message, because dataViewport doesn't update on every
+  // wheel tick (useZoomState reset effect skips on lastIntent='zoom').
   const [rangeExceeded, setRangeExceeded] = useState(false);
   const [rangeTooNarrow, setRangeTooNarrow] = useState(false);
 

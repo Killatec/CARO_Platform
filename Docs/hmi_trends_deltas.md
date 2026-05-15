@@ -6,6 +6,8 @@
 
 ## Pending propagation
 
+- Out-of-range UX booleans lifted from useTrendData (keyed on dataViewport, which skips updates on lastIntent='zoom') to TrendChartContainer as uxRangeExceeded/uxRangeTooNarrow derived from modeViewport (updates every RAF tick). useTrendData's rangeExceeded/rangeTooNarrow retained for fetch suppression (defense-in-depth); no longer consumed for render decisions. Spec §6.3 Out-of-range UX points 1 and 3 updated; §6.3 Client-side clamp paragraph updated for MIN_VIEWPORT_SPAN_MS client-only location.
+
 - Route-level INVALID_RANGE_TOO_NARROW check removed (had wrong threshold semantics: applied MIN_VIEWPORT_SPAN_MS=1000ms against per-tile span, but tiles are viewport/visibleTilesPerWindow=half-viewport; viewport=1000ms produced tile=500ms which the route incorrectly rejected). Phase 6 dispatch already handles small windows correctly (sub-100s → queryRaw; bucketed branch's INVALID_BUCKET_S check handles invalid bucketSMs cases via 10efccd). MIN_VIEWPORT_SPAN_MS removed from @caro/db (was server-side; now client-only in @caro/trend-chart). Client-side viewport gate unchanged — remains the sole under-range guard with the "Range too narrow" UX. Spec §6.1 INVALID_RANGE_TOO_NARROW removed from error table; §6.3 under-range clarified as client-side UX only; §9.5 CLIENT_UNDER_RANGE bullet updated to reflect asymmetry with over-range server-side guard.
 
 ---
