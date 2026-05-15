@@ -33,8 +33,12 @@ export interface RawTrendTile {
 /**
  * startTime is the start of the FIRST bucket in the served grid, which may be
  * earlier than the requested startTime when the range is not bucket-aligned.
- * endTime is the end of the LAST bucket. n is the actual row count — equals
- * bucketCount for aligned requests, bucketCount+1 for unaligned.
+ * endTime is the end of the LAST bucket.
+ * n is the actual served row count. For CAG sources with bucket widths that align
+ * cleanly with TS_BUCKET_ORIGIN_MS, n is bucketCount or bucketCount+1. For the
+ * raw-source bucketed path (sub-second widths from Math.round), n can drift from
+ * bucketCount by ±3 due to alignment variance; mathematically correct, not a bug.
+ * Clients consume response.n directly.
  * source is 'mixed' when watermark fall-through stitched portions from multiple
  * sources (§4.3). Raw-as-aggregate fall-through also yields 'mixed'.
  * bucketSMs is always an integer — derived as Math.round(spanMs / bucketCount).

@@ -49,13 +49,6 @@ export interface UseTrendDataResult extends HookState {
   /** Forces the main effect to re-run the history fetch path, using an asymmetric
    *  overfetch (1 LEFT, 0 RIGHT) — used on live → fixed transition. */
   refetchHistory: () => void;
-  /** True when the most recent visible-tile fetch failed with INVALID_BUCKET_S
-   *  (viewport span exceeds server's supported range). Cleared on next successful
-   *  fetch. Consumers can render a "Range too wide" message instead of the chart. */
-  rangeExceeded: boolean;
-  /** True when the viewport span is below MIN_VIEWPORT_SPAN_MS (< 1 second).
-   *  Cleared on next successful fetch. Consumers render "Range too narrow" message. */
-  rangeTooNarrow: boolean;
   swapCounter: number;
   activeTileCount: number;
   /** Wall-clock ms of the most recent viewport-change batch (visible tiles only).
@@ -103,14 +96,6 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
   const [lastFetchMs, setLastFetchMs] = useState<number | null>(null);
   const [responseTailTs, setResponseTailTs] = useState<number | null>(null);
   const [historyRefetchVersion, setHistoryRefetchVersion] = useState<number>(0);
-  // These flags drive fetch suppression (gated by dataViewport).
-  // TrendChartContainer maintains its own modeViewport-derived booleans
-  // (uxRangeExceeded / uxRangeTooNarrow) for the placeholder render and
-  // CursorDisplay message, because dataViewport doesn't update on every
-  // wheel tick (useZoomState reset effect skips on lastIntent='zoom').
-  const [rangeExceeded, setRangeExceeded] = useState(false);
-  const [rangeTooNarrow, setRangeTooNarrow] = useState(false);
-
   // Tracks the previous viewport span; used to detect preset changes during tailing.
   const prevSpanRef = useRef<bigint | null>(null);
 
@@ -146,7 +131,7 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
 
   // Single chokepoint for all tile fetches. Every fetch site MUST use this wrapper.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const gatedFetchTile = useCallback(buildGatedFetchTile(setRangeExceeded, setRangeTooNarrow), []);
+  const gatedFetchTile = useCallback(buildGatedFetchTile(), []);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -183,11 +168,9 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     spineFetchInFlightRef.current = false;
 
     if (isViewportOverRange(currentViewport)) {
-      setRangeExceeded(true);
       return;
     }
     if (isViewportUnderRange(currentViewport)) {
-      setRangeTooNarrow(true);
       return;
     }
 
@@ -202,7 +185,7 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
       tagIds, bucketCount, visibleTilesPerWindow, overfetchPerSide,
       viewport: currentViewport, isLiveExitRefetch, cache, oldActiveTiles,
       generationRef, activeTilesRef, inFlightTilesRef, finalizeRef, levelTransitionPendingRef,
-      setHookResult, setSwapCounter, setActiveTileCount, setLastFetchMs, setResponseTailTs, setRangeExceeded, setRangeTooNarrow,
+      setHookResult, setSwapCounter, setActiveTileCount, setLastFetchMs, setResponseTailTs,
       gatedFetchTile,
     });
 
@@ -343,5 +326,5 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     };
   }, []);
 
-  return { ...hookResult, ensureCovered, getActiveRange, evictAll, refetchHistory, rangeExceeded, rangeTooNarrow, swapCounter, activeTileCount, lastFetchMs, responseTailTs };
+  return { ...hookResult, ensureCovered, getActiveRange, evictAll, refetchHistory, swapCounter, activeTileCount, lastFetchMs, responseTailTs };
 }

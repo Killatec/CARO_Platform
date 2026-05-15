@@ -122,8 +122,6 @@ function makeResult(tagIds: number[], opts: Partial<UseTrendDataResult> = {}): U
     getActiveRange: vi.fn().mockReturnValue(null),
     evictAll: vi.fn(),
     refetchHistory: vi.fn(),
-    rangeExceeded: false,
-    rangeTooNarrow: false,
     swapCounter: 0,
     activeTileCount: 0,
     lastFetchMs: null,

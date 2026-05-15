@@ -5,8 +5,9 @@ import type { Tile, Viewport } from './types.js';
  * (make_interval(secs => N)) is 2000-01-03 00:00:00 UTC — the first Monday of
  * year 2000, not the PostgreSQL epoch (2000-01-01). Tile boundaries must be
  * multiples of bucketSMs from this origin, not from Unix epoch (1970-01-01),
- * otherwise gapfill emits partial-coverage buckets at the edges and the server
- * throws an assertion (n = bucketCount + 2).
+ * otherwise gapfill emits partial-coverage buckets at the edges and the response
+ * n drifts from bucketCount by a small integer; harmless under the current contract
+ * (clients consume response.n directly).
  *
  * Empirically confirmed via psql: time_bucket(make_interval(secs => 604.8),
  * '2000-01-03') → '2000-01-03' (exact boundary); the same call with
@@ -75,9 +76,9 @@ export const MAX_VIEWPORT_SPAN_MS =
 
 /**
  * Smallest viewport span the chart will fetch for. Below this threshold,
- * gatedFetchTile rejects with CLIENT_UNDER_RANGE; useTrendData sets
- * rangeTooNarrow=true; TrendChartContainer renders placeholderData;
- * CursorDisplay shows "Range too narrow. Zoom out or pick a wider preset."
+ * gatedFetchTile rejects with CLIENT_UNDER_RANGE; TrendChartContainer derives
+ * uxRangeTooNarrow from modeViewport and renders placeholderData with
+ * "Range too narrow. Zoom out or pick a wider preset." in CursorDisplay.
  *
  * Derived to keep bucketSMs ≥ 1ms in the live-spine path (bucketCount=1000):
  * below 1s, Math.round produces 0 and the chart breaks visually downstream.

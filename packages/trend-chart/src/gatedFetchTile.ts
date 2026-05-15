@@ -16,10 +16,7 @@ export const CLIENT_UNDER_RANGE = 'CLIENT_UNDER_RANGE' as const;
  * Every fetch site in the hook MUST use this wrapper — it is the single
  * chokepoint for all tile fetches.
  */
-export function buildGatedFetchTile(
-  setRangeExceeded: (exceeded: boolean) => void,
-  setRangeTooNarrow: (narrow: boolean) => void,
-): GatedFetchFn {
+export function buildGatedFetchTile(): GatedFetchFn {
   return (args: FetchTileParams): Promise<TileApiResponse> => {
     // Defense in depth: upstream tilesForViewport and ensureCovered filters should prevent
     // pre-epoch tiles, but guard here in case a future call site bypasses those filters.
@@ -39,7 +36,6 @@ export function buildGatedFetchTile(
     // For history tiles (bucketCount=500): triggers at span < 500n ms (viewport < MIN_VIEWPORT_SPAN_MS
     // is caught by the main-effect pre-check; this guards any bypass path).
     if (tileSpanBigint / BigInt(args.bucketCount) === 0n) {
-      setRangeTooNarrow(true);
       return Promise.reject(
         Object.assign(new Error('tile bucketSMs would be 0 — fetch skipped client-side'),
                       { code: CLIENT_UNDER_RANGE }),
@@ -49,15 +45,12 @@ export function buildGatedFetchTile(
     const tileSpanMs = Number(tileSpanBigint);
     const bucketS    = tileSpanMs / (args.bucketCount * 1000);
     if (bucketS > MAX_BUCKET_S) {
-      setRangeExceeded(true);
       return Promise.reject(
         Object.assign(new Error('viewport over range — fetch skipped client-side'),
                       { code: 'CLIENT_OVER_RANGE' }),
       );
     }
 
-    setRangeExceeded(false);
-    setRangeTooNarrow(false);
     return fetchTile(args);
   };
 }

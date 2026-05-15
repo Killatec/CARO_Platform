@@ -32,8 +32,6 @@ export interface HistoryTileFetchArgs {
   setActiveTileCount: Dispatch<SetStateAction<number>>;
   setLastFetchMs: Dispatch<SetStateAction<number | null>>;
   setResponseTailTs: Dispatch<SetStateAction<number | null>>;
-  setRangeExceeded: Dispatch<SetStateAction<boolean>>;
-  setRangeTooNarrow: Dispatch<SetStateAction<boolean>>;
   gatedFetchTile: GatedFetchFn;
 }
 
@@ -48,7 +46,7 @@ export function runHistoryTileFetch(args: HistoryTileFetchArgs): void {
     tagIds, bucketCount, visibleTilesPerWindow, overfetchPerSide, viewport,
     isLiveExitRefetch, cache, oldActiveTiles,
     generationRef, activeTilesRef, inFlightTilesRef, finalizeRef, levelTransitionPendingRef,
-    setHookResult, setSwapCounter, setActiveTileCount, setLastFetchMs, setResponseTailTs, setRangeExceeded, setRangeTooNarrow,
+    setHookResult, setSwapCounter, setActiveTileCount, setLastFetchMs, setResponseTailTs,
     gatedFetchTile,
   } = args;
 
@@ -81,8 +79,6 @@ export function runHistoryTileFetch(args: HistoryTileFetchArgs): void {
   );
 
   const generation = ++generationRef.current;
-  let batchHasRangeExceeded = false;
-  let batchHasRangeTooNarrow = false;
 
   const getMissing = (tile: Tile): number[] =>
     tagIds.filter(
@@ -129,8 +125,6 @@ export function runHistoryTileFetch(args: HistoryTileFetchArgs): void {
     levelTransitionPendingRef.current = false;
     setLastFetchMs(Math.round(performance.now() - batchT0));
     setResponseTailTs(computeResponseTailTs(newSorted, tagIds, cache, bucketCount));
-    if (!batchHasRangeExceeded) setRangeExceeded(false);
-    if (!batchHasRangeTooNarrow) setRangeTooNarrow(false);
     finalize();
     setSwapCounter(c => c + 1);
   };
@@ -171,13 +165,7 @@ export function runHistoryTileFetch(args: HistoryTileFetchArgs): void {
       })
       .catch((e: Error & { code?: string }) => {
         if (generationRef.current !== generation) return;
-        if (e.code === 'CLIENT_UNDER_RANGE') {
-          batchHasRangeTooNarrow = true; // prevents performSwap from clearing rangeTooNarrow
-          onVisibleTileSettled();
-          return;
-        }
-        if (e.code === 'CLIENT_OVER_RANGE') {
-          batchHasRangeExceeded = true; // prevents performSwap from clearing rangeExceeded
+        if (e.code === 'CLIENT_UNDER_RANGE' || e.code === 'CLIENT_OVER_RANGE') {
           onVisibleTileSettled();
           return;
         }
@@ -185,10 +173,6 @@ export function runHistoryTileFetch(args: HistoryTileFetchArgs): void {
           // Defensive: upstream filter should prevent pre-epoch visible tiles; silent skip.
           onVisibleTileSettled();
           return;
-        }
-        if (e.code === 'INVALID_BUCKET_S') {
-          batchHasRangeExceeded = true;
-          setRangeExceeded(true);
         }
         console.error('[useTrendData] visible tile fetch failed', {
           tagIds: missing,

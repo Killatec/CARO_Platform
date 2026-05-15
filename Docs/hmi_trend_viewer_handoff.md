@@ -52,9 +52,9 @@ packages/trend-chart/
     tileActiveSet.ts              # MAX_ACTIVE_TILES, chunkArray, CachedEntry, HookState,
                                   # estimateCachedEntrySize, storeTileResult, assembleData,
                                   # computeResponseTailTs, pruneAndAdd — pure functions / types
-    gatedFetchTile.ts             # buildGatedFetchTile(setRangeExceeded) factory —
-                                  # CLIENT_OVER_RANGE / CLIENT_PRE_EPOCH sentinel logic;
-                                  # GatedFetchFn type alias
+    gatedFetchTile.ts             # buildGatedFetchTile factory —
+                                  # CLIENT_OVER_RANGE / CLIENT_UNDER_RANGE / CLIENT_PRE_EPOCH
+                                  # sentinel logic; GatedFetchFn type alias
     liveSpineFetch.ts             # assembleLiveSpine (pure assembly), runLiveSpineFetch —
                                   # isTailing=true branch called from inside the main useEffect
     historyTileFetch.ts           # runHistoryTileFetch — isTailing=false branch:
@@ -67,8 +67,8 @@ packages/trend-chart/
                                   # ensureCovered, getActiveRange, evictAll, refetchHistory,
                                   # return value; re-exports pruneAndAdd + assembleLiveSpine
                                   # returns { data, isLoading, error, ensureCovered, getActiveRange,
-                                  #           evictAll, refetchHistory, rangeExceeded, lastFetchMs,
-                                  #           swapCounter, activeTileCount, responseTailTs }
+                                  #           evictAll, refetchHistory, swapCounter, activeTileCount,
+                                  #           lastFetchMs, responseTailTs }
     useTrendMode.ts               # tailing/fixed mode state machine; exports reducer for unit
                                   # testing; tick action dispatched by TrendChartContainer on
                                   # TREND_DELTA receipt
@@ -211,8 +211,7 @@ A `useEffect` keyed on `modeViewport.start/end` resets all three on `preset`, `l
 Key behaviors:
 
 - **Tile geometry**: `TREND_VIEWER_DEFAULTS.bucketCount=500`, `visibleTilesPerWindow=2`, `overfetchPerSide=1`. `deriveBucketSMs(viewport)` derives the bucket size from viewport span.
-- **`gatedFetchTile` wrapper**: built via `buildGatedFetchTile(setRangeExceeded)` in `gatedFetchTile.ts`; all four fetch sites (live-spine, history-visible, history-prefetch, `ensureCovered`) delegate through it. Rejects with `CLIENT_PRE_EPOCH` when `startTime < 0n` (silent skip) and with `CLIENT_OVER_RANGE` when the derived `bucketS > MAX_BUCKET_S` (sets `rangeExceeded = true`). Catch handlers at each site recognize the sentinels by `error.code` and skip silently; only `CLIENT_OVER_RANGE` propagates to the batch-level `batchHasRangeExceeded` flag (prevents `performSwap` from clearing the state mid-batch).
-- **`rangeExceeded` state**: boolean exposed on the hook result. `gatedFetchTile` sets `rangeExceeded = true` when `bucketS > MAX_BUCKET_S` and clears it on a clean fetch. `ensureCovered` is gated on `levelTransitionPendingRef` and `active.length === 0` (live-mode short-circuit).
+- **`gatedFetchTile` wrapper**: built via `buildGatedFetchTile()` in `gatedFetchTile.ts`; all four fetch sites (live-spine, history-visible, history-prefetch, `ensureCovered`) delegate through it. Rejects with `CLIENT_PRE_EPOCH` when `startTime < 0n` (silent skip), `CLIENT_UNDER_RANGE` when `tileSpanMs / bucketCount === 0` (sub-ms tile), and `CLIENT_OVER_RANGE` when `bucketS > MAX_BUCKET_S`. Catch handlers at each site recognize the sentinels by `error.code` and skip silently. No state is set by `gatedFetchTile` — out-of-range UX is owned by `TrendChartContainer` via `modeViewport`-derived booleans.
 - **`ensureCovered`**: lives in the shell; called by `checkAndExtendXCoverage` in `axisInteractions.ts` to request additional tiles on pan. Anchors candidate tiles outward from `activeTilesRef` edges using `tileSpanMs` derived from the active set's actual tile width (not the viewport span). Short-circuits when `activeTilesRef` is empty (live mode); candidate filter drops `t.startTime < 0n` and `t.startTime >= nowMs`.
 - **`getActiveRange`**: stable callback returning `{ startMs, endMs, tileSpanMs }` from `activeTilesRef.current`, or `null` if empty. `tileSpanMs = active[0].endTime - active[0].startTime` — the active set's actual tile width, used by both `panThresholdCheck` and `ensureCovered` to ensure the requested extension range matches the active grid (§10.5). Passed through `TrendChart` via `getActiveRangeRef` to `checkAndExtendXCoverage`.
 - **`refetchHistory()`**: bumps `historyRefetchVersion` state and sets `liveExitRefetchPendingRef`. Forces the main effect to re-run the history path even when `dataViewport` didn't change (the first `panApplied` on live exit carries live-viewport bounds). The history branch reads the flag and passes `overfetchRightCount: 0` to `tilesForViewport`, yielding 2 visible + 1 left prefetch instead of 2 + 1 + 1.
