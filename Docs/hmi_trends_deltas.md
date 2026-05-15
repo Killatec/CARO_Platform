@@ -6,12 +6,6 @@
 
 ## Pending propagation
 
-- Out-of-range UX booleans lifted from useTrendData (keyed on dataViewport, which skips updates on lastIntent='zoom') to TrendChartContainer as uxRangeExceeded/uxRangeTooNarrow derived from modeViewport (updates every RAF tick). useTrendData's rangeExceeded/rangeTooNarrow retained for fetch suppression (defense-in-depth); no longer consumed for render decisions. Spec §6.3 Out-of-range UX points 1 and 3 updated; §6.3 Client-side clamp paragraph updated for MIN_VIEWPORT_SPAN_MS client-only location.
-
-- Route-level INVALID_RANGE_TOO_NARROW check removed (had wrong threshold semantics: applied MIN_VIEWPORT_SPAN_MS=1000ms against per-tile span, but tiles are viewport/visibleTilesPerWindow=half-viewport; viewport=1000ms produced tile=500ms which the route incorrectly rejected). Phase 6 dispatch already handles small windows correctly (sub-100s → queryRaw; bucketed branch's INVALID_BUCKET_S check handles invalid bucketSMs cases via 10efccd). MIN_VIEWPORT_SPAN_MS removed from @caro/db (was server-side; now client-only in @caro/trend-chart). Client-side viewport gate unchanged — remains the sole under-range guard with the "Range too narrow" UX. Spec §6.1 INVALID_RANGE_TOO_NARROW removed from error table; §6.3 under-range clarified as client-side UX only; §9.5 CLIENT_UNDER_RANGE bullet updated to reflect asymmetry with over-range server-side guard.
-
-- Dead-code cleanup post audit-iteration sequence: `useTrendData`'s internal `rangeExceeded` / `rangeTooNarrow` state flags removed. They were written in three places (main effect, `runHistoryTileFetch` reconciliation, `gatedFetchTile` sentinel handlers) but never read in production — `TrendChartContainer` derives its UX state from `modeViewport` (`uxRangeExceeded`/`uxRangeTooNarrow`). The "defense-in-depth fetch suppression" rationale didn't hold up: suppression is already provided by main-effect early returns and `gatedFetchTile` sentinel throws. Removed the dead state, setter prop-drilling through `runHistoryTileFetch` and `buildGatedFetchTile`, and the corresponding test describe blocks. Stale comments updated in `level.ts`, `trends.ts` `AggregateTrendTile.n` JSDoc, and handoff §2/§5.
-
 ---
 
-**Last cleared:** 2026-05-15. Audit walkthrough Phases 1-6 propagated to spec, handoff, and `platform_todo.md`; entries removed per discipline. Audit history in git: commits 355ffaa → f90d8c5 (Phase 2 through Phase 6 implementations) and the Phase 1 / Phase 5 doc-only commits.
+**Last cleared:** 2026-05-15. Audit walkthrough closure — Phase 6 dispatch, route-level INVALID_RANGE_TOO_NARROW removal, and post-iteration dead-code cleanup propagated; entries cleared. Audit history in git: commits 355ffaa → d8da12a.
