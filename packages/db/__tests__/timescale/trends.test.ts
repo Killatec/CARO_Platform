@@ -3,6 +3,8 @@ import {
   getTrendTile,
   getTrendExtent,
   MAX_BUCKET_S,
+  SAMPLE_RATE_HZ,
+  dispatchShape,
   __test_watermarkOverride,
   __test_lastUsedSources,
   __test_getWatermarkMs,
@@ -116,17 +118,18 @@ describe('getTrendTile — INVALID_BUCKET_S', () => {
 // Tile startTime must be > 0n per INVALID_RANGE validation; tests use offsets
 // from epoch to keep windows cleanly within the sandbox.
 
-// ── RAW branch (bucketS < 1.0) ────────────────────────────────────────────────
-// Window: startTime=3_600_000n (1h), endTime=3_840_000n (1h4m), bucketCount=250
-// bucketS = 240_000 / 250_000 = 0.96 — raw path.
+// ── RAW branch (expectedPoints ≤ bucketCount) ─────────────────────────────────
+// Window: startTime=3_600_000n (1h), endTime=3_620_000n (20s), bucketCount=250
+// expectedPoints = 20 × 10 = 200 ≤ 250 → raw (unified dispatch rule).
+// Also satisfies old bucketS criterion: bucketS = 20_000/250_000 = 0.08 < 1.0.
 
-describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: RAW branch (bucketS=0.96)', async () => {
+describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: RAW branch (20s tile window)', async () => {
   const {
     writeTestSamples, resetTestRange, resetTestRangeExpectClean,
   } = await import('../helpers/trends-test-range.js');
 
   const START = 3_600_000n;  // 1h past epoch
-  const END   = 3_840_000n;  // 1h 4min past epoch
+  const END   = 3_620_000n;  // 20s window: expectedPoints = 200 ≤ 250 → raw
   const COUNT = 250;
 
   beforeEach(async () => { await resetTestRangeExpectClean(); });
@@ -867,7 +870,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — watermark fall-through', asyn
 
   // ── Test 6: raw dispatch is unaffected by watermark overrides ─────────────────
 
-  it('raw dispatch (bucketS < 1.0) ignores watermark overrides', async () => {
+  it('raw dispatch (short tile window) ignores watermark overrides', async () => {
     // Set overrides for all CAGs to weird values — raw path must not use them.
     __test_watermarkOverride.current = new Map([
       ['tag_samples_1s_cagg',    0],
@@ -876,9 +879,9 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — watermark fall-through', asyn
       ['tag_samples_10min_cagg', 0],
     ]);
 
-    // Raw window: bucketS = 240_000 / 250_000 = 0.96 < 1.0
+    // Raw window: 20s tile window, expectedPoints = 200 ≤ 250 → raw dispatch.
     const RAW_START = 3_600_000n;
-    const RAW_END   = 3_840_000n;
+    const RAW_END   = 3_620_000n;
     await writeTestSamples([{ ts: RAW_START + 1_000n, tagId: 6006, value: 8.0 }]);
 
     const tile = await getTrendTile([6006], RAW_START, RAW_END, COUNT) as RawTrendTile;
@@ -1060,11 +1063,10 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — future-bucket nulling (§6.5)
 
   // e) Raw tile, endTime past nowMs: raw path is unaffected (no future-null pass on raw).
   it('raw tile, endTime past nowMs: raw response is unchanged (no synthetic nulls)', async () => {
-    // Raw window: bucketS < 1.0.
+    // Raw window: 20s tile, expectedPoints = 200 ≤ 250 → raw path.
     const RAW_START = 3_600_000n;
-    const RAW_END   = 3_840_000n;
+    const RAW_END   = 3_620_000n;
     const RAW_COUNT = 250;
-    // bucketS = 240_000 / 250_000 = 0.96 → raw path.
 
     await writeTestSamples([
       { ts: RAW_START + 1_000n, tagId: 7005, value: 11.0 },
@@ -1257,6 +1259,165 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendExtent — direct query', async () => 
     // Sanity: newestMs reflects real data — must be a plausible epoch-ms value
     // (at minimum the sandbox sample at 10_000_000 ms past epoch).
     expect(result.oldestMs!).toBeGreaterThan(0n);
+  });
+});
+
+// ── dispatchShape — unit tests (no DB required) ───────────────────────────────
+//
+// At SAMPLE_RATE_HZ=10 and bucketCount=500, crossover is at tile window > 50 s
+// (visible window > 100 s with 2 tiles). At exactly 50 s: expectedPoints = 500 =
+// bucketCount → NOT strictly greater → raw (equality stays raw).
+
+describe('dispatchShape — unit', () => {
+  it('exports SAMPLE_RATE_HZ = 10', () => {
+    expect(SAMPLE_RATE_HZ).toBe(10);
+  });
+
+  it('returns raw for 1 ms tile window', () => {
+    expect(dispatchShape(0n, 1n, 500)).toBe('raw');
+  });
+
+  it('returns raw for 30 s tile window (1m preset per tile)', () => {
+    expect(dispatchShape(0n, 30_000n, 500)).toBe('raw');
+  });
+
+  it('returns raw at the crossover boundary: 50 s, expectedPoints = bucketCount (not strictly greater)', () => {
+    expect(dispatchShape(0n, 50_000n, 500)).toBe('raw');
+  });
+
+  it('returns bucketed just above crossover: 50.001 s', () => {
+    expect(dispatchShape(0n, 50_001n, 500)).toBe('bucketed');
+  });
+
+  it('returns bucketed for 150 s tile window (5m preset per tile)', () => {
+    expect(dispatchShape(0n, 150_000n, 500)).toBe('bucketed');
+  });
+
+  it('returns bucketed for 450 s tile window (15m preset per tile)', () => {
+    expect(dispatchShape(0n, 450_000n, 500)).toBe('bucketed');
+  });
+
+  it('returns bucketed for 1800 s tile window (1h preset per tile)', () => {
+    expect(dispatchShape(0n, 1_800_000n, 500)).toBe('bucketed');
+  });
+
+  it('crossover scales with bucketCount: at bucketCount=1000 crossover is at tile window > 100 s', () => {
+    // expectedPoints = 100 * 10 = 1000 = bucketCount → raw (equality stays raw)
+    expect(dispatchShape(0n, 100_000n, 1000)).toBe('raw');
+    // 100.001 s → bucketed
+    expect(dispatchShape(0n, 100_001n, 1000)).toBe('bucketed');
+  });
+
+  it('different startTime offsets do not affect the result (only span matters)', () => {
+    const offset = 3_600_000n; // 1h
+    // 150 s span at an arbitrary start → same as from 0
+    expect(dispatchShape(offset, offset + 150_000n, 500)).toBe('bucketed');
+    expect(dispatchShape(offset, offset + 30_000n,  500)).toBe('raw');
+  });
+});
+
+// ── Raw-source bucketed branch (bucketS < 1.0 + expectedPoints > bucketCount) ─
+//
+// Window: startTime=3_600_000n (1h), endTime=3_750_000n (1h 2.5min), bucketCount=500
+// tileWindow = 150_000 ms = 150 s → expectedPoints = 1500 > 500 → bucketed dispatch
+// bucketS = 150_000 / (500 × 1000) = 0.3 < 1.0 → tag_samples source
+// bucketSMs = Math.round(150_000 / 500) = 300 ms per bucket
+//
+// No CAG refresh required — this path reads tag_samples directly.
+// Tag IDs 10001–10099 are reserved for this block.
+
+describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: raw-source bucketed (bucketS=0.3, tile=150s)', async () => {
+  const {
+    writeTestSamples, resetTestRange, resetTestRangeExpectClean,
+  } = await import('../helpers/trends-test-range.js');
+
+  const START = 3_600_000n;   // 1h past epoch
+  const END   = 3_750_000n;   // 150 s window
+  const COUNT = 500;
+  // bucketSMs = Math.round(150_000 / 500) = 300 ms
+
+  beforeEach(async () => { await resetTestRangeExpectClean(); });
+  afterEach(async ()  => { await resetTestRange(); });
+  afterAll(async ()   => { await resetTestRange(); });
+
+  it('returns AggregateTrendTile shape (not raw) for 5m-equivalent tile', async () => {
+    await writeTestSamples([{ ts: START + 1_000n, tagId: 10001, value: 5.0 }]);
+    const tile = await getTrendTile([10001], START, END, COUNT) as AggregateTrendTile;
+    expect(tile.source).toBe('tag_samples');
+    expect(tile.bucketSMs).toBe(300);
+    expect(tile.series[0].value).toHaveLength(tile.n);
+    expect(tile.series[0].min).toHaveLength(tile.n);
+    expect(tile.series[0].max).toHaveLength(tile.n);
+  });
+
+  it('value/min/max arrays are populated (not raw COV ts arrays)', async () => {
+    await writeTestSamples([
+      { ts: START + 50n,  tagId: 10002, value: 10.0 },
+      { ts: START + 100n, tagId: 10002, value: 20.0 },
+    ]);
+    const tile = await getTrendTile([10002], START, END, COUNT) as AggregateTrendTile;
+    expect(Array.isArray(tile.series[0].value)).toBe(true);
+    expect(Array.isArray(tile.series[0].min)).toBe(true);
+    expect(Array.isArray(tile.series[0].max)).toBe(true);
+    // Both values fall in the same 300ms bucket (START+0 to START+300ms, bucket 0)
+    // last(value, ts) = 20.0, min = 10.0, max = 20.0
+    expect(tile.series[0].value[0]).toBe(20.0);
+    expect(tile.series[0].min[0]).toBe(10.0);
+    expect(tile.series[0].max[0]).toBe(20.0);
+  });
+
+  it('LOCF fills empty buckets — flatline tag stays flat across all buckets', async () => {
+    await writeTestSamples([{ ts: START + 50n, tagId: 10003, value: 42.0 }]);
+    const tile = await getTrendTile([10003], START, END, COUNT) as AggregateTrendTile;
+    const { value } = tile.series[0];
+    expect(value[0]).toBe(42.0);
+    expect(value[tile.n - 1]).toBe(42.0);
+    expect(value.every(v => v === 42.0)).toBe(true);
+  });
+
+  it('null-as-gap: bucket with null sample emits null for value/min/max', async () => {
+    const BUCKET_MS = 300n; // bucketSMs = 300
+    await writeTestSamples([
+      { ts: START + 100n,             tagId: 10004, value: 5.0  },
+      { ts: START + BUCKET_MS * 10n,  tagId: 10004, value: null },
+      { ts: START + BUCKET_MS * 20n,  tagId: 10004, value: 9.0  },
+    ]);
+    const tile = await getTrendTile([10004], START, END, COUNT) as AggregateTrendTile;
+    const { value, min, max } = tile.series[0];
+    expect(value[10]).toBeNull();
+    expect(min[10]).toBeNull();
+    expect(max[10]).toBeNull();
+    expect(value[20]).toBe(9.0);
+  });
+
+  it('bounded-prev LOCF: value before first in-window sample uses prior sample', async () => {
+    const priorTs = START - 60_000n; // 60s before window
+    const inTs    = START + 90_000n; // 90s into window (bucket 300)
+    await writeTestSamples([
+      { ts: priorTs, tagId: 10005, value: 55.5 },
+      { ts: inTs,    tagId: 10005, value: 99.0 },
+    ]);
+    const tile = await getTrendTile([10005], START, END, COUNT) as AggregateTrendTile;
+    const { value } = tile.series[0];
+    // Leading buckets before inTs should carry the prev value 55.5 via LOCF.
+    expect(value[0]).toBe(55.5);
+    // Bucket containing inTs and beyond should carry 99.0.
+    expect(value[tile.n - 1]).toBe(99.0);
+  });
+
+  it('__test_lastUsedSources records tag_samples', async () => {
+    __test_lastUsedSources.current = new Set();
+    await writeTestSamples([{ ts: START + 1_000n, tagId: 10006, value: 1.0 }]);
+    await getTrendTile([10006], START, END, COUNT);
+    expect(__test_lastUsedSources.current.has('tag_samples')).toBe(true);
+    expect(__test_lastUsedSources.current.size).toBe(1);
+  });
+
+  it('empty tag returns null×n arrays', async () => {
+    const tile = await getTrendTile([10007], START, END, COUNT) as AggregateTrendTile;
+    expect(tile.series[0].value.every(v => v === null)).toBe(true);
+    expect(tile.series[0].min.every(m => m === null)).toBe(true);
+    expect(tile.series[0].max.every(m => m === null)).toBe(true);
   });
 });
 

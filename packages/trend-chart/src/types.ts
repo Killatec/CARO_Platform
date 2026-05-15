@@ -14,7 +14,7 @@ export interface Viewport {
 /** Assembled data for the aggregate (CAG) path. */
 export interface AggregateSeriesData {
   type: 'aggregate';
-  source: '1s_cagg' | '10s_cagg' | '1min_cagg' | '10min_cagg' | 'mixed';
+  source: '1s_cagg' | '10s_cagg' | '1min_cagg' | '10min_cagg' | 'tag_samples' | 'mixed';
   startTime: bigint;
   endTime: bigint;
   /** Total bucket count across all visible tiles. */

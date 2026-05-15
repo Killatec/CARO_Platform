@@ -40,7 +40,7 @@ export interface RawTrendTile {
  * bucketSMs is always an integer — derived as Math.round(spanMs / bucketCount).
  */
 export interface AggregateTrendTile {
-  source: '1s_cagg' | '10s_cagg' | '1min_cagg' | '10min_cagg' | 'mixed';
+  source: '1s_cagg' | '10s_cagg' | '1min_cagg' | '10min_cagg' | 'tag_samples' | 'mixed';
   startTime: bigint;
   endTime: bigint;
   bucketSMs: number;
@@ -68,6 +68,13 @@ export type TrendTile = RawTrendTile | AggregateTrendTile;
 export const MAX_BUCKET_S = 14746;
 
 /**
+ * Worst-case sample rate used for raw-vs-bucketed shape dispatch.
+ * At 10 Hz with bucketCount=500 per tile, crossover is at tile window > 50 s
+ * (visible window > 100 s at visibleTilesPerWindow=2).
+ */
+export const SAMPLE_RATE_HZ = 10;
+
+/**
  * Canonical derivation of bucketSMs and bucketS from a tile range.
  * Used identically by the REST route and getTrendTile to prevent precision-boundary
  * disagreements between the two validation layers.
@@ -77,6 +84,22 @@ export const MAX_BUCKET_S = 14746;
  * intermediates that round-trip imperfectly (e.g. 1_555_250 ms / 250_000 = 6.221
  * yielding bucketSMs = 6220.8 via float error).
  */
+/**
+ * Window-size-based shape dispatch (proposal §4.1).
+ * Returns 'bucketed' when worst-case raw point count exceeds bucketCount.
+ * Called with the single tile's [startTime, endTime] and its bucketCount.
+ * At SAMPLE_RATE_HZ=10 and bucketCount=500, crossover is at tile window > 50 s.
+ */
+export function dispatchShape(
+  startTime: bigint,
+  endTime: bigint,
+  bucketCount: number,
+): 'raw' | 'bucketed' {
+  const tileWindowSec = Number(endTime - startTime) / 1000;
+  const expectedPoints = tileWindowSec * SAMPLE_RATE_HZ;
+  return expectedPoints > bucketCount ? 'bucketed' : 'raw';
+}
+
 export function deriveBucketSMs(
   startTime: bigint,
   endTime: bigint,
@@ -119,8 +142,8 @@ function nextFinerSource(s: AggregateSource): AggregateSource {
   return SOURCES[i - 1]!;
 }
 
-function sourceDisplayName(s: AggregateSource): '1s_cagg' | '10s_cagg' | '1min_cagg' | '10min_cagg' | 'raw' {
-  if (s === 'tag_samples') return 'raw';
+function sourceDisplayName(s: AggregateSource): '1s_cagg' | '10s_cagg' | '1min_cagg' | '10min_cagg' | 'tag_samples' {
+  if (s === 'tag_samples') return 'tag_samples';
   return s.replace('tag_samples_', '') as '1s_cagg' | '10s_cagg' | '1min_cagg' | '10min_cagg';
 }
 
@@ -635,20 +658,24 @@ export async function getTrendTile(
     );
   }
 
-  // ── Raw dispatch (bucketS < 1.0) — no watermark fall-through ────────────────
+  // ── Shape dispatch — Step 1: raw vs bucketed by window size (unified rule §4.1) ─
+  // Raw path: no watermark fall-through; COV samples returned directly.
 
-  if (bucketS < 1.0) {
+  if (dispatchShape(startTime, endTime, bucketCount) === 'raw') {
     const rawTile = await queryRaw(tagIds, startTime, endTime);
     return { ...rawTile, responseTailTs };
   }
 
-  // ── Aggregate dispatch (§6.3) ────────────────────────────────────────────────
+  // ── Step 2: bucketed — source table by bucketS (§4.2) ────────────────────────
+  // bucketS < 1.0: raw-source bucketed (tag_samples gapfill+locf; Infinity watermark,
+  // no fall-through). bucketS ≥ 1.0: existing CAG ladder unchanged.
 
-  let dispatchSource: CaggSource;
-  if      (bucketS < 16)   dispatchSource = 'tag_samples_1s_cagg';
-  else if (bucketS < 160)  dispatchSource = 'tag_samples_10s_cagg';
-  else if (bucketS < 1600) dispatchSource = 'tag_samples_1min_cagg';
-  else                     dispatchSource = 'tag_samples_10min_cagg';
+  let dispatchSource: AggregateSource;
+  if      (bucketS < 1.0)   dispatchSource = 'tag_samples';
+  else if (bucketS < 16)    dispatchSource = 'tag_samples_1s_cagg';
+  else if (bucketS < 160)   dispatchSource = 'tag_samples_10s_cagg';
+  else if (bucketS < 1600)  dispatchSource = 'tag_samples_1min_cagg';
+  else                      dispatchSource = 'tag_samples_10min_cagg';
 
   __test_lastUsedSources.current = new Set();
   const { segments, usedSources } = await queryRecursive(

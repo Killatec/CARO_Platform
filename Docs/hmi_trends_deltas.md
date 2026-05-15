@@ -110,6 +110,18 @@ Original handoff §11.D ("Past-LOCF on dormant signals") and the corresponding `
 
 ---
 
+## 2026-05-15 — Phase 6: Unified dispatch rule (proposal validated and implemented)
+
+- Window-size-based dispatch: raw COV for tile window where `expectedPoints ≤ bucketCount` (visible window ≤ 100 s at SAMPLE_RATE_HZ=10, bucketCount=500); bucketed for larger windows.
+- New raw-source bucketed path: when `bucketS < 1.0` AND window is bucketed, query reads `tag_samples` directly (gapfill+locf+bounded-prev, same template as CAGs).
+- Preset changes: 5m and 15m flip from raw COV to bucketed (raw-source `tag_samples`). All other presets unchanged.
+- `SAMPLE_RATE_HZ = 10` constant and `dispatchShape()` helper exported from `@caro/db`.
+- `AggregateTrendTile['source']` union extended with `'tag_samples'`; mirrored in `TileApiResponse` and `AggregateSeriesData` in `@caro/trend-chart`.
+- Spec §3, §6.1, §6.2, §6.3 updated to reflect the unified rule and new per-preset routing table.
+- Handoff §5 updated with Phase 6 dispatch rule summary.
+- No client-side logic changes (discriminated union preserved; `source === 'raw'` discriminant unaffected).
+- Validated via EXPLAIN ANALYZE 2026-05-15: bucketed 35% faster on DB side and 3.3× smaller on wire vs raw COV at ~5.7 Hz production activity. See `Docs/trend_dispatch_unified_rule_proposal.md` §7.1.
+
 ## Pending audit findings
 
 (none)

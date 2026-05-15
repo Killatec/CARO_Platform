@@ -58,7 +58,7 @@ Stack choices inherit from the platform (see `platform_handoff.md` §Stack). New
 | Component | Technology | Rationale |
 |---|---|---|
 | Chart rendering | uPlot | Canvas-2D renderer, ~40 KB bundle, handles 20 × high-density traces at 60 fps without React reconciliation overhead. Supports stepped interpolation and `spanGaps: false` which is required for the null-as-gap contract. Lower overhead than Recharts (SVG, re-renders with React) or Chart.js (canvas but heavier and less ergonomic for time-series). |
-| Aggregation (Phase A) | Four TimescaleDB CAGs + raw fall-through | 1s / 10s / 1min / 10min CAGs materialized off `tag_samples`. Reads use `time_bucket_gapfill()` + `locf()` with a bounded `prev` correlated subquery (§5.5). Outer `time_bucket(bucket_s)` re-aggregation lets one CAG cover ~a decade-and-a-half of window range (cheap zone = Div ≤ 16, §6.3). Raw is reserved for windows < 16 min (`bucket_s < 1.0`). Dispatch is watermark-aware (§4.3) — the trailing portion of any query past the CAG's materialization watermark falls through to the next-finer source. The on-the-fly-only design of v0.3 was rejected after gate testing showed it could not meet latency targets at production N. |
+| Aggregation (Phase A) | Four TimescaleDB CAGs + raw fall-through | 1s / 10s / 1min / 10min CAGs materialized off `tag_samples`. Reads use `time_bucket_gapfill()` + `locf()` with a bounded `prev` correlated subquery (§5.5). Outer `time_bucket(bucket_s)` re-aggregation lets one CAG cover ~a decade-and-a-half of window range (cheap zone = Div ≤ 16, §6.3). Dispatch is watermark-aware (§4.3) — the trailing portion of any query past the CAG's materialization watermark falls through to the next-finer source. **Unified dispatch rule (Phase 6, validated 2026-05-15):** raw COV is served only for tile windows where `expectedPoints ≤ bucketCount`; bucketed output is served for larger windows. `tag_samples` is now a source-table option for sub-second buckets (raw-source bucketed: gapfill+locf directly against `tag_samples`, same template as the CAG queries). Preset impact: 1m stays raw; 5m and 15m flip to bucketed via `tag_samples`. See §6.3 for the full two-step dispatch rule. |
 | Aggregation (Phase B+) | Additional CAGs as needed | If the 10min CAG's worst-case operating point (Div ≈ 24.58 at 85–170 d windows) proves too slow once that much history accumulates, an hourly CAG can be added. Same query template; only a new dispatch range. |
 
 All other layers (Node/Express, WebSocket, `@caro/db`, `@caro/hmi-context`, `@caro/ui`, React/Vite, TypeScript) are reused unchanged.
@@ -278,7 +278,7 @@ GET /api/v1/trends/tile
   &bucket_count=250           # positive integer, 1..2500
 ```
 
-One request = one time range for up to 8 tags. The server derives `bucketS = Number(endTime - startTime) / (bucketCount * 1000)` and dispatches on it per §6.3. The interactive trend viewer client sends epoch-aligned ranges — i.e., `startTime` is an integer multiple of `bucketCount * bucketS * 1000` from epoch — so that identical logical ranges produce identical wire requests across clients and share the cache. Other consumers may send non-aligned ranges; see §6.2 for how the response differs.
+One request = one time range for up to 8 tags. The server first applies the unified shape dispatch (§6.3 Step 1) using `SAMPLE_RATE_HZ = 10` and `bucketCount` to decide raw-vs-bucketed. Within the bucketed branch it derives `bucketS = Number(endTime - startTime) / (bucketCount * 1000)` and dispatches on it per §6.3 Step 2. Shape selection is server-side authoritative — no shape parameter exists on the wire. The interactive trend viewer client sends epoch-aligned ranges — i.e., `startTime` is an integer multiple of `bucketCount * bucketS * 1000` from epoch — so that identical logical ranges produce identical wire requests across clients and share the cache. Other consumers may send non-aligned ranges; see §6.2 for how the response differs.
 
 No `bucket_s` on the wire, no `tile_index`. `bucketS` is a server-internal derived value; clients express requests in terms of time ranges and a bucket count. The server is a pure function of `(tag_ids, start_time, end_time, bucket_count)`.
 
@@ -288,7 +288,7 @@ No `bucket_s` on the wire, no `tile_index`. `bucketS` is a server-internal deriv
 
 The response shape is a discriminated union on `source`:
 
-**Raw response (`bucketS < 1.0`):**
+**Raw response** (tile window where `expectedPoints ≤ bucketCount`, i.e., `tileWindowSec × SAMPLE_RATE_HZ ≤ bucketCount`; at `SAMPLE_RATE_HZ=10`, `bucketCount=500`: tile window ≤ 50 s, visible window ≤ 100 s)**:**
 
 ```jsonc
 {
@@ -308,7 +308,7 @@ The response shape is a discriminated union on `source`:
 
 Raw responses carry per-sample timestamps (COV samples are irregular). `ts[]` and `value[]` are parallel arrays of equal length.
 
-**Aggregate response (`bucketS ≥ 1.0`) — v0.8:**
+**Aggregate response** (tile window where `expectedPoints > bucketCount`; bucketed via `tag_samples` or a CAG per §6.3)**  — v0.8:**
 
 ```jsonc
 {
@@ -340,7 +340,7 @@ Raw responses carry per-sample timestamps (COV samples are irregular). `ts[]` an
 
 `min[i]` and `max[i]` are aligned 1:1 with `value[i]`. All three arrays have length `n`. For empty buckets (gapfilled, no source rows), `min[i] === max[i] === value[i]` — band collapses to zero area since the value was provably constant (COV semantics). For mixed-null buckets, all three are `null`. Raw responses (`source: 'raw'`) do NOT carry `min` or `max`; the discriminated union enforces this. See §6.5 for the full three-case rule.
 
-`source` is one of `'1s_cagg'`, `'10s_cagg'`, `'1min_cagg'`, `'10min_cagg'`, or `'mixed'`. `source: 'mixed'` appears when watermark fall-through (§4.3) stitched portions from multiple sources. `bucketSMs` is the bucket size in integer milliseconds, returned for client rendering; the server derives it as `Math.round((endTime - startTime) / bucketCount)`.
+`source` is one of `'tag_samples'`, `'1s_cagg'`, `'10s_cagg'`, `'1min_cagg'`, `'10min_cagg'`, or `'mixed'`. `source: 'tag_samples'` appears when the raw-source bucketed path (§6.3 Step 2, `bucketS < 1.0`) served the full range. `source: 'mixed'` appears when watermark fall-through (§4.3) stitched portions from multiple sources. The raw response shape still uses `source: 'raw'` — these are distinct: raw COV returns variable-length `ts[]` arrays; raw-source bucketed returns fixed-length `value[]`/`min[]`/`max[]` arrays with the aggregate envelope. `bucketSMs` is the bucket size in integer milliseconds, returned for client rendering; the server derives it as `Math.round((endTime - startTime) / bucketCount)`.
 
 `responseTailTs` is the server's `Date.now()` captured at request entry, before SQL execution. Present on **both** raw and aggregate responses. Clients use `(responseTailTs - 1000 ms)` as the live-ring-buffer trim threshold: WS events older than that are pruned as already covered by the cached tile; newer events remain in the accumulator/raw buffer for stitching. The 1-second margin absorbs `DbPipeline` writer-pipeline lag (`TIMESCALE_DB_TICK_MS = 500 ms` + writer round-trip) plus network and clock-skew. The same value also serves as the future-bucket-nulling cutoff inside `getTrendTile` (§6.5) — single source of truth, no separate `nowMs` field on the wire.
 
@@ -378,10 +378,22 @@ Validation errors:
 
 The dispatch table below is unchanged by the v0.6 alignment contract. Alignment only affects how many rows the `time_bucket_gapfill` call emits and what `startTime`/`endTime` the response carries (§6.2); it does not affect which source is chosen.
 
-**Server dispatch on `bucketS`:**
+**Server dispatch — two-step unified rule (Phase 6, validated 2026-05-15):**
+
+**Step 1 — shape selection (raw vs bucketed):**
 
 ```
-if bucket_s < 1.0:    raw `tag_samples`            (Div n/a — raw is COV-driven)
+expectedPoints = (endTime - startTime) / 1000 × SAMPLE_RATE_HZ
+if expectedPoints ≤ bucketCount → raw COV (queryRaw, returns RawTrendTile)
+else                            → bucketed (continue to Step 2)
+```
+
+`SAMPLE_RATE_HZ = 10` (exported from `@caro/db`). At `bucketCount = 500`, crossover is at tile window > 50 s (visible window > 100 s at `visibleTilesPerWindow = 2`).
+
+**Step 2 — source table for bucketed path:**
+
+```
+if bucket_s < 1.0:    tag_samples (raw-source bucketed, gapfill+locf directly on raw data)
 elif bucket_s < 16:   1s CAG    + outer time_bucket(bucket_s)
 elif bucket_s < 160:  10s CAG   + outer time_bucket(bucket_s)
 elif bucket_s < 1600: 1min CAG  + outer time_bucket(bucket_s)
@@ -390,12 +402,30 @@ else:                 10min CAG + outer time_bucket(bucket_s)
 
 Where Div = `bucketS / native_bucket_s` of the chosen CAG. The cheap zone is **Div ≤ 16**, measured (`DB_Config_Usage_And_Perf.md` §7.3): re-aggregation cost is roughly flat up to Div = 16 and roughly doubles per doubling of Div past that. Cheap zone is usable up to Div ≈ 30.
 
-**Window-range view (derived from the dispatch rule, at the trend viewer's fixed `bucket_count=250`):**
+**Per-preset routing (trend viewer defaults: `bucketCount=500`, `visibleTilesPerWindow=2`):**
+
+| Preset | Visible window | Tile window | `bucket_s` | Shape | Source |
+|---|---:|---:|---:|---|---|
+| 1m  | 60 s    | 30 s   | 0.06 s | Raw COV  | `tag_samples` (COV) |
+| 5m  | 300 s   | 150 s  | 0.30 s | Bucketed | `tag_samples` (raw-source) |
+| 15m | 900 s   | 450 s  | 0.90 s | Bucketed | `tag_samples` (raw-source) |
+| 1h  | 3,600 s | 1,800 s| 3.6 s  | Bucketed | 1s CAG |
+| 4h  | 14,400 s| 7,200 s| 14.4 s | Bucketed | 1s CAG |
+| 24h | 86,400 s|43,200 s| 86.4 s | Bucketed | 10s CAG |
+| 7d  | 604,800 s|302,400 s| 604.8 s| Bucketed | 1min CAG |
+| 14d |1,209,600 s|604,800 s|1,209.6 s| Bucketed | 1min CAG |
+
+The 5m and 15m presets now return bucketed output (raw-source) instead of raw COV. All other presets are unchanged. See `Docs/trend_dispatch_unified_rule_proposal.md` for empirical validation (35% faster DB-side, 3.3× smaller wire payload vs raw COV at production activity).
+
+**Drag-zoom / End-picker windows** below 100 s return raw COV automatically; above 100 s return bucketed. The flip is at the single threshold `expectedPoints = bucketCount`, not at `bucket_s = 1.0`.
+
+**Window-range view (derived, at `bucket_count=500`):**
 
 | Window | Source | `bucket_s` range | Div range |
 |---|---|---|---|
-| 1 – 16 min | raw | 0.12 – 0.96 s | n/a |
-| 16 min – 4 h | 1s CAG | 1.92 – 14.4 s | 1.92 – 14.4 |
+| < 1.67 min | raw COV | < 0.2 s | n/a |
+| 1.67 – 16.7 min | tag_samples bucketed | 0.2 – 2.0 s (but < 1.0 only) | n/a |
+| 16.7 min – 4 h | 1s CAG | 1.0 – 14.4 s | 1.0 – 14.4 |
 | 4 h – 32 h | 10s CAG | 28.8 – 115.2 s | 2.88 – 11.52 |
 | 32 h – 10 d | 1min CAG | 230.4 – 921.6 s | 3.84 – 15.36 |
 | 10 d – 170 d | 10min CAG | 1843 – 14746 s (`MAX_BUCKET_S`) | 3.07 – 24.58 |

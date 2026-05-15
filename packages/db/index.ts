@@ -13,5 +13,5 @@ export type { TimescaleMigrationResult } from './timescale/migrations.js';
 export { pingTimescale, writeTagSamples } from './timescale/samples.js';
 export type { TagSampleRow } from './timescale/samples.js';
 export { getTimescaleDatabaseSizeBytes } from './timescale/stats.js';
-export { getTrendTile, getTrendExtent, MAX_BUCKET_S, deriveBucketSMs, __test_watermarkOverride, __test_clearWatermarkCache, __test_lastUsedSources } from './timescale/trends.js';
+export { getTrendTile, getTrendExtent, MAX_BUCKET_S, SAMPLE_RATE_HZ, deriveBucketSMs, dispatchShape, __test_watermarkOverride, __test_clearWatermarkCache, __test_lastUsedSources } from './timescale/trends.js';
 export type { RawTrendSeries, AggregateTrendSeries, RawTrendTile, AggregateTrendTile, TrendTile } from './timescale/trends.js';

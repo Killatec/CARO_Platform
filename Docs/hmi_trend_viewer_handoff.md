@@ -221,6 +221,15 @@ Key behaviors:
 - **Stale-generation guard**: each fetch call captures a generation at dispatch; if `viewport` or `tagIds` change before the fetch resolves, the result is discarded.
 - **`bucketSMs` integer invariant**: the assembled `bucketSMs` value passed to the chart must always be an integer. The fallback path (when `lastBucketSMs === 0` — all tile fetches failed) applies `Math.round()` before returning. A defensive `!Number.isInteger(bucketSMs) → throw` assertion fires at the assembly boundary so any regression surfaces here, not downstream in `BigInt()` conversions.
 
+**Phase 6 — Unified dispatch rule (implemented 2026-05-15, see `Docs/trend_dispatch_unified_rule_proposal.md`).**
+
+The dispatch criterion for raw-vs-bucketed was replaced. Old rule: `bucketS < 1.0 → raw COV`. New two-step rule:
+
+1. **Shape** (raw or bucketed): `expectedPoints = tileWindowSec × SAMPLE_RATE_HZ`. If `expectedPoints ≤ bucketCount` → raw COV; otherwise bucketed.
+2. **Source table** (bucketed only): `bucketS < 1.0 → tag_samples` (raw-source bucketed, gapfill+locf directly on raw data); `bucketS ≥ 1.0` → existing CAG ladder unchanged.
+
+`SAMPLE_RATE_HZ = 10` and `dispatchShape()` are exported from `@caro/db`. At `SAMPLE_RATE_HZ=10` and `bucketCount=500`, the crossover is at tile window > 50 s (visible window > 100 s). Preset impact: 1m stays raw; **5m and 15m flip from raw COV to bucketed (source: `tag_samples`)**. Validated via EXPLAIN ANALYZE 2026-05-15: bucketed is 35% faster DB-side and 3.3× smaller on the wire vs raw COV at production activity (~5.7 Hz). No client-side code changes — the discriminated union (`RawTrendTile` | `AggregateTrendTile`) is preserved; `'tag_samples'` was added to `AggregateTrendTile['source']` to label the new path.
+
 ---
 
 ## 6. Chart Rendering (`TrendChart.tsx`)
