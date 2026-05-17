@@ -861,3 +861,90 @@ describe('useLiveSubscription — onDataReceived', () => {
     expect(onDataReceived).toHaveBeenCalledWith(9000);
   });
 });
+
+// ─── getLatestSampleTs ────────────────────────────────────────────────────────
+
+describe('useLiveSubscription — getLatestSampleTs', () => {
+  it('returns null before any samples arrive', () => {
+    const { result } = renderHook(() =>
+      useLiveSubscription({ tagIds: [1], trimThreshold: null }),
+    );
+    expect(result.current.getLatestSampleTs()).toBeNull();
+  });
+
+  it('returns the moduleTs (as bigint) of the first sample received', () => {
+    const { result } = renderHook(() =>
+      useLiveSubscription({ tagIds: [1], trimThreshold: null }),
+    );
+    act(() => { fireCb(1, 1000, 5); });
+    expect(result.current.getLatestSampleTs()).toBe(1000n);
+  });
+
+  it('returns the max moduleTs across sequential samples for one tag', () => {
+    const { result } = renderHook(() =>
+      useLiveSubscription({ tagIds: [1], trimThreshold: null }),
+    );
+    act(() => {
+      fireCb(1, 1000, 5);
+      fireCb(1, 3000, 7);
+      fireCb(1, 2000, 3); // lower than prev — sessionHighWaterMark holds the 3000 floor
+    });
+    expect(result.current.getLatestSampleTs()).toBe(3000n);
+  });
+
+  it('returns the max moduleTs across multiple tags', () => {
+    const { result } = renderHook(() =>
+      useLiveSubscription({ tagIds: [1, 2], trimThreshold: null }),
+    );
+    act(() => {
+      fireCb(1, 2000, 10);
+      fireCb(2, 5000, 20);
+      fireCb(1, 3000, 30);
+    });
+    expect(result.current.getLatestSampleTs()).toBe(5000n);
+  });
+
+  it('returns null immediately after commitAndDrain', () => {
+    const { result } = renderHook(() =>
+      useLiveSubscription({ tagIds: [1], trimThreshold: null }),
+    );
+    act(() => { fireCb(1, 1000, 5); });
+    expect(result.current.getLatestSampleTs()).toBe(1000n); // sanity
+
+    act(() => { result.current.commitAndDrain(); });
+    expect(result.current.getLatestSampleTs()).toBeNull();
+  });
+
+  it('is monotonic-non-decreasing: sessionHighWaterMark floors value when tag is removed', () => {
+    // Two tags; tag 2 provides the higher ts. After tag 2 is removed, the
+    // sessionHighWaterMark (from when tag 2 was present) floors the result so
+    // getLatestSampleTs() does not regress.
+    const { result, rerender } = renderHook(
+      ({ opts }) => useLiveSubscription(opts),
+      { initialProps: { opts: { tagIds: [1, 2], trimThreshold: null } } },
+    );
+    act(() => {
+      fireCb(1, 1000, 10);
+      fireCb(2, 9000, 20); // tag 2 provides the max — sessionHighWaterMark → 9000n
+    });
+    expect(result.current.getLatestSampleTs()).toBe(9000n);
+
+    // Remove tag 2 — its ring entry is deleted; currentMaxAcrossSubscribedTags drops.
+    rerender({ opts: { tagIds: [1], trimThreshold: null } });
+
+    // sessionHighWaterMark still holds 9000n → getLatestSampleTs() must not regress.
+    expect(result.current.getLatestSampleTs()).toBe(9000n);
+  });
+
+  it('resumes from null and advances again after drain + new samples', () => {
+    const { result } = renderHook(() =>
+      useLiveSubscription({ tagIds: [1], trimThreshold: null }),
+    );
+    act(() => { fireCb(1, 5000, 1); });
+    act(() => { result.current.commitAndDrain(); });
+    expect(result.current.getLatestSampleTs()).toBeNull(); // reset
+
+    act(() => { fireCb(1, 7000, 2); });
+    expect(result.current.getLatestSampleTs()).toBe(7000n); // new session
+  });
+});

@@ -197,7 +197,7 @@ export function EndPicker({ state, viewport, siteTimezone, onEndCommitted, onLiv
     }
   }
 
-  const isLive = state.mode === 'live-trailing';
+  const isLive = state.mode === 'live-trailing' || state.mode === 'live-fixed';
 
   return (
     <div style={ROW}>

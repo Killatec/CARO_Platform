@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, useMemo, useRef } from 'react';
 import type { CSSProperties } from 'react';
-import { useTrendMode, trendModeReducer, modeToViewport } from './useTrendMode.js';
+import { useTrendMode, trendModeReducer, modeToViewport, isLive } from './useTrendMode.js';
 import type { TrendModeAction } from './useTrendMode.js';
 import { useTrendData } from './useTrendData.js';
 import type { UseTrendDataResult } from './useTrendData.js';
@@ -95,7 +95,7 @@ export function TrendChartContainer({
   });
 
   // ── Data fetch (driven by explicit dataViewport) ──────────────────────────
-  const trendData = useTrendData({ viewport: dataViewport, tagIds, isLive: modeState.mode === 'live-trailing' });
+  const trendData = useTrendData({ viewport: dataViewport, tagIds, isLive: isLive(modeState.mode) });
   const { data, isLoading, ensureCovered, getActiveRange, swapCounter, activeTileCount, lastFetchMs } = trendData;
 
   // ── Stable refs for synchronous access from callbacks and cleanup ─────────
@@ -133,13 +133,13 @@ export function TrendChartContainer({
 
   // Advances nowMs from WS frame's max moduleTs — only while tailing.
   const handleDataReceived = useCallback((maxModuleTs: number) => {
-    if (modeStateRef.current.mode !== 'live-trailing') return;
+    if (!isLive(modeStateRef.current.mode)) return;
     dispatch({ type: 'tick', nowMs: BigInt(maxModuleTs) });
   }, [dispatch]);
 
   const liveSub = useLiveSubscription({
     tagIds,
-    isLive: modeState.mode === 'live-trailing',
+    isLive: isLive(modeState.mode),
     trimThreshold,
     seedFromCachedTile,
     tailMode,
@@ -241,7 +241,13 @@ export function TrendChartContainer({
       const r = pendingPanRef.current;
       pendingPanRef.current = null;
       if (r) {
-        dispatchModeAction({ type: 'panApplied', from: r.min, to: r.max, nowMs: BigInt(Date.now()) });
+        dispatchModeAction({
+          type: 'panApplied',
+          from: r.min,
+          to: r.max,
+          nowMs: BigInt(Date.now()),
+          latestSampleTs: liveSubRef.current?.getLatestSampleTs() ?? null,
+        });
       }
     });
   }, [dispatchModeAction]);
@@ -259,7 +265,12 @@ export function TrendChartContainer({
 
   const handleEndCommitted = useCallback(
     (to: bigint) => {
-      dispatchModeAction({ type: 'endPickerCommitted', to, nowMs: BigInt(Date.now()) });
+      dispatchModeAction({
+        type: 'endPickerCommitted',
+        to,
+        nowMs: BigInt(Date.now()),
+        latestSampleTs: liveSubRef.current?.getLatestSampleTs() ?? null,
+      });
     },
     [dispatchModeAction],
   );

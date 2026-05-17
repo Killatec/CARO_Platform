@@ -33,6 +33,7 @@ vi.mock('../src/useLiveSubscription.js', () => ({
     return {
       tail: liveHoisted.getTail(),
       commitAndDrain: liveHoisted.commitAndDrain,
+      getLatestSampleTs: vi.fn().mockReturnValue(null),
     };
   }),
   TREND_RING_CAPACITY: 20,

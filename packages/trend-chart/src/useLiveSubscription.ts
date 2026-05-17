@@ -75,6 +75,14 @@ export interface UseLiveSubscriptionResult {
    */
   commitAndDrain(): void;
   /**
+   * Returns max(sessionHighWaterMark, currentMaxAcrossSubscribedTags).
+   * Returns null before the first TREND_DELTA frame arrives in the session.
+   * Monotonic-non-decreasing within a session — the high-water-mark floor
+   * prevents regression when the max-providing tag is removed. Reset to null
+   * by commitAndDrain. See proposal §4 preamble / §11 glossary.
+   */
+  getLatestSampleTs(): bigint | null;
+  /**
    * Live tail extension for chart rendering. null when not tailing, when
    * tailMode is null, or when no data has closed/arrived yet.
    */
@@ -284,6 +292,11 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
   const pendingFrameMaxTsRef   = useRef<number>(0);
   const frameFlushScheduledRef = useRef(false);
 
+  // Session-scoped high-water-mark: highest moduleTs seen since Live entry.
+  // Floors latestSampleTs so it never regresses when the max-providing tag
+  // is removed. Reset to null by commitAndDrain. See proposal §4 preamble.
+  const sessionHighWaterMarkRef = useRef<bigint | null>(null);
+
   isLiveRef.current      = isLive;
   bucketSMsRef.current      = bucketSMs;
   trimThresholdRef.current  = trimThreshold;
@@ -333,6 +346,12 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
         if (!arr) return;
         arr.push({ moduleTs, value });
         if (arr.length > TREND_RING_CAPACITY) arr.shift();
+
+        // Bump session high-water-mark on every sample regardless of Live state.
+        const mTs = BigInt(moduleTs);
+        if (sessionHighWaterMarkRef.current === null || mTs > sessionHighWaterMarkRef.current) {
+          sessionHighWaterMarkRef.current = mTs;
+        }
 
         if (isLiveRef.current) {
           const mode = tailModeRef.current;
@@ -470,9 +489,33 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
     for (const arr of ringsRef.current.values()) arr.length = 0;
     accumulatorsRef.current.clear();
     for (const arr of rawBuffersRef.current.values()) arr.length = 0;
+    // Reset session high-water-mark alongside the other in-place clears so
+    // getLatestSampleTs() returns null immediately after drain.
+    sessionHighWaterMarkRef.current = null;
     // Clear React state so consumers see the drain immediately, without waiting
     // on a subsequent re-render triggered by mode flip.
     setTail(null);
+  }, []);
+
+  // ── getLatestSampleTs ─────────────────────────────────────────────────────
+
+  const getLatestSampleTs = useCallback((): bigint | null => {
+    // currentMaxAcrossSubscribedTags: derived from the last (most-recent)
+    // ring entry per currently-subscribed tag. The ring is keyed only for
+    // active tags; removed tags' entries are deleted by the subscribe-lifecycle
+    // effect, so this scan covers exactly the subscribed set.
+    let currentMax: bigint | null = null;
+    for (const arr of ringsRef.current.values()) {
+      if (arr.length > 0) {
+        const ts = BigInt(arr[arr.length - 1]!.moduleTs);
+        if (currentMax === null || ts > currentMax) currentMax = ts;
+      }
+    }
+    const hwm = sessionHighWaterMarkRef.current;
+    if (hwm === null && currentMax === null) return null;
+    if (hwm === null) return currentMax;
+    if (currentMax === null) return hwm;
+    return hwm > currentMax ? hwm : currentMax;
   }, []);
 
   // Suppress the brief mismatch window during a tailMode transition
@@ -487,5 +530,5 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
     [tail, tailMode],
   );
 
-  return { commitAndDrain, tail: tailToReturn };
+  return { commitAndDrain, getLatestSampleTs, tail: tailToReturn };
 }

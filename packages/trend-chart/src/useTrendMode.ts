@@ -27,20 +27,41 @@ export type LastIntent = 'preset' | 'live' | 'endPicker' | 'zoom' | 'pan' | null
  * Discriminated mode state. Fixed carries sizeMs to restore when returning to
  * tailing via liveClicked (spec §12.3 "preserving the prior sizeMs").
  * lastIntent tracks the most recent user action for preset highlighting.
+ *
+ * 'live-fixed' is wired into the type system in Phase 1.3 so Phase 3 doesn't
+ * surface as a wall of type errors. No action produces it until Phase 3 — it
+ * is unreachable at runtime in Phases 1–2.
  */
 export type ModeState =
   | { mode: 'live-trailing'; sizeMs: bigint; nowMs: bigint; lastIntent: LastIntent }
-  | { mode: 'fixed'; from: bigint; to: bigint; sizeMs: bigint; lastIntent: LastIntent };
+  | { mode: 'live-fixed';    from: bigint; to: bigint; sizeMs: bigint; lastIntent: LastIntent }
+  | { mode: 'fixed';         from: bigint; to: bigint; sizeMs: bigint; lastIntent: LastIntent };
+
+/**
+ * Returns true when the mode is one of the two Live states ('live-trailing' or
+ * 'live-fixed'). Use this predicate wherever consumers previously checked
+ * `mode === 'live-trailing'` alone, so that 'live-fixed' (Phase 3+) gets the
+ * same Live-path treatment automatically.
+ */
+export function isLive(mode: ModeState['mode']): boolean {
+  return mode === 'live-trailing' || mode === 'live-fixed';
+}
 
 export type TrendModeAction =
   | { type: 'presetClicked'; sizeMs: bigint; nowMs: bigint }
   | { type: 'liveClicked'; nowMs: bigint }
-  | { type: 'endPickerCommitted'; to: bigint; nowMs: bigint }
+  /**
+   * latestSampleTs is read from useLiveSubscription.getLatestSampleTs() at
+   * dispatch time and carried here so the reducer stays pure. The reducer
+   * ignores it in Phase 1 — it is reserved for Phase 3 live→live-fixed routing.
+   */
+  | { type: 'endPickerCommitted'; to: bigint; nowMs: bigint; latestSampleTs?: bigint | null }
   | { type: 'zoomApplied'; from: bigint; to: bigint; nowMs: bigint }
   // Pan translates the viewport without changing span. Always lands in fixed
   // mode — pan never enters tailing. To enter live mode the user must click
   // Live or commit End ≈ now via the End picker.
-  | { type: 'panApplied'; from: bigint; to: bigint; nowMs: bigint }
+  /** latestSampleTs: same role as in endPickerCommitted above. */
+  | { type: 'panApplied'; from: bigint; to: bigint; nowMs: bigint; latestSampleTs?: bigint | null }
   | { type: 'tick'; nowMs: bigint };
 
 /** Pure reducer — exported for unit testing. */
@@ -61,9 +82,12 @@ export function trendModeReducer(state: ModeState, action: TrendModeAction): Mod
       return { mode: 'live-trailing', sizeMs: action.sizeMs, nowMs: action.nowMs, lastIntent: 'preset' };
 
     case 'liveClicked':
-      if (state.mode === 'fixed') {
+      if (state.mode === 'fixed' || state.mode === 'live-fixed') {
+        // Both fixed and live-fixed lack nowMs in their shape, so we cannot
+        // spread — construct live-trailing explicitly from sizeMs only.
         return { mode: 'live-trailing', sizeMs: state.sizeMs, nowMs: action.nowMs, lastIntent: 'live' };
       }
+      // live-trailing: spread is safe because the shape already carries nowMs.
       return { ...state, nowMs: action.nowMs, lastIntent: 'live' };
 
     // End picker commits End only; always goes fixed — user clicks Live if they

@@ -25,6 +25,60 @@ const FIXED_1H: ModeState = {
   lastIntent: null,
 };
 
+// ── Phase 3 fixtures ──────────────────────────────────────────────────────────
+// 'live-fixed' is unreachable in Phase 1 but wired into the type system.
+// These fixtures exist so Phase 3 test cases can import and extend them
+// without needing to reconstruct the shape from scratch.
+
+/** live-fixed state anchored at [NOW-2h, NOW-1h] with a 1h window. */
+const LIVE_FIXED_1H: ModeState = {
+  mode: 'live-fixed',
+  from: NOW - 7_200_000n,
+  to:   NOW - 3_600_000n,
+  sizeMs: 3_600_000n,
+  lastIntent: 'pan',
+};
+
+/**
+ * Factory for live-fixed states. All fields have sensible defaults; supply
+ * only the overrides you need in a given test case.
+ */
+function makeLiveFixedState(overrides: Partial<{
+  from: bigint;
+  to: bigint;
+  sizeMs: bigint;
+  lastIntent: ModeState['lastIntent'];
+}>): ModeState {
+  return {
+    mode: 'live-fixed',
+    from: overrides.from ?? NOW - 7_200_000n,
+    to:   overrides.to   ?? NOW - 3_600_000n,
+    sizeMs: overrides.sizeMs ?? 3_600_000n,
+    lastIntent: overrides.lastIntent !== undefined ? overrides.lastIntent : 'pan',
+  };
+}
+
+// ── Payload assertion helper ──────────────────────────────────────────────────
+// For use in Phase 3 tests that verify actions carry the correct latestSampleTs.
+
+/**
+ * Asserts that a panApplied or endPickerCommitted action carries the expected
+ * latestSampleTs value. Phase 3 will use this to verify that dispatch sites
+ * correctly forward the live-subscription value into the action payload.
+ */
+function assertPayloadLatestSampleTs(
+  action: TrendModeAction & { latestSampleTs?: bigint | null },
+  expected: bigint | null,
+): void {
+  expect(action.latestSampleTs ?? null).toBe(expected);
+}
+
+// Suppress "unused variable" TS/linter warnings for Phase 3 helpers that are
+// not yet referenced by any test. Remove these lines in Phase 3.
+void LIVE_FIXED_1H;
+void makeLiveFixedState;
+void assertPayloadLatestSampleTs;
+
 function dispatch(state: ModeState, action: TrendModeAction): ModeState {
   return trendModeReducer(state, action);
 }
