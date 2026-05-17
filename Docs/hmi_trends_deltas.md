@@ -6,6 +6,8 @@
 
 ## Pending propagation
 
+(none)
+
 ---
 
-**Last cleared:** 2026-05-15. Audit walkthrough closure — Phase 6 dispatch, route-level INVALID_RANGE_TOO_NARROW removal, and post-iteration dead-code cleanup propagated; entries cleared. Audit history in git: commits 355ffaa → d8da12a.
+**Last cleared:** 2026-05-17. Audit remediation pass closure — M1 (signature change + meta + singleton removal), D1 (top-level summary log), F5 (per-tag outbox cap), TG-7 follow-up (`commitAndDrain` fix), and TG-1 (chunk-pruning regression test) propagated to spec §4.1 / §4.4 / §14.7 and handoff §1 / §10. `Docs/Update_plan.md` deleted; audit history in git: commits through 2026-05-17.

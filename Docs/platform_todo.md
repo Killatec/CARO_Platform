@@ -2,7 +2,7 @@
 
 **Purpose:** Implementation backlog only — features fully specified but not yet built. Design questions that are unresolved live in the relevant spec's Open Questions section. Remove items when complete.
 
-**Updated:** 2026-04-29
+**Updated:** 2026-05-14
 
 ---
 
@@ -13,14 +13,19 @@
 
 ### Trend Viewer — Deferred / Possible Future Improvements
 
-- [ ] **TrendSnapshotScheduler heartbeat-vs-null:** When a module has not received any MQTT packet within the snapshot interval, write a null sentinel rather than the last-known value. Surfaces device-silent periods as gaps in CAG rendering instead of LOCF flat lines. Deferred until a user-visible complaint is observed. See `hmi_trend_viewer_handoff.md` §11.D for context.
+- [ ] **Dead-tag detection / "stale tag" UI indicator.** With the LOCF cutoff query removed (was paying 814ms of planning time per CAG request at production scale), LOCF carries the last known value forward through all empty trailing buckets — a recently-stopped tag shows a flat line extending to the right edge of the requested window. See `hmi_trend_viewer_handoff.md` "Dead-tag detection" section for context and three replacement options under consideration: (1) per-tag freshness lookup alongside tile response; (2) watchdog contract guarantee (continuous NULL writes while telemetry silent); (3) per-tag freshness tag (`Trend_Info`-style). Likely combination of (2) + (1). Deferred until a user-facing complaint surfaces.
 
-These three items were specified for Phase A (§17.1.1 steps 5 and 13) but deferred by explicit decision (2026-04-29). The Trend Viewer API and its test coverage are complete; these are observability, operational sizing, and one-shot validation — not contract-level work.
+### Trend Viewer — Operational/observability watchlist
 
-- [ ] **Pool sizing optimization (§15):** Bump `@caro/db` Timescale pool from `max = 10` to 20–30 per spec §15. Recommended before multi-operator production rollout. One-line config change in `packages/db/timescale/pool.ts`. Empirical sizing test recommended (`Docs/DB_Config_Usage_And_Perf.md` §10.5) before settling on the exact value. Deferred 2026-04-29.
-- [ ] **Server-side per-tile perf log (§14.7):** Update the existing `TIMESCALE_LOG_TILE_QUERIES` gate in `packages/db/timescale/trends.ts` to emit the spec-compliant log line including the `source` field (covers raw / each CAG name / 'mixed' for fall-through). Roughly 10–20 lines; currently emits a v0.3-era format. Deferred 2026-04-29.
-- [ ] **EXPLAIN-plan validation gate (§5.5):** Run `EXPLAIN (BUFFERS, ANALYZE)` on a representative bounded-prev query against production-state Timescale and confirm ≤ 2 chunks in the prev SubPlan ChunkAppend, planning time < 5 ms. Execute once `tag_samples` has ≥ ~100 chunks (~4 days of production writes); not ongoing CI — a one-shot milestone check. Deferred 2026-04-29. [SUPERSEDED 2026-04-29 by `/dev/trends-perf` — perf test page provides client-observed latency across all CAG paths, which is the operationally meaningful gate.]
-- [ ] **DB contention at high concurrency (observation):** perf-page testing at tag_count=24 (12 concurrent reqs/cell) pushed per-request latency 2–4× higher than at tag_count=8. Pool=10 is not the bottleneck; root cause is shared DB resources under many concurrent queries. Watch in production multi-operator scenarios; revisit if user-visible. Pool bump to 20–30 (tracked in deferred items above) may help but is not the primary lever.
+The Trend Viewer API and its test coverage are complete; these are operational monitoring items, not contract-level work.
+
+- [ ] **Pool sizing watchlist (spec §15):** Monitor `@caro/db` Timescale pool utilization during multi-operator perf evaluation. Current default `max = 10` has not surfaced as a bottleneck in empirical testing — perf-page testing at `tag_count=24` (12 concurrent requests/cell) showed shared DB resources, not pool capacity, as the latency driver. Bump toward 20–30 only if pool exhaustion is observed in real multi-operator load. One-line config change in `packages/db/timescale/pool.ts`; sizing methodology in `Docs/DB_Config_Usage_And_Perf.md §10.5`.
+- [ ] ~~**EXPLAIN-plan validation gate (spec §5.5)**~~ — superseded by `/dev/trends-perf` (perf test page provides client-observed latency across all CAG paths, the operationally meaningful gate). Bounded-prev chunk-pruning regression coverage now provided by the TG-1 plan-assertion test in `packages/db/__tests__/timescale/trends.test.ts` (added 2026-05-17 audit pass).
+- [ ] **Flaky integration tests under cumulative DB load (surfaced 2026-05-17 audit pass).** Two integration tests began intermittently failing with hook timeouts during the audit remediation: (1) `getWatermarkMs — direct catalog query > tag_samples_10min_cagg: returns finite ms timestamp within expected range` (10s hook exceeded by ~44s), and (2) `getTrendTile — integration: 10s CAG branch > dispatches to source="10s_cagg" for the 8h window` (10s hook timeout). Both look like cumulative-DB-load symptoms — test-DB chunk count and shared catalog overhead growing across runs, not real defects. Same family as the unbounded-scan slowness in `getTrendExtent` (optimized 2026-05-17 via `ORDER BY ts ASC/DESC LIMIT 1` — MergeAppend short-circuits at first row, ~10-100× faster than the prior full-table `MIN/MAX`). Worth a focused operational pass: audit other unbounded scans, consider per-test chunk-truncate or sandbox-isolation strategies for the integration suite.
+
+### Cross-cutting / platform
+
+- [ ] **Re-evaluate error management platform-wide.** Current pattern across HMI routes (`tags.ts`, `trends.ts`, `reset.ts`) is bare-string error codes assigned via `err.code = 'X'`; `@caro/db` does the same in `codeError(...)` throws; `CaroError` (`@caro/server/errorHandler.ts`) carries them through to the platform envelope. The pattern is simple but has real shortcomings: no compile-time typo protection (`'INVALID_RAGNE'` compiles), no discoverability (must grep to enumerate all codes), no shared types for client-side consumers, and per-route hand-maintained HTTP-status maps (e.g., `routes/trends.ts:8-13`) that drift silently from the throwing module's actual code surface. Three improvements worth considering, in increasing scope: per-domain typed code constants (cheapest — each module exports its codes as `as const` maps); shared `throw*` helpers in `@caro/server` (reduce per-throw-site boilerplate); shared client-side error response types. The platform-wide cost is moderate (~week of refactor across HMI server + `@caro/db` + client error handling). Surfaced from `hmi_trend_viewer` audit B3#5 (2026-MM-DD).
 - [ ] Create HMI database migrations (005+) for all HMI tables: `users`, `sessions`, `commissioned_modules`, `operation_modes`, `mode_revisions`, `setpoint_values`, `pending_setpoint_values`, `system_settings`, `audit_log`
 - [ ] Periodic Timescale reconnect — NullDbWriter → TimescaleDbWriter retry after failed boot ping (currently requires HMI restart)
 - [ ] `DbPipeline`: remove legacy `flush()` / `queueSize` public aliases (currently referenced in `telemetry-intake.test.ts`; rename or internalize in a dedicated cleanup pass)
@@ -51,4 +56,4 @@ These three items were specified for Phase A (§17.1.1 steps 5 and 13) but defer
 
 ## Platform / Packages
 
-- [ ] `packages/server` and `packages/ui` have no automated tests
+- [ ] `packages/server` has no automated tests

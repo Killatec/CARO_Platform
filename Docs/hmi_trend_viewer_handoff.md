@@ -21,7 +21,9 @@ Phase A Steps 1–11 are complete. Steps 1–6 delivered the server-side trends 
 | 10 | Mode state machine + time-range UI: tailing/fixed transitions, 8-preset strip, End picker (End-only), Live button, pan/zoom interactions | ✅ Done |
 | 11 | Live tail: dedicated trend WS channel, `useLiveSubscription` hook (ring buffer + bucket accumulator + raw buffer; `commitAndDrain` returns void), unified `mergeTrendData` (live-wins-on-coverage, no `isTailing`), eviction-on-live-entry cache freshness (Gap B fix), server-side future-bucket nulling in `getTrendTile`, no-clamp wheel-zoom + `gatedFetchTile` over-range gating + inline "Range too wide" message in `CursorDisplay`, `dispatchModeAction` cleanup wrapper | ✅ Done |
 
-**Test coverage (2026-05-13):** 583 passing in `@caro/trend-chart` (23 test files), 67 in `@caro/hmi-context`, 115 in `@caro/db`, 256 in the HMI server, 33 in the HMI client.
+**Test coverage (2026-05-17):** 586 passing in `@caro/trend-chart`, 67 in `@caro/hmi-context`, 156 in `@caro/db`, 289 in the HMI server, 33 in the HMI client.
+
+**Audit remediation pass (2026-05-15 → 2026-05-17):** all items from `Docs/hmi_trend_viewer_audit_2026-05-15.md` landed across Phases 1–5. Notable architectural change: **M1 metadata-as-return-value** — `getTrendTile()` now returns `Promise<{ tile, meta }>` (see spec §4.1 / §14.7); the `__test_lastUsedSources` module singleton is gone, with per-segment source/timing/rowCount now flowing through `meta.segments[]`. Operational hardening: F5 per-tag outbox cap (spec §4.4), TG-7 `commitAndDrain` bug fix (§10 gotcha below), TG-1 plan-pruning regression test (§10 gotcha below). All other items were refactors, test additions, or comment cleanup with no observable behavior change.
 
 ---
 
@@ -62,10 +64,13 @@ packages/trend-chart/
                                   # stale-generation tracking, liveExitRefetch flag handling
 
     # ── React hooks ───────────────────────────────────────────────────────────
-    useTrendData.ts               # hook shell (~150 lines): state/ref allocation, useEffect
+    useTrendData.ts               # hook shell: state/ref allocation, useEffect
                                   # orchestration (calls runLiveSpineFetch or runHistoryTileFetch),
                                   # ensureCovered, getActiveRange, evictAll, refetchHistory,
-                                  # return value; re-exports pruneAndAdd + assembleLiveSpine
+                                  # return value; re-exports pruneAndAdd + assembleLiveSpine.
+                                  # ensureCovered accounts for ~100 lines of the file (pan-extend
+                                  # candidate computation + per-tile fetch orchestration); future
+                                  # extraction candidate as ensureCoveredFactory.ts if size grows.
                                   # returns { data, isLoading, error, ensureCovered, getActiveRange,
                                   #           evictAll, refetchHistory, swapCounter, activeTileCount,
                                   #           lastFetchMs, responseTailTs }
@@ -382,6 +387,12 @@ Hard-won lessons from the min/max upgrade and perf engineering work.
 
 **Pan-back data-loss window.** On tailing → fixed transition, `commitAndDrain` clears the live buffer immediately. Live values that arrived in the last ~`TIMESCALE_DB_TICK_MS` + FIFO trim buffer (~1.5 s by default: 500 ms DB tick + 1 s trim tolerance) may not yet be committed to TimescaleDB when the next REST fetch fires. Those values are not lost in the historian — they land within the next DB flush cycle — but the brief in-transit window renders as null/gap until the subsequent refetch picks them up. Deliberate property of the tail-extension model: keeping tailing-exit synchronous and simple outweighs the cost of a sub-2 s null flash on pan-back. Not a bug.
 
+**`commitAndDrain` must reset per-tag arrays in place, not `.clear()` the map.** `rawBuffersRef` is `Map<tagId, Array>`. Calling `.clear()` removes every per-tag key; the subscribe callback's `if (buf)` guard then silently drops every subsequent event until something re-allocates the map keys. Production lifecycle mode-flip + tailMode-effect re-allocation masked the bug, but it surfaces immediately under stable-mode drain (the TG-7 audit test). Fix: `for (const arr of rawBuffersRef.current.values()) arr.length = 0` plus `setTail(null)` for explicit React-state drain. Spec §10.6 documents the contract; the in-place mutation pattern is the implementation choice that matches it. Surfaced + closed during the 2026-05-17 audit pass.
+
+**EXPLAIN of `locf(prev => ...)` hides the prev subquery in TimescaleDB 2.26.3 output.** When validating chunk pruning on the bounded-prev pattern (spec §5.5), `EXPLAIN (FORMAT JSON)` on a `locf()` call does not expose the nested correlated subquery in the plan tree — pruning structure for the `prev` lookup is invisible. The TG-1 plan-assertion test (`packages/db/__tests__/timescale/trends.test.ts`) works around this by extracting the inner prev SQL directly from `buildGapfillSql`'s output via regex and EXPLAIN-ing it as a standalone statement. Future tests of the bounded-prev shape must do the same.
+
+**EXPLAIN with parameter bindings uses the generic plan (statistics-based pruning), not constraint exclusion.** Related to the above: `EXPLAIN (FORMAT JSON) $sql` with `[params]` goes through the Extended Protocol → prepared statement → generic plan after the 5th execution. Generic plans use row-count statistics for chunk pruning, which silently prunes empty chunks regardless of whether the bounded-prev's `INTERVAL '5 minutes'` filter is present. To verify constraint-based exclusion (what production sees), substitute literal values into the SQL before EXPLAIN. Spec §5.5 has the production-side prepared-statement warning; this is the test-side corollary. Surfaced during TG-1 implementation.
+
 ---
 
 ## 11. Known Issues
@@ -392,7 +403,7 @@ Observations from production behavior. Not divergences from spec — document he
 
 **B. Data gaps near right edge after live→fixed transition.**
 
-*Gap A (immediate, transient) — present, accepted.* Right after a tailing→fixed transition, the history fetch may return CAG-lag null buckets at the right edge of the newly-fixed viewport (the CAG hasn't yet materialized the most recent ~10-30 s of data). The null band resolves when the CAG catches up, but the user must trigger a re-fetch (pan, zoom, etc.) to see the update. Accepted: Gap A is small in practice, self-corrects quickly, and the root cause (CAG materialization lag) is a fundamental property of the architecture, not a client-side bug. If Gap A becomes a user-visible complaint, a ring-survives-transition architecture is a viable follow-up: keep the live sample ring populated across the tailing→fixed transition (rather than draining it via `commitAndDrain`), use it as an overlay source for the merge in the post-transition window, and invalidate cached tiles when ring entries age out (on the assumption that the CAG has materialized the underlying buckets by then). The trade-off is a more elaborate lifecycle vs. the simpler eviction-on-live-entry approach currently shipped.
+*Gap A (closed, 2026-05-16).* Originally described as a CAG-lag null band at the right edge of the newly-fixed viewport after tailing→fixed transition. Closed by future-bucket nulling (spec §6.5): buckets whose `bucketStartMs > responseTailTs` are set to `(null, null, null)` server-side at request entry, so the post-transition right edge shows the chart line trailing off naturally at `responseTailTs` — visually identical to the live-tail's trailing edge. The residual writer-lag gap (`TIMESCALE_DB_TICK_MS = 500 ms` + ~1 s FIFO trim tolerance) sits in `[responseTailTs - 1.5 s, responseTailTs]` and is filled by `time_bucket_gapfill + locf` for bucketed presets. Every bucketed preset has `bucketSMs ≥ 300 ms` (5m and larger), making the lag sub-bucket or sub-perceptual; the 1m raw-COV preset uses no LOCF and is unaffected. The ring-survives-transition follow-up architecture proposed in earlier revisions of this section is no longer needed — watermark-aware fall-through (spec §4.3) combined with future-bucket nulling jointly handle the right-edge case.
 
 *Gap B (cross-session frozen cache nulls) — closed (2026-05-13).* In the prior architecture, CAG-lag nulls could be written to the tile cache and frozen there indefinitely. Users who toggled between live and fixed would see stale nulls accumulate across sessions. Eliminated by eviction-on-live-entry: `dispatchModeAction` calls `evictAll()` on every fixed→tailing (Live button) transition, clearing the cache so each live session starts with a clean slate. See `hmi_trend_viewer_spec.md` §10.8.
 
