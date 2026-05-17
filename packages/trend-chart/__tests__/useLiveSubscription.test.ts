@@ -2,6 +2,7 @@ import { renderHook, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useLiveSubscription, TREND_RING_CAPACITY } from '../src/useLiveSubscription.js';
 import { TS_BUCKET_ORIGIN_MS } from '../src/level.js';
+import type { AggregateSeriesData } from '../src/types.js';
 
 // ─── Mock @caro/hmi-context ────────────────────────────────────────────────────
 
@@ -946,5 +947,78 @@ describe('useLiveSubscription — getLatestSampleTs', () => {
 
     act(() => { fireCb(1, 7000, 2); });
     expect(result.current.getLatestSampleTs()).toBe(7000n); // new session
+  });
+});
+
+// ─── Generation counter ───────────────────────────────────────────────────────
+
+describe('useLiveSubscription — generation counter', () => {
+  it('getCurrentGeneration() starts at 0', () => {
+    const { result } = renderHook(() =>
+      useLiveSubscription({ tagIds: [1], trimThreshold: null }),
+    );
+    expect(result.current.getCurrentGeneration()).toBe(0);
+  });
+
+  it('commitAndDrain increments generation by exactly 1', () => {
+    const { result } = renderHook(() =>
+      useLiveSubscription({ tagIds: [1], trimThreshold: null }),
+    );
+    act(() => { result.current.commitAndDrain(); });
+    expect(result.current.getCurrentGeneration()).toBe(1);
+  });
+
+  it('multiple commitAndDrain calls each increment generation by 1', () => {
+    const { result } = renderHook(() =>
+      useLiveSubscription({ tagIds: [1], trimThreshold: null }),
+    );
+    act(() => { result.current.commitAndDrain(); });
+    act(() => { result.current.commitAndDrain(); });
+    act(() => { result.current.commitAndDrain(); });
+    expect(result.current.getCurrentGeneration()).toBe(3);
+  });
+
+  it('commitAndDrain bumps generation even when buffer is empty (no events fired)', () => {
+    // Buffer is empty (no fireCb calls) — drain must still increment the counter.
+    const { result } = renderHook(() =>
+      useLiveSubscription({ tagIds: [1], trimThreshold: null }),
+    );
+    act(() => { result.current.commitAndDrain(); });
+    expect(result.current.getCurrentGeneration()).toBe(1);
+  });
+
+  it('seedFromSpineFetch with stale generation leaves buffer unchanged', () => {
+    // Capture generation, call commitAndDrain (generation advances), then attempt
+    // to seed with the old (now stale) generation — buffer must remain null.
+    const { result } = renderHook(() =>
+      useLiveSubscription({
+        tagIds: [1],
+        trimThreshold: null,
+        isLive: true,
+        tailMode: 'aggregate',
+        bucketSMs: BUCKET_SMS,
+      }),
+    );
+
+    const stalegen = result.current.getCurrentGeneration(); // 0
+
+    act(() => { result.current.commitAndDrain(); }); // generation → 1
+    expect(result.current.getCurrentGeneration()).toBe(1);
+
+    const staleSpine: AggregateSeriesData = {
+      type:      'aggregate',
+      source:    '1s_cagg',
+      startTime: BigInt(ORIGIN),
+      endTime:   BigInt(ORIGIN + 5000),
+      n:         5,
+      bucketSMs: Number(BUCKET_SMS),
+      series:    new Map([[1, { value: [1, 2, 3, 4, 5], min: [1, 2, 3, 4, 5], max: [1, 2, 3, 4, 5] }]]),
+    };
+
+    // Seed with the captured (stale) generation — must be silently dropped.
+    result.current.seedFromSpineFetch(1, staleSpine, stalegen);
+
+    // Buffer should remain null — nothing was stored.
+    expect(result.current.getBufferSnapshot()).toBeNull();
   });
 });
