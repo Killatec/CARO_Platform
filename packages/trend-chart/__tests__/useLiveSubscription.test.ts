@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useLiveSubscription, TREND_RING_CAPACITY } from '../src/useLiveSubscription.js';
 import { TS_BUCKET_ORIGIN_MS } from '../src/level.js';
 import type { AggregateSeriesData } from '../src/types.js';
+import { mergeTrendData } from '../src/mergeTrendData.js';
 
 // ─── Mock @caro/hmi-context ────────────────────────────────────────────────────
 
@@ -1020,5 +1021,103 @@ describe('useLiveSubscription — generation counter', () => {
 
     // Buffer should remain null — nothing was stored.
     expect(result.current.getBufferSnapshot()).toBeNull();
+  });
+});
+
+// ─── Phase 2b unified buffer ──────────────────────────────────────────────────
+
+describe('useLiveSubscription — Phase 2b unified buffer', () => {
+  const makeSpine = (): AggregateSeriesData => ({
+    type:      'aggregate',
+    source:    '1s_cagg',
+    startTime: BigInt(ORIGIN),
+    endTime:   BigInt(ORIGIN + 5 * Number(BUCKET_SMS)),
+    n:         5,
+    bucketSMs: Number(BUCKET_SMS),
+    series:    new Map([[1, { value: [10, 20, 30, 40, 50], min: [10, 20, 30, 40, 50], max: [10, 20, 30, 40, 50] }]]),
+  });
+
+  it('D2: matching generation seeds spine; getBufferSnapshot returns it', () => {
+    const { result } = renderHook(() =>
+      useLiveSubscription({ tagIds: [1], trimThreshold: null, isLive: true, tailMode: 'aggregate', bucketSMs: BUCKET_SMS }),
+    );
+
+    const gen = result.current.getCurrentGeneration(); // 0
+    const spine = makeSpine();
+
+    result.current.seedFromSpineFetch(1, spine, gen);
+
+    const snapshot = result.current.getBufferSnapshot();
+    expect(snapshot).not.toBeNull();
+    expect(snapshot!.type).toBe('aggregate');
+    expect(snapshot!.startTime).toBe(spine.startTime);
+    const snap = snapshot as AggregateSeriesData;
+    expect(snap.series.get(1)!.value).toEqual([10, 20, 30, 40, 50]);
+  });
+
+  it('commitAndDrain clears seeded spine; getBufferSnapshot returns null afterward', () => {
+    const { result } = renderHook(() =>
+      useLiveSubscription({ tagIds: [1], trimThreshold: null, isLive: true, tailMode: 'aggregate', bucketSMs: BUCKET_SMS }),
+    );
+
+    const gen = result.current.getCurrentGeneration();
+    result.current.seedFromSpineFetch(1, makeSpine(), gen);
+    expect(result.current.getBufferSnapshot()).not.toBeNull();
+
+    act(() => { result.current.commitAndDrain(); });
+
+    expect(result.current.getBufferSnapshot()).toBeNull();
+  });
+
+  it('D3: getBufferSnapshot() matches mergeTrendData(spine, tail) for same inputs', () => {
+    const { result } = renderHook(() =>
+      useLiveSubscription({ tagIds: [1], trimThreshold: null, isLive: true, tailMode: 'aggregate', bucketSMs: BUCKET_SMS }),
+    );
+
+    const gen = result.current.getCurrentGeneration();
+    const spine = makeSpine();
+    result.current.seedFromSpineFetch(1, spine, gen);
+
+    // Fire two samples in consecutive buckets so bucket 5 closes and a tail exists.
+    act(() => {
+      fireCb(1, ORIGIN + 5 * Number(BUCKET_SMS) + 100, 99);  // bucket 5 opens
+      fireCb(1, ORIGIN + 6 * Number(BUCKET_SMS) + 100, 88);  // bucket 6 opens → bucket 5 closes
+    });
+
+    const snapshot = result.current.getBufferSnapshot();
+    const tail = result.current.tail;
+    const expected = mergeTrendData(spine, tail);
+
+    expect(snapshot).not.toBeNull();
+    expect(expected).not.toBeNull();
+    expect(snapshot!.type).toBe(expected!.type);
+    expect(snapshot!.startTime).toBe(expected!.startTime);
+    expect(snapshot!.endTime).toBe(expected!.endTime);
+    const snap = snapshot as AggregateSeriesData;
+    const exp  = expected  as AggregateSeriesData;
+    expect(snap.n).toBe(exp.n);
+    expect(snap.series.get(1)!.value).toEqual(exp.series.get(1)!.value);
+  });
+
+  it('D4: WS push after spine seed advances getBufferSnapshot endTime without re-render', () => {
+    const { result } = renderHook(() =>
+      useLiveSubscription({ tagIds: [1], trimThreshold: null, isLive: true, tailMode: 'aggregate', bucketSMs: BUCKET_SMS }),
+    );
+
+    const gen = result.current.getCurrentGeneration();
+    result.current.seedFromSpineFetch(1, makeSpine(), gen);
+
+    // No tail yet — snapshot covers only the spine.
+    const beforeEnd = result.current.getBufferSnapshot()!.endTime;
+
+    // Fire two samples in consecutive buckets so a bucket closes.
+    act(() => {
+      fireCb(1, ORIGIN + 5 * Number(BUCKET_SMS) + 100, 77);
+      fireCb(1, ORIGIN + 6 * Number(BUCKET_SMS) + 100, 66);
+    });
+
+    // getBufferSnapshot reads from refs synchronously — picks up the new closed bucket.
+    const afterEnd = result.current.getBufferSnapshot()!.endTime;
+    expect(afterEnd).toBeGreaterThan(beforeEnd);
   });
 });

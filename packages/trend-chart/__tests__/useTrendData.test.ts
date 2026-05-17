@@ -1411,7 +1411,8 @@ describe('useTrendData — isTailing skip guard', () => {
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     // At least one visible-tile fetch must have fired (empty active set → guard skipped).
     expect(mockFetchTile).toHaveBeenCalled();
-    expect(result.current.data).not.toBeNull();
+    // Phase 2b: data is always null in live mode; spine goes to onSpineResolved / unified buffer.
+    expect(result.current.data).toBeNull();
   });
 
   it('isTailing=true + span change (preset switch) → fetch fires', async () => {
@@ -1437,23 +1438,38 @@ describe('useTrendData — isTailing skip guard', () => {
     // Viewport ending at a non-round timestamp — tile-grid alignment would shift
     // startTime to a boundary earlier than viewport.start, creating a left-side gap.
     const oddViewport: Viewport = { start: 12_345_678_000n, end: 12_345_678_000n + ONE_HOUR };
-    const { result } = renderHook(() =>
-      useTrendData({ viewport: oddViewport, tagIds: [1], isLive: true }),
+
+    let seededBounds: { startTime: bigint; endTime: bigint } | undefined;
+    renderHook(() =>
+      useTrendData({
+        viewport: oddViewport,
+        tagIds: [1],
+        isLive: true,
+        onSpineResolved: (_tagId, series) => { seededBounds = series; },
+      }),
     );
 
     await waitFor(() => expect(mockFetchTile).toHaveBeenCalled());
 
+    // Fetch params must use raw viewport bounds (no grid alignment).
     const call = mockFetchTile.mock.calls[0]!;
     expect(call[0].startTime).toBe(oddViewport.start);
     expect(call[0].endTime).toBe(oddViewport.end);
-    expect(result.current.data?.startTime).toBe(oddViewport.start);
-    expect(result.current.data?.endTime).toBe(oddViewport.end);
+    // Phase 2b: assembled spine goes to onSpineResolved, not hookResult.data.
+    await waitFor(() => seededBounds !== undefined);
+    expect(seededBounds!.startTime).toBe(oddViewport.start);
+    expect(seededBounds!.endTime).toBe(oddViewport.end);
   });
 
-  it('live entry: exactly one spine tile fetch, data assembled directly (no cache path)', async () => {
+  it('live entry: exactly one spine tile fetch; data:null + activeTileCount:0 (spine bypasses cache)', async () => {
+    let onSpineResolvedCallCount = 0;
+
     const { result } = renderHook(
       ({ viewport, isLive }: { viewport: Viewport; isLive: boolean }) =>
-        useTrendData({ viewport, tagIds: [1], isLive }),
+        useTrendData({
+          viewport, tagIds: [1], isLive,
+          onSpineResolved: () => { onSpineResolvedCallCount++; },
+        }),
       { initialProps: { viewport: defaultViewport, isLive: true } },
     );
 
@@ -1461,8 +1477,9 @@ describe('useTrendData — isTailing skip guard', () => {
 
     // Spine fetch fires exactly once (1 group of 1 tag → 1 call).
     expect(mockFetchTile).toHaveBeenCalledTimes(1);
-    expect(result.current.data).not.toBeNull();
-    expect(result.current.data?.type).toBe('aggregate');
+    // Phase 2b: data is null in live mode; spine is delivered via onSpineResolved.
+    expect(result.current.data).toBeNull();
+    expect(onSpineResolvedCallCount).toBe(1);
     // activeTileCount stays 0 in live mode — spine is not a cached tile.
     expect(result.current.activeTileCount).toBe(0);
   });
@@ -1570,6 +1587,52 @@ describe('useTrendData — refetchHistory', () => {
     for (const [p] of newCalls) {
       expect((p as Parameters<typeof fetchTile>[0]).startTime).toBeLessThan(lastVisibleEnd);
     }
+  });
+});
+
+// ── Phase 2b: liveGeneration capture ─────────────────────────────────────────
+
+describe('useTrendData — Phase 2b live-generation capture', () => {
+  it('D1: liveGeneration captured at dispatch; stale gen → onSpineResolved still called with dispatch-time gen', async () => {
+    // Verify that dispatchGeneration is captured from getLiveGeneration() at the moment the
+    // fetch is dispatched, not at the moment the fetch resolves. If the live generation
+    // advances between dispatch and resolve, useLiveSubscription's seedFromSpineFetch will
+    // silently drop the stale result — but useTrendData's responsibility is solely to pass
+    // the dispatch-time generation to onSpineResolved, not to re-check it.
+
+    let liveGen = 0;
+    const onSpineResolved = vi.fn();
+
+    // Stall the fetch so we can advance liveGen before it resolves.
+    const resolvers: Array<(v: TileApiResponse) => void> = [];
+    mockFetchTile.mockImplementation(
+      () => new Promise<TileApiResponse>(r => resolvers.push(r)),
+    );
+
+    renderHook(() =>
+      useTrendData({
+        viewport: defaultViewport,
+        tagIds: [1],
+        isLive: true,
+        getLiveGeneration: () => liveGen,
+        onSpineResolved,
+      }),
+    );
+
+    // Wait for the fetch to be dispatched.
+    await waitFor(() => expect(mockFetchTile).toHaveBeenCalledTimes(1));
+
+    // Simulate commitAndDrain: advance the live generation AFTER dispatch.
+    liveGen = 1;
+
+    // Resolve the fetch with the stale generation still in dispatchGeneration.
+    act(() => {
+      for (const r of resolvers) r(makeAggResponse([1]));
+    });
+
+    // onSpineResolved is called with the dispatch-time generation (0), not the current (1).
+    await waitFor(() => expect(onSpineResolved).toHaveBeenCalled());
+    expect(onSpineResolved).toHaveBeenCalledWith(1, expect.objectContaining({ type: 'aggregate' }), 0);
   });
 });
 

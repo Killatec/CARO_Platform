@@ -17,6 +17,7 @@ const liveHoisted = vi.hoisted(() => {
   const commitAndDrain = vi.fn();
   let _tail: unknown = null;
   let _lastOpts: Record<string, unknown> | null = null;
+  let _snapshot: unknown = null;
 
   return {
     commitAndDrain,
@@ -24,6 +25,8 @@ const liveHoisted = vi.hoisted(() => {
     getTail: () => _tail,
     setLastOpts: (o: Record<string, unknown>) => { _lastOpts = o; },
     getLastOpts: () => _lastOpts,
+    setSnapshot: (s: unknown) => { _snapshot = s; },
+    getSnapshot: () => _snapshot,
   };
 });
 
@@ -34,6 +37,9 @@ vi.mock('../src/useLiveSubscription.js', () => ({
       tail: liveHoisted.getTail(),
       commitAndDrain: liveHoisted.commitAndDrain,
       getLatestSampleTs: vi.fn().mockReturnValue(null),
+      getBufferSnapshot: vi.fn(() => liveHoisted.getSnapshot()),
+      getCurrentGeneration: vi.fn().mockReturnValue(0),
+      seedFromSpineFetch: vi.fn(),
     };
   }),
   TREND_RING_CAPACITY: 20,
@@ -151,6 +157,7 @@ describe('TrendChartContainer', () => {
     capturedOnDragZoom = undefined;
     capturedData = undefined;
     liveHoisted.setTail(null);
+    liveHoisted.setSnapshot(makeAggData([1, 2]));
     mockUseTrendData.mockReturnValue(makeResult([1, 2]));
     // EndPicker calls showPicker() on the hidden input; jsdom doesn't implement it.
     Object.defineProperty(HTMLInputElement.prototype, 'showPicker', {
@@ -242,12 +249,15 @@ describe('TrendChartContainer', () => {
   });
 
   it('shows loading hint when data is null and isLoading=true', () => {
+    // In Live mode chart data comes from getBufferSnapshot(); null snapshot keeps chartData null.
+    liveHoisted.setSnapshot(null);
     mockUseTrendData.mockReturnValue(makeResult([1, 2], { data: null, isLoading: true }));
     renderContainer();
     expect(screen.getByText('Loading…')).toBeTruthy();
   });
 
   it('shows no-tags hint when tagIds is empty', () => {
+    liveHoisted.setSnapshot(null);
     mockUseTrendData.mockReturnValue(makeResult([], { data: null, isLoading: false }));
     renderContainer([]);
     expect(screen.getByText('No tags selected.')).toBeTruthy();
@@ -698,6 +708,10 @@ describe('TrendChartContainer', () => {
       // When spine settles, tailMode→'aggregate' triggers ring replay with the
       // correct bucketSMs. This verifies no deltas are misrouted during the
       // spine-fetch window.
+      //
+      // Phase 2b: cachedData comes from getBufferSnapshot() in live mode.
+      // Null snapshot simulates "no spine seeded yet" (spine in-flight).
+      liveHoisted.setSnapshot(null);
       mockUseTrendData.mockReturnValue(makeResult([1], { data: null, isLoading: true, responseTailTs: null }));
       renderContainer([1]);
 
@@ -705,7 +719,8 @@ describe('TrendChartContainer', () => {
       expect(liveHoisted.getLastOpts()?.tailMode).toBeNull();
       expect(liveHoisted.getLastOpts()?.bucketSMs).toBeNull();
 
-      // Spine settles: useTrendData now returns data.
+      // Spine settles: update snapshot to simulate seedFromSpineFetch writing to spineRef.
+      liveHoisted.setSnapshot(makeAggData([1]));
       mockUseTrendData.mockReturnValue(makeResult([1]));
       // Trigger a re-render by simulating a tick (onDataReceived advances nowMs).
       act(() => {

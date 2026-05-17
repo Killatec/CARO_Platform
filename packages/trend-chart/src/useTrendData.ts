@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { TREND_VIEWER_DEFAULTS, MIN_VIEWPORT_SPAN_MS, MAX_VIEWPORT_SPAN_MS } from './level.js';
 import { TileCache, makeTileCacheKey } from './tileCache.js';
-import type { Tile, Viewport } from './types.js';
+import type { Tile, Viewport, AggregateSeriesData, RawSeriesData } from './types.js';
 import {
   estimateCachedEntrySize,
   chunkArray,
@@ -31,6 +31,10 @@ export interface UseTrendDataOptions {
   visibleTilesPerWindow?: number;
   overfetchPerSide?: number;
   cacheCapacityBytes?: number;
+  /** Returns the current useLiveSubscription generation counter, captured at fetch-dispatch time. */
+  getLiveGeneration?: () => number;
+  /** Called per-tag when the live-spine fetch resolves; writes into the unified buffer. */
+  onSpineResolved?: (tagId: number, series: AggregateSeriesData | RawSeriesData, generation: number) => void;
 }
 
 export interface UseTrendDataResult extends HookState {
@@ -75,6 +79,8 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     visibleTilesPerWindow = TREND_VIEWER_DEFAULTS.visibleTilesPerWindow,
     overfetchPerSide = TREND_VIEWER_DEFAULTS.overfetchPerSide,
     cacheCapacityBytes = DEFAULT_CACHE_CAPACITY,
+    getLiveGeneration,
+    onSpineResolved,
   } = opts;
 
   const cache = useMemo(
@@ -123,6 +129,10 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
   // renders; putting isTailing in deps caused a stale-viewport fetch on entry.
   const isLiveRef = useRef<boolean>(isLive);
   isLiveRef.current = isLive;
+  const getLiveGenerationRef = useRef(getLiveGeneration);
+  getLiveGenerationRef.current = getLiveGeneration;
+  const onSpineResolvedRef = useRef(onSpineResolved);
+  onSpineResolvedRef.current = onSpineResolved;
 
   // Stable dep keys: tagIds array → joined string; Viewport object → component fields.
   const tagIdsKey = tagIds.join(',');
@@ -158,6 +168,9 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
         spineLoadedRef, spineFetchInFlightRef, generationRef,
         activeTilesRef, inFlightTilesRef,
         setHookResult, setSwapCounter, setLastFetchMs, setResponseTailTs, setActiveTileCount,
+        getCurrentGeneration: () => getLiveGenerationRef.current?.() ?? 0,
+        seedFromSpineFetch: (tagId: number, series: AggregateSeriesData | RawSeriesData, gen: number) =>
+          onSpineResolvedRef.current?.(tagId, series, gen),
       });
       return () => { finalizeRef.current = null; };
     }

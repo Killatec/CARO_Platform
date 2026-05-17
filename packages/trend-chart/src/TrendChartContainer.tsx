@@ -14,7 +14,7 @@ import { SpanPresets } from './SpanPresets.js';
 import { EndPicker } from './EndPicker.js';
 import { CursorDisplay } from './CursorDisplay.js';
 import { TREND_VIEWER_DEFAULTS, MIN_VIEWPORT_SPAN_MS, MAX_VIEWPORT_SPAN_MS } from './level.js';
-import type { AggregateSeriesData } from './types.js';
+import type { AggregateSeriesData, RawSeriesData } from './types.js';
 
 const VISIBLE_TILES_PER_WINDOW = TREND_VIEWER_DEFAULTS.visibleTilesPerWindow;
 const BUCKET_COUNT = TREND_VIEWER_DEFAULTS.bucketCount;
@@ -94,22 +94,36 @@ export function TrendChartContainer({
     lastIntent: modeState.lastIntent,
   });
 
+  // ── Live subscription ref (declared before useTrendData so the spine callbacks
+  //    can reference it; stable ref, never null after first render) ─────────────
+  const liveSubRef = useRef<UseLiveSubscriptionResult | null>(null);
+  const getLiveGeneration = useCallback(() => liveSubRef.current?.getCurrentGeneration() ?? 0, []);
+  const onSpineResolved = useCallback(
+    (tagId: number, series: AggregateSeriesData | RawSeriesData, gen: number) => {
+      liveSubRef.current?.seedFromSpineFetch(tagId, series, gen);
+    },
+    [],
+  );
+
   // ── Data fetch (driven by explicit dataViewport) ──────────────────────────
-  const trendData = useTrendData({ viewport: dataViewport, tagIds, isLive: isLive(modeState.mode) });
+  const trendData = useTrendData({ viewport: dataViewport, tagIds, isLive: isLive(modeState.mode), getLiveGeneration, onSpineResolved });
   const { data, isLoading, ensureCovered, getActiveRange, swapCounter, activeTileCount, lastFetchMs } = trendData;
 
   // ── Stable refs for synchronous access from callbacks and cleanup ─────────
   // Updated synchronously during render so callbacks always see the latest values.
   const modeStateRef = useRef(modeState);
   const trendDataRef = useRef<UseTrendDataResult>(trendData);
-  const liveSubRef   = useRef<UseLiveSubscriptionResult | null>(null);
 
   modeStateRef.current = modeState;
   trendDataRef.current = trendData;
 
   // ── Live subscription inputs ──────────────────────────────────────────────
   const viewportSpanMs = modeViewport.end - modeViewport.start;
-  const cachedData = data;
+  // In Live mode, read from the unified buffer (previous render's getBufferSnapshot) so
+  // tailMode and bucketSMs are derivable without holding spine data in useTrendData state.
+  const cachedData = isLive(modeState.mode)
+    ? (liveSubRef.current?.getBufferSnapshot() ?? null)
+    : data;
 
   const tailMode: 'aggregate' | 'raw' | null =
     cachedData?.type === 'aggregate' ? 'aggregate'
@@ -152,10 +166,12 @@ export function TrendChartContainer({
   liveSubRef.current = liveSub;
 
   // ── Merged data for rendering ─────────────────────────────────────────────
-  const mergedData = useMemo(
-    () => mergeTrendData(data, liveSub.tail),
-    [data, liveSub.tail],
-  );
+  const mergedData = useMemo(() => {
+    if (isLive(modeState.mode)) {
+      return liveSub.getBufferSnapshot();
+    }
+    return mergeTrendData(data, liveSub.tail);
+  }, [modeState.mode, data, liveSub.tail, liveSub.getBufferSnapshot]);
 
   // ── xRange: passes the live mode viewport to TrendChart for imperative
   //    setScale — updated every tick in tailing, or on preset/EndPicker/zoom. ──
@@ -164,7 +180,7 @@ export function TrendChartContainer({
     [modeViewport.start, modeViewport.end],
   );
 
-  const bucketSMsIndicator = data?.type === 'aggregate' ? BigInt(data.bucketSMs) : null;
+  const bucketSMsIndicator = cachedData?.type === 'aggregate' ? BigInt(cachedData.bucketSMs) : null;
 
   // ── dispatchModeAction: live drain before dispatch ────────────────────────
   // Used for all actions that can change the tailing/fixed mode boundary.

@@ -111,6 +111,8 @@ export interface LiveSpineFetchArgs {
   setLastFetchMs: Dispatch<SetStateAction<number | null>>;
   setResponseTailTs: Dispatch<SetStateAction<number | null>>;
   setActiveTileCount: Dispatch<SetStateAction<number>>;
+  getCurrentGeneration: () => number;
+  seedFromSpineFetch: (tagId: number, series: AggregateSeriesData | RawSeriesData, generation: number) => void;
 }
 
 /**
@@ -125,6 +127,7 @@ export function runLiveSpineFetch(args: LiveSpineFetchArgs): void {
     spineLoadedRef, spineFetchInFlightRef, generationRef,
     activeTilesRef, inFlightTilesRef,
     setHookResult, setSwapCounter, setLastFetchMs, setResponseTailTs, setActiveTileCount,
+    getCurrentGeneration, seedFromSpineFetch,
   } = args;
 
   if (!spanChanged && (spineLoadedRef.current || spineFetchInFlightRef.current)) return;
@@ -150,6 +153,7 @@ export function runLiveSpineFetch(args: LiveSpineFetchArgs): void {
   const batchT0 = performance.now();
   setHookResult(prev => ({ ...prev, isLoading: true }));
 
+  const dispatchGeneration = getCurrentGeneration();
   spineFetchInFlightRef.current = true;
   // Promise resolution order: generation check FIRST, then clear the flag.
   //
@@ -183,7 +187,12 @@ export function runLiveSpineFetch(args: LiveSpineFetchArgs): void {
     if (generationRef.current !== generation) return;
     spineFetchInFlightRef.current = false;
     const data = assembleLiveSpine(responses, spineTile, tagIds);
-    setHookResult({ data, isLoading: false, error: null });
+    if (data !== null) {
+      for (const tagId of tagIds) {
+        seedFromSpineFetch(tagId, data, dispatchGeneration);
+      }
+    }
+    setHookResult({ data: null, isLoading: false, error: null });
     setSwapCounter(c => c + 1);
     setLastFetchMs(Math.round(performance.now() - batchT0));
     const maxTailTs = responses.reduce((m, r) => Math.max(m, r.responseTailTs), 0);
