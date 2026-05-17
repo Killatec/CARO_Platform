@@ -29,7 +29,7 @@ export type LastIntent = 'preset' | 'live' | 'endPicker' | 'zoom' | 'pan' | null
  * lastIntent tracks the most recent user action for preset highlighting.
  */
 export type ModeState =
-  | { mode: 'tailing'; sizeMs: bigint; nowMs: bigint; lastIntent: LastIntent }
+  | { mode: 'live-trailing'; sizeMs: bigint; nowMs: bigint; lastIntent: LastIntent }
   | { mode: 'fixed'; from: bigint; to: bigint; sizeMs: bigint; lastIntent: LastIntent };
 
 export type TrendModeAction =
@@ -58,11 +58,11 @@ export function trendModeReducer(state: ModeState, action: TrendModeAction): Mod
           lastIntent: 'preset',
         };
       }
-      return { mode: 'tailing', sizeMs: action.sizeMs, nowMs: action.nowMs, lastIntent: 'preset' };
+      return { mode: 'live-trailing', sizeMs: action.sizeMs, nowMs: action.nowMs, lastIntent: 'preset' };
 
     case 'liveClicked':
       if (state.mode === 'fixed') {
-        return { mode: 'tailing', sizeMs: state.sizeMs, nowMs: action.nowMs, lastIntent: 'live' };
+        return { mode: 'live-trailing', sizeMs: state.sizeMs, nowMs: action.nowMs, lastIntent: 'live' };
       }
       return { ...state, nowMs: action.nowMs, lastIntent: 'live' };
 
@@ -97,7 +97,7 @@ export function trendModeReducer(state: ModeState, action: TrendModeAction): Mod
     }
 
     case 'tick':
-      if (state.mode === 'tailing') {
+      if (state.mode === 'live-trailing') {
         // Spread preserves lastIntent — advancing the clock is not a user intent.
         return { ...state, nowMs: action.nowMs };
       }
@@ -107,7 +107,7 @@ export function trendModeReducer(state: ModeState, action: TrendModeAction): Mod
 
 /** Derive the renderable viewport from mode state. */
 export function modeToViewport(state: ModeState): Viewport {
-  if (state.mode === 'tailing') {
+  if (state.mode === 'live-trailing') {
     return { start: state.nowMs - state.sizeMs, end: state.nowMs };
   }
   return { start: state.from, end: state.to };
@@ -122,7 +122,7 @@ export interface UseTrendModeResult {
 /** Stateful hook: owns mode reducer + 1 Hz tick. */
 export function useTrendMode(): UseTrendModeResult {
   const [state, dispatch] = useReducer(trendModeReducer, undefined, () => ({
-    mode: 'tailing' as const,
+    mode: 'live-trailing' as const,
     sizeMs: DEFAULT_SIZE_MS,
     nowMs: BigInt(Date.now()),
     lastIntent: null as LastIntent,

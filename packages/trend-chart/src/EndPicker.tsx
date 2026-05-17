@@ -197,7 +197,7 @@ export function EndPicker({ state, viewport, siteTimezone, onEndCommitted, onLiv
     }
   }
 
-  const isTailing = state.mode === 'tailing';
+  const isLive = state.mode === 'live-trailing';
 
   return (
     <div style={ROW}>
@@ -222,8 +222,8 @@ export function EndPicker({ state, viewport, siteTimezone, onEndCommitted, onLiv
           aria-hidden="true"
         />
       </div>
-      <button type="button" style={isTailing ? LIVE_BTN : LIVE_BTN_FIXED} onClick={onLive}>
-        {isTailing ? '● Live' : 'Go Live'}
+      <button type="button" style={isLive ? LIVE_BTN : LIVE_BTN_FIXED} onClick={onLive}>
+        {isLive ? '● Live' : 'Go Live'}
       </button>
     </div>
   );

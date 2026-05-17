@@ -13,7 +13,7 @@ const ONE_HOUR = 3_600_000n;
 // 2023-11-14T22:13:20.000Z
 const VIEWPORT: Viewport = { start: NOW - ONE_HOUR, end: NOW };
 
-const TAILING: ModeState = { mode: 'tailing', sizeMs: ONE_HOUR, nowMs: NOW, lastIntent: null };
+const LIVE_TRAILING: ModeState = { mode: 'live-trailing', sizeMs: ONE_HOUR, nowMs: NOW, lastIntent: null };
 const FIXED: ModeState = { mode: 'fixed', from: NOW - ONE_HOUR, to: NOW, sizeMs: ONE_HOUR, lastIntent: null };
 
 function renderPicker(opts: {
@@ -29,7 +29,7 @@ function renderPicker(opts: {
     onLive,
     ...render(
       <EndPicker
-        state={opts.state ?? TAILING}
+        state={opts.state ?? LIVE_TRAILING}
         viewport={opts.viewport ?? VIEWPORT}
         siteTimezone="UTC"
         onEndCommitted={onEndCommitted}
@@ -75,7 +75,7 @@ describe('EndPicker — initial render', () => {
   });
 
   it('shows "● Live" button in tailing mode', () => {
-    renderPicker({ state: TAILING });
+    renderPicker({ state: LIVE_TRAILING });
     expect(screen.getByText('● Live')).toBeTruthy();
   });
 
@@ -162,7 +162,7 @@ describe('EndPicker — viewport.end sync', () => {
   it('re-syncs display text when viewport.end changes via rerender', () => {
     const { rerender } = render(
       <EndPicker
-        state={TAILING}
+        state={LIVE_TRAILING}
         viewport={VIEWPORT}
         siteTimezone="UTC"
         onEndCommitted={vi.fn()}
@@ -172,7 +172,7 @@ describe('EndPicker — viewport.end sync', () => {
     const newEnd = NOW + 600_000n; // 10 min later
     rerender(
       <EndPicker
-        state={TAILING}
+        state={LIVE_TRAILING}
         viewport={{ start: VIEWPORT.start + 600_000n, end: newEnd }}
         siteTimezone="UTC"
         onEndCommitted={vi.fn()}
@@ -188,7 +188,7 @@ describe('EndPicker — viewport.end sync', () => {
 
 describe('EndPicker — Live button', () => {
   it('calls onLive when "● Live" clicked', () => {
-    const { onLive } = renderPicker({ state: TAILING });
+    const { onLive } = renderPicker({ state: LIVE_TRAILING });
     fireEvent.click(screen.getByText('● Live'));
     expect(onLive).toHaveBeenCalledOnce();
   });

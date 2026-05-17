@@ -95,7 +95,7 @@ export function TrendChartContainer({
   });
 
   // ── Data fetch (driven by explicit dataViewport) ──────────────────────────
-  const trendData = useTrendData({ viewport: dataViewport, tagIds, isTailing: modeState.mode === 'tailing' });
+  const trendData = useTrendData({ viewport: dataViewport, tagIds, isLive: modeState.mode === 'live-trailing' });
   const { data, isLoading, ensureCovered, getActiveRange, swapCounter, activeTileCount, lastFetchMs } = trendData;
 
   // ── Stable refs for synchronous access from callbacks and cleanup ─────────
@@ -133,13 +133,13 @@ export function TrendChartContainer({
 
   // Advances nowMs from WS frame's max moduleTs — only while tailing.
   const handleDataReceived = useCallback((maxModuleTs: number) => {
-    if (modeStateRef.current.mode !== 'tailing') return;
+    if (modeStateRef.current.mode !== 'live-trailing') return;
     dispatch({ type: 'tick', nowMs: BigInt(maxModuleTs) });
   }, [dispatch]);
 
   const liveSub = useLiveSubscription({
     tagIds,
-    isTailing: modeState.mode === 'tailing',
+    isLive: modeState.mode === 'live-trailing',
     trimThreshold,
     seedFromCachedTile,
     tailMode,
@@ -176,7 +176,7 @@ export function TrendChartContainer({
     // refetch fresh data, eliminating Gap B (stale CAG-lag nulls accumulating
     // in the tile cache across sessions). Trade-off: every live exit pays a full
     // tile re-fetch (~3 tiles); negligible at expected usage rates.
-    if (cur.mode === 'fixed' && next.mode === 'tailing') {
+    if (cur.mode === 'fixed' && next.mode === 'live-trailing') {
       trendDataRef.current.evictAll();
     }
 
@@ -184,7 +184,7 @@ export function TrendChartContainer({
     // coverage is committed. No cache eviction needed — live mode never writes
     // to the LRU cache, so there is nothing to evict. History fetches start
     // fresh against the now-clean cache.
-    if (cur.mode === 'tailing' && next.mode === 'fixed') {
+    if (cur.mode === 'live-trailing' && next.mode === 'fixed') {
       liveSubRef.current?.commitAndDrain();
       // Force dataViewport to match the post-pan modeViewport so the main
       // useTrendData effect fires and runs the history-fetch path.
@@ -369,7 +369,7 @@ export function TrendChartContainer({
       onDragZoom={handleDragZoom}
       footer={footerJsx}
       onCursorTsChange={setCursorTsMs}
-      showLastWhenIdle={modeState.mode === 'tailing'}
+      showLastWhenIdle={modeState.mode === 'live-trailing'}
       onXRangeChange={handleXRangeChange}
       onXPan={handleXPan}
       lastIntent={modeState.lastIntent}

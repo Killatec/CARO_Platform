@@ -513,14 +513,14 @@ describe('TrendChartContainer', () => {
 
     it('initial render passes isTailing=true to useLiveSubscription', () => {
       renderContainer();
-      expect(liveHoisted.getLastOpts()?.isTailing).toBe(true);
+      expect(liveHoisted.getLastOpts()?.isLive).toBe(true);
     });
 
     it('after End commit, isTailing=false passed to useLiveSubscription', () => {
       renderContainer([1]);
       const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
       fireEvent.change(input, { target: { value: '2020-01-02T00:00:00' } });
-      expect(liveHoisted.getLastOpts()?.isTailing).toBe(false);
+      expect(liveHoisted.getLastOpts()?.isLive).toBe(false);
     });
 
     it('onDataReceived dispatches tick when mode is tailing (re-renders useTrendData)', () => {
@@ -759,7 +759,7 @@ describe('TrendChartContainer', () => {
 
       // Find the first useTrendData re-render where isTailing flipped to true.
       const tailingCallIdx = mockUseTrendData.mock.calls.findIndex(
-        args => args[0].isTailing === true,
+        args => args[0].isLive === true,
       );
       expect(tailingCallIdx).toBeGreaterThanOrEqual(0);
 

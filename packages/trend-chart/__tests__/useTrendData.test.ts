@@ -1376,9 +1376,9 @@ describe('useTrendData — isTailing skip guard', () => {
     mockFetchTile.mockResolvedValue(makeAggResponse([1]));
 
     const { rerender } = renderHook(
-      ({ viewport, isTailing }: { viewport: Viewport; isTailing: boolean }) =>
-        useTrendData({ viewport, tagIds: [1], isTailing }),
-      { initialProps: { viewport: defaultViewport, isTailing: false } },
+      ({ viewport, isLive }: { viewport: Viewport; isLive: boolean }) =>
+        useTrendData({ viewport, tagIds: [1], isLive }),
+      { initialProps: { viewport: defaultViewport, isLive: false } },
     );
 
     // History-mode fetches settle first.
@@ -1388,13 +1388,13 @@ describe('useTrendData — isTailing skip guard', () => {
     // Enter tailing mode with a new viewport (Go Live always changes nowMs → new viewport).
     // isTailing is no longer in the effect dep array; only the viewport change triggers a re-run.
     const liveViewport: Viewport = { start: ONE_HOUR * 10n, end: ONE_HOUR * 11n };
-    rerender({ viewport: liveViewport, isTailing: true });
+    rerender({ viewport: liveViewport, isLive: true });
     await waitFor(() => expect(mockFetchTile.mock.calls.length).toBeGreaterThan(callsAfterHistory));
     const callsAfterSpine = mockFetchTile.mock.calls.length;
 
     // Tick viewport forward keeping the same span → spineLoadedRef=true, skip guard fires.
     const tickedViewport: Viewport = { start: ONE_HOUR * 10n + 1000n, end: ONE_HOUR * 11n + 1000n };
-    rerender({ viewport: tickedViewport, isTailing: true });
+    rerender({ viewport: tickedViewport, isLive: true });
 
     await act(async () => {});
     // No additional fetches beyond the spine fetch.
@@ -1405,7 +1405,7 @@ describe('useTrendData — isTailing skip guard', () => {
     mockFetchTile.mockResolvedValue(makeAggResponse([1]));
 
     const { result } = renderHook(() =>
-      useTrendData({ viewport: defaultViewport, tagIds: [1], isTailing: true }),
+      useTrendData({ viewport: defaultViewport, tagIds: [1], isLive: true }),
     );
 
     await waitFor(() => expect(result.current.isLoading).toBe(false));
@@ -1418,9 +1418,9 @@ describe('useTrendData — isTailing skip guard', () => {
     mockFetchTile.mockResolvedValue(makeAggResponse([1]));
 
     const { rerender } = renderHook(
-      ({ viewport, isTailing }: { viewport: Viewport; isTailing: boolean }) =>
-        useTrendData({ viewport, tagIds: [1], isTailing }),
-      { initialProps: { viewport: defaultViewport, isTailing: false } },
+      ({ viewport, isLive }: { viewport: Viewport; isLive: boolean }) =>
+        useTrendData({ viewport, tagIds: [1], isLive }),
+      { initialProps: { viewport: defaultViewport, isLive: false } },
     );
 
     await waitFor(() => expect(mockFetchTile).toHaveBeenCalled());
@@ -1428,7 +1428,7 @@ describe('useTrendData — isTailing skip guard', () => {
 
     // Switch to 2h span (simulates preset change during tailing).
     const widerViewport: Viewport = { start: 0n, end: ONE_HOUR * 2n };
-    rerender({ viewport: widerViewport, isTailing: true });
+    rerender({ viewport: widerViewport, isLive: true });
 
     await waitFor(() => expect(mockFetchTile.mock.calls.length).toBeGreaterThan(callsAfterInitial));
   });
@@ -1438,7 +1438,7 @@ describe('useTrendData — isTailing skip guard', () => {
     // startTime to a boundary earlier than viewport.start, creating a left-side gap.
     const oddViewport: Viewport = { start: 12_345_678_000n, end: 12_345_678_000n + ONE_HOUR };
     const { result } = renderHook(() =>
-      useTrendData({ viewport: oddViewport, tagIds: [1], isTailing: true }),
+      useTrendData({ viewport: oddViewport, tagIds: [1], isLive: true }),
     );
 
     await waitFor(() => expect(mockFetchTile).toHaveBeenCalled());
@@ -1452,9 +1452,9 @@ describe('useTrendData — isTailing skip guard', () => {
 
   it('live entry: exactly one spine tile fetch, data assembled directly (no cache path)', async () => {
     const { result } = renderHook(
-      ({ viewport, isTailing }: { viewport: Viewport; isTailing: boolean }) =>
-        useTrendData({ viewport, tagIds: [1], isTailing }),
-      { initialProps: { viewport: defaultViewport, isTailing: true } },
+      ({ viewport, isLive }: { viewport: Viewport; isLive: boolean }) =>
+        useTrendData({ viewport, tagIds: [1], isLive }),
+      { initialProps: { viewport: defaultViewport, isLive: true } },
     );
 
     await waitFor(() => expect(result.current.isLoading).toBe(false));
@@ -1470,7 +1470,7 @@ describe('useTrendData — isTailing skip guard', () => {
   it('live mode: viewport tick (same span) does not trigger additional fetch', async () => {
     const { result, rerender } = renderHook(
       ({ viewport }: { viewport: Viewport }) =>
-        useTrendData({ viewport, tagIds: [1], isTailing: true }),
+        useTrendData({ viewport, tagIds: [1], isLive: true }),
       { initialProps: { viewport: defaultViewport } },
     );
 
@@ -1492,7 +1492,7 @@ describe('useTrendData — isTailing skip guard', () => {
 
     const { rerender } = renderHook(
       ({ viewport }: { viewport: Viewport }) =>
-        useTrendData({ viewport, tagIds: [1], isTailing: true }),
+        useTrendData({ viewport, tagIds: [1], isLive: true }),
       { initialProps: { viewport: defaultViewport } },
     );
 
@@ -1522,9 +1522,9 @@ describe('useTrendData — refetchHistory', () => {
     // to simulate the live → fixed transition. refetchHistory() is called
     // on the fixed-mode side to trigger the asymmetric history fetch.
     const { result, rerender } = renderHook(
-      ({ viewport, isTailing }: { viewport: Viewport; isTailing: boolean }) =>
-        useTrendData({ viewport, tagIds: [1], isTailing }),
-      { initialProps: { viewport: defaultViewport, isTailing: false } },
+      ({ viewport, isLive }: { viewport: Viewport; isLive: boolean }) =>
+        useTrendData({ viewport, tagIds: [1], isLive }),
+      { initialProps: { viewport: defaultViewport, isLive: false } },
     );
 
     // Let history mode settle first.
@@ -1532,11 +1532,11 @@ describe('useTrendData — refetchHistory', () => {
 
     // Enter live mode with a new viewport (Go Live produces a new modeViewport).
     const liveViewport: Viewport = { start: ONE_HOUR * 10n, end: ONE_HOUR * 11n };
-    rerender({ viewport: liveViewport, isTailing: true });
+    rerender({ viewport: liveViewport, isLive: true });
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     // Simulate live → fixed transition: switch to fixed mode at the live viewport.
-    rerender({ viewport: liveViewport, isTailing: false });
+    rerender({ viewport: liveViewport, isLive: false });
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     const callsBeforeRefetch = mockFetchTile.mock.calls.length;
 

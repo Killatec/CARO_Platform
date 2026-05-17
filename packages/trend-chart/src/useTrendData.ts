@@ -26,7 +26,7 @@ export interface UseTrendDataOptions {
   tagIds: number[];
   /** When true, tile fetches are suppressed while the viewport span is unchanged
    *  and at least one active tile exists — the live buffer drives rendering. */
-  isTailing?: boolean;
+  isLive?: boolean;
   bucketCount?: number;
   visibleTilesPerWindow?: number;
   overfetchPerSide?: number;
@@ -70,7 +70,7 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
   const {
     viewport,
     tagIds,
-    isTailing = false,
+    isLive = false,
     bucketCount = TREND_VIEWER_DEFAULTS.bucketCount,
     visibleTilesPerWindow = TREND_VIEWER_DEFAULTS.visibleTilesPerWindow,
     overfetchPerSide = TREND_VIEWER_DEFAULTS.overfetchPerSide,
@@ -121,8 +121,8 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
   // Ref-tracked isTailing so the effect can read the current value without
   // being in the dep array — mode flip and viewport cascade arrive in separate
   // renders; putting isTailing in deps caused a stale-viewport fetch on entry.
-  const isTailingRef = useRef<boolean>(isTailing);
-  isTailingRef.current = isTailing;
+  const isLiveRef = useRef<boolean>(isLive);
+  isLiveRef.current = isLive;
 
   // Stable dep keys: tagIds array → joined string; Viewport object → component fields.
   const tagIdsKey = tagIds.join(',');
@@ -151,7 +151,7 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     // `active.length === 0` guard fires first — live mode never triggers
     // pan-prefetch fetches. levelTransitionPendingRef is never set here; it
     // lives exclusively in the history path.
-    if (isTailingRef.current) {
+    if (isLiveRef.current) {
       runLiveSpineFetch({
         tagIds, bucketCount, visibleTilesPerWindow,
         viewport: currentViewport, spanChanged, gatedFetchTile,

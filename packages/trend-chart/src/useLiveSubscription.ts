@@ -43,8 +43,8 @@ export interface UseLiveSubscriptionOptions {
   tagIds: number[];
   /** null until the first tile fetch lands. */
   trimThreshold: number | null;
-  /** Whether the chart is in tailing mode. Defaults to false. */
-  isTailing?: boolean;
+  /** Whether the chart is in live mode. Defaults to false. */
+  isLive?: boolean;
   /** Bucket size in ms from the current CAG level. null until first tile resolves. */
   bucketSMs?: bigint | null;
   /** Last known value per tag from the rightmost cached tile, for LOCF seeding. */
@@ -257,7 +257,7 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
   const {
     tagIds,
     trimThreshold,
-    isTailing    = false,
+    isLive    = false,
     bucketSMs    = null,
     seedFromCachedTile = null,
     tailMode     = null,
@@ -272,7 +272,7 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
   const rawBuffersRef   = useRef<Map<number, TrendSample[]>>(new Map());
 
   // Prop shadows in refs — always current, safe to read from callbacks.
-  const isTailingRef        = useRef(isTailing);
+  const isLiveRef        = useRef(isLive);
   const bucketSMsRef        = useRef<bigint | null>(bucketSMs);
   const trimThresholdRef    = useRef<number | null>(trimThreshold);
   const seedRef             = useRef<Map<number, number | boolean | string | null> | null>(seedFromCachedTile);
@@ -284,7 +284,7 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
   const pendingFrameMaxTsRef   = useRef<number>(0);
   const frameFlushScheduledRef = useRef(false);
 
-  isTailingRef.current      = isTailing;
+  isLiveRef.current      = isLive;
   bucketSMsRef.current      = bucketSMs;
   trimThresholdRef.current  = trimThreshold;
   seedRef.current           = seedFromCachedTile;
@@ -300,7 +300,7 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
   // Flush accumulator/raw state to React — React 18 auto-batching coalesces
   // multiple calls within the same synchronous event handler.
   function flushTail(): void {
-    if (!isTailingRef.current || tailModeRef.current === null) {
+    if (!isLiveRef.current || tailModeRef.current === null) {
       setTail(null);
       return;
     }
@@ -334,7 +334,7 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
         arr.push({ moduleTs, value });
         if (arr.length > TREND_RING_CAPACITY) arr.shift();
 
-        if (isTailingRef.current) {
+        if (isLiveRef.current) {
           const mode = tailModeRef.current;
           if (mode === 'aggregate' && bucketSMsRef.current !== null) {
             const state = accumulatorsRef.current.get(tagId);
@@ -404,7 +404,7 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
   // the matching path and replays ring.
 
   useEffect(() => {
-    if (!isTailing || tailMode === null) {
+    if (!isLive || tailMode === null) {
       accumulatorsRef.current.clear();
       rawBuffersRef.current.clear();
       setTail(null);
@@ -458,7 +458,7 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
 
     flushTail();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isTailing, bucketSMsStr, tagIdsKey, tailMode]);
+  }, [isLive, bucketSMsStr, tagIdsKey, tailMode]);
 
   // ── commitAndDrain ────────────────────────────────────────────────────────
 

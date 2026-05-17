@@ -143,7 +143,7 @@ function tailingOpts(tagIds: number[], seed?: Map<number, number | null>): Param
   return {
     tagIds,
     trimThreshold: null,
-    isTailing: true,
+    isLive: true,
     bucketSMs: BUCKET_SMS,
     seedFromCachedTile: seed ?? null,
     tailMode: 'aggregate',
@@ -347,7 +347,7 @@ describe('useLiveSubscription — mode-flip', () => {
   it('false→true with ring entries: accumulator replays them and produces tail', () => {
     const { result, rerender } = renderHook(
       ({ opts }) => useLiveSubscription(opts),
-      { initialProps: { opts: { tagIds: [1], trimThreshold: null, isTailing: false, bucketSMs: BUCKET_SMS, seedFromCachedTile: null, tailMode: 'aggregate' as const } } },
+      { initialProps: { opts: { tagIds: [1], trimThreshold: null, isLive: false, bucketSMs: BUCKET_SMS, seedFromCachedTile: null, tailMode: 'aggregate' as const } } },
     );
     // Push events while not tailing (ring fills, no accumulator)
     act(() => {
@@ -358,7 +358,7 @@ describe('useLiveSubscription — mode-flip', () => {
     expect(result.current.tail).toBeNull(); // not tailing yet
 
     // Flip to tailing: replays ring
-    rerender({ opts: { tagIds: [1], trimThreshold: null, isTailing: true, bucketSMs: BUCKET_SMS, seedFromCachedTile: null, tailMode: 'aggregate' as const } });
+    rerender({ opts: { tagIds: [1], trimThreshold: null, isLive: true, bucketSMs: BUCKET_SMS, seedFromCachedTile: null, tailMode: 'aggregate' as const } });
 
     const { tail } = result.current;
     expect(tail).not.toBeNull();
@@ -369,9 +369,9 @@ describe('useLiveSubscription — mode-flip', () => {
   it('false→true with empty ring: tail remains null until first event', () => {
     const { result, rerender } = renderHook(
       ({ opts }) => useLiveSubscription(opts),
-      { initialProps: { opts: { tagIds: [1], trimThreshold: null, isTailing: false, bucketSMs: BUCKET_SMS, seedFromCachedTile: null, tailMode: 'aggregate' as const } } },
+      { initialProps: { opts: { tagIds: [1], trimThreshold: null, isLive: false, bucketSMs: BUCKET_SMS, seedFromCachedTile: null, tailMode: 'aggregate' as const } } },
     );
-    rerender({ opts: { tagIds: [1], trimThreshold: null, isTailing: true, bucketSMs: BUCKET_SMS, seedFromCachedTile: null, tailMode: 'aggregate' as const } });
+    rerender({ opts: { tagIds: [1], trimThreshold: null, isLive: true, bucketSMs: BUCKET_SMS, seedFromCachedTile: null, tailMode: 'aggregate' as const } });
     expect(result.current.tail).toBeNull();
 
     // Even after an event in the open bucket (not yet closed), tail is still null
@@ -383,13 +383,13 @@ describe('useLiveSubscription — mode-flip', () => {
     // The accumulator should not process events when bucketSMs is unknown.
     const { result, rerender } = renderHook(
       ({ opts }) => useLiveSubscription(opts),
-      { initialProps: { opts: { tagIds: [1], trimThreshold: null, isTailing: true, bucketSMs: null as bigint | null, seedFromCachedTile: null, tailMode: 'aggregate' as const } } },
+      { initialProps: { opts: { tagIds: [1], trimThreshold: null, isLive: true, bucketSMs: null as bigint | null, seedFromCachedTile: null, tailMode: 'aggregate' as const } } },
     );
     act(() => { fireCb(1, tAt(0, 100), 5); }); // ring fills but no accumulator
     expect(result.current.tail).toBeNull();
 
     // bucketSMs arrives — triggers re-init + ring replay
-    rerender({ opts: { tagIds: [1], trimThreshold: null, isTailing: true, bucketSMs: BUCKET_SMS, seedFromCachedTile: null, tailMode: 'aggregate' as const } });
+    rerender({ opts: { tagIds: [1], trimThreshold: null, isLive: true, bucketSMs: BUCKET_SMS, seedFromCachedTile: null, tailMode: 'aggregate' as const } });
     // ring has one event in bucket 0; no close yet
     expect(result.current.tail).toBeNull();
 
@@ -403,7 +403,7 @@ describe('useLiveSubscription — mode-flip', () => {
   it('true→false clears accumulator and sets tail to null', () => {
     const { result, rerender } = renderHook(
       ({ opts }) => useLiveSubscription(opts),
-      { initialProps: { opts: { tagIds: [1], trimThreshold: null, isTailing: true, bucketSMs: BUCKET_SMS, seedFromCachedTile: null, tailMode: 'aggregate' as const } } },
+      { initialProps: { opts: { tagIds: [1], trimThreshold: null, isLive: true, bucketSMs: BUCKET_SMS, seedFromCachedTile: null, tailMode: 'aggregate' as const } } },
     );
     act(() => {
       fireCb(1, tAt(0, 100), 3);
@@ -411,7 +411,7 @@ describe('useLiveSubscription — mode-flip', () => {
     });
     expect(result.current.tail).not.toBeNull();
 
-    rerender({ opts: { tagIds: [1], trimThreshold: null, isTailing: false, bucketSMs: BUCKET_SMS, seedFromCachedTile: null, tailMode: 'aggregate' as const } });
+    rerender({ opts: { tagIds: [1], trimThreshold: null, isLive: false, bucketSMs: BUCKET_SMS, seedFromCachedTile: null, tailMode: 'aggregate' as const } });
     expect(result.current.tail).toBeNull();
   });
 });
@@ -422,7 +422,7 @@ describe('useLiveSubscription — trim + accumulator coexistence', () => {
   it('trimThreshold advance trims ring; accumulator state survives unchanged', () => {
     const { result, rerender } = renderHook(
       ({ opts }) => useLiveSubscription(opts),
-      { initialProps: { opts: { tagIds: [1], trimThreshold: null as number | null, isTailing: true, bucketSMs: BUCKET_SMS, seedFromCachedTile: null, tailMode: 'aggregate' as const } } },
+      { initialProps: { opts: { tagIds: [1], trimThreshold: null as number | null, isLive: true, bucketSMs: BUCKET_SMS, seedFromCachedTile: null, tailMode: 'aggregate' as const } } },
     );
     act(() => {
       fireCb(1, tAt(0, 100), 3);
@@ -432,7 +432,7 @@ describe('useLiveSubscription — trim + accumulator coexistence', () => {
     expect(closedBefore).toBe(1);
 
     // Advance trim: ring entries below threshold are removed. Accumulator untouched.
-    rerender({ opts: { tagIds: [1], trimThreshold: tAt(0, 500), isTailing: true, bucketSMs: BUCKET_SMS, seedFromCachedTile: null, tailMode: 'aggregate' as const } });
+    rerender({ opts: { tagIds: [1], trimThreshold: tAt(0, 500), isLive: true, bucketSMs: BUCKET_SMS, seedFromCachedTile: null, tailMode: 'aggregate' as const } });
 
     // Accumulator still reports the same closed bucket
     expect(result.current.tail!.perTag.get(1)!.value).toHaveLength(closedBefore);
@@ -443,7 +443,7 @@ describe('useLiveSubscription — trim + accumulator coexistence', () => {
 // ─── Raw mode helpers ─────────────────────────────────────────────────────────
 
 function rawOpts(tagIds: number[]): Parameters<typeof useLiveSubscription>[0] {
-  return { tagIds, trimThreshold: null, isTailing: true, tailMode: 'raw' };
+  return { tagIds, trimThreshold: null, isLive: true, tailMode: 'raw' };
 }
 
 // ─── Raw mode: core behavior ──────────────────────────────────────────────────
@@ -570,11 +570,11 @@ describe('useLiveSubscription — tailMode transitions', () => {
   it('tailMode null → aggregate: accumulator initializes; tail becomes aggregate on close', () => {
     const { result, rerender } = renderHook(
       ({ opts }) => useLiveSubscription(opts),
-      { initialProps: { opts: { tagIds: [1], trimThreshold: null, isTailing: true, bucketSMs: BUCKET_SMS, tailMode: null as 'aggregate' | 'raw' | null } } },
+      { initialProps: { opts: { tagIds: [1], trimThreshold: null, isLive: true, bucketSMs: BUCKET_SMS, tailMode: null as 'aggregate' | 'raw' | null } } },
     );
     expect(result.current.tail).toBeNull();
 
-    rerender({ opts: { tagIds: [1], trimThreshold: null, isTailing: true, bucketSMs: BUCKET_SMS, tailMode: 'aggregate' } });
+    rerender({ opts: { tagIds: [1], trimThreshold: null, isLive: true, bucketSMs: BUCKET_SMS, tailMode: 'aggregate' } });
     act(() => {
       fireCb(1, tAt(0, 100), 5);
       fireCb(1, tAt(1, 100), 9); // closes bucket 0
@@ -586,11 +586,11 @@ describe('useLiveSubscription — tailMode transitions', () => {
   it('tailMode null → raw: raw buffer initializes; tail becomes raw on first event', () => {
     const { result, rerender } = renderHook(
       ({ opts }) => useLiveSubscription(opts),
-      { initialProps: { opts: { tagIds: [1], trimThreshold: null, isTailing: true, tailMode: null as 'aggregate' | 'raw' | null } } },
+      { initialProps: { opts: { tagIds: [1], trimThreshold: null, isLive: true, tailMode: null as 'aggregate' | 'raw' | null } } },
     );
     expect(result.current.tail).toBeNull();
 
-    rerender({ opts: { tagIds: [1], trimThreshold: null, isTailing: true, tailMode: 'raw' } });
+    rerender({ opts: { tagIds: [1], trimThreshold: null, isLive: true, tailMode: 'raw' } });
     act(() => { fireCb(1, 5000, 42); });
     expect(result.current.tail!.mode).toBe('raw');
   });
@@ -598,7 +598,7 @@ describe('useLiveSubscription — tailMode transitions', () => {
   it('tailMode aggregate → raw while tailing: accumulator clears; raw buffer starts fresh', () => {
     const { result, rerender } = renderHook(
       ({ opts }) => useLiveSubscription(opts),
-      { initialProps: { opts: { tagIds: [1], trimThreshold: null, isTailing: true, bucketSMs: BUCKET_SMS, tailMode: 'aggregate' as const } } },
+      { initialProps: { opts: { tagIds: [1], trimThreshold: null, isLive: true, bucketSMs: BUCKET_SMS, tailMode: 'aggregate' as const } } },
     );
     act(() => {
       fireCb(1, tAt(0, 100), 5);
@@ -607,7 +607,7 @@ describe('useLiveSubscription — tailMode transitions', () => {
     expect(result.current.tail!.mode).toBe('aggregate');
 
     // Switch to raw mode: accumulator clears; ring replays into raw buffer
-    rerender({ opts: { tagIds: [1], trimThreshold: null, isTailing: true, bucketSMs: BUCKET_SMS, tailMode: 'raw' } });
+    rerender({ opts: { tagIds: [1], trimThreshold: null, isLive: true, bucketSMs: BUCKET_SMS, tailMode: 'raw' } });
     // ring was populated during aggregate phase; replay produces raw tail
     expect(result.current.tail!.mode).toBe('raw');
     const rawTail = result.current.tail as import('../src/useLiveSubscription.js').RawTail;
@@ -618,7 +618,7 @@ describe('useLiveSubscription — tailMode transitions', () => {
   it('tailMode raw → aggregate while tailing: raw clears; accumulator re-inits from ring', () => {
     const { result, rerender } = renderHook(
       ({ opts }) => useLiveSubscription(opts),
-      { initialProps: { opts: { tagIds: [1], trimThreshold: null, isTailing: true, bucketSMs: BUCKET_SMS, tailMode: 'raw' as const } } },
+      { initialProps: { opts: { tagIds: [1], trimThreshold: null, isLive: true, bucketSMs: BUCKET_SMS, tailMode: 'raw' as const } } },
     );
     act(() => {
       fireCb(1, tAt(0, 100), 3);
@@ -627,7 +627,7 @@ describe('useLiveSubscription — tailMode transitions', () => {
     expect(result.current.tail!.mode).toBe('raw');
 
     // Switch to aggregate: raw clears, accumulator replays ring
-    rerender({ opts: { tagIds: [1], trimThreshold: null, isTailing: true, bucketSMs: BUCKET_SMS, tailMode: 'aggregate' } });
+    rerender({ opts: { tagIds: [1], trimThreshold: null, isLive: true, bucketSMs: BUCKET_SMS, tailMode: 'aggregate' } });
     // ring has two entries spanning bucket 0 and 1; replay closes bucket 0
     expect(result.current.tail!.mode).toBe('aggregate');
     const aggTail = result.current.tail as import('../src/useLiveSubscription.js').AggregateTail;
@@ -638,12 +638,12 @@ describe('useLiveSubscription — tailMode transitions', () => {
   it('isTailing true → false with tailMode=raw: raw buffer clears; tail becomes null', () => {
     const { result, rerender } = renderHook(
       ({ opts }) => useLiveSubscription(opts),
-      { initialProps: { opts: { tagIds: [1], trimThreshold: null, isTailing: true, tailMode: 'raw' as const } } },
+      { initialProps: { opts: { tagIds: [1], trimThreshold: null, isLive: true, tailMode: 'raw' as const } } },
     );
     act(() => { fireCb(1, 1000, 5); });
     expect(result.current.tail).not.toBeNull();
 
-    rerender({ opts: { tagIds: [1], trimThreshold: null, isTailing: false, tailMode: 'raw' as const } });
+    rerender({ opts: { tagIds: [1], trimThreshold: null, isLive: false, tailMode: 'raw' as const } });
     expect(result.current.tail).toBeNull();
   });
 });
@@ -654,7 +654,7 @@ describe('useLiveSubscription — raw trim', () => {
   it('trimThreshold does NOT trim raw buffers (rawBuffers survive threshold advance)', () => {
     const { result, rerender } = renderHook(
       ({ opts }) => useLiveSubscription(opts),
-      { initialProps: { opts: { tagIds: [1], trimThreshold: null as number | null, isTailing: true, tailMode: 'raw' as const } } },
+      { initialProps: { opts: { tagIds: [1], trimThreshold: null as number | null, isLive: true, tailMode: 'raw' as const } } },
     );
     act(() => {
       fireCb(1, 100, 1);
@@ -662,7 +662,7 @@ describe('useLiveSubscription — raw trim', () => {
       fireCb(1, 900, 3);
     });
     // Advance threshold to 500: rawBuffers must NOT be trimmed (all 3 entries survive)
-    rerender({ opts: { tagIds: [1], trimThreshold: 500, isTailing: true, tailMode: 'raw' as const } });
+    rerender({ opts: { tagIds: [1], trimThreshold: 500, isLive: true, tailMode: 'raw' as const } });
 
     const rawTail = result.current.tail as import('../src/useLiveSubscription.js').RawTail;
     expect(rawTail.perTag.get(1)!.ts).toEqual([100n, 500n, 900n]);
@@ -674,7 +674,7 @@ describe('useLiveSubscription — raw trim', () => {
     // jump forward, letting cached LOCF gapfill leak through mergeRaw's drop filter.
     const { result, rerender } = renderHook(
       ({ opts }) => useLiveSubscription(opts),
-      { initialProps: { opts: { tagIds: [1], trimThreshold: null as number | null, isTailing: true, tailMode: 'raw' as const } } },
+      { initialProps: { opts: { tagIds: [1], trimThreshold: null as number | null, isLive: true, tailMode: 'raw' as const } } },
     );
     act(() => {
       fireCb(1, 1000, 10);
@@ -682,7 +682,7 @@ describe('useLiveSubscription — raw trim', () => {
       fireCb(1, 3000, 30);
     });
     // After threshold advances to 2500, rawBuffers must still have the ts=1000 entry
-    rerender({ opts: { tagIds: [1], trimThreshold: 2500, isTailing: true, tailMode: 'raw' as const } });
+    rerender({ opts: { tagIds: [1], trimThreshold: 2500, isLive: true, tailMode: 'raw' as const } });
 
     const rawTail = result.current.tail as import('../src/useLiveSubscription.js').RawTail;
     // All entries survive — minLiveTs stays at 1000n
@@ -692,18 +692,18 @@ describe('useLiveSubscription — raw trim', () => {
   it('ring IS trimmed when trimThreshold advances in raw mode', () => {
     const { result, rerender } = renderHook(
       ({ opts }) => useLiveSubscription(opts),
-      { initialProps: { opts: { tagIds: [1], trimThreshold: null as number | null, isTailing: true, tailMode: 'raw' as const } } },
+      { initialProps: { opts: { tagIds: [1], trimThreshold: null as number | null, isLive: true, tailMode: 'raw' as const } } },
     );
     act(() => {
       fireCb(1, 100, 1);
       fireCb(1, 500, 2);
       fireCb(1, 900, 3);
     });
-    rerender({ opts: { tagIds: [1], trimThreshold: 500, isTailing: true, tailMode: 'raw' as const } });
+    rerender({ opts: { tagIds: [1], trimThreshold: 500, isLive: true, tailMode: 'raw' as const } });
     // After trim, re-enter tailing to force ring replay into rawBuffers — should
     // replay only entries >= threshold (500 and 900)
-    rerender({ opts: { tagIds: [1], trimThreshold: 500, isTailing: false, tailMode: 'raw' as const } });
-    rerender({ opts: { tagIds: [1], trimThreshold: 500, isTailing: true, tailMode: 'raw' as const } });
+    rerender({ opts: { tagIds: [1], trimThreshold: 500, isLive: false, tailMode: 'raw' as const } });
+    rerender({ opts: { tagIds: [1], trimThreshold: 500, isLive: true, tailMode: 'raw' as const } });
 
     const rawTail = result.current.tail as import('../src/useLiveSubscription.js').RawTail;
     expect(rawTail.perTag.get(1)!.ts).toEqual([500n, 900n]);
@@ -712,14 +712,14 @@ describe('useLiveSubscription — raw trim', () => {
   it('aggregate mode: trimThreshold advance does NOT touch accumulator (step 7 invariant preserved)', () => {
     const { result, rerender } = renderHook(
       ({ opts }) => useLiveSubscription(opts),
-      { initialProps: { opts: { tagIds: [1], trimThreshold: null as number | null, isTailing: true, bucketSMs: BUCKET_SMS, tailMode: 'aggregate' as const } } },
+      { initialProps: { opts: { tagIds: [1], trimThreshold: null as number | null, isLive: true, bucketSMs: BUCKET_SMS, tailMode: 'aggregate' as const } } },
     );
     act(() => {
       fireCb(1, tAt(0, 100), 3);
       fireCb(1, tAt(1, 100), 5); // closes bucket 0
     });
     const lenBefore = result.current.tail!.perTag.get(1)!.value.length;
-    rerender({ opts: { tagIds: [1], trimThreshold: tAt(1, 50), isTailing: true, bucketSMs: BUCKET_SMS, tailMode: 'aggregate' as const } });
+    rerender({ opts: { tagIds: [1], trimThreshold: tAt(1, 50), isLive: true, bucketSMs: BUCKET_SMS, tailMode: 'aggregate' as const } });
     // Accumulator closed-bucket count is unchanged
     expect(result.current.tail!.perTag.get(1)!.value).toHaveLength(lenBefore);
   });
@@ -735,7 +735,7 @@ describe('useLiveSubscription — viewportSpanMs 2×span trim', () => {
       useLiveSubscription({
         tagIds: [1],
         trimThreshold: null,
-        isTailing: true,
+        isLive: true,
         tailMode: 'raw',
         viewportSpanMs: SPAN,
       }),
@@ -767,7 +767,7 @@ describe('useLiveSubscription — viewportSpanMs 2×span trim', () => {
       useLiveSubscription({
         tagIds: [1],
         trimThreshold: null,
-        isTailing: true,
+        isLive: true,
         tailMode: 'raw',
         viewportSpanMs: SPAN,
       }),
@@ -791,7 +791,7 @@ describe('useLiveSubscription — raw ring replay', () => {
   it('enter tailing with tailMode=raw and ring entries: raw buffer gets ring replay', () => {
     const { result, rerender } = renderHook(
       ({ opts }) => useLiveSubscription(opts),
-      { initialProps: { opts: { tagIds: [1], trimThreshold: null, isTailing: false, tailMode: 'raw' as const } } },
+      { initialProps: { opts: { tagIds: [1], trimThreshold: null, isLive: false, tailMode: 'raw' as const } } },
     );
     // Fill ring while not tailing
     act(() => {
@@ -801,7 +801,7 @@ describe('useLiveSubscription — raw ring replay', () => {
     expect(result.current.tail).toBeNull();
 
     // Enter tailing: ring replays into raw buffer
-    rerender({ opts: { tagIds: [1], trimThreshold: null, isTailing: true, tailMode: 'raw' as const } });
+    rerender({ opts: { tagIds: [1], trimThreshold: null, isLive: true, tailMode: 'raw' as const } });
     const rawTail = result.current.tail as import('../src/useLiveSubscription.js').RawTail;
     expect(rawTail).not.toBeNull();
     expect(rawTail.perTag.get(1)!.ts).toEqual([1000n, 2000n]);
@@ -851,7 +851,7 @@ describe('useLiveSubscription — onDataReceived', () => {
     renderHook(() => useLiveSubscription({
       tagIds: [1],
       trimThreshold: null,
-      isTailing: false,
+      isLive: false,
       onDataReceived,
     }));
 
