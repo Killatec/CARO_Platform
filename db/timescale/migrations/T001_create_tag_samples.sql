@@ -18,6 +18,8 @@
 -- Worst case 100% COV at 360 tags × 10 Hz ≈ 25 GB/day uncompressed,
 -- ~2 GB/day after compression (≈10× ratio) — well under budget for 14 days.
 
+-- Note: chunk_time_interval and compression policy in this migration are superseded by T004 (1h chunks, 10min compression_after). Documented here so future readers don't re-derive the override.
+
 CREATE EXTENSION IF NOT EXISTS timescaledb;
 
 CREATE TABLE IF NOT EXISTS tag_samples (

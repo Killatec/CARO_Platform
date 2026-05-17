@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { TREND_VIEWER_DEFAULTS, MIN_VIEWPORT_SPAN_MS, MAX_VIEWPORT_SPAN_MS } from './level.js';
 import { TileCache, makeTileCacheKey } from './tileCache.js';
-import type { Tile, Viewport, TrendData } from './types.js';
+import type { Tile, Viewport } from './types.js';
 import {
   estimateCachedEntrySize,
   chunkArray,
@@ -10,7 +10,7 @@ import {
   storeTileResult,
 } from './tileActiveSet.js';
 import type { CachedEntry, HookState } from './tileActiveSet.js';
-import { buildGatedFetchTile } from './gatedFetchTile.js';
+import { buildGatedFetchTile, isClientFetchSentinel } from './gatedFetchTile.js';
 import { assembleLiveSpine, runLiveSpineFetch } from './liveSpineFetch.js';
 import { runHistoryTileFetch } from './historyTileFetch.js';
 
@@ -292,7 +292,7 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
         })
         .catch((e: Error & { code?: string }) => {
           inFlightTilesRef.current.delete(tileKey);
-          if (e.code === 'CLIENT_UNDER_RANGE' || e.code === 'CLIENT_OVER_RANGE' || e.code === 'CLIENT_PRE_EPOCH') return;
+          if (isClientFetchSentinel(e)) return;
           setLastFetchMs(Math.round(performance.now() - tileT0));
           if (generationRef.current !== gen) return;
           console.warn('[useTrendData] dynamic fetch failed', { tile, error: e });

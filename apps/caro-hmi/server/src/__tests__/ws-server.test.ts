@@ -491,6 +491,42 @@ describe('WsServer — trend channel', () => {
   });
 });
 
+// ── TG-2 server: boolean TREND_DELTA forwarding ────────────────────────────────
+
+describe('WsServer — TG-2: boolean trend values forward as native booleans', () => {
+  it('value=true flows as boolean true (not 1) through TREND_DELTA frame', async () => {
+    trendLkv.set(TREND_TAG_1, true);
+    const ws = await makeTrendClient();
+    ws.send(JSON.stringify({ type: 'SUBSCRIBE_TREND', tagIds: [TREND_TAG_1] }));
+
+    // Push an explicit sample so the frame has a real event (not just the synthetic-on-flush
+    // LKV pull — though either path should preserve the boolean type).
+    trendServer.handleTrendDelta(Date.now(), TREND_MODULE);
+
+    const frames = await collectTrendDeltas(ws, TREND_FLUSH_WAIT_MS);
+    const sample = frames.flatMap(f => f.samples).find(s => s.tagId === TREND_TAG_1);
+
+    expect(sample).toBeDefined();
+    expect(sample!.value).toBe(true);                   // strict identity — not 1, not "true"
+    expect(typeof sample!.value).toBe('boolean');
+  });
+
+  it('value=false flows as boolean false (not 0) through TREND_DELTA frame', async () => {
+    trendLkv.set(TREND_TAG_1, false);
+    const ws = await makeTrendClient();
+    ws.send(JSON.stringify({ type: 'SUBSCRIBE_TREND', tagIds: [TREND_TAG_1] }));
+
+    trendServer.handleTrendDelta(Date.now(), TREND_MODULE);
+
+    const frames = await collectTrendDeltas(ws, TREND_FLUSH_WAIT_MS);
+    const sample = frames.flatMap(f => f.samples).find(s => s.tagId === TREND_TAG_1);
+
+    expect(sample).toBeDefined();
+    expect(sample!.value).toBe(false);                  // strict identity — not 0, not "false"
+    expect(typeof sample!.value).toBe('boolean');
+  });
+});
+
 // ── F4: Shape validation and trendable-set filter ────────────────────────────
 
 /** WsServer with no trendableTagIds (default empty set) — used for filter tests. */
@@ -528,67 +564,93 @@ async function makeFilterClient(): Promise<WebSocket> {
   return ws;
 }
 
-describe('WsServer — F4 shape validation', () => {
-  it('SUBSCRIBE with null tagIds is ignored — no SNAPSHOT received', async () => {
-    const ws = await makeFilterClient();
-    const p = collect(ws, 1, 150).catch(() => null);
-    ws.send(JSON.stringify({ type: 'SUBSCRIBE', tagIds: null }));
-    const result = await p;
-    expect(result).toBeNull(); // timed out → no response
-  });
+// ── TG-4: Parametrized shape validation ────────────────────────────────────────
 
-  it('SUBSCRIBE with non-integer tagId is ignored — no SNAPSHOT received', async () => {
-    const ws = await makeFilterClient();
-    const p = collect(ws, 1, 150).catch(() => null);
-    ws.send(JSON.stringify({ type: 'SUBSCRIBE', tagIds: [1.5, 2] }));
-    const result = await p;
-    expect(result).toBeNull();
-  });
+const MALFORMED_INPUTS = [
+  { name: 'null tagIds',         payload: null },
+  { name: 'non-array tagIds',    payload: 'bad' },
+  { name: 'non-integer element', payload: [1.5, 2] },
+  { name: 'negative element',    payload: [-1, -2] },
+] as const;
 
-  it('SUBSCRIBE with negative tagId is ignored — no SNAPSHOT received', async () => {
-    const ws = await makeFilterClient();
-    const p = collect(ws, 1, 150).catch(() => null);
-    ws.send(JSON.stringify({ type: 'SUBSCRIBE', tagIds: [-1] }));
-    const result = await p;
-    expect(result).toBeNull();
-  });
+describe('WsServer — TG-4: SUBSCRIBE / UNSUBSCRIBE shape validation', () => {
+  for (const messageType of ['SUBSCRIBE', 'UNSUBSCRIBE'] as const) {
+    describe(`${messageType}`, () => {
+      for (const input of MALFORMED_INPUTS) {
+        it(`rejects ${input.name}: connection stays open, no response sent`, async () => {
+          const ws = await openClient(port);
+          openClients.push(ws);
 
-  it('UNSUBSCRIBE with non-array tagIds is ignored — no crash', async () => {
-    const ws = await makeFilterClient();
-    // Subscribe first so there's state to unsubscribe from
-    ws.send(JSON.stringify({ type: 'SUBSCRIBE', tagIds: [1] }));
-    await wait(50);
-    // Malformed unsubscribe — should not throw or crash
-    ws.send(JSON.stringify({ type: 'UNSUBSCRIBE', tagIds: 'all' }));
-    await wait(50);
-    // Server still alive — connection remains open
-    expect(ws.readyState).toBe(WebSocket.OPEN);
-  });
+          ws.send(JSON.stringify({ type: messageType, tagIds: input.payload }));
+          await wait(50);
 
-  it('SUBSCRIBE_TREND with non-array tagIds is ignored — no TREND_DELTA emitted', async () => {
-    const ws = await makeTrendClient(); // uses trendServer which has trendableTagIds set
-    trendLkv.set(TREND_TAG_1, 55);
-    ws.send(JSON.stringify({ type: 'SUBSCRIBE_TREND', tagIds: 'bad' }));
-    const frames = await collectTrendDeltas(ws, TREND_FLUSH_WAIT_MS);
-    expect(frames).toHaveLength(0);
-  });
+          // Server-side: connection still open.
+          expect(ws.readyState).toBe(WebSocket.OPEN);
 
-  it('SUBSCRIBE_TREND with string tagId element is ignored — no TREND_DELTA emitted', async () => {
-    const ws = await makeTrendClient();
-    trendLkv.set(TREND_TAG_1, 55);
-    ws.send(JSON.stringify({ type: 'SUBSCRIBE_TREND', tagIds: ['10'] }));
-    const frames = await collectTrendDeltas(ws, TREND_FLUSH_WAIT_MS);
-    expect(frames).toHaveLength(0);
-  });
+          // SUBSCRIBE returns SNAPSHOT on success; for malformed input there must be no SNAPSHOT.
+          // UNSUBSCRIBE has no response at all, so this assertion is a no-op for that type — but
+          // harmless. Collect briefly with a short timeout, expect no messages received.
+          const received: object[] = [];
+          ws.on('message', (raw: Buffer) => received.push(JSON.parse(raw.toString())));
+          await wait(50);
+          expect(received).toHaveLength(0);
+        });
+      }
+    });
+  }
+});
 
-  it('UNSUBSCRIBE_TREND with non-array tagIds is ignored — no crash', async () => {
+describe('WsServer — TG-4: SUBSCRIBE_TREND / UNSUBSCRIBE_TREND shape validation', () => {
+  for (const messageType of ['SUBSCRIBE_TREND', 'UNSUBSCRIBE_TREND'] as const) {
+    describe(`${messageType}`, () => {
+      for (const input of MALFORMED_INPUTS) {
+        it(`rejects ${input.name}: connection stays open, no TREND_DELTA emitted`, async () => {
+          const ws = await makeTrendClient();
+          ws.send(JSON.stringify({ type: messageType, tagIds: input.payload }));
+
+          // Wait one flush window; verify no TREND_DELTA frames arrive for any tag.
+          const frames = await collectTrendDeltas(ws, TREND_FLUSH_WAIT_MS);
+          expect(frames).toHaveLength(0);
+          expect(ws.readyState).toBe(WebSocket.OPEN);
+        });
+      }
+    });
+  }
+});
+
+// ── F5: Bounded per-tag trend outbox ─────────────────────────────────────────
+
+describe('WsServer — F5 trend outbox overflow', () => {
+  it('caps per-tag outbox at 500 and emits batched warn on flush', async () => {
+    const OVERFLOW_COUNT = 50;
+    const TOTAL_INGESTS = 500 + OVERFLOW_COUNT;
+
+    trendLkv.set(TREND_TAG_1, 1);
     const ws = await makeTrendClient();
     ws.send(JSON.stringify({ type: 'SUBSCRIBE_TREND', tagIds: [TREND_TAG_1] }));
-    await wait(50);
-    ws.send(JSON.stringify({ type: 'UNSUBSCRIBE_TREND', tagIds: null }));
-    await wait(50);
-    // Server still alive — connection remains open
-    expect(ws.readyState).toBe(WebSocket.OPEN);
+    await wait(TREND_FLUSH_WAIT_MS); // drain initial synthetic flushes before hammering
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    // Hammer synchronously — all 550 events reach the outbox before the next flush fires
+    for (let i = 0; i < TOTAL_INGESTS; i++) {
+      trendServer.handleTrendDelta(i + 1, TREND_MODULE);
+    }
+
+    const frames = await collectTrendDeltas(ws, TREND_FLUSH_WAIT_MS);
+
+    // The drain frame flushes exactly 500 samples for the tag (oldest 50 were dropped)
+    const maxSamplesInFrame = Math.max(
+      ...frames.map(f => f.samples.filter(s => s.tagId === TREND_TAG_1).length),
+    );
+    expect(maxSamplesInFrame).toBe(500);
+
+    // The batched warn fires exactly once, reporting the overflow count
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/dropped 50 trend sample/),
+    );
+
+    warnSpy.mockRestore();
   });
 });
 

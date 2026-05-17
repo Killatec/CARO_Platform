@@ -3,6 +3,7 @@ import { tilesForViewport } from './level.js';
 import { TileCache, makeTileCacheKey } from './tileCache.js';
 import type { Tile, Viewport } from './types.js';
 import type { GatedFetchFn } from './gatedFetchTile.js';
+import { isClientFetchSentinel } from './gatedFetchTile.js';
 import {
   chunkArray,
   assembleData,
@@ -165,12 +166,8 @@ export function runHistoryTileFetch(args: HistoryTileFetchArgs): void {
       })
       .catch((e: Error & { code?: string }) => {
         if (generationRef.current !== generation) return;
-        if (e.code === 'CLIENT_UNDER_RANGE' || e.code === 'CLIENT_OVER_RANGE') {
-          onVisibleTileSettled();
-          return;
-        }
-        if (e.code === 'CLIENT_PRE_EPOCH') {
-          // Defensive: upstream filter should prevent pre-epoch visible tiles; silent skip.
+        // Defensive: upstream filter should prevent pre-epoch visible tiles; sentinel codes are silent skips.
+        if (isClientFetchSentinel(e)) {
           onVisibleTileSettled();
           return;
         }
@@ -211,7 +208,7 @@ export function runHistoryTileFetch(args: HistoryTileFetchArgs): void {
       })
       .catch((e: Error & { code?: string }) => {
         if (generationRef.current !== generation) return;
-        if (e.code === 'CLIENT_UNDER_RANGE' || e.code === 'CLIENT_OVER_RANGE' || e.code === 'CLIENT_PRE_EPOCH') return;
+        if (isClientFetchSentinel(e)) return;
         console.warn('[useTrendData] prefetch fetch failed', {
           tagIds: missing,
           startTime: tile.startTime,

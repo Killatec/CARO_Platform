@@ -4,7 +4,16 @@ import type { FetchTileParams, TileApiResponse } from './api.js';
 
 export type GatedFetchFn = (args: FetchTileParams) => Promise<TileApiResponse>;
 
-export const CLIENT_UNDER_RANGE = 'CLIENT_UNDER_RANGE' as const;
+const CLIENT_FETCH_SENTINELS = ['CLIENT_UNDER_RANGE', 'CLIENT_OVER_RANGE', 'CLIENT_PRE_EPOCH'] as const;
+
+/**
+ * True when an error is one of the three client-side fetch sentinels
+ * (under-range, over-range, pre-epoch). Catch handlers use this to skip
+ * silently — these aren't fetch failures, they're predicate misses.
+ */
+export function isClientFetchSentinel(e: { code?: string } | undefined | null): boolean {
+  return e != null && typeof e.code === 'string' && (CLIENT_FETCH_SENTINELS as readonly string[]).includes(e.code);
+}
 
 /**
  * Builds the gated fetch tile callback used throughout the hook.
@@ -38,7 +47,7 @@ export function buildGatedFetchTile(): GatedFetchFn {
     if (tileSpanBigint / BigInt(args.bucketCount) === 0n) {
       return Promise.reject(
         Object.assign(new Error('tile bucketSMs would be 0 — fetch skipped client-side'),
-                      { code: CLIENT_UNDER_RANGE }),
+                      { code: 'CLIENT_UNDER_RANGE' }),
       );
     }
 

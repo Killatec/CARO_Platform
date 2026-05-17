@@ -22,7 +22,7 @@ const BUCKET_COUNT = TREND_VIEWER_DEFAULTS.bucketCount;
 export interface TrendChartContainerProps {
   /**
    * Initial tag ID list. Container owns the list and handles removes via the
-   * Legend. Tag additions are wired in Step 12 (TagPickerDrawer).
+   * Legend. Tag additions wired in the tag picker drawer.
    */
   tagIds: number[];
   siteTimezone?: string;

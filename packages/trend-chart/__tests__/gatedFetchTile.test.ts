@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { buildGatedFetchTile, CLIENT_UNDER_RANGE } from '../src/gatedFetchTile.js';
+import { buildGatedFetchTile } from '../src/gatedFetchTile.js';
 import { fetchTile } from '../src/api.js';
 import { MIN_VIEWPORT_SPAN_MS, TREND_VIEWER_DEFAULTS } from '../src/level.js';
 import type { FetchTileParams } from '../src/api.js';
@@ -40,7 +40,7 @@ describe('buildGatedFetchTile — CLIENT_UNDER_RANGE', () => {
     const start = 1_000_000n;
     const end   = start + MIN_VIEWPORT_SPAN_MS - 1n;
 
-    await expect(gated(makeFetchParams(start, end))).rejects.toMatchObject({ code: CLIENT_UNDER_RANGE });
+    await expect(gated(makeFetchParams(start, end))).rejects.toMatchObject({ code: 'CLIENT_UNDER_RANGE' });
     expect(mockFetchTile).not.toHaveBeenCalled();
   });
 

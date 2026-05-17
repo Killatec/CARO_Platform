@@ -3,12 +3,29 @@ import { WebSocket, WebSocketServer } from 'ws';
 import type { LkvCache, LkvValue } from './lkv.js';
 import type { DutyTracker } from './duty-tracker.js';
 
+/**
+ * Per-tag cap on the trend outbox.
+ *
+ * Each trendable tag has its own event array in `client.trendOutbox`. When a
+ * tag's array reaches this limit (because the WS send buffer is back-pressured
+ * and trendFlush can't drain), the oldest event is dropped to make room. A
+ * per-client drop counter accumulates across the flush window and emits one
+ * batched warn per flush.
+ *
+ * 500 events ≈ 50 seconds of nominal 10 Hz COV per tag — generous headroom
+ * before drops on any realistic network hiccup. Worst-case memory per stuck
+ * client = subscribed_tags × 500 × ~48 bytes/event; bounded and small even at
+ * the 8-tag UX cap.
+ */
+const MAX_TREND_OUTBOX_PER_TAG = 500;
+
 interface WsClient {
   ws: WebSocket;
   subscriptions: Set<number>;
   lastSentGen: Map<number, number>;
   trendSubscriptions: Set<number>;
   trendOutbox: Map<number, Array<{ moduleTs: number; value: LkvValue }>>;
+  trendDroppedCount: number;
 }
 
 type InboundMessage =
@@ -65,6 +82,7 @@ export class WsServer {
         lastSentGen: new Map(),
         trendSubscriptions: new Set(),
         trendOutbox: new Map(),
+        trendDroppedCount: 0,
       };
       this.clients.add(client);
 
@@ -119,6 +137,10 @@ export class WsServer {
         if (!events) {
           events = [];
           client.trendOutbox.set(tagId, events);
+        }
+        if (events.length >= MAX_TREND_OUTBOX_PER_TAG) {
+          events.shift();                    // drop oldest — newest data is more relevant for live tail
+          client.trendDroppedCount++;
         }
         events.push({ moduleTs, value: lkvCache.get(tagId) ?? null });
       }
@@ -247,6 +269,14 @@ export class WsServer {
 
         client.trendOutbox.clear();
         this.send(client, { type: 'TREND_DELTA', samples });
+
+        if (client.trendDroppedCount > 0) {
+          console.warn(
+            `[WsServer] dropped ${client.trendDroppedCount} trend sample(s) (outbox overflow; ` +
+            `per-tag cap=${MAX_TREND_OUTBOX_PER_TAG}). Client likely back-pressured or stalled.`,
+          );
+          client.trendDroppedCount = 0;
+        }
       }
     });
   }

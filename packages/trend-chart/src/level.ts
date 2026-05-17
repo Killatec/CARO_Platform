@@ -84,7 +84,7 @@ export const MAX_VIEWPORT_SPAN_MS =
  * below 1s, Math.round produces 0 and the chart breaks visually downstream.
  *
  * Client-side concept only. The server does not enforce a corresponding
- * threshold — sub-100s windows route to queryRaw via Phase 6 dispatch and
+ * threshold — sub-100s windows route to queryRaw via shape dispatch and
  * return correctly (raw COV samples, possibly empty); the bucketed branch's
  * INVALID_BUCKET_S check catches genuinely invalid cases. See spec §6.3
  * Out-of-range UX.

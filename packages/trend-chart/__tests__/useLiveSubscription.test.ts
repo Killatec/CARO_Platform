@@ -253,6 +253,53 @@ describe('useLiveSubscription — three-case rule (aggregate)', () => {
     expect(tail!.perTag.get(1)!.min).toEqual([0]);
     expect(tail!.perTag.get(1)!.max).toEqual([1]);
   });
+
+  // TG-2 (client portion): multi-event boolean coercion in bucket accumulator.
+  // Distinct from the single-event tests above — exercises toNumericValue across
+  // multiple same-valued booleans so min/max update paths are both hit.
+
+  it('boolean true → 1 in bucket accumulator (toNumericValue, aggregate)', () => {
+    const { result } = renderHook(() => useLiveSubscription(tailingOpts([1])));
+    act(() => {
+      fireCb(1, tAt(0, 100), true);
+      fireCb(1, tAt(0, 200), true);
+      fireCb(1, tAt(1, 100), 0); // closes bucket 0
+    });
+    const { tail } = result.current;
+    expect(tail).not.toBeNull();
+    expect(tail!.perTag.get(1)!.value).toEqual([1]);
+    expect(tail!.perTag.get(1)!.min).toEqual([1]);
+    expect(tail!.perTag.get(1)!.max).toEqual([1]);
+  });
+
+  it('boolean false → 0 in bucket accumulator (toNumericValue, aggregate)', () => {
+    const { result } = renderHook(() => useLiveSubscription(tailingOpts([1])));
+    act(() => {
+      fireCb(1, tAt(0, 100), false);
+      fireCb(1, tAt(0, 200), false);
+      fireCb(1, tAt(1, 100), 1); // closes bucket 0
+    });
+    const { tail } = result.current;
+    expect(tail!.perTag.get(1)!.value).toEqual([0]);
+    expect(tail!.perTag.get(1)!.min).toEqual([0]);
+    expect(tail!.perTag.get(1)!.max).toEqual([0]);
+  });
+
+  it('mixed boolean true/false in same bucket → (last=last_event, min=0, max=1)', () => {
+    // Demonstrates min/max coercion across multiple boolean events; the tightest
+    // assertion that the accumulator does not short-circuit type-mixed buckets.
+    const { result } = renderHook(() => useLiveSubscription(tailingOpts([1])));
+    act(() => {
+      fireCb(1, tAt(0, 100), true);
+      fireCb(1, tAt(0, 200), false);
+      fireCb(1, tAt(0, 300), true);
+      fireCb(1, tAt(1, 100), 0); // closes bucket 0
+    });
+    const { tail } = result.current;
+    expect(tail!.perTag.get(1)!.value).toEqual([1]); // last event in bucket 0 was `true → 1`
+    expect(tail!.perTag.get(1)!.min).toEqual([0]);
+    expect(tail!.perTag.get(1)!.max).toEqual([1]);
+  });
 });
 
 // ─── Bucket boundary tests ────────────────────────────────────────────────────
@@ -476,6 +523,44 @@ describe('useLiveSubscription — raw mode core', () => {
   it('no events yet → tail is null', () => {
     const { result } = renderHook(() => useLiveSubscription(rawOpts([1])));
     expect(result.current.tail).toBeNull();
+  });
+
+  // TG-7: commitAndDrain clears rawBuffers in raw mode.
+  it('commitAndDrain clears rawBuffers in raw mode (subscription preserved, new events still arrive)', () => {
+    const { result } = renderHook(() => useLiveSubscription(rawOpts([1])));
+
+    // Populate the raw buffer.
+    act(() => {
+      fireCb(1, 1000, 3.5);
+      fireCb(1, 2000, 7.0);
+    });
+    expect((result.current.tail as import('../src/useLiveSubscription.js').RawTail)!.perTag.get(1)!.value)
+      .toEqual([3.5, 7.0]);
+
+    // Drain.
+    act(() => { result.current.commitAndDrain(); });
+
+    // After drain: raw buffer cleared. Tail goes back to null (no events accumulated)
+    // OR perTag.get(1) returns undefined / empty — assert whichever shape the hook produces.
+    // The crux is that the previously-pushed events are gone.
+    const postDrainTail = result.current.tail;
+    if (postDrainTail === null) {
+      // Acceptable — null tail means no events accumulated post-drain.
+    } else {
+      const t = (postDrainTail as import('../src/useLiveSubscription.js').RawTail).perTag.get(1);
+      // Either perTag has no entry for tag 1, or the entry has empty value/ts arrays.
+      expect(t?.value ?? []).toEqual([]);
+      expect(t?.ts ?? []).toEqual([]);
+    }
+
+    // Subscription is still active.
+    expect(cbCount(1)).toBe(1);
+
+    // New events arrive into a fresh buffer.
+    act(() => { fireCb(1, 3000, 10); });
+    const freshTail = result.current.tail as import('../src/useLiveSubscription.js').RawTail;
+    expect(freshTail.perTag.get(1)!.value).toEqual([10]);
+    expect(freshTail.perTag.get(1)!.ts).toEqual([3000n]);
   });
 });
 

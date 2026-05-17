@@ -42,3 +42,26 @@ const timescalePool: DbPool = {
 };
 
 export default timescalePool;
+
+/**
+ * Typed query helper for the TimescaleDB pool.
+ *
+ * Wraps `timescalePool.query(text, params)` and returns the rows array directly,
+ * cast to the caller's row type. Exists so the row-shape cast appears in one
+ * place per call site instead of being scattered alongside every `.rows as T[]`.
+ * Identical wire behavior to calling `timescalePool.query` directly.
+ *
+ * Example:
+ *   const rows = await timescaleQuery<{ split_ms: string | number }>(
+ *     'SELECT extract(epoch from time_bucket(...)) * 1000 AS split_ms',
+ *     [bucketSMs, watermarkMs],
+ *   );
+ *   const splitMs = Number(rows[0].split_ms);
+ */
+export async function timescaleQuery<T>(
+  text: string,
+  params?: unknown[],
+): Promise<T[]> {
+  const result = await timescalePool.query(text, params);
+  return result.rows as T[];
+}

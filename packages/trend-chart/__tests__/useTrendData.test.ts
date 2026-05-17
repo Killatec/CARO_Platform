@@ -1433,11 +1433,6 @@ describe('useTrendData — isTailing skip guard', () => {
     await waitFor(() => expect(mockFetchTile.mock.calls.length).toBeGreaterThan(callsAfterInitial));
   });
 
-  // NOTE: The tests below use renderHook and fail with "document is not defined"
-  // due to a pre-existing jsdom environment gap that affects all renderHook-based tests
-  // in this package. The failure is NOT a logic regression — the assertions are correct
-  // and should pass once the jsdom setup is fixed. Do not mark these .skip.
-
   it('live entry: fetchTile called with exact viewport bounds, not tile-grid-aligned bounds', async () => {
     // Viewport ending at a non-round timestamp — tile-grid alignment would shift
     // startTime to a boundary earlier than viewport.start, creating a left-side gap.

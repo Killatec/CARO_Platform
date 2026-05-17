@@ -463,9 +463,16 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
   // ── commitAndDrain ────────────────────────────────────────────────────────
 
   const commitAndDrain = useCallback((): void => {
+    // Empty per-tag arrays in place rather than .clear() the maps so the
+    // subscribe callback's `if (buf)` guard still passes on subsequent events.
+    // Production masks this via the mode-flip lifecycle (tailMode-change effect
+    // re-allocates), but TG-7 surfaced it under stable-mode drain. See spec §10.6.
     for (const arr of ringsRef.current.values()) arr.length = 0;
     accumulatorsRef.current.clear();
-    rawBuffersRef.current.clear();
+    for (const arr of rawBuffersRef.current.values()) arr.length = 0;
+    // Clear React state so consumers see the drain immediately, without waiting
+    // on a subsequent re-render triggered by mode flip.
+    setTail(null);
   }, []);
 
   // Suppress the brief mismatch window during a tailMode transition

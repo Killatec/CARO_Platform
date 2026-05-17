@@ -9,6 +9,7 @@ import { useTrendData } from '../src/useTrendData.js';
 import { formatDateTime } from '@caro/ui';
 import type { UseTrendDataResult } from '../src/useTrendData.js';
 import { MIN_VIEWPORT_SPAN_MS, MAX_VIEWPORT_SPAN_MS } from '../src/level.js';
+import { expectCallOrder } from './testUtils.js';
 
 // ── useLiveSubscription mock (hoisted so vi.mock factory can close over it) ───
 
@@ -251,7 +252,7 @@ describe('TrendChartContainer', () => {
     expect(screen.getByText('No tags selected.')).toBeTruthy();
   });
 
-  it('rangeExceeded=true: shows red message in cursor row; chart and controls remain interactive', () => {
+  it('modeViewport over-range: shows range message in cursor row; chart and controls remain interactive', () => {
     renderContainer([1]);
     // Trigger over-range via zoom (modeViewport-derived path, not hook flag).
     const end = 1_700_000_000_000n;
@@ -270,7 +271,7 @@ describe('TrendChartContainer', () => {
     expect(screen.getByText('Go Live')).toBeTruthy();
   });
 
-  it('rangeExceeded=true: placeholderData uses modeViewport bounds with n=2 stub points', () => {
+  it('modeViewport over-range: placeholderData uses modeViewport bounds with n=2 stub points', () => {
     // Trigger over-range via zoom (modeViewport-derived path). Uses a far-past
     // realistic timestamp (Nov 2023) — verifies placeholder startTime comes from
     // modeViewport, not a dataViewport that might saturate to 1n on aggressive
@@ -292,7 +293,7 @@ describe('TrendChartContainer', () => {
     expect(capturedData!.endTime).toBe(end);
   });
 
-  it('rangeExceeded=true: placeholderData x-values span exactly modeViewport bounds', () => {
+  it('modeViewport over-range: placeholderData x-values span exactly modeViewport bounds', () => {
     // The x-values uPlot derives from AggregateSeriesData:
     //   xs[k] = startTime/1000 + k * (bucketSMs/1000)  (in seconds)
     // With n=2 and bucketSMs = Number(endTime - startTime):
@@ -646,6 +647,22 @@ describe('TrendChartContainer', () => {
       expect(mockResult.evictAll).not.toHaveBeenCalled();
     });
 
+    it('tailing→fixed: commitAndDrain fires BEFORE refetchHistory (TG-5 ordering)', () => {
+      renderContainer([1]);
+
+      const farPastEnd = 1_700_000_000_000n;
+      const farPastStart = farPastEnd - 3_600_000n;
+      act(() => {
+        capturedOnXPan?.(farPastStart, farPastEnd);
+        vi.runAllTimers();
+      });
+
+      // Order matters: commitAndDrain must clear live state BEFORE refetchHistory
+      // triggers the post-transition history fetch. Inversion would let live-buffer
+      // residue leak into the fetched range (spec §10.6).
+      expectCallOrder(liveHoisted.commitAndDrain, mockResult.refetchHistory);
+    });
+
     it('Live click in fixed → evictAll called once to clear stale cache; mode returns to tailing', () => {
       // evictAll on fixed→tailing ensures every subsequent live exit fetches
       // fresh tiles, preventing Gap B (stale CAG-lag nulls accumulating in cache).
@@ -717,6 +734,42 @@ describe('TrendChartContainer', () => {
 
       fireEvent.click(screen.getByText('Go Live'));
       expect(mockResult.evictAll).toHaveBeenCalledOnce();
+    });
+
+    it('Live click: evictAll fires BEFORE the re-render with isTailing=true (TG-6 ordering)', () => {
+      renderContainer([1]);
+
+      // Pan into fixed mode first.
+      const farPastEnd = 1_700_000_000_000n;
+      const farPastStart = farPastEnd - 3_600_000n;
+      act(() => {
+        capturedOnXPan?.(farPastStart, farPastEnd);
+        vi.runAllTimers();
+      });
+
+      // Reset spies so we only observe the Live-click activity.
+      mockResult.evictAll.mockClear();
+      mockUseTrendData.mockClear();
+
+      // Click Live: synchronously evictAll → dispatch(liveClicked); React re-renders;
+      // useTrendData is called with isTailing=true on that next render.
+      act(() => {
+        fireEvent.click(screen.getByText('Go Live'));
+      });
+
+      // Find the first useTrendData re-render where isTailing flipped to true.
+      const tailingCallIdx = mockUseTrendData.mock.calls.findIndex(
+        args => args[0].isTailing === true,
+      );
+      expect(tailingCallIdx).toBeGreaterThanOrEqual(0);
+
+      // Ordering: evictAll fired BEFORE the useTrendData call that has isTailing=true.
+      // Raw invocationCallOrder comparison rather than expectCallOrder because the
+      // two spies aren't peers — evictAll is called once in the click handler, while
+      // useTrendData is called N times across re-renders; we target the Nth call.
+      const evictAllOrder = mockResult.evictAll.mock.invocationCallOrder[0]!;
+      const tailingCallOrder = mockUseTrendData.mock.invocationCallOrder[tailingCallIdx]!;
+      expect(evictAllOrder).toBeLessThan(tailingCallOrder);
     });
 
     it('evictAll NOT called on tailing→fixed transitions (pan, EndPicker commit)', () => {

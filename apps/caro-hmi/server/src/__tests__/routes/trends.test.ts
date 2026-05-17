@@ -7,7 +7,7 @@ import type { ErrorRequestHandler } from 'express';
 import { errorHandler } from '@caro/server';
 import trendsRouter from '../../routes/trends.js';
 import { getTrendTile, getTrendExtent, MAX_BUCKET_S, deriveBucketSMs, writeTagSamples, timescalePool } from '@caro/db';
-import type { RawTrendTile, AggregateTrendTile } from '@caro/db';
+import type { RawTrendTile, AggregateTrendTile, TileMeta } from '@caro/db';
 
 // ── Mock @caro/db, preserving real impl for integration tests ─────────────────
 
@@ -88,6 +88,13 @@ const AGG_TILE: AggregateTrendTile = {
   }],
 };
 
+const FAKE_META: TileMeta = {
+  segments:         [{ source: 'raw', rangeStartMs: 0, rangeEndMs: 1, rowCount: 0, dbElapsedMs: 0 }],
+  finalSource:      'raw',
+  totalDbElapsedMs: 0,
+  rows:             0,
+};
+
 // ── Unit tests (mocked @caro/db) ──────────────────────────────────────────────
 
 describe('GET /api/v1/trends/tile — unit (mocked)', () => {
@@ -101,7 +108,7 @@ describe('GET /api/v1/trends/tile — unit (mocked)', () => {
   // ── Happy paths ─────────────────────────────────────────────────────────────
 
   it('raw happy path: returns 200 with envelope wrapping RawTrendTile', async () => {
-    mockGet.mockResolvedValueOnce(RAW_TILE);
+    mockGet.mockResolvedValueOnce({ tile: RAW_TILE, meta: FAKE_META });
     const res = await request(app)
       .get('/api/v1/trends/tile?tag_ids=1&start_time=3600000&end_time=3840000&bucket_count=250');
     expect(res.status).toBe(200);
@@ -113,7 +120,7 @@ describe('GET /api/v1/trends/tile — unit (mocked)', () => {
   });
 
   it('aggregate happy path: returns 200 with envelope wrapping AggregateTrendTile', async () => {
-    mockGet.mockResolvedValueOnce(AGG_TILE);
+    mockGet.mockResolvedValueOnce({ tile: AGG_TILE, meta: FAKE_META });
     const res = await request(app)
       .get('/api/v1/trends/tile?tag_ids=1&start_time=7200000&end_time=10800000&bucket_count=250');
     expect(res.status).toBe(200);
@@ -124,7 +131,7 @@ describe('GET /api/v1/trends/tile — unit (mocked)', () => {
   });
 
   it('aggregate response carries min and max arrays aligned with value', async () => {
-    mockGet.mockResolvedValueOnce(AGG_TILE);
+    mockGet.mockResolvedValueOnce({ tile: AGG_TILE, meta: FAKE_META });
     const res = await request(app)
       .get('/api/v1/trends/tile?tag_ids=1&start_time=7200000&end_time=10800000&bucket_count=250');
     expect(res.status).toBe(200);
@@ -137,7 +144,7 @@ describe('GET /api/v1/trends/tile — unit (mocked)', () => {
   });
 
   it('raw response does not carry min or max on series (discriminated-union invariant)', async () => {
-    mockGet.mockResolvedValueOnce(RAW_TILE);
+    mockGet.mockResolvedValueOnce({ tile: RAW_TILE, meta: FAKE_META });
     const res = await request(app)
       .get('/api/v1/trends/tile?tag_ids=1&start_time=3600000&end_time=3840000&bucket_count=250');
     expect(res.status).toBe(200);
@@ -147,7 +154,7 @@ describe('GET /api/v1/trends/tile — unit (mocked)', () => {
   });
 
   it('raw response includes prev with bigint ts serialised to number when present', async () => {
-    mockGet.mockResolvedValueOnce(RAW_TILE);
+    mockGet.mockResolvedValueOnce({ tile: RAW_TILE, meta: FAKE_META });
     const res = await request(app)
       .get('/api/v1/trends/tile?tag_ids=1&start_time=3600000&end_time=3840000&bucket_count=250');
     expect(res.status).toBe(200);
@@ -159,7 +166,7 @@ describe('GET /api/v1/trends/tile — unit (mocked)', () => {
   });
 
   it('raw response has no prev key when series entry has no prev (v0.8 cache)', async () => {
-    mockGet.mockResolvedValueOnce(RAW_TILE_NO_PREV);
+    mockGet.mockResolvedValueOnce({ tile: RAW_TILE_NO_PREV, meta: FAKE_META });
     const res = await request(app)
       .get('/api/v1/trends/tile?tag_ids=1&start_time=3600000&end_time=3840000&bucket_count=250');
     expect(res.status).toBe(200);
@@ -167,7 +174,7 @@ describe('GET /api/v1/trends/tile — unit (mocked)', () => {
   });
 
   it('aggregate response has no prev field on series (discriminated-union regression check)', async () => {
-    mockGet.mockResolvedValueOnce(AGG_TILE);
+    mockGet.mockResolvedValueOnce({ tile: AGG_TILE, meta: FAKE_META });
     const res = await request(app)
       .get('/api/v1/trends/tile?tag_ids=1&start_time=7200000&end_time=10800000&bucket_count=250');
     expect(res.status).toBe(200);
@@ -175,7 +182,7 @@ describe('GET /api/v1/trends/tile — unit (mocked)', () => {
   });
 
   it('bigint ts entries in raw response are serialised to JSON numbers', async () => {
-    mockGet.mockResolvedValueOnce(RAW_TILE);
+    mockGet.mockResolvedValueOnce({ tile: RAW_TILE, meta: FAKE_META });
     const res = await request(app)
       .get('/api/v1/trends/tile?tag_ids=1&start_time=3600000&end_time=3840000&bucket_count=250');
     const ts = res.body.data.series[0].ts;
@@ -279,6 +286,45 @@ describe('GET /api/v1/trends/tile — unit (mocked)', () => {
     expect(res.body.error.code).toBe('INVALID_BUCKET_COUNT');
   });
 
+  // ── TG-8: parseIntStrict acceptance + previously-uncovered range cases ────────
+
+  describe('TG-8 strict input validation', () => {
+    it('bucket_count=250abc → 400 INVALID_BUCKET_COUNT (parseIntStrict rejects trailing garbage)', async () => {
+      const res = await request(app)
+        .get('/api/v1/trends/tile?tag_ids=1&start_time=1000000&end_time=2000000&bucket_count=250abc');
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('INVALID_BUCKET_COUNT');
+    });
+
+    it('bucket_count=250.7 → 400 INVALID_BUCKET_COUNT (parseIntStrict rejects fractions)', async () => {
+      const res = await request(app)
+        .get('/api/v1/trends/tile?tag_ids=1&start_time=1000000&end_time=2000000&bucket_count=250.7');
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('INVALID_BUCKET_COUNT');
+    });
+
+    it('tag_ids=1.5,2 → 400 INVALID_TAG_IDS (parseIntStrict rejects fractions inside split list)', async () => {
+      const res = await request(app)
+        .get('/api/v1/trends/tile?tag_ids=1.5,2&start_time=1000000&end_time=2000000&bucket_count=250');
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('INVALID_TAG_IDS');
+    });
+
+    it('start_time=1&end_time=0 → 400 INVALID_RANGE (end_time must exceed start_time)', async () => {
+      const res = await request(app)
+        .get('/api/v1/trends/tile?tag_ids=1&start_time=1&end_time=0&bucket_count=250');
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('INVALID_RANGE');
+    });
+
+    it('end_time=-100 → 400 INVALID_RANGE (negative end rejected by endTime <= startTime check)', async () => {
+      const res = await request(app)
+        .get('/api/v1/trends/tile?tag_ids=1&start_time=1000000&end_time=-100&bucket_count=250');
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('INVALID_RANGE');
+    });
+  });
+
   // ── Error translation ───────────────────────────────────────────────────────
 
   it('db throws INVALID_BUCKET_S → 400 with original message', async () => {
@@ -291,14 +337,10 @@ describe('GET /api/v1/trends/tile — unit (mocked)', () => {
     expect(res.body.error.message).toBe('bad bucket');
   });
 
-  // ── Short windows: Phase 6 dispatch routes to queryRaw → 200 raw COV ──────
-  // Route-level INVALID_RANGE_TOO_NARROW was removed (had wrong threshold
-  // semantics — applied MIN_VIEWPORT_SPAN_MS against per-tile span, not
-  // viewport; tiles are viewport/visibleTilesPerWindow = half-viewport).
-  // Phase 6 dispatch handles sub-100s windows correctly via queryRaw.
+  // Route INVALID_RANGE_TOO_NARROW validation removed (Phase 6 dispatch routes sub-100s tiles to raw COV); see hmi_trends_deltas.md.
 
   it('205ms span at bucket_count=1000 → 200 raw COV via Phase 6 dispatch', async () => {
-    mockGet.mockResolvedValueOnce(RAW_TILE_NO_PREV);
+    mockGet.mockResolvedValueOnce({ tile: RAW_TILE_NO_PREV, meta: FAKE_META });
     const res = await request(app)
       .get('/api/v1/trends/tile?tag_ids=1&start_time=1778861359020&end_time=1778861359225&bucket_count=1000');
     expect(res.status).toBe(200);
@@ -308,7 +350,7 @@ describe('GET /api/v1/trends/tile — unit (mocked)', () => {
   });
 
   it('500ms span at bucket_count=500 → 200 raw COV (tile width client sends at 1s viewport threshold)', async () => {
-    mockGet.mockResolvedValueOnce(RAW_TILE_NO_PREV);
+    mockGet.mockResolvedValueOnce({ tile: RAW_TILE_NO_PREV, meta: FAKE_META });
     const res = await request(app)
       .get('/api/v1/trends/tile?tag_ids=1&start_time=1000000000&end_time=1000000500&bucket_count=500');
     expect(res.status).toBe(200);
@@ -332,7 +374,7 @@ describe('GET /api/v1/trends/tile — unit (mocked)', () => {
 
   it('responseTailTs present on raw response — is a number close to Date.now()', async () => {
     mockGet.mockImplementationOnce(async (_t, _s, _e, _bc, nowMs) => ({
-      ...RAW_TILE, responseTailTs: nowMs ?? Date.now(),
+      tile: { ...RAW_TILE, responseTailTs: nowMs ?? Date.now() }, meta: FAKE_META,
     }));
     const before = Date.now();
     const res = await request(app)
@@ -346,7 +388,7 @@ describe('GET /api/v1/trends/tile — unit (mocked)', () => {
 
   it('responseTailTs present on aggregate response — is a number close to Date.now()', async () => {
     mockGet.mockImplementationOnce(async (_t, _s, _e, _bc, nowMs) => ({
-      ...AGG_TILE, responseTailTs: nowMs ?? Date.now(),
+      tile: { ...AGG_TILE, responseTailTs: nowMs ?? Date.now() }, meta: FAKE_META,
     }));
     const before = Date.now();
     const res = await request(app)
@@ -364,7 +406,7 @@ describe('GET /api/v1/trends/tile — unit (mocked)', () => {
       // Record when getTrendTile body executes — nowMs was captured before this
       capturedInsideMock = Date.now();
       await new Promise(r => setTimeout(r, 80));
-      return { ...RAW_TILE, responseTailTs: nowMs ?? Date.now() };
+      return { tile: { ...RAW_TILE, responseTailTs: nowMs ?? Date.now() }, meta: FAKE_META };
     });
     const before = Date.now();
     const res = await request(app)
@@ -376,7 +418,7 @@ describe('GET /api/v1/trends/tile — unit (mocked)', () => {
   });
 
   it('response body is JSON-serialisable (bigints converted to numbers by serializeTile)', async () => {
-    mockGet.mockResolvedValueOnce(RAW_TILE);
+    mockGet.mockResolvedValueOnce({ tile: RAW_TILE, meta: FAKE_META });
     const res = await request(app)
       .get('/api/v1/trends/tile?tag_ids=1&start_time=3600000&end_time=3840000&bucket_count=250');
     expect(() => JSON.stringify(res.body)).not.toThrow();
@@ -503,7 +545,7 @@ describe.skipIf(!HAVE_TIMESCALE)('GET /api/v1/trends/tile — integration (live 
   });
 
   it('gzip off (default): response does not have content-encoding: gzip', async () => {
-    mockGet.mockResolvedValueOnce(RAW_TILE);
+    mockGet.mockResolvedValueOnce({ tile: RAW_TILE, meta: FAKE_META });
     const app = buildApp();
     const res = await request(app)
       .get('/api/v1/trends/tile?tag_ids=1&start_time=3600000&end_time=3840000&bucket_count=250')
@@ -512,7 +554,7 @@ describe.skipIf(!HAVE_TIMESCALE)('GET /api/v1/trends/tile — integration (live 
   });
 
   it('gzip on: compression middleware produces content-encoding: gzip', async () => {
-    mockGet.mockResolvedValueOnce(AGG_TILE);
+    mockGet.mockResolvedValueOnce({ tile: AGG_TILE, meta: FAKE_META });
     const app = buildGzipApp();
     const res = await request(app)
       .get('/api/v1/trends/tile?tag_ids=1&start_time=7200000&end_time=10800000&bucket_count=250')

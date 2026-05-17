@@ -12,6 +12,21 @@ const DB_CODE_STATUS: Record<string, number> = {
   INVALID_BUCKET_S:     400,
 };
 
+// ── Validation helpers ────────────────────────────────────────────────────────
+
+function bad(code: string, message: string, status = 400): never {
+  const err = new Error(message) as CaroError;
+  err.status = status;
+  err.code   = code;
+  throw err;
+}
+
+function parseIntStrict(raw: string, code: string, message: string): number {
+  const n = Number(raw.trim());
+  if (!Number.isInteger(n)) bad(code, message);
+  return n;
+}
+
 const router = Router();
 
 // Converts bigint fields to Number before JSON serialisation.
@@ -57,25 +72,19 @@ router.get('/tile', asyncWrap(async (req, res) => {
 
   // Presence check — all four params are required.
   for (const name of ['tag_ids', 'start_time', 'end_time', 'bucket_count'] as const) {
-    if (!q[name]) {
-      const err = new Error(`Missing required query parameter: ${name}`) as CaroError;
-      err.status = 400;
-      err.code   = 'MISSING_QUERY_PARAM';
-      throw err;
-    }
+    if (!q[name]) bad('MISSING_QUERY_PARAM', `Missing required query parameter: ${name}`);
   }
 
   // tag_ids — comma-separated, 1–8 positive integers (§6.6 cap is enforced by @caro/db).
-  const tagIds = (q.tag_ids as string).split(',').map(s => parseInt(s.trim(), 10));
+  const tagIds = (q.tag_ids as string).split(',').map(s =>
+    parseIntStrict(s, 'INVALID_TAG_IDS', 'tag_ids must be 1–8 comma-separated positive integers'),
+  );
   if (
     tagIds.length === 0 ||
     tagIds.length > 8 ||
-    tagIds.some(id => !Number.isInteger(id) || id <= 0)
+    tagIds.some(id => id <= 0)
   ) {
-    const err = new Error('tag_ids must be 1–8 comma-separated positive integers') as CaroError;
-    err.status = 400;
-    err.code   = 'INVALID_TAG_IDS';
-    throw err;
+    bad('INVALID_TAG_IDS', 'tag_ids must be 1–8 comma-separated positive integers');
   }
 
   // start_time — positive integer string → BigInt.
@@ -83,55 +92,39 @@ router.get('/tile', asyncWrap(async (req, res) => {
   try {
     startTime = BigInt((q.start_time as string).trim());
   } catch {
-    const err = new Error('start_time must be a positive integer (ms since epoch)') as CaroError;
-    err.status = 400;
-    err.code   = 'INVALID_RANGE';
-    throw err;
+    bad('INVALID_RANGE', 'start_time must be a positive integer (ms since epoch)');
   }
-  if (startTime <= 0n) {
-    const err = new Error('start_time must be a positive integer (ms since epoch)') as CaroError;
-    err.status = 400;
-    err.code   = 'INVALID_RANGE';
-    throw err;
-  }
+  if (startTime! <= 0n) bad('INVALID_RANGE', 'start_time must be a positive integer (ms since epoch)');
 
   // end_time — positive integer string → BigInt, must exceed start_time.
   let endTime: bigint;
   try {
     endTime = BigInt((q.end_time as string).trim());
   } catch {
-    const err = new Error('end_time must be a positive integer (ms since epoch)') as CaroError;
-    err.status = 400;
-    err.code   = 'INVALID_RANGE';
-    throw err;
+    bad('INVALID_RANGE', 'end_time must be a positive integer (ms since epoch)');
   }
-  if (endTime <= startTime) {
-    const err = new Error('end_time must be greater than start_time') as CaroError;
-    err.status = 400;
-    err.code   = 'INVALID_RANGE';
-    throw err;
-  }
+  if (endTime! <= startTime!) bad('INVALID_RANGE', 'end_time must be greater than start_time');
 
   // bucket_count — integer in 1..2500.
-  const bucketCount = parseInt((q.bucket_count as string).trim(), 10);
-  if (!Number.isInteger(bucketCount) || bucketCount < 1 || bucketCount > 2500) {
-    const err = new Error('bucket_count must be an integer in 1..2500') as CaroError;
-    err.status = 400;
-    err.code   = 'INVALID_BUCKET_COUNT';
-    throw err;
+  const bucketCount = parseIntStrict(
+    q.bucket_count as string,
+    'INVALID_BUCKET_COUNT',
+    'bucket_count must be an integer in 1..2500',
+  );
+  if (bucketCount < 1 || bucketCount > 2500) {
+    bad('INVALID_BUCKET_COUNT', 'bucket_count must be an integer in 1..2500');
   }
 
   try {
-    const tile = await getTrendTile(tagIds, startTime, endTime, bucketCount, nowMs);
+    const { tile } = await getTrendTile(tagIds, startTime!, endTime!, bucketCount, nowMs);
     res.json({ ok: true, data: serializeTile(tile) });
   } catch (e: unknown) {
     const raw = e as Error & { code?: string };
-    const status = raw.code !== undefined ? (DB_CODE_STATUS[raw.code] ?? 500) : 500;
-    if (status >= 500) console.error('[trends/tile] internal error', raw);
-    const wrapped = new Error(raw.message) as CaroError;
-    wrapped.status = status;
-    wrapped.code = raw.code ?? 'INTERNAL_ERROR';
-    throw wrapped;
+    if (typeof raw.code === 'string' && raw.code in DB_CODE_STATUS) {
+      bad(raw.code, raw.message, DB_CODE_STATUS[raw.code]);
+    }
+    console.error('[trends/tile] internal error', raw);
+    throw raw;
   }
 }));
 

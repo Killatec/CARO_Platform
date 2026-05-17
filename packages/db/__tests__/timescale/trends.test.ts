@@ -5,13 +5,17 @@ import {
   MAX_BUCKET_S,
   SAMPLE_RATE_HZ,
   dispatchShape,
+  DISPATCH_TABLE,
+  nextFinerSource,
+  buildGapfillSql,
+  dropSeamDuplicates,
+  nullFutureBuckets,
   __test_watermarkOverride,
-  __test_lastUsedSources,
   __test_getWatermarkMs,
   __test_clearWatermarkCache,
 } from '../../timescale/trends.js';
-import type { RawTrendTile, AggregateTrendTile } from '../../timescale/trends.js';
-import timescalePool from '../../timescale/pool.js';
+import type { RawTrendTile, AggregateTrendTile, TileMeta, SegmentResult, AggregateTrendSeries, TileMetaSegment } from '../../timescale/trends.js';
+import timescalePool, { timescaleQuery } from '../../timescale/pool.js';
 
 // ── Guard: skip all integration tests if TimescaleDB is not configured ─────────
 
@@ -110,6 +114,39 @@ describe('getTrendTile — INVALID_BUCKET_S (bucketed path only)', () => {
   });
 });
 
+describe('DISPATCH_TABLE', () => {
+  it('has the exact thresholds and sources from spec §6.3 Step 2', () => {
+    expect(DISPATCH_TABLE).toEqual([
+      { maxBucketS: 1,        source: 'tag_samples' },
+      { maxBucketS: 16,       source: 'tag_samples_1s_cagg' },
+      { maxBucketS: 160,      source: 'tag_samples_10s_cagg' },
+      { maxBucketS: 1600,     source: 'tag_samples_1min_cagg' },
+      { maxBucketS: Infinity, source: 'tag_samples_10min_cagg' },
+    ]);
+  });
+
+  it('terminal Infinity entry guarantees find() always matches', () => {
+    expect(DISPATCH_TABLE.find(d => 0.5    < d.maxBucketS)!.source).toBe('tag_samples');
+    expect(DISPATCH_TABLE.find(d => 10     < d.maxBucketS)!.source).toBe('tag_samples_1s_cagg');
+    expect(DISPATCH_TABLE.find(d => 100    < d.maxBucketS)!.source).toBe('tag_samples_10s_cagg');
+    expect(DISPATCH_TABLE.find(d => 1000   < d.maxBucketS)!.source).toBe('tag_samples_1min_cagg');
+    expect(DISPATCH_TABLE.find(d => 5000   < d.maxBucketS)!.source).toBe('tag_samples_10min_cagg');
+    expect(DISPATCH_TABLE.find(d => 1e9    < d.maxBucketS)!.source).toBe('tag_samples_10min_cagg');
+  });
+});
+
+// ── TG-9: nextFinerSource unit tests (no DB needed) ──────────────────────────
+
+describe('nextFinerSource', () => {
+  it('throws when asked for finer than tag_samples (finest source)', () => {
+    expect(() => nextFinerSource('tag_samples')).toThrow(/no finer source/);
+  });
+
+  it('returns tag_samples when asked for finer than 1s_cagg (smoke test)', () => {
+    expect(nextFinerSource('tag_samples_1s_cagg')).toBe('tag_samples');
+  });
+});
+
 // ── Integration tests — live TimescaleDB ──────────────────────────────────────
 //
 // All samples live in [TEST_RANGE_START=0n, TEST_RANGE_END=946_684_799_000n]
@@ -139,7 +176,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: RAW branch (20s 
 
   it('returns shape { source: "raw", startTime, endTime, series }', async () => {
     await writeTestSamples([{ ts: START + 1_000n, tagId: 1001, value: 5.0 }]);
-    const tile = await getTrendTile([1001], START, END, COUNT) as RawTrendTile;
+    const tile = (await getTrendTile([1001], START, END, COUNT)).tile as RawTrendTile;
     expect(tile.source).toBe('raw');
     expect(tile.startTime).toBe(START);
     expect(tile.endTime).toBe(END);
@@ -153,7 +190,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: RAW branch (20s 
       { ts: START + 5_000n, tagId: 1002, value: 20.0 },
       { ts: START + 1_000n, tagId: 1002, value:  5.0 },
     ]);
-    const tile = await getTrendTile([1002], START, END, COUNT) as RawTrendTile;
+    const tile = (await getTrendTile([1002], START, END, COUNT)).tile as RawTrendTile;
     const s = tile.series[0];
     expect(s.ts[0]).toBe(START + 1_000n);
     expect(s.ts[1]).toBe(START + 2_000n);
@@ -163,7 +200,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: RAW branch (20s 
 
   it('tagIds order is preserved in series array even when a tag has no samples', async () => {
     await writeTestSamples([{ ts: START + 1_000n, tagId: 1004, value: 1.0 }]);
-    const tile = await getTrendTile([1005, 1004], START, END, COUNT) as RawTrendTile;
+    const tile = (await getTrendTile([1005, 1004], START, END, COUNT)).tile as RawTrendTile;
     expect(tile.series[0].tagId).toBe(1005);
     expect(tile.series[0].ts).toEqual([]);
     expect(tile.series[0].value).toEqual([]);
@@ -172,7 +209,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: RAW branch (20s 
   });
 
   it('empty range: tag with no samples returns ts:[] value:[]', async () => {
-    const tile = await getTrendTile([1006], START, END, COUNT) as RawTrendTile;
+    const tile = (await getTrendTile([1006], START, END, COUNT)).tile as RawTrendTile;
     expect(tile.series[0].ts).toEqual([]);
     expect(tile.series[0].value).toEqual([]);
   });
@@ -183,13 +220,13 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: RAW branch (20s 
       { ts: START + 2_000n, tagId: 1007, value: null },
       { ts: START + 3_000n, tagId: 1007, value: 4.0 },
     ]);
-    const tile = await getTrendTile([1007], START, END, COUNT) as RawTrendTile;
+    const tile = (await getTrendTile([1007], START, END, COUNT)).tile as RawTrendTile;
     expect(tile.series[0].value[1]).toBeNull();
   });
 
   it('ts arrays carry bigint values', async () => {
     await writeTestSamples([{ ts: START + 1_500n, tagId: 1008, value: 7.0 }]);
-    const tile = await getTrendTile([1008], START, END, COUNT) as RawTrendTile;
+    const tile = (await getTrendTile([1008], START, END, COUNT)).tile as RawTrendTile;
     expect(typeof tile.series[0].ts[0]).toBe('bigint');
     expect(tile.series[0].ts[0]).toBe(START + 1_500n);
   });
@@ -198,7 +235,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: RAW branch (20s 
     // Write one sample 60 s before the window (within the 5-minute bound).
     const prevTs = START - 60_000n;
     await writeTestSamples([{ ts: prevTs, tagId: 1011, value: 42.0 }]);
-    const tile = await getTrendTile([1011], START, END, COUNT) as RawTrendTile;
+    const tile = (await getTrendTile([1011], START, END, COUNT)).tile as RawTrendTile;
     expect(tile.series[0].prev).toBeDefined();
     expect(tile.series[0].prev!.ts).toBe(prevTs);
     expect(tile.series[0].prev!.value).toBe(42.0);
@@ -208,14 +245,14 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: RAW branch (20s 
     // Write one sample 6 minutes before the window (outside the 5-minute bound).
     const prevTs = START - 360_000n;
     await writeTestSamples([{ ts: prevTs, tagId: 1012, value: 7.0 }]);
-    const tile = await getTrendTile([1012], START, END, COUNT) as RawTrendTile;
+    const tile = (await getTrendTile([1012], START, END, COUNT)).tile as RawTrendTile;
     expect(tile.series[0].prev).toBeUndefined();
   });
 
   it('bounded-prev: prev absent when no samples exist before the window at all', async () => {
     // Write only one in-window sample — nothing before startTime.
     await writeTestSamples([{ ts: START + 10_000n, tagId: 1013, value: 3.0 }]);
-    const tile = await getTrendTile([1013], START, END, COUNT) as RawTrendTile;
+    const tile = (await getTrendTile([1013], START, END, COUNT)).tile as RawTrendTile;
     expect(tile.series[0].prev).toBeUndefined();
   });
 
@@ -226,7 +263,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: RAW branch (20s 
       { ts: START - 30_000n, tagId: 1014, value: 11.0 },  // 30s before → within bound
       { ts: START - 360_000n, tagId: 1015, value: 22.0 }, // 6 min before → outside bound
     ]);
-    const tile = await getTrendTile([1014, 1015], START, END, COUNT) as RawTrendTile;
+    const tile = (await getTrendTile([1014, 1015], START, END, COUNT)).tile as RawTrendTile;
     const s14 = tile.series.find(s => s.tagId === 1014)!;
     const s15 = tile.series.find(s => s.tagId === 1015)!;
     expect(s14.prev).toBeDefined();
@@ -245,7 +282,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: RAW branch (20s 
       { ts: START + 2_000n,   tagId: 1016, value: 20.0 }, // in-window
       { ts: START + 3_000n,   tagId: 1018, value: 30.0 }, // in-window, no prev
     ]);
-    const tile = await getTrendTile([1016, 1017, 1018], START, END, COUNT) as RawTrendTile;
+    const tile = (await getTrendTile([1016, 1017, 1018], START, END, COUNT)).tile as RawTrendTile;
     const s16 = tile.series.find(s => s.tagId === 1016)!;
     const s17 = tile.series.find(s => s.tagId === 1017)!;
     const s18 = tile.series.find(s => s.tagId === 1018)!;
@@ -272,7 +309,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: RAW branch (20s 
     const unalignedStart = START + 123n;
     const unalignedEnd   = END   + 123n;
     await writeTestSamples([{ ts: unalignedStart + 1_000n, tagId: 1009, value: 7.0 }]);
-    const tile = await getTrendTile([1009], unalignedStart, unalignedEnd, COUNT) as RawTrendTile;
+    const tile = (await getTrendTile([1009], unalignedStart, unalignedEnd, COUNT)).tile as RawTrendTile;
     expect(tile.source).toBe('raw');
     expect(tile.startTime).toBe(unalignedStart);
     expect(tile.endTime).toBe(unalignedEnd);
@@ -309,14 +346,14 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (b
   it('dispatches to source="1s_cagg" for a 1h window with 250 buckets', async () => {
     await writeTestSamples([{ ts: START + 1_000n, tagId: 2001, value: 1.0 }]);
     await refreshTestCagg(VIEW);
-    const tile = await getTrendTile([2001], START, END, COUNT) as AggregateTrendTile;
+    const tile = (await getTrendTile([2001], START, END, COUNT)).tile as AggregateTrendTile;
     expect(tile.source).toBe('1s_cagg');
   });
 
   it('aggregate response has n === bucketCount, all three series arrays have same length', async () => {
     await writeTestSamples([{ ts: START + 1_000n, tagId: 2002, value: 1.0 }]);
     await refreshTestCagg(VIEW);
-    const tile = await getTrendTile([2002], START, END, COUNT) as AggregateTrendTile;
+    const tile = (await getTrendTile([2002], START, END, COUNT)).tile as AggregateTrendTile;
     expect(tile.n).toBe(COUNT);
     expect(tile.series[0].value).toHaveLength(COUNT);
     expect(tile.series[0].min).toHaveLength(COUNT);
@@ -327,7 +364,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (b
     // Write one sample early in the window; the rest of the 250 buckets should carry it.
     await writeTestSamples([{ ts: START + 500n, tagId: 2003, value: 42.0 }]);
     await refreshTestCagg(VIEW);
-    const tile = await getTrendTile([2003], START, END, COUNT) as AggregateTrendTile;
+    const tile = (await getTrendTile([2003], START, END, COUNT)).tile as AggregateTrendTile;
     const { value, min, max } = tile.series[0];
     // First bucket should contain 42.0; all subsequent buckets carry it forward.
     expect(value[0]).toBe(42.0);
@@ -350,7 +387,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (b
       { ts: START + bucketSMs * 10n, tagId: 2004, value: 20.0 },
     ]);
     await refreshTestCagg(VIEW);
-    const tile = await getTrendTile([2004], START, END, COUNT) as AggregateTrendTile;
+    const tile = (await getTrendTile([2004], START, END, COUNT)).tile as AggregateTrendTile;
     const { value, min, max } = tile.series[0];
     // bucket 5 must be null — mixed-null rule nulls all three arrays
     expect(value[5]).toBeNull();
@@ -370,7 +407,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (b
       { ts: inTs,    tagId: 2005, value: 99.0 },
     ]);
     await refreshTestCagg(VIEW);
-    const tile = await getTrendTile([2005], START, END, COUNT) as AggregateTrendTile;
+    const tile = (await getTrendTile([2005], START, END, COUNT)).tile as AggregateTrendTile;
     const { value } = tile.series[0];
     // Left edge buckets (before inTs) should carry the prev value 55.5.
     expect(value[0]).toBe(55.5);
@@ -384,7 +421,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (b
     const inTs = START + 1_800_000n; // 30 min into the window (bucket ~125)
     await writeTestSamples([{ ts: inTs, tagId: 2006, value: 7.0 }]);
     await refreshTestCagg(VIEW);
-    const tile = await getTrendTile([2006], START, END, COUNT) as AggregateTrendTile;
+    const tile = (await getTrendTile([2006], START, END, COUNT)).tile as AggregateTrendTile;
     const { value, min, max } = tile.series[0];
     expect(value[0]).toBeNull(); // left edge: no prev
     expect(value[COUNT - 1]).toBe(7.0); // inTs is ~bucket 125; LOCF carries 7.0 forward unbounded (no cutoff)
@@ -395,7 +432,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (b
 
   it('empty range: tag with no CAG data returns value/min/max:[null]*n', async () => {
     // No samples written; CAG has nothing for this tag.
-    const tile = await getTrendTile([2007], START, END, COUNT) as AggregateTrendTile;
+    const tile = (await getTrendTile([2007], START, END, COUNT)).tile as AggregateTrendTile;
     expect(tile.series[0].value).toHaveLength(COUNT);
     expect(tile.series[0].value.every(v => v === null)).toBe(true);
     expect(tile.series[0].min).toHaveLength(COUNT);
@@ -407,7 +444,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (b
   it('startTime and endTime are returned as bigint', async () => {
     await writeTestSamples([{ ts: START + 1_000n, tagId: 2008, value: 1.0 }]);
     await refreshTestCagg(VIEW);
-    const tile = await getTrendTile([2008], START, END, COUNT) as AggregateTrendTile;
+    const tile = (await getTrendTile([2008], START, END, COUNT)).tile as AggregateTrendTile;
     expect(typeof tile.startTime).toBe('bigint');
     expect(typeof tile.endTime).toBe('bigint');
     expect(tile.startTime).toBe(START);
@@ -421,7 +458,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (b
   it('aligned startTime returns exactly bucketCount buckets with matching startTime/endTime', async () => {
     await writeTestSamples([{ ts: START + 1_000n, tagId: 2009, value: 3.0 }]);
     await refreshTestCagg(VIEW);
-    const tile = await getTrendTile([2009], START, END, COUNT) as AggregateTrendTile;
+    const tile = (await getTrendTile([2009], START, END, COUNT)).tile as AggregateTrendTile;
     expect(tile.n).toBe(COUNT);
     expect(tile.startTime).toBe(START);
     expect(tile.endTime).toBe(END);
@@ -437,7 +474,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (b
     await writeTestSamples([{ ts: unalignedStart + 1_000n, tagId: 2010, value: 5.0 }]);
     await refreshTestCagg(VIEW);
 
-    const tile = await getTrendTile([2010], unalignedStart, unalignedEnd, COUNT) as AggregateTrendTile;
+    const tile = (await getTrendTile([2010], unalignedStart, unalignedEnd, COUNT)).tile as AggregateTrendTile;
     expect(tile.source).toBe('1s_cagg');
     expect(tile.n).toBe(COUNT + 1);
     // Served grid snaps back to the natural boundary before unalignedStart.
@@ -458,7 +495,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (b
     ]);
     await refreshTestCagg(VIEW);
 
-    const tile = await getTrendTile([2011, 2012, 2013], unalignedStart, unalignedEnd, COUNT) as AggregateTrendTile;
+    const tile = (await getTrendTile([2011, 2012, 2013], unalignedStart, unalignedEnd, COUNT)).tile as AggregateTrendTile;
     expect(tile.n).toBe(COUNT + 1);
     expect(tile.series).toHaveLength(3);
     for (const s of tile.series) {
@@ -484,7 +521,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (b
       { ts: B5 + 300n, tagId: 2100, value: 2.0 },
     ]);
     await refreshTestCagg(VIEW);
-    const tile = await getTrendTile([2100], START, END, COUNT) as AggregateTrendTile;
+    const tile = (await getTrendTile([2100], START, END, COUNT)).tile as AggregateTrendTile;
     const { value, min, max } = tile.series[0];
     expect(value[5]).toBe(2.0);  // last by ts within bucket 5
     expect(min[5]).toBe(1.0);    // true minimum across all samples in bucket 5
@@ -498,7 +535,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (b
       { ts: B3 + 100n, tagId: 2101, value: 5.0 },
     ]);
     await refreshTestCagg(VIEW);
-    const tile = await getTrendTile([2101], START, END, COUNT) as AggregateTrendTile;
+    const tile = (await getTrendTile([2101], START, END, COUNT)).tile as AggregateTrendTile;
     const { value, min, max } = tile.series[0];
     expect(value[3]).toBe(5.0);
     expect(min[3]).toBe(5.0);  // degenerate: min === value
@@ -515,7 +552,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (b
       { ts: B10 + 100n,   tagId: 2102, value: 99.0 },
     ]);
     await refreshTestCagg(VIEW);
-    const tile = await getTrendTile([2102], START, END, COUNT) as AggregateTrendTile;
+    const tile = (await getTrendTile([2102], START, END, COUNT)).tile as AggregateTrendTile;
     const { value, min, max } = tile.series[0];
     // Bucket 5 is empty — LOCF'd from bucket 0's last = 7.0.
     expect(value[5]).toBe(7.0);
@@ -538,7 +575,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (b
       { ts: B5 + 2_100n, tagId: 2103, value: 2.0  },  // 1s sub-bucket 7274000ms
     ]);
     await refreshTestCagg(VIEW);
-    const tile = await getTrendTile([2103], START, END, COUNT) as AggregateTrendTile;
+    const tile = (await getTrendTile([2103], START, END, COUNT)).tile as AggregateTrendTile;
     const { value, min, max } = tile.series[0];
     // Bucket 5: sum(null_count)=1 → mixed-null case → all three must be null.
     expect(value[5]).toBeNull();
@@ -563,7 +600,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (b
       { ts: START + 7_000n, tagId: 2104, value: 35.0 }, // LAST by time — 1s sub-bucket 7
     ]);
     await refreshTestCagg(VIEW);
-    const tile = await getTrendTile([2104], START, END, COUNT_8) as AggregateTrendTile;
+    const tile = (await getTrendTile([2104], START, END, COUNT_8)).tile as AggregateTrendTile;
     const { value, min, max } = tile.series[0];
     expect(value[0]).toBe(35.0);  // last by ts in bucket 0
     // Correct aggregation: min/max span all four sub-buckets.
@@ -602,7 +639,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 10s CAG branch (
   it('dispatches to source="10s_cagg" for the 8h window', async () => {
     await writeTestSamples([{ ts: START + 1_000n, tagId: 3001, value: 1.0 }]);
     await refreshTestCagg(VIEW);
-    const tile = await getTrendTile([3001], START, END, COUNT) as AggregateTrendTile;
+    const tile = (await getTrendTile([3001], START, END, COUNT)).tile as AggregateTrendTile;
     expect(tile.source).toBe('10s_cagg');
     expect(tile.n).toBe(COUNT);
     expect(tile.series[0].value).toHaveLength(COUNT);
@@ -639,7 +676,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1min CAG branch 
   it('dispatches to source="1min_cagg" for the 2-day window', async () => {
     await writeTestSamples([{ ts: START + 1_000n, tagId: 4001, value: 1.0 }]);
     await refreshTestCagg(VIEW);
-    const tile = await getTrendTile([4001], START, END, COUNT) as AggregateTrendTile;
+    const tile = (await getTrendTile([4001], START, END, COUNT)).tile as AggregateTrendTile;
     expect(tile.source).toBe('1min_cagg');
     expect(tile.n).toBe(COUNT);
     expect(tile.series[0].value).toHaveLength(COUNT);
@@ -679,7 +716,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 10min CAG branch
   it('dispatches to source="10min_cagg" for the 15-day window', async () => {
     await writeTestSamples([{ ts: START + 1_000n, tagId: 5001, value: 1.0 }]);
     await refreshTestCagg(VIEW);
-    const tile = await getTrendTile([5001], START, END, COUNT) as AggregateTrendTile;
+    const tile = (await getTrendTile([5001], START, END, COUNT)).tile as AggregateTrendTile;
     expect(tile.source).toBe('10min_cagg');
     expect(tile.n).toBe(COUNT);
     expect(tile.series[0].value).toHaveLength(COUNT);
@@ -743,7 +780,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — watermark fall-through', asyn
     await writeTestSamples([{ ts: START + 1_000n, tagId: 6001, value: 7.5 }]);
     await refreshTestCagg('1s_cagg');
 
-    const tile = await getTrendTile([6001], START, END, COUNT) as AggregateTrendTile;
+    const tile = (await getTrendTile([6001], START, END, COUNT)).tile as AggregateTrendTile;
     expect(tile.source).toBe('1s_cagg');   // NOT 'mixed'
     expect(tile.n).toBe(COUNT);
     expect(tile.series[0].value).toHaveLength(COUNT);
@@ -773,7 +810,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — watermark fall-through', asyn
     // Refresh 10s_cagg for the sandbox window so it can contribute.
     await refreshTestCagg('10s_cagg');
 
-    const tile = await getTrendTile([6002], START, END, COUNT) as AggregateTrendTile;
+    const tile = (await getTrendTile([6002], START, END, COUNT)).tile as AggregateTrendTile;
     expect(tile.source).toBe('mixed');
     expect(tile.n).toBe(COUNT);
     expect(tile.series[0].value).toHaveLength(COUNT);
@@ -795,7 +832,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — watermark fall-through', asyn
     await refreshTestCagg('1s_cagg');
     await refreshTestCagg('10s_cagg');
 
-    const tile = await getTrendTile([6003], START, END, COUNT) as AggregateTrendTile;
+    const tile = (await getTrendTile([6003], START, END, COUNT)).tile as AggregateTrendTile;
     // Fall-through occurred (1s_cagg not used), so source = 'mixed'.
     expect(tile.source).toBe('mixed');
     expect(tile.n).toBe(COUNT);
@@ -823,7 +860,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — watermark fall-through', asyn
     await refreshTestCagg('1s_cagg');
     await refreshTestCagg('10s_cagg');
 
-    const tile = await getTrendTile([6004], START, END, COUNT) as AggregateTrendTile;
+    const tile = (await getTrendTile([6004], START, END, COUNT)).tile as AggregateTrendTile;
     expect(tile.source).toBe('mixed');
     // n must still be exactly COUNT (aligned request, aligned split).
     expect(tile.n).toBe(COUNT);
@@ -857,16 +894,18 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — watermark fall-through', asyn
     await refreshTestCagg('1s_cagg');
     await refreshTestCagg('10s_cagg');
 
-    const tile = await getTrendTile([6005], START_10S, END_10S, COUNT) as AggregateTrendTile;
-    expect(tile.source).toBe('mixed');
-    expect(tile.n).toBe(COUNT);
-    expect(tile.series[0].value).toHaveLength(COUNT);
+    const { tile, meta } = await getTrendTile([6005], START_10S, END_10S, COUNT);
+    const aggTile = tile as AggregateTrendTile;
+    expect(aggTile.source).toBe('mixed');
+    expect(aggTile.n).toBe(COUNT);
+    expect(aggTile.series[0].value).toHaveLength(COUNT);
 
     // Prove recursion reached two distinct sources:
     // 10s_cagg served the left half; tag_samples served the right half (1s_cagg fell through entirely).
-    expect(__test_lastUsedSources.current.size).toBeGreaterThanOrEqual(2);
-    expect(__test_lastUsedSources.current.has('tag_samples_10s_cagg')).toBe(true);
-    expect(__test_lastUsedSources.current.has('tag_samples')).toBe(true);
+    const sourcesUsed = new Set(meta.segments.map(s => s.source));
+    expect(sourcesUsed.size).toBeGreaterThanOrEqual(2);
+    expect(sourcesUsed.has('tag_samples_10s_cagg')).toBe(true);
+    expect(sourcesUsed.has('tag_samples')).toBe(true);
   });
 
   // ── Test 6: raw dispatch is unaffected by watermark overrides ─────────────────
@@ -885,7 +924,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — watermark fall-through', asyn
     const RAW_END   = 3_620_000n;
     await writeTestSamples([{ ts: RAW_START + 1_000n, tagId: 6006, value: 8.0 }]);
 
-    const tile = await getTrendTile([6006], RAW_START, RAW_END, COUNT) as RawTrendTile;
+    const tile = (await getTrendTile([6006], RAW_START, RAW_END, COUNT)).tile as RawTrendTile;
     expect(tile.source).toBe('raw');
     expect(tile.startTime).toBe(RAW_START);
     expect(tile.endTime).toBe(RAW_END);
@@ -918,7 +957,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — watermark fall-through', asyn
     const liveEnd   = nowMs;
 
     // bucketS = 600_000 / 250_000 = 2.4 → 1s_cagg dispatch
-    const tile = await getTrendTile([tagId], liveStart, liveEnd, COUNT) as AggregateTrendTile;
+    const tile = (await getTrendTile([tagId], liveStart, liveEnd, COUNT)).tile as AggregateTrendTile;
 
     // Source must be '1s_cagg' (watermark covers full range) or 'mixed' (fall-through).
     expect(['1s_cagg', 'mixed']).toContain(tile.source);
@@ -992,7 +1031,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — future-bucket nulling (§6.5)
     // Bucket 125: start = START + 125*BUCKET_MS > nowMs → nulled.
     const nowMs = Number(START) + 125 * BUCKET_MS - 1;
 
-    const tile = await getTrendTile([7001], START, END, COUNT, nowMs) as AggregateTrendTile;
+    const tile = (await getTrendTile([7001], START, END, COUNT, nowMs)).tile as AggregateTrendTile;
 
     // Buckets 0–124: at or before nowMs → must retain LOCF'd 42.0.
     expect(tile.series[0].value[0]).toBe(42.0);
@@ -1015,7 +1054,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — future-bucket nulling (§6.5)
     // nowMs = END exactly. All bucket starts are ≤ nowMs (last bucket start = END - BUCKET_MS).
     const nowMs = Number(END);
 
-    const tile = await getTrendTile([7002], START, END, COUNT, nowMs) as AggregateTrendTile;
+    const tile = (await getTrendTile([7002], START, END, COUNT, nowMs)).tile as AggregateTrendTile;
 
     // No future buckets — every bucket start < END = nowMs.
     expect(tile.series[0].value.every(v => v !== null)).toBe(true);
@@ -1030,7 +1069,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — future-bucket nulling (§6.5)
     // nowMs well in the future (2 days after END).
     const nowMs = Number(END) + 2 * 86_400_000;
 
-    const tile = await getTrendTile([7003], START, END, COUNT, nowMs) as AggregateTrendTile;
+    const tile = (await getTrendTile([7003], START, END, COUNT, nowMs)).tile as AggregateTrendTile;
 
     expect(tile.series[0].value.every(v => v !== null)).toBe(true);
     expect(tile.series[0].value[0]).toBe(5.0);
@@ -1050,7 +1089,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — future-bucket nulling (§6.5)
     const bucket10Start = Number(START) + 10 * BUCKET_MS;
     const nowMs = bucket10Start + BUCKET_MS / 2;
 
-    const tile = await getTrendTile([7004], START, END, COUNT, nowMs) as AggregateTrendTile;
+    const tile = (await getTrendTile([7004], START, END, COUNT, nowMs)).tile as AggregateTrendTile;
 
     // Bucket 10 (containing nowMs): preserved.
     expect(tile.series[0].value[10]).toBe(99.0);
@@ -1077,7 +1116,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — future-bucket nulling (§6.5)
     // nowMs = well before RAW_END — if raw applied future-null it would strip the second sample.
     const nowMs = Number(RAW_START) + 500;
 
-    const tile = await getTrendTile([7005], RAW_START, RAW_END, RAW_COUNT, nowMs) as RawTrendTile;
+    const tile = (await getTrendTile([7005], RAW_START, RAW_END, RAW_COUNT, nowMs)).tile as RawTrendTile;
 
     expect(tile.source).toBe('raw');
     // Both in-window samples must be present — raw path applies no future-null filtering.
@@ -1107,7 +1146,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — future-bucket nulling (§6.5)
     // nowMs cuts at bucket 200 boundary — buckets 200–249 must be nulled.
     const nowMs = Number(START) + 200 * BUCKET_MS;
 
-    const tile = await getTrendTile([7006], START, END, COUNT, nowMs) as AggregateTrendTile;
+    const tile = (await getTrendTile([7006], START, END, COUNT, nowMs)).tile as AggregateTrendTile;
 
     expect(tile.source).toBe('mixed');
     // Bucket 199 (startMs = nowMs): preserved (startMs === nowMs, not strictly greater).
@@ -1119,6 +1158,43 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — future-bucket nulling (§6.5)
     expect(tile.series[0].value[201]).toBeNull();
     expect(tile.series[0].value[249]).toBeNull();
     expect(tile.series[0].value).toHaveLength(COUNT);
+  });
+
+  // g) Raw-source bucketed (source='tag_samples'): future-null applies to this path too.
+  //    Phase 6 dispatch routes 5m/15m presets to tag_samples-as-bucketed source; the
+  //    future-null pass must operate on the bucketed result the same as it does on
+  //    CAG-sourced aggregate tiles.
+  it('source=tag_samples, endTime past nowMs: future buckets nulled on raw-source bucketed', async () => {
+    // Window: 50s, 250 buckets → 200 ms each → bucketS = 0.2 → tag_samples dispatch.
+    const TS_START  = 3_600_000n;          // 1h past epoch (independent of file-scope START)
+    const TS_END    = TS_START + 50_000n;  // 50s window
+    const TS_COUNT  = 250;
+    const TS_BUCKET = 200;                 // ms per bucket
+
+    // Sample at bucket 0 so LOCF fills 200.0 forward through the entire window.
+    await writeTestSamples([{ ts: TS_START + 100n, tagId: 7777, value: 200.0 }]);
+
+    // nowMs lands inside bucket 100 (start = TS_START + 100 * 200 = TS_START + 20000).
+    // Bucket 100: start = TS_START + 20000 ≤ nowMs → preserved.
+    // Bucket 101: start = TS_START + 20200 > nowMs → nulled.
+    const nowMs = Number(TS_START) + 100 * TS_BUCKET + 100;
+
+    const tile = (await getTrendTile([7777], TS_START, TS_END, TS_COUNT, nowMs)).tile as AggregateTrendTile;
+
+    // Confirm dispatch picked tag_samples — this is the crux of the test.
+    expect(tile.source).toBe('tag_samples');
+    expect(tile.bucketSMs).toBe(TS_BUCKET);
+
+    // Buckets 0–100: at or before nowMs → LOCF'd 200.0.
+    expect(tile.series[0].value[0]).toBe(200.0);
+    expect(tile.series[0].value[100]).toBe(200.0);
+    // Bucket 101 onward: bucketStartMs > nowMs → null.
+    expect(tile.series[0].value[101]).toBeNull();
+    expect(tile.series[0].value[TS_COUNT - 1]).toBeNull();
+    expect(tile.series[0].min[101]).toBeNull();
+    expect(tile.series[0].max[101]).toBeNull();
+    // Array length unchanged.
+    expect(tile.series[0].value).toHaveLength(TS_COUNT);
   });
 });
 
@@ -1177,7 +1253,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — seam regression: non-Postgres
     await refreshTestCagg('1s_cagg');
     await refreshTestCagg('10s_cagg');
 
-    const tile = await getTrendTile([9001], START, END, COUNT) as AggregateTrendTile;
+    const tile = (await getTrendTile([9001], START, END, COUNT)).tile as AggregateTrendTile;
 
     expect(tile.source).toBe('mixed');
     expect(Number.isInteger(tile.bucketSMs)).toBe(true);
@@ -1343,7 +1419,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: raw-source bucke
 
   it('returns AggregateTrendTile shape (not raw) for 5m-equivalent tile', async () => {
     await writeTestSamples([{ ts: START + 1_000n, tagId: 10001, value: 5.0 }]);
-    const tile = await getTrendTile([10001], START, END, COUNT) as AggregateTrendTile;
+    const tile = (await getTrendTile([10001], START, END, COUNT)).tile as AggregateTrendTile;
     expect(tile.source).toBe('tag_samples');
     expect(tile.bucketSMs).toBe(300);
     expect(tile.series[0].value).toHaveLength(tile.n);
@@ -1356,7 +1432,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: raw-source bucke
       { ts: START + 50n,  tagId: 10002, value: 10.0 },
       { ts: START + 100n, tagId: 10002, value: 20.0 },
     ]);
-    const tile = await getTrendTile([10002], START, END, COUNT) as AggregateTrendTile;
+    const tile = (await getTrendTile([10002], START, END, COUNT)).tile as AggregateTrendTile;
     expect(Array.isArray(tile.series[0].value)).toBe(true);
     expect(Array.isArray(tile.series[0].min)).toBe(true);
     expect(Array.isArray(tile.series[0].max)).toBe(true);
@@ -1369,7 +1445,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: raw-source bucke
 
   it('LOCF fills empty buckets — flatline tag stays flat across all buckets', async () => {
     await writeTestSamples([{ ts: START + 50n, tagId: 10003, value: 42.0 }]);
-    const tile = await getTrendTile([10003], START, END, COUNT) as AggregateTrendTile;
+    const tile = (await getTrendTile([10003], START, END, COUNT)).tile as AggregateTrendTile;
     const { value } = tile.series[0];
     expect(value[0]).toBe(42.0);
     expect(value[tile.n - 1]).toBe(42.0);
@@ -1383,7 +1459,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: raw-source bucke
       { ts: START + BUCKET_MS * 10n,  tagId: 10004, value: null },
       { ts: START + BUCKET_MS * 20n,  tagId: 10004, value: 9.0  },
     ]);
-    const tile = await getTrendTile([10004], START, END, COUNT) as AggregateTrendTile;
+    const tile = (await getTrendTile([10004], START, END, COUNT)).tile as AggregateTrendTile;
     const { value, min, max } = tile.series[0];
     expect(value[10]).toBeNull();
     expect(min[10]).toBeNull();
@@ -1398,7 +1474,7 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: raw-source bucke
       { ts: priorTs, tagId: 10005, value: 55.5 },
       { ts: inTs,    tagId: 10005, value: 99.0 },
     ]);
-    const tile = await getTrendTile([10005], START, END, COUNT) as AggregateTrendTile;
+    const tile = (await getTrendTile([10005], START, END, COUNT)).tile as AggregateTrendTile;
     const { value } = tile.series[0];
     // Leading buckets before inTs should carry the prev value 55.5 via LOCF.
     expect(value[0]).toBe(55.5);
@@ -1406,16 +1482,16 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: raw-source bucke
     expect(value[tile.n - 1]).toBe(99.0);
   });
 
-  it('__test_lastUsedSources records tag_samples', async () => {
-    __test_lastUsedSources.current = new Set();
+  it('meta.segments records tag_samples as the sole source on the raw-source bucketed path', async () => {
     await writeTestSamples([{ ts: START + 1_000n, tagId: 10006, value: 1.0 }]);
-    await getTrendTile([10006], START, END, COUNT);
-    expect(__test_lastUsedSources.current.has('tag_samples')).toBe(true);
-    expect(__test_lastUsedSources.current.size).toBe(1);
+    const { meta } = await getTrendTile([10006], START, END, COUNT);
+    const sourcesUsed = new Set(meta.segments.map(s => s.source));
+    expect(sourcesUsed.has('tag_samples')).toBe(true);
+    expect(sourcesUsed.size).toBe(1);
   });
 
   it('empty tag returns null×n arrays', async () => {
-    const tile = await getTrendTile([10007], START, END, COUNT) as AggregateTrendTile;
+    const tile = (await getTrendTile([10007], START, END, COUNT)).tile as AggregateTrendTile;
     expect(tile.series[0].value.every(v => v === null)).toBe(true);
     expect(tile.series[0].min.every(m => m === null)).toBe(true);
     expect(tile.series[0].max.every(m => m === null)).toBe(true);
@@ -1451,7 +1527,7 @@ describe.skipIf(!HAVE_TIMESCALE)(
         { ts: START + 50n,  tagId: 13001, value: 1.0 },
         { ts: START + 100n, tagId: 13001, value: 2.0 },
       ]);
-      const tile = await getTrendTile([13001], START, END, 1000) as RawTrendTile;
+      const tile = (await getTrendTile([13001], START, END, 1000)).tile as RawTrendTile;
       expect(tile.source).toBe('raw');
       expect(tile.series[0].value).toHaveLength(2);
       expect(tile.series[0].value).toEqual([1.0, 2.0]);
@@ -1499,7 +1575,7 @@ describe.skipIf(!HAVE_TIMESCALE)(
       const END   = 900_000_162_358n;   // span = 162,292 ms
       const COUNT = 1000;
       await writeTestSamples([{ ts: START + 81_146n, tagId: 12001, value: 1.0 }]);
-      const tile = await getTrendTile([12001], START, END, COUNT) as AggregateTrendTile;
+      const tile = (await getTrendTile([12001], START, END, COUNT)).tile as AggregateTrendTile;
       expect(tile.source).toBe('tag_samples');
       expect(tile.bucketSMs).toBe(162);
       expect(tile.n).toBe(COUNT + 3);
@@ -1513,13 +1589,66 @@ describe.skipIf(!HAVE_TIMESCALE)(
       const END   = 900_000_130_613n;   // span = 130,517 ms
       const COUNT = 1000;
       await writeTestSamples([{ ts: START + 65_258n, tagId: 12002, value: 1.0 }]);
-      const tile = await getTrendTile([12002], START, END, COUNT) as AggregateTrendTile;
+      const tile = (await getTrendTile([12002], START, END, COUNT)).tile as AggregateTrendTile;
       expect(tile.source).toBe('tag_samples');
       expect(tile.bucketSMs).toBe(131);
       expect(tile.n).toBe(COUNT - 3);
     });
   },
 );
+
+// ── D1 structured perf log — TIMESCALE_LOG_TILE_QUERIES gate ─────────────────
+//
+// LOG_TILE_QUERIES is a module-level const in trends.ts captured at import time
+// from process.env.TIMESCALE_LOG_TILE_QUERIES === '1'. The test checks the same
+// env var at file evaluation time; when the gate is off the test returns early
+// and counts as a silent pass. timescalePool.query is mocked so no real
+// TimescaleDB connection is required.
+
+const LOG_TILE_QUERIES_ENABLED = process.env.TIMESCALE_LOG_TILE_QUERIES === '1';
+
+describe('getTrendTile — D1 structured perf log (TIMESCALE_LOG_TILE_QUERIES gate)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let querySpy: any;
+
+  beforeEach(() => {
+    querySpy = vi.spyOn(timescalePool, 'query').mockResolvedValue({
+      rows: [],
+      rowCount: 0, command: 'SELECT', oid: 0, fields: [],
+    } as never);
+  });
+
+  afterEach(() => {
+    querySpy.mockRestore();
+  });
+
+  it('emits one structured summary line per request with the documented field shape', async () => {
+    if (!LOG_TILE_QUERIES_ENABLED) return;
+
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    try {
+      // Raw path: 20s window → expectedPoints = 200 ≤ 250 → raw dispatch (no DB write needed).
+      await getTrendTile([1], 3_600_000n, 3_620_000n, 250);
+
+      const summaryCalls = infoSpy.mock.calls.filter(([msg]) =>
+        typeof msg === 'string' && (msg as string).startsWith('[db] getTrendTile '),
+      );
+      expect(summaryCalls.length).toBe(1);
+
+      const summary = summaryCalls[0]![0] as string;
+      expect(summary).toMatch(/^\[db\] getTrendTile /);
+      expect(summary).toMatch(/start=\d+/);
+      expect(summary).toMatch(/end=\d+/);
+      expect(summary).toMatch(/bucket_count=\d+/);
+      expect(summary).toMatch(/source=(raw|tag_samples|1s_cagg|10s_cagg|1min_cagg|10min_cagg|mixed)/);
+      expect(summary).toMatch(/tag_count=\d+/);
+      expect(summary).toMatch(/rows=\d+/);
+      expect(summary).toMatch(/db_elapsed_ms=\d+\.\d/);
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
+});
 
 // NOTE: The LOCF data-extent cutoff (MAX(ts) query + past-extent CASE wrapper) was removed
 // for performance. It paid 814ms of planning time per CAG request on production-scale
@@ -1621,5 +1750,377 @@ describe('getWatermarkMs — memoization', () => {
 
     await __test_getWatermarkMs('tag_samples_1s_cagg');
     expect(querySpy).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ── buildGapfillSql — byte-equivalence snapshot ───────────────────────────────
+//
+// These tests are pure string comparisons — no DB required, no HAVE_TIMESCALE
+// guard. The expected strings are the EXACT original inline SQL templates from
+// querySegment before R3. If either test starts failing you have changed the SQL
+// shape in a way that may affect plan-time chunk pruning (§5.5) — re-derive
+// carefully or revert.
+
+function normalizeSql(sql: string): string {
+  return sql.replace(/\s+/g, ' ').trim();
+}
+
+describe('buildGapfillSql', () => {
+  it('produces byte-equivalent SQL for the tag_samples (raw-as-aggregate) path', () => {
+    const expected = `
+      SELECT s.tag_id,
+             time_bucket_gapfill(
+               $1::int * INTERVAL '1 millisecond',
+               s.ts,
+               to_timestamp($2::bigint / 1000.0),
+               to_timestamp($3::bigint / 1000.0)
+             ) AS gf_bucket,
+             locf(
+               last(s.value, s.ts),
+               prev => (SELECT value FROM tag_samples
+                         WHERE tag_id = s.tag_id
+                           AND ts <  to_timestamp($2::bigint / 1000.0)
+                           AND ts >= to_timestamp($2::bigint / 1000.0) - INTERVAL '5 minutes'
+                         ORDER BY ts DESC
+                         LIMIT 1)
+             ) AS val,
+             min(s.value) AS bucket_min,
+             max(s.value) AS bucket_max,
+             count(*) FILTER (WHERE s.value IS NULL) AS bucket_null_count
+      FROM tag_samples s
+      WHERE s.tag_id = ANY($4::int[])
+        AND s.ts >= to_timestamp($2::bigint / 1000.0)
+        AND s.ts <  to_timestamp($3::bigint / 1000.0)
+      GROUP BY s.tag_id, gf_bucket
+      ORDER BY s.tag_id, gf_bucket
+    `;
+
+    const actual = buildGapfillSql({
+      sourceTable:   'tag_samples',
+      timeCol:       'ts',
+      valueCol:      'value',
+      minExpr:       'min(s.value)',
+      maxExpr:       'max(s.value)',
+      nullCountExpr: 'count(*) FILTER (WHERE s.value IS NULL)',
+    });
+
+    expect(normalizeSql(actual)).toBe(normalizeSql(expected));
+  });
+
+  it('produces byte-equivalent SQL for the CAG path (parameterized by source name)', () => {
+    const expected = `
+      SELECT s.tag_id,
+             time_bucket_gapfill(
+               $1::int * INTERVAL '1 millisecond',
+               s.bucket,
+               to_timestamp($2::bigint / 1000.0),
+               to_timestamp($3::bigint / 1000.0)
+             ) AS gf_bucket,
+             locf(
+               last(s.last, s.bucket),
+               prev => (SELECT last FROM tag_samples_1s_cagg
+                         WHERE tag_id = s.tag_id
+                           AND bucket <  to_timestamp($2::bigint / 1000.0)
+                           AND bucket >= to_timestamp($2::bigint / 1000.0) - INTERVAL '5 minutes'
+                         ORDER BY bucket DESC
+                         LIMIT 1)
+             ) AS val,
+             min(s.min) AS bucket_min,
+             max(s.max) AS bucket_max,
+             sum(s.null_count) AS bucket_null_count
+      FROM tag_samples_1s_cagg s
+      WHERE s.tag_id = ANY($4::int[])
+        AND s.bucket >= to_timestamp($2::bigint / 1000.0)
+        AND s.bucket <  to_timestamp($3::bigint / 1000.0)
+      GROUP BY s.tag_id, gf_bucket
+      ORDER BY s.tag_id, gf_bucket
+    `;
+
+    const actual = buildGapfillSql({
+      sourceTable:   'tag_samples_1s_cagg',
+      timeCol:       'bucket',
+      valueCol:      'last',
+      minExpr:       'min(s.min)',
+      maxExpr:       'max(s.max)',
+      nullCountExpr: 'sum(s.null_count)',
+    });
+
+    expect(normalizeSql(actual)).toBe(normalizeSql(expected));
+  });
+
+  it('source name is faithfully interpolated for each CAG ladder entry', () => {
+    for (const source of ['tag_samples_10s_cagg', 'tag_samples_1min_cagg', 'tag_samples_10min_cagg']) {
+      const sql = buildGapfillSql({
+        sourceTable:   source,
+        timeCol:       'bucket',
+        valueCol:      'last',
+        minExpr:       'min(s.min)',
+        maxExpr:       'max(s.max)',
+        nullCountExpr: 'sum(s.null_count)',
+      });
+      expect(sql).toContain(`FROM ${source} s`);
+      expect(sql).toContain(`prev => (SELECT last FROM ${source}`);
+    }
+  });
+});
+
+// ── dropSeamDuplicates — unit tests (no DB required) ─────────────────────────
+
+describe('dropSeamDuplicates', () => {
+  function makeSeg(opts: {
+    servedStart: number;
+    servedEnd:   number;
+    n:           number;
+    values:      Array<[number, (number | null)[]]>;
+    source?:     TileMetaSegment['source'];
+  }): SegmentResult {
+    const valuesByTag = new Map<number, { value: (number | null)[]; min: (number | null)[]; max: (number | null)[] }>();
+    for (const [tagId, value] of opts.values) {
+      valuesByTag.set(tagId, {
+        value: [...value],
+        min:   [...value],
+        max:   [...value],
+      });
+    }
+    return {
+      servedStart: opts.servedStart,
+      servedEnd:   opts.servedEnd,
+      n:           opts.n,
+      valuesByTag,
+      meta: {
+        source:       opts.source ?? 'tag_samples_1s_cagg',
+        rangeStartMs: opts.servedStart,
+        rangeEndMs:   opts.servedEnd,
+        rowCount:     opts.n,
+        dbElapsedMs:  10,
+      },
+    };
+  }
+
+  it('empty array: no-op', () => {
+    const segments: SegmentResult[] = [];
+    dropSeamDuplicates(segments, 1000);
+    expect(segments).toEqual([]);
+  });
+
+  it('single segment: no-op (no adjacent pair)', () => {
+    const segments = [
+      makeSeg({ servedStart: 0, servedEnd: 5000, n: 5, values: [[1, [1, 2, 3, 4, 5]]] }),
+    ];
+    dropSeamDuplicates(segments, 1000);
+    expect(segments[0]!.n).toBe(5);
+    expect(segments[0]!.valuesByTag.get(1)!.value).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it('two segments with seam: pops the trailing bucket from left, decrements n/servedEnd/meta.rowCount', () => {
+    const segments = [
+      makeSeg({ servedStart: 0,    servedEnd: 5000, n: 5, values: [[1, [1, 2, 3, 4, 5]]] }),
+      // Right segment's servedStart equals left.servedEnd - bucketSMs (4000 = 5000 - 1000).
+      makeSeg({ servedStart: 4000, servedEnd: 8000, n: 4, values: [[1, [9, 10, 11, 12]]] }),
+    ];
+    dropSeamDuplicates(segments, 1000);
+    expect(segments[0]!.n).toBe(4);
+    expect(segments[0]!.servedEnd).toBe(4000);
+    expect(segments[0]!.meta.rowCount).toBe(4);
+    expect(segments[0]!.valuesByTag.get(1)!.value).toEqual([1, 2, 3, 4]);
+    // Right untouched.
+    expect(segments[1]!.n).toBe(4);
+    expect(segments[1]!.valuesByTag.get(1)!.value).toEqual([9, 10, 11, 12]);
+  });
+
+  it('two segments without seam: no-op', () => {
+    const segments = [
+      makeSeg({ servedStart: 0,    servedEnd: 5000, n: 5, values: [[1, [1, 2, 3, 4, 5]]] }),
+      // Adjacent, but right.servedStart (5000) !== left.servedEnd - bucketSMs (4000). No seam.
+      makeSeg({ servedStart: 5000, servedEnd: 9000, n: 4, values: [[1, [9, 10, 11, 12]]] }),
+    ];
+    dropSeamDuplicates(segments, 1000);
+    expect(segments[0]!.n).toBe(5);
+    expect(segments[0]!.servedEnd).toBe(5000);
+  });
+
+  it('three segments with one seam (between [0] and [1]): only that pair is modified', () => {
+    const segments = [
+      makeSeg({ servedStart: 0,     servedEnd: 5000,  n: 5, values: [[1, [1, 2, 3, 4, 5]]] }),
+      makeSeg({ servedStart: 4000,  servedEnd: 8000,  n: 4, values: [[1, [9, 10, 11, 12]]] }),
+      makeSeg({ servedStart: 9000,  servedEnd: 12000, n: 3, values: [[1, [20, 21, 22]]] }),
+    ];
+    dropSeamDuplicates(segments, 1000);
+    expect(segments[0]!.n).toBe(4);  // seam with [1] → popped
+    expect(segments[1]!.n).toBe(4);  // unchanged
+    expect(segments[2]!.n).toBe(3);  // unchanged
+  });
+
+  it('meta.rowCount mirror clamps at zero (defensive)', () => {
+    const segments = [
+      makeSeg({ servedStart: 0, servedEnd: 1000, n: 1, values: [[1, [1]]] }),
+      makeSeg({ servedStart: 0, servedEnd: 1000, n: 1, values: [[1, [2]]] }),
+    ];
+    // Manually zero out meta.rowCount on the left to exercise the clamp.
+    segments[0]!.meta.rowCount = 0;
+    dropSeamDuplicates(segments, 1000);
+    expect(segments[0]!.meta.rowCount).toBe(0);
+  });
+});
+
+// ── nullFutureBuckets — unit tests (no DB required) ──────────────────────────
+
+describe('nullFutureBuckets', () => {
+  function makeSeries(tagId: number, values: (number | null)[]): AggregateTrendSeries {
+    return {
+      tagId,
+      value: [...values],
+      min:   values.map(v => v === null ? null : v - 0.5),
+      max:   values.map(v => v === null ? null : v + 0.5),
+    };
+  }
+
+  it('all buckets before cutoff: no change', () => {
+    const series = [makeSeries(1, [10, 20, 30, 40, 50])];
+    // cutoff well past last bucket start (4000ms when servedStart=0, bucketSMs=1000)
+    nullFutureBuckets(series, 0n, 1000, 10_000n);
+    expect(series[0]!.value).toEqual([10, 20, 30, 40, 50]);
+    expect(series[0]!.min).toEqual([9.5, 19.5, 29.5, 39.5, 49.5]);
+  });
+
+  it('all buckets after cutoff: every value/min/max becomes null', () => {
+    const series = [makeSeries(1, [10, 20, 30])];
+    // cutoff before first bucket start (5000ms)
+    nullFutureBuckets(series, 5000n, 1000, 4000n);
+    expect(series[0]!.value).toEqual([null, null, null]);
+    expect(series[0]!.min).toEqual([null, null, null]);
+    expect(series[0]!.max).toEqual([null, null, null]);
+  });
+
+  it('mid-window cutoff splits: past preserved, future nulled', () => {
+    const series = [makeSeries(1, [10, 20, 30, 40, 50])];
+    // bucket starts: 0, 1000, 2000, 3000, 4000. Cutoff 2500 → buckets at 3000, 4000 are nulled.
+    nullFutureBuckets(series, 0n, 1000, 2500n);
+    expect(series[0]!.value).toEqual([10, 20, 30, null, null]);
+    expect(series[0]!.min).toEqual([9.5, 19.5, 29.5, null, null]);
+  });
+
+  it('cutoff exactly at a bucket start: that bucket preserved (strict >)', () => {
+    const series = [makeSeries(1, [10, 20, 30])];
+    // bucket starts: 0, 1000, 2000. Cutoff exactly 1000 → only bucket at 2000 nulled.
+    nullFutureBuckets(series, 0n, 1000, 1000n);
+    expect(series[0]!.value).toEqual([10, 20, null]);
+  });
+
+  it('multi-series: applied independently to each tag', () => {
+    const series = [
+      makeSeries(1, [10, 20, 30]),
+      makeSeries(2, [100, 200, 300]),
+    ];
+    // bucket starts: 0, 1000, 2000. Cutoff 500 → only bucket 0 (start=0) preserved.
+    nullFutureBuckets(series, 0n, 1000, 500n);
+    expect(series[0]!.value).toEqual([10, null, null]);
+    expect(series[1]!.value).toEqual([100, null, null]);
+  });
+});
+
+// ── TG-1: bounded-prev plan structure (chunk pruning) ────────────────────────
+//
+// Tag IDs 11001-11099 are reserved for this block.
+// Verifies that the `INTERVAL '5 minutes'` bound on the prev correlated subquery
+// in buildGapfillSql prunes the ChunkAppend at plan time to a small constant
+// number of chunks, regardless of how many chunks the hypertable has accumulated.
+// Catches the 814ms regression class (unbounded prev — see spec §5.5, handoff §10).
+//
+// Implementation note (TimescaleDB 2.26.3): the `prev =>` argument to locf() is
+// handled by the GapFill custom node internally and does NOT appear as a PostgreSQL
+// SubPlan when running EXPLAIN on the full gapfill query. We therefore:
+//   (a) Extract the inner prev subquery from buildGapfillSql's output.
+//   (b) Substitute literal values for the $2 placeholder and the `s.tag_id`
+//       correlation so the planner sees actual timestamps and can apply
+//       time-range-based chunk exclusion (constraint exclusion on the chunk CHECK
+//       constraints). With parameterized queries, PostgreSQL uses generic-plan
+//       statistics rather than range constraints, which masks the regression.
+// The byte-equivalence tests in describe('buildGapfillSql') below ensure that the
+// extracted inner SQL stays in sync with the production template.
+
+describe.skipIf(!HAVE_TIMESCALE)('buildGapfillSql — TG-1 bounded-prev chunk pruning', async () => {
+  const {
+    writeTestSamples, resetTestRange, resetTestRangeExpectClean,
+  } = await import('../helpers/trends-test-range.js');
+
+  beforeEach(async () => { await resetTestRangeExpectClean(); });
+  afterEach(async () => { await resetTestRange(); });
+  afterAll(async () => { await resetTestRange(); });
+
+  it('bounded-prev inner subquery plan references ≤ 4 distinct chunks even when hypertable spans 5+ chunks', async () => {
+    // Seed samples across 5 distinct 1h chunks. T004 configures chunk_time_interval=1h,
+    // so writes at hours 101-105 (relative to BASE=100h) create 5 separate chunks. The
+    // sandbox already contains chunks from other describe blocks (hours 1, 2, 4, etc.)
+    // that persist in the catalog. With an unbounded prev the planner includes ALL of
+    // those chunks (8+). With the 5-minute bound it prunes to 1-2.
+    const HOUR_MS    = 3_600_000n;
+    const BASE       = 100n * HOUR_MS;  // sandbox-safe (pre-2000, well inside TEST_RANGE)
+    const TAG        = 11001;
+    const queryStart = BASE + HOUR_MS * 3n;  // 370_800_000ms = Jan 5 1970 07:00 UTC
+
+    await writeTestSamples([
+      { tagId: TAG, ts: BASE + HOUR_MS * 1n, value: 10.0 },
+      { tagId: TAG, ts: BASE + HOUR_MS * 2n, value: 20.0 },
+      { tagId: TAG, ts: BASE + HOUR_MS * 3n, value: 30.0 },
+      { tagId: TAG, ts: BASE + HOUR_MS * 4n, value: 40.0 },
+      { tagId: TAG, ts: BASE + HOUR_MS * 5n, value: 50.0 },
+    ]);
+
+    // Extract the inner prev subquery directly from buildGapfillSql's output, so
+    // removing the INTERVAL '5 minutes' from the production template automatically
+    // propagates here and fails the assertion. The regex matches the `(SELECT ...
+    // LIMIT 1)` block from the `prev => (...)` argument in the locf() call.
+    const fullSql = buildGapfillSql({
+      sourceTable:   'tag_samples',
+      timeCol:       'ts',
+      valueCol:      'value',
+      minExpr:       'min(s.value)',
+      maxExpr:       'max(s.value)',
+      nullCountExpr: 'count(*) FILTER (WHERE s.value IS NULL)',
+    });
+    const prevMatch = fullSql.match(/prev => \((SELECT[\s\S]+?LIMIT 1)\)/);
+    expect(prevMatch).not.toBeNull();
+
+    // Substitute literal values so the PostgreSQL planner uses constraint-based chunk
+    // exclusion (time-range CHECKs) rather than generic-plan statistics. This is what
+    // makes the no-bound case reliably show 5+ chunks instead of the stats-pruned 1.
+    const qStartMs   = Number(queryStart);
+    const prevSqlLiteral = prevMatch![1]!
+      .replace(/s\.tag_id/g,   String(TAG))
+      .replace(/\$2/g,         String(qStartMs));
+
+    // EXPLAIN (FORMAT JSON) — plan-time only, no execution.
+    const explainRows = await timescaleQuery<{ 'QUERY PLAN': unknown }>(
+      `EXPLAIN (FORMAT JSON) ${prevSqlLiteral}`,
+      [],
+    );
+
+    expect(explainRows).toHaveLength(1);
+    const plan = explainRows[0]!['QUERY PLAN'];
+    expect(plan).toBeDefined();
+
+    // Count distinct chunk relations referenced in the plan JSON. TimescaleDB
+    // names chunks `_hyper_<hypertable_id>_<chunk_id>_chunk`. Pruned chunks are
+    // not referenced; surviving chunks appear as "Relation Name" in their scan nodes.
+    const planStr        = JSON.stringify(plan);
+    const chunkRegex     = /"_hyper_\d+_\d+_chunk"/g;
+    const matches        = planStr.match(chunkRegex) ?? [];
+    const distinctChunks = new Set(matches);
+
+    // Diagnostic on failure: print the chunks consulted so a reader can see
+    // immediately what changed.
+    if (distinctChunks.size > 4) {
+      console.error(
+        `TG-1: bounded-prev plan structure regressed.\n` +
+        `  Chunks consulted: ${distinctChunks.size}\n` +
+        `  Distinct names: ${[...distinctChunks].join(', ')}\n` +
+        `  Likely cause: prev subquery in buildGapfillSql no longer has the\n` +
+        `  INTERVAL '5 minutes' bound; planning cost will grow with chunk count.\n` +
+        `  See spec §5.5 and handoff §10 ("PostgreSQL planning cost grows...").`,
+      );
+    }
+
+    expect(distinctChunks.size).toBeLessThanOrEqual(4);
   });
 });

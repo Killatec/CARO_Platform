@@ -2,6 +2,7 @@ import type { MutableRefObject, Dispatch, SetStateAction } from 'react';
 import type { Tile, Viewport, TrendData, AggregateSeriesData, RawSeriesData } from './types.js';
 import type { TileApiResponse } from './api.js';
 import type { GatedFetchFn } from './gatedFetchTile.js';
+import { isClientFetchSentinel } from './gatedFetchTile.js';
 import type { HookState } from './tileActiveSet.js';
 import { chunkArray } from './tileActiveSet.js';
 
@@ -150,6 +151,30 @@ export function runLiveSpineFetch(args: LiveSpineFetchArgs): void {
   setHookResult(prev => ({ ...prev, isLoading: true }));
 
   spineFetchInFlightRef.current = true;
+  // Promise resolution order: generation check FIRST, then clear the flag.
+  //
+  // Safe under the current three-bump invariant for generationRef.current.
+  // Every code path that bumps generationRef past a pending live-spine
+  // fetch's captured generation also leaves spineFetchInFlightRef in a
+  // consistent state for the new generation:
+  //
+  //   - this function (line above, ++generationRef.current): the new live
+  //     fetch re-sets the flag to true immediately after.
+  //   - useTrendData.ts:167-168 (history-mode entry): explicitly clears
+  //     the flag to false BEFORE runHistoryTileFetch bumps the generation.
+  //   - useTrendData.ts:304-311 (evictAll): clears the flag and bumps the
+  //     generation atomically.
+  //
+  // Consequence: a stale-generation .then/.catch returning early WITHOUT
+  // clearing the flag is always a no-op — the flag is already in the right
+  // state for whatever generation is now current. Inverting the order
+  // (clear-before-gen-check) would not be wrong today but accomplishes
+  // nothing, and would become actively incorrect if a fourth gen-bump path
+  // were added that did NOT clear the flag. If you find yourself adding
+  // such a path, also clear spineFetchInFlightRef there OR migrate to a
+  // per-generation ref pattern.
+  //
+  // Audit 2026-05-15 BUG-2: examined; closed as no-defect.
   Promise.all(
     chunkArray(tagIds, 8).map(group =>
       gatedFetchTile({ tagIds: group, startTime: spineTile.startTime, endTime: spineTile.endTime, bucketCount: spineTile.bucketCount }),
@@ -167,7 +192,7 @@ export function runLiveSpineFetch(args: LiveSpineFetchArgs): void {
   }).catch((e: Error & { code?: string }) => {
     if (generationRef.current !== generation) return;
     spineFetchInFlightRef.current = false;
-    if (e.code === 'CLIENT_UNDER_RANGE' || e.code === 'CLIENT_OVER_RANGE' || e.code === 'CLIENT_PRE_EPOCH') return;
+    if (isClientFetchSentinel(e)) return;
     console.error('[useTrendData] live spine fetch failed', { tagIds, error: e });
     setHookResult({ data: null, isLoading: false, error: e instanceof Error ? e.message : String(e) });
   });

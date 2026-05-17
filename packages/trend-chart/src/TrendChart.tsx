@@ -450,7 +450,7 @@ export function TrendChart({
         }
       }
 
-      // No level transition: standard coverage check (Prompt 1 behavior).
+      // No level transition: standard coverage check.
       checkAndExtendXCoverage(u, ensureCoveredRef.current, getActiveRangeRef.current);
     };
 
