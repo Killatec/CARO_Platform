@@ -187,41 +187,40 @@ export function TrendChartContainer({
 
   const bucketSMsIndicator = cachedData?.type === 'aggregate' ? BigInt(cachedData.bucketSMs) : null;
 
-  // ── dispatchModeAction: live drain before dispatch ────────────────────────
-  // Used for all actions that can change the tailing/fixed mode boundary.
+  // ── dispatchModeAction: side-effects at mode-boundary crossings ──────────
   const dispatchModeAction = useCallback((action: TrendModeAction) => {
-    const cur  = modeStateRef.current;
-    const next = trendModeReducer(cur, action);
+    const prev = modeStateRef.current;
+    const next = trendModeReducer(prev, action);
+    const wasLive = isLive(prev.mode);
+    const willBeLive = isLive(next.mode);
+    // A "fresh live landing" is live-fixed → live-trailing via an explicit user gesture
+    // (Live button or preset click). Triggers full buffer + cache teardown so the new
+    // Live session starts clean (D3). Does NOT fire for live-trailing → live-trailing
+    // (preset change while already tailing), which needs no teardown.
+    const isFreshLiveLanding =
+      prev.mode === 'live-fixed' && next.mode === 'live-trailing' &&
+      (action.type === 'liveClicked' || action.type === 'presetClicked');
 
-    // Fixed → tailing: evict all tiles. Forces every subsequent live exit to
-    // refetch fresh data, eliminating Gap B (stale CAG-lag nulls accumulating
-    // in the tile cache across sessions). Trade-off: every live exit pays a full
-    // tile re-fetch (~3 tiles); negligible at expected usage rates.
-    if (cur.mode === 'fixed' && next.mode === 'live-trailing') {
+    if (wasLive && !willBeLive) {
+      // Live → fixed: drain buffer, sync viewport, refetch history.
+      liveSubRef.current?.commitAndDrain();
+      syncDataViewport(modeToViewport(next));
+      trendDataRef.current.refetchHistory();
+    } else if (!wasLive && willBeLive) {
+      // fixed → live-: evict cache. Buffer is empty in fixed mode; generation
+      // counter NOT bumped (nothing in flight to invalidate).
+      trendDataRef.current.evictAll();
+    } else if (isFreshLiveLanding && wasLive) {
+      // live-* → live-trailing via preset/Live button: clear buffer (bumps
+      // generation) + evict cache (defensive — kept symmetric with fixed→live).
+      liveSubRef.current?.commitAndDrain();
       trendDataRef.current.evictAll();
     }
-
-    // Tailing → fixed: drain the live buffer so accumulated ring/accumulator
-    // coverage is committed. No cache eviction needed — live mode never writes
-    // to the LRU cache, so there is nothing to evict. History fetches start
-    // fresh against the now-clean cache.
-    if (cur.mode === 'live-trailing' && next.mode === 'fixed') {
-      liveSubRef.current?.commitAndDrain();
-      // Force dataViewport to match the post-pan modeViewport so the main
-      // useTrendData effect fires and runs the history-fetch path.
-      // Without this, dataViewport stays stuck at the live-mode value
-      // (useZoomState's reset effect skips on lastIntent='pan'), and the
-      // empty activeTilesRef from live mode causes ensureCovered to no-op,
-      // leaving the chart with no data for the new pan position.
-      syncDataViewport(modeToViewport(next));
-      // Force the history fetch even when syncDataViewport's bounds equal the
-      // current dataViewport (pan-from-live: first panApplied carries live
-      // viewport bounds, so no state change would occur from syncDataViewport alone).
-      trendDataRef.current.refetchHistory();
-    }
+    // live-trailing ↔ live-fixed flips (auto-promote, pan-within-Live): no teardown.
+    // fixed → fixed: no teardown.
 
     dispatch(action);
-  }, [dispatch]);
+  }, [dispatch, syncDataViewport]);
 
   // ── Callbacks ─────────────────────────────────────────────────────────────
 

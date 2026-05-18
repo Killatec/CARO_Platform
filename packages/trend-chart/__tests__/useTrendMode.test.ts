@@ -73,11 +73,6 @@ function assertPayloadLatestSampleTs(
   expect(action.latestSampleTs ?? null).toBe(expected);
 }
 
-// Suppress "unused variable" TS/linter warnings for Phase 3 helpers that are
-// not yet referenced by any test. Remove these lines in Phase 3.
-void LIVE_FIXED_1H;
-void makeLiveFixedState;
-void assertPayloadLatestSampleTs;
 
 function dispatch(state: ModeState, action: TrendModeAction): ModeState {
   return trendModeReducer(state, action);
@@ -544,5 +539,230 @@ describe('modeToViewport', () => {
     const vp = modeToViewport(FIXED_1H);
     expect(vp.start).toBe(FIXED_1H.from);
     expect(vp.end).toBe(FIXED_1H.to);
+  });
+
+  it('live-fixed viewport = [from, to] (Phase 3)', () => {
+    const vp = modeToViewport(LIVE_FIXED_1H);
+    expect(vp.start).toBe(LIVE_FIXED_1H.from);
+    expect(vp.end).toBe(LIVE_FIXED_1H.to);
+  });
+});
+
+// ── Phase 3: panApplied — live-fixed routing ───────────────────────────────────
+
+describe('panApplied — Phase 3 live-fixed routing', () => {
+  const LTS = NOW - 3_000_000n; // latestSampleTs: 3 000 s ago
+
+  it('pan-right from live-trailing with to > latestSampleTs → live-fixed, sizeMs preserved', () => {
+    const to   = NOW - 1_000_000n; // 1 000 s ago — past LTS (3 000 s ago)
+    const from = to - LIVE_TRAILING_1H.sizeMs;
+    const next = dispatch(LIVE_TRAILING_1H, { type: 'panApplied', from, to, nowMs: NOW, latestSampleTs: LTS });
+    expect(next.mode).toBe('live-fixed');
+    if (next.mode !== 'live-fixed') return;
+    expect(next.from).toBe(from);
+    expect(next.to).toBe(to);
+    expect(next.sizeMs).toBe(LIVE_TRAILING_1H.sizeMs);
+    expect(next.lastIntent).toBe('pan');
+  });
+
+  it('pan from live-fixed with to > latestSampleTs → stays live-fixed', () => {
+    const newTo   = NOW - 1_000_000n; // still > LTS
+    const newFrom = newTo - LIVE_FIXED_1H.sizeMs;
+    const next = dispatch(LIVE_FIXED_1H, { type: 'panApplied', from: newFrom, to: newTo, nowMs: NOW, latestSampleTs: LTS });
+    expect(next.mode).toBe('live-fixed');
+    if (next.mode !== 'live-fixed') return;
+    expect(next.sizeMs).toBe(LIVE_FIXED_1H.sizeMs);
+  });
+
+  it('pan from live-trailing with to <= latestSampleTs → fixed', () => {
+    const to   = LTS - 1_000_000n; // well before LTS
+    const from = to - LIVE_TRAILING_1H.sizeMs;
+    const next = dispatch(LIVE_TRAILING_1H, { type: 'panApplied', from, to, nowMs: NOW, latestSampleTs: LTS });
+    expect(next.mode).toBe('fixed');
+  });
+
+  it('pan from live-fixed with to <= latestSampleTs → fixed', () => {
+    const to   = LTS - 500_000n;
+    const from = to - LIVE_FIXED_1H.sizeMs;
+    const next = dispatch(LIVE_FIXED_1H, { type: 'panApplied', from, to, nowMs: NOW, latestSampleTs: LTS });
+    expect(next.mode).toBe('fixed');
+    if (next.mode !== 'fixed') return;
+    expect(next.sizeMs).toBe(LIVE_FIXED_1H.sizeMs);
+  });
+
+  it('to === latestSampleTs boundary: not strictly greater → fixed', () => {
+    const to   = LTS; // equal — not > latestSampleTs
+    const from = to - LIVE_TRAILING_1H.sizeMs;
+    const next = dispatch(LIVE_TRAILING_1H, { type: 'panApplied', from, to, nowMs: NOW, latestSampleTs: LTS });
+    expect(next.mode).toBe('fixed');
+  });
+
+  it('latestSampleTs === null from live-trailing: fallback = nowMs; to = nowMs → fixed', () => {
+    const to   = NOW; // = nowMs → NOT > effectiveLts → fixed
+    const from = to - LIVE_TRAILING_1H.sizeMs;
+    const next = dispatch(LIVE_TRAILING_1H, { type: 'panApplied', from, to, nowMs: NOW, latestSampleTs: null });
+    expect(next.mode).toBe('fixed');
+  });
+
+  it('latestSampleTs === null from live-fixed: fallback = state.to; to < state.to → fixed', () => {
+    // LIVE_FIXED_1H.to = NOW - 3_600_000n; pan to something less than that
+    const to   = NOW - 5_000_000n;
+    const from = to - LIVE_FIXED_1H.sizeMs;
+    const next = dispatch(LIVE_FIXED_1H, { type: 'panApplied', from, to, nowMs: NOW, latestSampleTs: null });
+    expect(next.mode).toBe('fixed');
+  });
+
+  it('latestSampleTs === null from live-fixed: to > state.to → live-fixed', () => {
+    // LIVE_FIXED_1H.to = NOW - 3_600_000n; pan to something greater than that
+    const to   = NOW - 1_000_000n; // > state.to
+    const from = to - LIVE_FIXED_1H.sizeMs;
+    const next = dispatch(LIVE_FIXED_1H, { type: 'panApplied', from, to, nowMs: NOW, latestSampleTs: null });
+    expect(next.mode).toBe('live-fixed');
+    if (next.mode !== 'live-fixed') return;
+    expect(next.sizeMs).toBe(LIVE_FIXED_1H.sizeMs); // sizeMs from state, not to - from
+  });
+
+  it('assertPayloadLatestSampleTs helper: verifies lts forwarded correctly', () => {
+    const action: TrendModeAction = { type: 'panApplied', from: FAR_PAST, to: FAR_PAST + 3_600_000n, nowMs: NOW, latestSampleTs: LTS };
+    assertPayloadLatestSampleTs(action as TrendModeAction & { latestSampleTs?: bigint | null }, LTS);
+  });
+});
+
+// ── Phase 3: endPickerCommitted — live-fixed routing ───────────────────────────
+
+describe('endPickerCommitted — Phase 3 live-fixed routing', () => {
+  const LTS = NOW - 3_000_000n;
+
+  it('future end from live-trailing (to > latestSampleTs) → live-fixed', () => {
+    const to = NOW - 1_000_000n; // > LTS
+    const next = dispatch(LIVE_TRAILING_1H, { type: 'endPickerCommitted', to, nowMs: NOW, latestSampleTs: LTS });
+    expect(next.mode).toBe('live-fixed');
+    if (next.mode !== 'live-fixed') return;
+    expect(next.to).toBe(to);
+    expect(next.sizeMs).toBe(LIVE_TRAILING_1H.sizeMs);
+    expect(next.lastIntent).toBe('endPicker');
+  });
+
+  it('future end from live-fixed (to > latestSampleTs) → stays live-fixed', () => {
+    const lts2 = NOW - 5_000_000n;
+    const to   = NOW - 2_000_000n; // > lts2
+    const next = dispatch(LIVE_FIXED_1H, { type: 'endPickerCommitted', to, nowMs: NOW, latestSampleTs: lts2 });
+    expect(next.mode).toBe('live-fixed');
+    if (next.mode !== 'live-fixed') return;
+    expect(next.to).toBe(to);
+    expect(next.sizeMs).toBe(LIVE_FIXED_1H.sizeMs);
+  });
+
+  it('past end from live-trailing (to <= latestSampleTs) → fixed', () => {
+    const to = LTS - 2_000_000n; // < LTS
+    const next = dispatch(LIVE_TRAILING_1H, { type: 'endPickerCommitted', to, nowMs: NOW, latestSampleTs: LTS });
+    expect(next.mode).toBe('fixed');
+    if (next.mode !== 'fixed') return;
+    expect(next.to).toBe(to);
+    expect(next.lastIntent).toBe('endPicker');
+  });
+
+  it('past end from live-fixed (to <= latestSampleTs) → fixed', () => {
+    const to = LTS - 500_000n;
+    const next = dispatch(LIVE_FIXED_1H, { type: 'endPickerCommitted', to, nowMs: NOW, latestSampleTs: LTS });
+    expect(next.mode).toBe('fixed');
+  });
+
+  it('future end from fixed → fixed (D6: endPicker-from-fixed never enters Live)', () => {
+    const to = NOW; // clearly > LTS, but from fixed → always fixed (D6)
+    const next = dispatch(FIXED_1H, { type: 'endPickerCommitted', to, nowMs: NOW, latestSampleTs: LTS });
+    expect(next.mode).toBe('fixed');
+    if (next.mode !== 'fixed') return;
+    expect(next.to).toBe(to);
+  });
+
+  it('latestSampleTs === null from live-trailing: to > nowMs → live-fixed', () => {
+    // nowMs = state.nowMs (= NOW); to > NOW triggers live-fixed when lts is null
+    const to = NOW + 1_000n;
+    const next = dispatch(LIVE_TRAILING_1H, { type: 'endPickerCommitted', to, nowMs: NOW, latestSampleTs: null });
+    expect(next.mode).toBe('live-fixed');
+    if (next.mode !== 'live-fixed') return;
+    expect(next.to).toBe(to);
+  });
+});
+
+// ── Phase 3: tick — live-fixed auto-promote ────────────────────────────────────
+
+describe('tick — Phase 3 live-fixed auto-promote', () => {
+  // LIVE_FIXED_1H.to = NOW - 3_600_000n; auto-promote fires when nowMs >= that value.
+
+  it('live-fixed below threshold: no-op (same state reference)', () => {
+    const nowMs = NOW - 5_000_000n; // < state.to → no-op
+    const next = dispatch(LIVE_FIXED_1H, { type: 'tick', nowMs });
+    expect(next).toBe(LIVE_FIXED_1H);
+  });
+
+  it('live-fixed at threshold (nowMs === state.to) → auto-promote to live-trailing', () => {
+    const nowMs = LIVE_FIXED_1H.to; // exactly equal
+    const next = dispatch(LIVE_FIXED_1H, { type: 'tick', nowMs });
+    expect(next.mode).toBe('live-trailing');
+    if (next.mode !== 'live-trailing') return;
+    expect(next.nowMs).toBe(nowMs);
+    expect(next.sizeMs).toBe(LIVE_FIXED_1H.sizeMs);
+    expect(next.lastIntent).toBe('live');
+  });
+
+  it('live-fixed above threshold → live-trailing with snap', () => {
+    const nowMs = NOW; // >> LIVE_FIXED_1H.to
+    const next = dispatch(LIVE_FIXED_1H, { type: 'tick', nowMs });
+    expect(next.mode).toBe('live-trailing');
+    if (next.mode !== 'live-trailing') return;
+    expect(next.nowMs).toBe(NOW);
+    expect(next.sizeMs).toBe(LIVE_FIXED_1H.sizeMs);
+  });
+
+  it('auto-promote: viewport snapped to [nowMs - sizeMs, nowMs]', () => {
+    const nowMs = NOW;
+    const next = dispatch(LIVE_FIXED_1H, { type: 'tick', nowMs });
+    const vp = modeToViewport(next);
+    expect(vp.end).toBe(nowMs);
+    expect(vp.start).toBe(nowMs - LIVE_FIXED_1H.sizeMs);
+  });
+
+  it('auto-promote: lastIntent = live (so useZoomState reset effect fires)', () => {
+    const next = dispatch(LIVE_FIXED_1H, { type: 'tick', nowMs: NOW });
+    if (next.mode !== 'live-trailing') return;
+    expect(next.lastIntent).toBe('live');
+  });
+});
+
+// ── Phase 3: liveClicked / presetClicked / zoomApplied from live-fixed ─────────
+
+describe('liveClicked — Phase 3', () => {
+  it('from live-fixed → live-trailing, sizeMs preserved', () => {
+    const next = dispatch(LIVE_FIXED_1H, { type: 'liveClicked', nowMs: NOW });
+    expect(next.mode).toBe('live-trailing');
+    if (next.mode !== 'live-trailing') return;
+    expect(next.sizeMs).toBe(LIVE_FIXED_1H.sizeMs);
+    expect(next.nowMs).toBe(NOW);
+    expect(next.lastIntent).toBe('live');
+  });
+});
+
+describe('presetClicked — Phase 3', () => {
+  it('from live-fixed → live-trailing (live re-entry via preset)', () => {
+    const next = dispatch(LIVE_FIXED_1H, { type: 'presetClicked', sizeMs: 900_000n, nowMs: NOW });
+    expect(next.mode).toBe('live-trailing');
+    if (next.mode !== 'live-trailing') return;
+    expect(next.sizeMs).toBe(900_000n);
+    expect(next.lastIntent).toBe('preset');
+  });
+});
+
+describe('zoomApplied — Phase 3', () => {
+  it('from live-fixed → fixed (D7: zoom always exits Live)', () => {
+    const from = NOW - 1_800_000n;
+    const to   = NOW - 900_000n;
+    const next = dispatch(LIVE_FIXED_1H, { type: 'zoomApplied', from, to, nowMs: NOW });
+    expect(next.mode).toBe('fixed');
+    if (next.mode !== 'fixed') return;
+    expect(next.from).toBe(from);
+    expect(next.to).toBe(to);
+    expect(next.lastIntent).toBe('zoom');
   });
 });

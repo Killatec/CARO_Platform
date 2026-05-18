@@ -18,6 +18,7 @@ const liveHoisted = vi.hoisted(() => {
   let _tail: unknown = null;
   let _lastOpts: Record<string, unknown> | null = null;
   let _snapshot: unknown = null;
+  let _latestSampleTs: bigint | null = null;
 
   return {
     commitAndDrain,
@@ -27,6 +28,8 @@ const liveHoisted = vi.hoisted(() => {
     getLastOpts: () => _lastOpts,
     setSnapshot: (s: unknown) => { _snapshot = s; },
     getSnapshot: () => _snapshot,
+    setLatestSampleTs: (ts: bigint | null) => { _latestSampleTs = ts; },
+    getLatestSampleTs: () => _latestSampleTs,
   };
 });
 
@@ -36,7 +39,7 @@ vi.mock('../src/useLiveSubscription.js', () => ({
     return {
       tail: liveHoisted.getTail(),
       commitAndDrain: liveHoisted.commitAndDrain,
-      getLatestSampleTs: vi.fn().mockReturnValue(null),
+      getLatestSampleTs: vi.fn().mockImplementation(() => liveHoisted.getLatestSampleTs()),
       getBufferSnapshot: vi.fn(() => liveHoisted.getSnapshot()),
       getCurrentGeneration: vi.fn().mockReturnValue(0),
       seedFromSpineFetch: vi.fn(),
@@ -158,6 +161,7 @@ describe('TrendChartContainer', () => {
     capturedData = undefined;
     liveHoisted.setTail(null);
     liveHoisted.setSnapshot(makeAggData([1, 2]));
+    liveHoisted.setLatestSampleTs(null);
     mockUseTrendData.mockReturnValue(makeResult([1, 2]));
     // EndPicker calls showPicker() on the hidden input; jsdom doesn't implement it.
     Object.defineProperty(HTMLInputElement.prototype, 'showPicker', {
@@ -849,6 +853,144 @@ describe('TrendChartContainer', () => {
       expect(screen.getByText('Loading…')).toBeTruthy();
       // TrendChart NOT rendered.
       expect(screen.queryByTitle('Remove trace')).toBeNull();
+    });
+
+    // ── Phase 3: live-fixed routing ───────────────────────────────────────────
+
+    // LTS shared by all Phase 3 container tests (5 000 s before farPastEnd).
+    const PHASE3_LTS = 1_700_000_000_000n - 5_000_000n;
+    const PHASE3_PAN_END = 1_700_000_000_000n;
+    const PHASE3_PAN_START = PHASE3_PAN_END - 3_600_000n;
+
+    /** Helper: enter live-fixed by panning to PHASE3_PAN_END (> PHASE3_LTS). */
+    function enterLiveFixed() {
+      act(() => {
+        capturedOnXPan?.(PHASE3_PAN_START, PHASE3_PAN_END);
+        vi.runAllTimers();
+      });
+    }
+
+    it('Phase 3: pan within Live (to > latestSampleTs) → live-fixed; no commitAndDrain, no evictAll, no refetchHistory', () => {
+      liveHoisted.setLatestSampleTs(PHASE3_LTS);
+      const mockR = makeResult([1]);
+      mockUseTrendData.mockReturnValue(mockR);
+      renderContainer([1]);
+
+      enterLiveFixed();
+
+      expect(liveHoisted.commitAndDrain).not.toHaveBeenCalled();
+      expect(mockR.evictAll).not.toHaveBeenCalled();
+      expect(mockR.refetchHistory).not.toHaveBeenCalled();
+      // Still in Live mode (live-fixed shows "● Live" same as live-trailing)
+      expect(screen.getByText('● Live')).toBeTruthy();
+    });
+
+    it('Phase 3: live-fixed shows isLive=true to useLiveSubscription (data subscription stays active)', () => {
+      liveHoisted.setLatestSampleTs(PHASE3_LTS);
+      renderContainer([1]);
+      enterLiveFixed();
+      expect(liveHoisted.getLastOpts()?.isLive).toBe(true);
+    });
+
+    it('Phase 3: preset click from live-fixed → live-trailing: commitAndDrain + evictAll (D3 teardown)', () => {
+      liveHoisted.setLatestSampleTs(PHASE3_LTS);
+      const mockR = makeResult([1]);
+      mockUseTrendData.mockReturnValue(mockR);
+      renderContainer([1]);
+
+      enterLiveFixed();
+      liveHoisted.commitAndDrain.mockClear();
+      mockR.evictAll.mockClear();
+      mockR.refetchHistory.mockClear();
+
+      // Preset click from live-fixed → live-trailing = isFreshLiveLanding → full D3 teardown
+      fireEvent.click(screen.getByText('4h'));
+
+      expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
+      expect(mockR.evictAll).toHaveBeenCalledOnce();
+      expect(mockR.refetchHistory).not.toHaveBeenCalled();
+      expect(screen.getByText('● Live')).toBeTruthy();
+    });
+
+    it('Phase 3: Live button from live-fixed → live-trailing: commitAndDrain + evictAll', () => {
+      liveHoisted.setLatestSampleTs(PHASE3_LTS);
+      const mockR = makeResult([1]);
+      mockUseTrendData.mockReturnValue(mockR);
+      renderContainer([1]);
+
+      enterLiveFixed();
+      liveHoisted.commitAndDrain.mockClear();
+      mockR.evictAll.mockClear();
+
+      // Click "● Live" in live-fixed → live-trailing: isFreshLiveLanding → D3 teardown
+      fireEvent.click(screen.getByText('● Live'));
+
+      expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
+      expect(mockR.evictAll).toHaveBeenCalledOnce();
+      expect(mockR.refetchHistory).not.toHaveBeenCalled();
+    });
+
+    it('Phase 3: live-fixed → fixed via second pan past LTS: commitAndDrain + refetchHistory, no evictAll', () => {
+      liveHoisted.setLatestSampleTs(PHASE3_LTS);
+      const mockR = makeResult([1]);
+      mockUseTrendData.mockReturnValue(mockR);
+      renderContainer([1]);
+
+      enterLiveFixed();
+      liveHoisted.commitAndDrain.mockClear();
+      mockR.evictAll.mockClear();
+      mockR.refetchHistory.mockClear();
+
+      // Second pan: to < LTS → panApplied returns 'fixed' from 'live-fixed'
+      const fixedEnd = PHASE3_LTS - 1_000_000n;
+      const fixedStart = fixedEnd - 3_600_000n;
+      act(() => {
+        capturedOnXPan?.(fixedStart, fixedEnd);
+        vi.runAllTimers();
+      });
+
+      // wasLive && !willBeLive → drain + refetch
+      expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
+      expect(mockR.refetchHistory).toHaveBeenCalledOnce();
+      expect(mockR.evictAll).not.toHaveBeenCalled();
+      expect(screen.getByText('Go Live')).toBeTruthy();
+    });
+
+    it('Phase 3: onDataReceived in live-fixed auto-promotes when nowMs >= state.to', () => {
+      liveHoisted.setLatestSampleTs(PHASE3_LTS);
+      renderContainer([1]);
+      enterLiveFixed(); // state.to = PHASE3_PAN_END = 1_700_000_000_000n
+
+      // In live-fixed: showLastWhenIdle=false → "fixed"
+      expect(screen.getByTestId('idle-mode').textContent).toBe('fixed');
+      expect(screen.getByText('● Live')).toBeTruthy();
+
+      // Dispatch tick with nowMs > state.to → auto-promote to live-trailing
+      act(() => {
+        (liveHoisted.getLastOpts()?.onDataReceived as ((ts: number) => void) | undefined)?.(
+          2_000_000_000_000, // >> PHASE3_PAN_END → triggers auto-promote
+        );
+      });
+
+      // Auto-promoted: showLastWhenIdle flips to true → "live"
+      expect(screen.getByTestId('idle-mode').textContent).toBe('live');
+    });
+
+    it('Phase 3: onDataReceived in live-fixed no-op when nowMs < state.to (no auto-promote)', () => {
+      liveHoisted.setLatestSampleTs(PHASE3_LTS);
+      renderContainer([1]);
+      enterLiveFixed(); // state.to = 1_700_000_000_000n
+
+      // Dispatch tick with nowMs < state.to → no-op (reducer returns same state ref)
+      act(() => {
+        (liveHoisted.getLastOpts()?.onDataReceived as ((ts: number) => void) | undefined)?.(
+          1_600_000_000_000, // < state.to = 1_700_000_000_000n → no-op
+        );
+      });
+
+      // No state change: still in live-fixed → idle-mode "fixed", button "● Live"
+      expect(screen.getByTestId('idle-mode').textContent).toBe('fixed');
+      expect(screen.getByText('● Live')).toBeTruthy();
     });
 
     it('E: Live mergedData reads spine ref fresh on every render (wide-preset staleness fix)', () => {

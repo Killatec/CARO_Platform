@@ -90,8 +90,9 @@ export function trendModeReducer(state: ModeState, action: TrendModeAction): Mod
       // live-trailing: spread is safe because the shape already carries nowMs.
       return { ...state, nowMs: action.nowMs, lastIntent: 'live' };
 
-    // End picker commits End only; always goes fixed — user clicks Live if they
-    // want tailing. Strict interpretation: no near-now → tailing auto-transition.
+    // End picker commits End only. From fixed: always stays fixed (D6 asymmetry —
+    // endPicker never enters Live). From live-*: if to > latestSampleTs → live-fixed;
+    // else → fixed. latestSampleTs === null fallback: use state.modeViewport.end.
     case 'endPickerCommitted': {
       const { to } = action;
       // Defensive: require at least 1 ms of span. EndPicker UI prevents this; reducer
@@ -101,7 +102,20 @@ export function trendModeReducer(state: ModeState, action: TrendModeAction): Mod
       // Ensure from >= 1n. End picker contract preserves the chosen End, so we shrink
       // the span rather than shifting End forward (unlike clampLowerBound for zoom/pan).
       const sizeMs = to - cappedSize >= 1n ? cappedSize : to - 1n;
-      return { mode: 'fixed', from: to - sizeMs, to, sizeMs, lastIntent: 'endPicker' };
+      const from = to - sizeMs;
+      if (isLive(state.mode)) {
+        const lts = action.latestSampleTs ?? null;
+        const effectiveLts: bigint =
+          lts !== null
+            ? lts
+            : state.mode === 'live-trailing' ? state.nowMs : state.to;
+        if (to > effectiveLts) {
+          return { mode: 'live-fixed', from, to, sizeMs, lastIntent: 'endPicker' };
+        }
+        return { mode: 'fixed', from, to, sizeMs, lastIntent: 'endPicker' };
+      }
+      // From fixed: always stays fixed (D6 asymmetry).
+      return { mode: 'fixed', from, to, sizeMs, lastIntent: 'endPicker' };
     }
 
     // Zoom always exits tailing. Zoom is an exploratory action — the operator
@@ -117,6 +131,17 @@ export function trendModeReducer(state: ModeState, action: TrendModeAction): Mod
     case 'panApplied': {
       const clamped = clampLowerBound(action.from, action.to);
       const sizeMs = state.sizeMs;
+      if (isLive(state.mode)) {
+        const lts = action.latestSampleTs ?? null;
+        const effectiveLts: bigint =
+          lts !== null
+            ? lts
+            : state.mode === 'live-trailing' ? state.nowMs : state.to;
+        if (clamped.to > effectiveLts) {
+          return { mode: 'live-fixed', from: clamped.from, to: clamped.to, sizeMs, lastIntent: 'pan' };
+        }
+        return { mode: 'fixed', from: clamped.from, to: clamped.to, sizeMs, lastIntent: 'pan' };
+      }
       return { mode: 'fixed', from: clamped.from, to: clamped.to, sizeMs, lastIntent: 'pan' };
     }
 
@@ -125,7 +150,15 @@ export function trendModeReducer(state: ModeState, action: TrendModeAction): Mod
         // Spread preserves lastIntent — advancing the clock is not a user intent.
         return { ...state, nowMs: action.nowMs };
       }
-      return state;
+      if (state.mode === 'live-fixed') {
+        if (action.nowMs >= state.to) {
+          // Auto-promote: nowMs has caught up — snap back to live-trailing.
+          // lastIntent='live' so useZoomState reset effect fires.
+          return { mode: 'live-trailing', sizeMs: state.sizeMs, nowMs: action.nowMs, lastIntent: 'live' };
+        }
+        return state; // nowMs hasn't caught up yet — no-op
+      }
+      return state; // fixed: defensive no-op
   }
 }
 
