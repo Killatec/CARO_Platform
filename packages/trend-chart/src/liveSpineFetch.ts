@@ -5,6 +5,7 @@ import type { GatedFetchFn } from './gatedFetchTile.js';
 import { isClientFetchSentinel } from './gatedFetchTile.js';
 import type { HookState } from './tileActiveSet.js';
 import { chunkArray } from './tileActiveSet.js';
+import { isSpineDiagArmed, getSpineDiagSession } from './__spineDiag.js';
 
 /**
  * Assembles one or more tile API responses (from parallel tag-group fetches of
@@ -113,6 +114,7 @@ export interface LiveSpineFetchArgs {
   setActiveTileCount: Dispatch<SetStateAction<number>>;
   getCurrentGeneration: () => number;
   seedFromSpineFetch: (tagId: number, series: AggregateSeriesData | RawSeriesData, generation: number) => void;
+  onPostSeed?: () => void;
 }
 
 /**
@@ -127,7 +129,7 @@ export function runLiveSpineFetch(args: LiveSpineFetchArgs): void {
     spineLoadedRef, spineFetchInFlightRef, generationRef,
     activeTilesRef, inFlightTilesRef,
     setHookResult, setSwapCounter, setLastFetchMs, setResponseTailTs, setActiveTileCount,
-    getCurrentGeneration, seedFromSpineFetch,
+    getCurrentGeneration, seedFromSpineFetch, onPostSeed,
   } = args;
 
   if (!spanChanged && (spineLoadedRef.current || spineFetchInFlightRef.current)) return;
@@ -155,6 +157,28 @@ export function runLiveSpineFetch(args: LiveSpineFetchArgs): void {
 
   const dispatchGeneration = getCurrentGeneration();
   spineFetchInFlightRef.current = true;
+
+  if (isSpineDiagArmed()) {
+    const sid = getSpineDiagSession();
+    console.log(`[trend-diag #${sid}] SPINE FETCH DISPATCH`, {
+      tile: {
+        startTime: spineTile.startTime.toString(),
+        endTime: spineTile.endTime.toString(),
+        spanMs: (spineTile.endTime - spineTile.startTime).toString(),
+        bucketCount: spineTile.bucketCount,
+      },
+      viewport: {
+        start: viewport.start.toString(),
+        end: viewport.end.toString(),
+        spanMs: (viewport.end - viewport.start).toString(),
+      },
+      tagIds,
+      bucketCount,
+      visibleTilesPerWindow,
+      dispatchGeneration,
+      spanChanged,
+    });
+  }
   // Promise resolution order: generation check FIRST, then clear the flag.
   //
   // Safe under the current three-bump invariant for generationRef.current.
@@ -187,15 +211,36 @@ export function runLiveSpineFetch(args: LiveSpineFetchArgs): void {
     if (generationRef.current !== generation) return;
     spineFetchInFlightRef.current = false;
     const data = assembleLiveSpine(responses, spineTile, tagIds);
+    const maxTailTs = responses.reduce((m, r) => Math.max(m, r.responseTailTs), 0);
+    if (isSpineDiagArmed()) {
+      const sid = getSpineDiagSession();
+      console.log(`[trend-diag #${sid}] SPINE FETCH RECEIVED`, {
+        data: data === null ? null : {
+          type: data.type,
+          source: data.type === 'aggregate' ? data.source : 'raw',
+          startTime: data.startTime.toString(),
+          endTime: data.endTime.toString(),
+          bucketSMs: data.type === 'aggregate' ? data.bucketSMs : undefined,
+          n: data.type === 'aggregate' ? data.n : undefined,
+          perTag: Array.from(data.series.entries()).map(([tid, s]) => ({
+            tagId: tid,
+            valueLen: data.type === 'aggregate' ? s.value.length : (s as unknown as { ts: bigint[] }).ts.length,
+            nullCount: data.type === 'aggregate' ? s.value.filter(v => v === null).length : 0,
+          })),
+        },
+        responseTailTs: maxTailTs > 0 ? maxTailTs : null,
+        rawResponseCount: responses.length,
+      });
+    }
     if (data !== null) {
       for (const tagId of tagIds) {
         seedFromSpineFetch(tagId, data, dispatchGeneration);
       }
+      if (onPostSeed) onPostSeed();
     }
     setHookResult({ data: null, isLoading: false, error: null });
     setSwapCounter(c => c + 1);
     setLastFetchMs(Math.round(performance.now() - batchT0));
-    const maxTailTs = responses.reduce((m, r) => Math.max(m, r.responseTailTs), 0);
     setResponseTailTs(maxTailTs > 0 ? maxTailTs : null);
     spineLoadedRef.current = true;
   }).catch((e: Error & { code?: string }) => {

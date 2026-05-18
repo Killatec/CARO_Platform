@@ -15,6 +15,7 @@ import { EndPicker } from './EndPicker.js';
 import { CursorDisplay } from './CursorDisplay.js';
 import { TREND_VIEWER_DEFAULTS, MIN_VIEWPORT_SPAN_MS, MAX_VIEWPORT_SPAN_MS } from './level.js';
 import type { AggregateSeriesData, RawSeriesData } from './types.js';
+import { armSpineDiag, isSpineDiagArmed, getSpineDiagSession, disarmSpineDiag } from './__spineDiag.js';
 
 const VISIBLE_TILES_PER_WINDOW = TREND_VIEWER_DEFAULTS.visibleTilesPerWindow;
 const BUCKET_COUNT = TREND_VIEWER_DEFAULTS.bucketCount;
@@ -105,8 +106,71 @@ export function TrendChartContainer({
     [],
   );
 
+  const onPostSeed = useCallback(() => {
+    if (!isSpineDiagArmed()) return;
+    const sid = getSpineDiagSession();
+    const snap = liveSubRef.current?.getBufferSnapshot() ?? null;
+    console.log(`[trend-diag #${sid}] RECONSTRUCTED BUFFER`, {
+      snapshot: snap === null
+        ? null
+        : snap.type === 'aggregate'
+        ? {
+            type: 'aggregate',
+            source: snap.source,
+            startTime: snap.startTime.toString(),
+            endTime: snap.endTime.toString(),
+            bucketSMs: snap.bucketSMs,
+            n: snap.n,
+            perTag: Array.from(snap.series.entries()).map(([tid, s]) => {
+              const v = s.value;
+              const nullCount = v.filter(x => x === null).length;
+              const firstNonNullIdx = v.findIndex(x => x !== null);
+              let lastNonNullIdx = -1;
+              for (let i = v.length - 1; i >= 0; i--) if (v[i] !== null) { lastNonNullIdx = i; break; }
+              let longestNullRunStart = -1;
+              let longestNullRunLen = 0;
+              let currStart = -1;
+              for (let i = 0; i < v.length; i++) {
+                if (v[i] === null) {
+                  if (currStart === -1) currStart = i;
+                  const len = i - currStart + 1;
+                  if (len > longestNullRunLen) { longestNullRunLen = len; longestNullRunStart = currStart; }
+                } else {
+                  currStart = -1;
+                }
+              }
+              return {
+                tagId: tid,
+                valueLen: v.length,
+                nullCount,
+                firstNonNullIdx,
+                lastNonNullIdx,
+                longestNullRun: longestNullRunLen > 0
+                  ? { startIdx: longestNullRunStart, lenBuckets: longestNullRunLen, approxStartTimeMs: (snap.startTime + BigInt(longestNullRunStart) * BigInt(snap.bucketSMs)).toString() }
+                  : null,
+              };
+            }),
+          }
+        : {
+            type: 'raw',
+            source: snap.source,
+            startTime: snap.startTime.toString(),
+            endTime: snap.endTime.toString(),
+            perTag: Array.from(snap.series.entries()).map(([tid, s]) => ({
+              tagId: tid,
+              tsLen: s.ts.length,
+              oldestTs: s.ts.length > 0 ? s.ts[0]!.toString() : null,
+              newestTs: s.ts.length > 0 ? s.ts[s.ts.length - 1]!.toString() : null,
+            })),
+          },
+      tailMode: liveSubRef.current?.tail?.mode ?? null,
+      latestSampleTs: liveSubRef.current?.getLatestSampleTs()?.toString() ?? null,
+    });
+    disarmSpineDiag();
+  }, []);
+
   // ── Data fetch (driven by explicit dataViewport) ──────────────────────────
-  const trendData = useTrendData({ viewport: dataViewport, tagIds, isLive: isLive(modeState.mode), getLiveGeneration, onSpineResolved });
+  const trendData = useTrendData({ viewport: dataViewport, tagIds, isLive: isLive(modeState.mode), getLiveGeneration, onSpineResolved, onPostSeed });
   const { data, isLoading, ensureCovered, getActiveRange, swapCounter, activeTileCount, lastFetchMs } = trendData;
 
   // ── Stable refs for synchronous access from callbacks and cleanup ─────────
@@ -275,6 +339,12 @@ export function TrendChartContainer({
 
   const handlePreset = useCallback(
     (sizeMs: bigint) => {
+      const sid = armSpineDiag();
+      console.log(`[trend-diag #${sid}] PRESET PRESS`, {
+        sizeMs: sizeMs.toString(),
+        nowMs: Date.now(),
+        currentMode: modeStateRef.current.mode,
+      });
       dispatchModeAction({ type: 'presetClicked', sizeMs, nowMs: BigInt(Date.now()) });
     },
     [dispatchModeAction],
