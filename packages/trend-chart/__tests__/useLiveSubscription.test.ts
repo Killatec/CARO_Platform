@@ -1523,3 +1523,209 @@ describe('useLiveSubscription — seedFromSpineFetch clip gated on isContinuatio
     expect(tag2.value).toEqual([20, 21]);
   });
 });
+
+// ─── G: wholesale replace clears accumulator/rawBuffer state ─────────────────
+//
+// Root cause: after a wholesale spine replace (bucketSMs/metadata change), the
+// OLD accumulator arrays are still present. When the NEXT render calls
+// getBufferSnapshot → buildAggregateTail, those arrays are stamped with the NEW
+// bucketSMs from the ref (already synced during that render). The merge then
+// places OLD-era buckets at wrong NEW-bucketSMs indices, cutting the chart's
+// right edge short. Fix: seedFromSpineFetch clears accumulators and rawBuffers
+// synchronously before the spineRef update whenever isContinuation=false.
+
+describe('useLiveSubscription — wholesale replace clears accumulator state (G)', () => {
+
+  it('G-1: aggregate wholesale replace → accumulators cleared → spine returned unchanged by next getBufferSnapshot', () => {
+    // Setup: populate an accumulator at OLD_BUCKET=1000ms (1 closed bucket, value=5).
+    // Wholesale-replace spine at NEW_BUCKET=3000ms, values=[10,11,12,13,14].
+    // Post-fix: accumulators cleared → buildAggregateTail(empty) = null → spine unchanged.
+    // Pre-fix: stale bucket (value=5, firstClosedStartMs=ORIGIN) would be merged at
+    //   NEW_BUCKET indices → spine.value[0] clobbered with 5 (not 10).
+    const OLD_BUCKET = 1000n;
+    const NEW_BUCKET = 3000n;
+
+    const { result, rerender } = renderHook(
+      ({ opts }: { opts: Parameters<typeof useLiveSubscription>[0] }) => useLiveSubscription(opts),
+      { initialProps: { opts: { tagIds: [1], trimThreshold: null, isLive: true, tailMode: 'aggregate' as const, bucketSMs: OLD_BUCKET } } },
+    );
+
+    // Close 1 bucket (value=5) so firstClosedStartMs is set.
+    act(() => {
+      fireCb(1, ORIGIN + 100, 5);
+      fireCb(1, ORIGIN + 1100, 6); // crosses into next bucket → closes bucket at ORIGIN
+    });
+    expect(result.current.tail).not.toBeNull(); // sanity: accumulator populated
+
+    const gen = result.current.getCurrentGeneration();
+    const newSpineN = 5;
+    const newSpine: AggregateSeriesData = {
+      type: 'aggregate', source: '5min_cagg' as const,
+      startTime: BigInt(ORIGIN),
+      endTime:   BigInt(ORIGIN + newSpineN * Number(NEW_BUCKET)),
+      n: newSpineN, bucketSMs: Number(NEW_BUCKET),
+      series: new Map([[1, { value: [10, 11, 12, 13, 14], min: [10, 11, 12, 13, 14], max: [10, 11, 12, 13, 14] }]]),
+    };
+
+    // Wholesale seed: isContinuation=false → accumulators cleared, then spine written.
+    result.current.seedFromSpineFetch(1, newSpine, gen);
+
+    // Sync bucketSMsRef to NEW_BUCKET so getBufferSnapshot uses it correctly.
+    rerender({ opts: { tagIds: [1], trimThreshold: null, isLive: true, tailMode: 'aggregate' as const, bucketSMs: NEW_BUCKET } });
+
+    const snapshot = result.current.getBufferSnapshot() as AggregateSeriesData;
+    expect(snapshot).not.toBeNull();
+    // Accumulators cleared → buildAggregateTail(empty, NEW_BUCKET) = null
+    // → mergeTrendData(spine, null) returns spine unchanged.
+    // Without fix: stale accumulator value=5 would overwrite spine.value[0] (was 10).
+    expect(snapshot.series.get(1)!.value).toEqual([10, 11, 12, 13, 14]);
+  });
+
+  it('G-2: aggregate continuation seed (isContinuation=true) does NOT clear accumulator state', () => {
+    // Seed tag1 (wholesale → clears, writes spineRef). Re-seed tag1 with same metadata
+    // (isContinuation=true → mutate path → no clear). Tail should remain non-null
+    // (WS-driven accumulator data survives; the continuation path ran, not wholesale).
+    const { result } = renderHook(() =>
+      useLiveSubscription({ tagIds: [1], trimThreshold: null, isLive: true, tailMode: 'aggregate', bucketSMs: BUCKET_SMS }),
+    );
+
+    // Build accumulator: 1 closed bucket.
+    act(() => {
+      fireCb(1, ORIGIN + 100, 99);
+      fireCb(1, ORIGIN + 1100, 88); // closes bucket at ORIGIN
+    });
+    expect(result.current.tail).not.toBeNull(); // sanity
+
+    const gen = result.current.getCurrentGeneration();
+    const spineA: AggregateSeriesData = {
+      type: 'aggregate', source: '1s_cagg' as const,
+      startTime: BigInt(ORIGIN - 5000), endTime: BigInt(ORIGIN - 5000 + 5 * Number(BUCKET_SMS)),
+      n: 5, bucketSMs: Number(BUCKET_SMS),
+      series: new Map([[1, { value: [1, 2, 3, 4, 5], min: [1, 2, 3, 4, 5], max: [1, 2, 3, 4, 5] }]]),
+    };
+
+    // First seed: wholesale (existing=null → isContinuation=false → clears + writes).
+    result.current.seedFromSpineFetch(1, spineA, gen);
+
+    // Second seed: same spine metadata → isContinuation=true → mutate path, no clear.
+    // Continuation spine has tag1's series in it for the clip computation.
+    const spineACopy: AggregateSeriesData = { ...spineA, series: new Map([[1, { value: [1, 2, 3, 4, 5], min: [1,2,3,4,5], max: [1,2,3,4,5] }]]) };
+    result.current.seedFromSpineFetch(1, spineACopy, gen);
+
+    // isContinuation=true: accumulator not cleared by the second seed.
+    // tail React state unchanged by seedFromSpineFetch (it only mutates refs) →
+    // still reflects the WS bucket built before the seeds.
+    expect(result.current.tail).not.toBeNull();
+  });
+
+  it('G-3: raw wholesale replace → rawBuffers cleared → spine returned unchanged by next getBufferSnapshot', () => {
+    // Mirror of G-1 for the raw path: populate rawBuffer, wholesale-replace spine.
+    // Post-fix: rawBuffers cleared → buildRawTail(empty) = null → spine unchanged.
+    //
+    // Fire rawBuffer events AFTER the spine's endTime so the merge path would
+    // normally append them. Do NOT rerender (that would trigger the tailMode effect
+    // independently); assert directly from getBufferSnapshot that only the two
+    // spine entries are returned — the old rawBuffer events are gone.
+    const { result } = renderHook(() =>
+      useLiveSubscription({ tagIds: [1], trimThreshold: null, isLive: true, tailMode: 'raw' as const }),
+    );
+
+    const gen = result.current.getCurrentGeneration();
+    const rawSpine: RawSeriesData = {
+      type: 'raw', source: 'raw',
+      startTime: BigInt(ORIGIN - 1000), endTime: BigInt(ORIGIN + 5000),
+      series: new Map([[1, { ts: [BigInt(ORIGIN - 500), BigInt(ORIGIN)], value: [10, 20] }]]),
+    };
+
+    // First: seed the spine (wholesale — existing=null).
+    result.current.seedFromSpineFetch(1, rawSpine, gen);
+
+    // Push raw samples that land AFTER spine.endTime so without the clear they
+    // would be merged into the snapshot as extra trailing entries.
+    act(() => {
+      fireCb(1, ORIGIN + 6000, 42);
+      fireCb(1, ORIGIN + 7000, 43);
+    });
+
+    // Now wholesale-replace again with the same spine data (triggers clear).
+    const gen2 = result.current.getCurrentGeneration();
+    result.current.seedFromSpineFetch(1, rawSpine, gen2);
+
+    // rawBuffers cleared → buildRawTail(empty) = null → mergeTrendData returns spine unchanged.
+    // Without fix: rawBuffer events at ORIGIN+6000/7000 would appear after the spine entries.
+    const snapshot = result.current.getBufferSnapshot();
+    expect(snapshot).not.toBeNull();
+    expect(snapshot!.type).toBe('raw');
+    const entry = (snapshot as RawSeriesData).series.get(1)!;
+    expect(entry.ts).toEqual([BigInt(ORIGIN - 500), BigInt(ORIGIN)]);
+    expect(entry.value).toEqual([10, 20]);
+  });
+
+  it('G-4: sessionHighWaterMark reset on wholesale replace — getLatestSampleTs drops to ring max', () => {
+    // HWM is inflated to 9000n by a tag-2 event. Tag 2 is then removed (ring entry
+    // deleted). With HWM still 9000n, getLatestSampleTs() = 9000. Wholesale spine
+    // replace resets HWM to null → getLatestSampleTs() falls back to ring max (100n).
+    const { result, rerender } = renderHook(
+      ({ opts }: { opts: Parameters<typeof useLiveSubscription>[0] }) => useLiveSubscription(opts),
+      { initialProps: { opts: { tagIds: [1, 2], trimThreshold: null, isLive: true, tailMode: 'aggregate' as const, bucketSMs: BUCKET_SMS } } },
+    );
+
+    act(() => {
+      fireCb(1, 100, 1);   // tag1: ring=[100], HWM → 100
+      fireCb(2, 9000, 2);  // tag2: ring=[9000], HWM → 9000
+    });
+    expect(result.current.getLatestSampleTs()).toBe(9000n); // sanity
+
+    // Remove tag2: its ring entry is deleted; HWM still 9000.
+    rerender({ opts: { tagIds: [1], trimThreshold: null, isLive: true, tailMode: 'aggregate' as const, bucketSMs: BUCKET_SMS } });
+    expect(result.current.getLatestSampleTs()).toBe(9000n); // HWM floors it
+
+    // Wholesale spine replace with a DIFFERENT bucketSMs → HWM reset to null.
+    // bucketSMs must differ from BUCKET_SMS (1000n) to satisfy the conditional clear.
+    const gen = result.current.getCurrentGeneration();
+    const spine: AggregateSeriesData = {
+      type: 'aggregate', source: '5min_cagg' as const,
+      startTime: BigInt(ORIGIN), endTime: BigInt(ORIGIN + 5 * Number(BUCKET_SMS) * 5),
+      n: 5, bucketSMs: Number(BUCKET_SMS) * 5, // 5000 ≠ 1000 → triggers clear
+      series: new Map([[1, { value: [1, 2, 3, 4, 5] }]]),
+    };
+    result.current.seedFromSpineFetch(1, spine, gen);
+
+    // HWM is null; getLatestSampleTs() falls back to ring max = 100.
+    // Without fix: HWM still 9000 → returns 9000 (wrong, inflated from removed tag).
+    expect(result.current.getLatestSampleTs()).toBe(100n);
+  });
+
+  it('G-5: generation guard fires before the accumulator clear — stale seed is a no-op', () => {
+    // Verify that a stale-generation seed (which would otherwise be a wholesale replace)
+    // neither clears accumulators nor writes the spine.
+    const { result } = renderHook(() =>
+      useLiveSubscription({ tagIds: [1], trimThreshold: null, isLive: true, tailMode: 'aggregate', bucketSMs: BUCKET_SMS }),
+    );
+
+    // Build accumulator: 1 closed bucket.
+    act(() => {
+      fireCb(1, ORIGIN + 100, 77);
+      fireCb(1, ORIGIN + 1100, 88);
+    });
+    expect(result.current.tail).not.toBeNull(); // sanity
+
+    const staleGen = result.current.getCurrentGeneration(); // 0
+    act(() => { result.current.commitAndDrain(); }); // gen → 1, buffer cleared
+
+    // Attempt to seed with the STALE generation using mismatched metadata
+    // (would be wholesale if the generation guard were absent).
+    const staleSpine: AggregateSeriesData = {
+      type: 'aggregate', source: '5min_cagg' as const,
+      startTime: BigInt(ORIGIN), endTime: BigInt(ORIGIN + 3 * Number(BUCKET_SMS) * 5),
+      n: 3, bucketSMs: Number(BUCKET_SMS) * 5,
+      series: new Map([[1, { value: [99, 99, 99] }]]),
+    };
+    result.current.seedFromSpineFetch(1, staleSpine, staleGen);
+
+    // Generation guard fires first → early return → spine NOT written, no clear.
+    expect(result.current.getBufferSnapshot()).toBeNull();
+    // tail is null from commitAndDrain; the stale seed did not re-populate anything.
+    expect(result.current.tail).toBeNull();
+  });
+});

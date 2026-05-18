@@ -695,6 +695,23 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
       // and is about to be reset by the tailMode effect — clipping based on it
       // produces a gap. spineMetadataMatches is the right signal because
       // bucketSMs is part of the metadata match.
+      if (!isContinuation) {
+        // The corruption window is specific to a bucketSMs change: bucketSMsRef
+        // is synced to the new value during the next render, before the tailMode
+        // effect runs. If the accumulators still hold OLD-bucketSMs data at that
+        // point, buildAggregateTail stamps them with the NEW bucketSMs — placing
+        // OLD-era buckets at wrong indices and cutting the merge right edge short.
+        // Clear only when bucketSMs actually changes; same-bucketSMs wholesale
+        // replaces (viewport shift, etc.) have valid accumulator data for the new
+        // spine and must not lose it.
+        const newBucketSMs = series.bucketSMs;
+        const curBucketSMs = bucketSMsRef.current !== null ? Number(bucketSMsRef.current) : null;
+        if (newBucketSMs !== curBucketSMs) {
+          accumulatorsRef.current.clear();
+          rawBuffersRef.current.clear();
+          sessionHighWaterMarkRef.current = null;
+        }
+      }
       const accState = accumulatorsRef.current.get(tagId);
       let clippedN = series.n;
       if (isContinuation && accState && accState.firstClosedStartMs !== null) {
@@ -735,6 +752,13 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
       // Live-wins-on-coverage (raw): drop spine entries with ts >= minLiveTs.
       // Gate on isContinuation: on wholesale replacement, rawBuffersRef reflects
       // an OLD session and is about to be reset by the tailMode effect.
+      if (!isContinuation) {
+        // Mirror the aggregate clear: wipe stale-bucketed state synchronously
+        // before the spineRef update so the next render's merge sees a clean tail.
+        accumulatorsRef.current.clear();
+        rawBuffersRef.current.clear();
+        sessionHighWaterMarkRef.current = null;
+      }
       const rawBuf = rawBuffersRef.current.get(tagId);
       let filteredTs    = [...tagData.ts];
       let filteredValue = [...tagData.value];
