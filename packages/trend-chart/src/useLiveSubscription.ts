@@ -643,12 +643,17 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
       const tagData = series.series.get(tagId);
       if (!tagData) return;
 
-      // Live-wins-on-coverage (aggregate): clip the spine so that WS-accumulated
-      // live buckets always win on their coverage range. Find the index of the
-      // first live bucket's start in the spine's bucket grid.
+      const existing = spineRef.current;
+      const isContinuation = spineMetadataMatches(existing, series);
+      // Live-wins-on-coverage clip applies only when this is a same-fetch
+      // continuation. On a wholesale replacement (preset change with different
+      // bucketSMs), the accumulator's firstClosedStartMs reflects OLD bucketing
+      // and is about to be reset by the tailMode effect — clipping based on it
+      // produces a gap. spineMetadataMatches is the right signal because
+      // bucketSMs is part of the metadata match.
       const accState = accumulatorsRef.current.get(tagId);
       let clippedN = series.n;
-      if (accState && accState.firstClosedStartMs !== null) {
+      if (isContinuation && accState && accState.firstClosedStartMs !== null) {
         const liveStartIndex = Number(
           (accState.firstClosedStartMs - series.startTime) / BigInt(series.bucketSMs),
         );
@@ -661,8 +666,7 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
       if (tagData.min) entry.min = tagData.min.slice(0, clippedN);
       if (tagData.max) entry.max = tagData.max.slice(0, clippedN);
 
-      const existing = spineRef.current;
-      if (spineMetadataMatches(existing, series)) {
+      if (isContinuation) {
         // Same fetch's subsequent tag — mutate the shared series map.
         (existing as AggregateSeriesData).series.set(tagId, entry);
       } else {
@@ -682,13 +686,16 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
       const tagData = series.series.get(tagId);
       if (!tagData) return;
 
-      // Live-wins-on-coverage (raw): drop spine entries with ts >= minLiveTs
-      // (the timestamp of the first raw-buffer entry for this tag).
+      const existing = spineRef.current;
+      const isContinuation = spineMetadataMatches(existing, series);
+      // Live-wins-on-coverage (raw): drop spine entries with ts >= minLiveTs.
+      // Gate on isContinuation: on wholesale replacement, rawBuffersRef reflects
+      // an OLD session and is about to be reset by the tailMode effect.
       const rawBuf = rawBuffersRef.current.get(tagId);
       let filteredTs    = [...tagData.ts];
       let filteredValue = [...tagData.value];
 
-      if (rawBuf && rawBuf.length > 0) {
+      if (isContinuation && rawBuf && rawBuf.length > 0) {
         const minLiveTs = BigInt(rawBuf[0]!.moduleTs);
         const cutIdx = filteredTs.findIndex(t => t >= minLiveTs);
         if (cutIdx >= 0) {
@@ -703,8 +710,7 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
         ...(tagData.prev ? { prev: tagData.prev } : {}),
       };
 
-      const existing = spineRef.current;
-      if (spineMetadataMatches(existing, series)) {
+      if (isContinuation) {
         // Same fetch's subsequent tag — spread preserves tile-range metadata.
         const rawExisting = existing as RawSeriesData;
         const newSeries = new Map(rawExisting.series);

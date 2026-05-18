@@ -1405,3 +1405,121 @@ describe('useLiveSubscription — getBufferSnapshot type-coherence guard (D-B)',
     warnSpy.mockRestore();
   });
 });
+
+// ─── F: seedFromSpineFetch clip gating on isContinuation ─────────────────────
+
+describe('useLiveSubscription — seedFromSpineFetch clip gated on isContinuation (F)', () => {
+  it('F-1: preset-change clip bug — bucketSMs mismatch → isContinuation=false → full spine, no clip', () => {
+    // Repro: accumulator populated at 300ms buckets (prior 5m preset).
+    // New spine arrives at 900ms buckets (15m preset). Different bucketSMs ≠ match.
+    // Pre-fix: isContinuation ignored; liveStartIndex = (ORIGIN - ORIGIN) / 900 = 0
+    //   → clippedN = 0 → ALL spine buckets gone → chart gap covering the full range.
+    // Post-fix: isContinuation=false → clip skipped → full spine preserved.
+    const OLD_BUCKET = 300n;
+    const NEW_BUCKET = 900n;
+
+    const { result } = renderHook(() =>
+      useLiveSubscription({ tagIds: [1], trimThreshold: null, isLive: true, tailMode: 'aggregate', bucketSMs: OLD_BUCKET }),
+    );
+
+    // Fire events to close one 300ms bucket so firstClosedStartMs = BigInt(ORIGIN).
+    // Event at ORIGIN+100 opens bucket at BigInt(ORIGIN).
+    // Event at ORIGIN+400 (bucket BigInt(ORIGIN+300)) closes it.
+    act(() => {
+      fireCb(1, ORIGIN + 100, 5);
+      fireCb(1, ORIGIN + 400, 6);
+    });
+
+    const newSpineN = 10;
+    const newSpine: AggregateSeriesData = {
+      type:      'aggregate',
+      source:    '1min_cagg' as const,
+      startTime: BigInt(ORIGIN),
+      endTime:   BigInt(ORIGIN + newSpineN * Number(NEW_BUCKET)),
+      n:         newSpineN,
+      bucketSMs: Number(NEW_BUCKET),
+      series: new Map([[1, {
+        value: Array.from({ length: newSpineN }, (_, i) => i),
+        min:   Array.from({ length: newSpineN }, (_, i) => i),
+        max:   Array.from({ length: newSpineN }, (_, i) => i),
+      }]]),
+    };
+
+    const gen = result.current.getCurrentGeneration();
+    result.current.seedFromSpineFetch(1, newSpine, gen);
+
+    // bucketSMsRef is still OLD_BUCKET (300n) while spine.bucketSMs = 900.
+    // mergeTrendData's bucketSMs-mismatch passthrough returns spine unchanged,
+    // so getBufferSnapshot gives a direct view of the seeded value lengths.
+    const snapshot = result.current.getBufferSnapshot() as AggregateSeriesData;
+    expect(snapshot).not.toBeNull();
+    // Under the fix: isContinuation=false → clippedN = series.n = 10.
+    // Under old code: liveStartIndex = (ORIGIN-ORIGIN)/900 = 0 → clippedN = 0.
+    const entry = snapshot.series.get(1)!;
+    expect(entry.value.length).toBe(newSpineN);
+  });
+
+  it('F-2: same-fetch continuation — matching bucketSMs → isContinuation=true → clip is applied', () => {
+    // Tag 1 arrives first (wholesale replace; spineRef was null).
+    // Tag 2 arrives second with identical metadata → isContinuation=true.
+    // Tag 2's accumulator has firstClosedStartMs = BigInt(ORIGIN); spine starts
+    // 2000ms before ORIGIN → liveStartIndex = 2 → clippedN = 2 out of 5.
+    const BATCH_BUCKET = BUCKET_SMS; // 1000n
+    const SPINE_N      = 5;
+    const spineStart   = BigInt(ORIGIN - 2000);
+    const spineEnd     = BigInt(ORIGIN - 2000 + SPINE_N * Number(BATCH_BUCKET));
+
+    const { result, rerender } = renderHook(
+      ({ opts }: { opts: Parameters<typeof useLiveSubscription>[0] }) => useLiveSubscription(opts),
+      { initialProps: { opts: { tagIds: [1, 2], trimThreshold: null, isLive: true, tailMode: 'aggregate' as const, bucketSMs: BATCH_BUCKET } } },
+    );
+
+    // Populate tag 2's accumulator: close one bucket at BigInt(ORIGIN).
+    // ORIGIN+100  → opens bucket BigInt(ORIGIN).
+    // ORIGIN+1100 → opens bucket BigInt(ORIGIN+1000), closing previous.
+    // → firstClosedStartMs = BigInt(ORIGIN).
+    act(() => {
+      fireCb(2, ORIGIN + 100, 5);
+      fireCb(2, ORIGIN + 1100, 6);
+    });
+
+    const spineData: AggregateSeriesData = {
+      type:      'aggregate',
+      source:    '1min_cagg' as const,
+      startTime: spineStart,
+      endTime:   spineEnd,
+      n:         SPINE_N,
+      bucketSMs: Number(BATCH_BUCKET),
+      series: new Map([
+        [1, { value: [10, 11, 12, 13, 14], min: [10, 11, 12, 13, 14], max: [10, 11, 12, 13, 14] }],
+        [2, { value: [20, 21, 22, 23, 24], min: [20, 21, 22, 23, 24], max: [20, 21, 22, 23, 24] }],
+      ]),
+    };
+
+    const gen = result.current.getCurrentGeneration();
+
+    // Tag 1: spineRef=null → isContinuation=false → no clip → 5 entries.
+    result.current.seedFromSpineFetch(1, spineData, gen);
+    // Tag 2: spineRef has tag1's metadata → isContinuation=true → clip applied.
+    // liveStartIndex = (ORIGIN - (ORIGIN-2000)) / 1000 = 2 → clippedN = min(5,2) = 2.
+    result.current.seedFromSpineFetch(2, spineData, gen);
+
+    // Switch tailMode to null so getBufferSnapshot returns spine unchanged
+    // (no tail merge) for direct inspection. spineRef survives the effect clear.
+    rerender({ opts: { tagIds: [1, 2], trimThreshold: null, isLive: true, tailMode: null, bucketSMs: null } });
+
+    const snapshot = result.current.getBufferSnapshot() as AggregateSeriesData;
+    expect(snapshot).not.toBeNull();
+    expect(snapshot.type).toBe('aggregate');
+
+    // Tag 1: no clip (wholesale replace, accumulator was fresh/ignored).
+    const tag1 = snapshot.series.get(1)!;
+    expect(tag1.value.length).toBe(SPINE_N);
+    expect(tag1.value).toEqual([10, 11, 12, 13, 14]);
+
+    // Tag 2: clip applied → 2 entries.
+    const tag2 = snapshot.series.get(2)!;
+    expect(tag2.value.length).toBe(2);
+    expect(tag2.value).toEqual([20, 21]);
+  });
+});
