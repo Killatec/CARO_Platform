@@ -814,6 +814,43 @@ describe('TrendChartContainer', () => {
       expect(mockResult.evictAll).not.toHaveBeenCalled();
     });
 
+    // ── D-C: bridge-data ref (Bug 3 fix) ─────────────────────────────────────
+
+    it('D-C: <TrendChart> stays mounted when chartData briefly drops to null (bridge via lastChartDataRef)', () => {
+      // First render: spine available → TrendChart rendered.
+      liveHoisted.setSnapshot(makeAggData([1, 2]));
+      mockUseTrendData.mockReturnValue(makeResult([1, 2]));
+      const { rerender } = renderContainer([1, 2]);
+
+      // Verify TrendChart is rendered (remove buttons present, no loading hint).
+      expect(screen.queryByText('Loading…')).toBeNull();
+      expect(screen.getAllByTitle('Remove trace').length).toBeGreaterThan(0);
+
+      // Transition: snapshot drops to null (spine in-flight after mode change).
+      liveHoisted.setSnapshot(null);
+      mockUseTrendData.mockReturnValue(makeResult([1, 2], { data: null, isLoading: true }));
+      rerender(
+        <MockHmiProvider tagDefs={TAG_DEFS}>
+          <TrendChartContainer tagIds={[1, 2]} siteTimezone="UTC" height={400} />
+        </MockHmiProvider>,
+      );
+
+      // Bridge: lastChartDataRef holds the prior non-null data → TrendChart stays.
+      expect(screen.queryByText('Loading…')).toBeNull();
+      expect(screen.getAllByTitle('Remove trace').length).toBeGreaterThan(0);
+    });
+
+    it('D-C: initial load with null snapshot renders loading hint (no bridge before first data)', () => {
+      // lastChartDataRef is null on first render → effectiveChartData is null → loading hint.
+      liveHoisted.setSnapshot(null);
+      mockUseTrendData.mockReturnValue(makeResult([1], { data: null, isLoading: true }));
+      renderContainer([1]);
+
+      expect(screen.getByText('Loading…')).toBeTruthy();
+      // TrendChart NOT rendered.
+      expect(screen.queryByTitle('Remove trace')).toBeNull();
+    });
+
   });
 });
 

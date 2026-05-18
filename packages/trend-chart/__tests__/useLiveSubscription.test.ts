@@ -2,7 +2,7 @@ import { renderHook, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useLiveSubscription, TREND_RING_CAPACITY } from '../src/useLiveSubscription.js';
 import { TS_BUCKET_ORIGIN_MS } from '../src/level.js';
-import type { AggregateSeriesData } from '../src/types.js';
+import type { AggregateSeriesData, RawSeriesData } from '../src/types.js';
 import { mergeTrendData } from '../src/mergeTrendData.js';
 
 // ─── Mock @caro/hmi-context ────────────────────────────────────────────────────
@@ -1237,5 +1237,171 @@ describe('useLiveSubscription — Phase 2b unified buffer', () => {
     // getBufferSnapshot reads from refs synchronously — picks up the new closed bucket.
     const afterEnd = result.current.getBufferSnapshot()!.endTime;
     expect(afterEnd).toBeGreaterThan(beforeEnd);
+  });
+});
+
+// ─── D-A: seedFromSpineFetch metadata matching ────────────────────────────────
+
+describe('useLiveSubscription — seedFromSpineFetch metadata matching (D-A)', () => {
+  const sharedAggMeta = {
+    type: 'aggregate' as const,
+    source: '1s_cagg' as const,
+    startTime: BigInt(ORIGIN),
+    endTime:   BigInt(ORIGIN + 5 * Number(BUCKET_SMS)),
+    n:         5,
+    bucketSMs: Number(BUCKET_SMS),
+  };
+
+  it('D-A-1: mismatched aggregate bucketSMs replaces spineRef wholesale, dropping prior tag', () => {
+    const { result } = renderHook(() =>
+      useLiveSubscription({ tagIds: [1, 2], trimThreshold: null, isLive: true, tailMode: 'aggregate', bucketSMs: BUCKET_SMS }),
+    );
+    const gen = result.current.getCurrentGeneration();
+
+    // First seed: tag 1, bucketSMs = BUCKET_SMS (1000 ms).
+    result.current.seedFromSpineFetch(1, {
+      ...sharedAggMeta,
+      series: new Map([[1, { value: [1, 2, 3, 4, 5], min: [1, 2, 3, 4, 5], max: [1, 2, 3, 4, 5] }]]),
+    }, gen);
+
+    // Second seed: tag 2, different bucketSMs (2000 ≠ 1000) → metadata mismatch → replace.
+    const differentBucket: AggregateSeriesData = {
+      ...sharedAggMeta,
+      endTime:   BigInt(ORIGIN + 5 * 2000),
+      bucketSMs: 2000,
+      series:    new Map([[2, { value: [6, 7, 8, 9, 10], min: [6, 7, 8, 9, 10], max: [6, 7, 8, 9, 10] }]]),
+    };
+    result.current.seedFromSpineFetch(2, differentBucket, gen);
+
+    const snapshot = result.current.getBufferSnapshot() as AggregateSeriesData;
+    expect(snapshot).not.toBeNull();
+    // Wholesale replacement: tag 1 gone, tag 2 present, bucketSMs updated.
+    expect(snapshot.series.has(1)).toBe(false);
+    expect(snapshot.series.has(2)).toBe(true);
+    expect(snapshot.bucketSMs).toBe(2000);
+  });
+
+  it('D-A-2: mismatched type (seed aggregate then raw) replaces spineRef with raw type', () => {
+    const { result } = renderHook(() =>
+      useLiveSubscription({ tagIds: [1], trimThreshold: null, isLive: true, tailMode: 'raw' }),
+    );
+    const gen = result.current.getCurrentGeneration();
+
+    // Seed an aggregate spine first.
+    result.current.seedFromSpineFetch(1, {
+      ...sharedAggMeta,
+      series: new Map([[1, { value: [1, 2, 3, 4, 5], min: [1, 2, 3, 4, 5], max: [1, 2, 3, 4, 5] }]]),
+    }, gen);
+
+    // Seed with raw series (type mismatch) → wholesale replacement.
+    const rawSpine: RawSeriesData = {
+      type:      'raw',
+      source:    'raw',
+      startTime: BigInt(ORIGIN),
+      endTime:   BigInt(ORIGIN + 3 * Number(BUCKET_SMS)),
+      series:    new Map([[1, { ts: [BigInt(ORIGIN + 500), BigInt(ORIGIN + 1500)], value: [10, 20] }]]),
+    };
+    result.current.seedFromSpineFetch(1, rawSpine, gen);
+
+    const snapshot = result.current.getBufferSnapshot();
+    expect(snapshot).not.toBeNull();
+    expect(snapshot!.type).toBe('raw');
+    expect(snapshot!.startTime).toBe(rawSpine.startTime);
+  });
+
+  it('D-A-3: matching aggregate metadata: second tag accumulates without replacement', () => {
+    const { result } = renderHook(() =>
+      useLiveSubscription({ tagIds: [1, 2], trimThreshold: null, isLive: true, tailMode: 'aggregate', bucketSMs: BUCKET_SMS }),
+    );
+    const gen = result.current.getCurrentGeneration();
+
+    // Seed tag 1 with the shared metadata.
+    result.current.seedFromSpineFetch(1, {
+      ...sharedAggMeta,
+      series: new Map([[1, { value: [1, 2, 3, 4, 5], min: [1, 2, 3, 4, 5], max: [1, 2, 3, 4, 5] }]]),
+    }, gen);
+
+    // Seed tag 2 with identical metadata → mutate branch, tag 1 must survive.
+    result.current.seedFromSpineFetch(2, {
+      ...sharedAggMeta,
+      series: new Map([[2, { value: [6, 7, 8, 9, 10], min: [6, 7, 8, 9, 10], max: [6, 7, 8, 9, 10] }]]),
+    }, gen);
+
+    const snapshot = result.current.getBufferSnapshot() as AggregateSeriesData;
+    expect(snapshot).not.toBeNull();
+    expect(snapshot.series.has(1)).toBe(true);
+    expect(snapshot.series.has(2)).toBe(true);
+    expect(snapshot.series.get(1)!.value).toEqual([1, 2, 3, 4, 5]);
+    expect(snapshot.series.get(2)!.value).toEqual([6, 7, 8, 9, 10]);
+    expect(snapshot.bucketSMs).toBe(Number(BUCKET_SMS));
+  });
+
+  it('D-A-4: mismatched raw startTime → replaces wholesale using series.endTime (not per-tag last ts)', () => {
+    // Validates that the new spineRef.endTime = series.endTime (tile range), not
+    // the per-tag filtered last ts (newEndTime). With series.endTime=5000n and
+    // filteredTs last = 3000n, snapshot.endTime must be 5000n after replacement.
+    const { result } = renderHook(() =>
+      useLiveSubscription({ tagIds: [1], trimThreshold: null, isLive: true, tailMode: 'raw' }),
+    );
+    const gen = result.current.getCurrentGeneration();
+
+    // First seed: startTime=0n, endTime=1000n.
+    result.current.seedFromSpineFetch(1, {
+      type: 'raw', source: 'raw',
+      startTime: 0n, endTime: 1000n,
+      series: new Map([[1, { ts: [100n, 200n], value: [1, 2] }]]),
+    }, gen);
+
+    // Second seed: different startTime (2000n ≠ 0n) → wholesale replace.
+    // series.endTime = 5000n but filteredTs last ts = 3000n.
+    result.current.seedFromSpineFetch(1, {
+      type: 'raw', source: 'raw',
+      startTime: 2000n, endTime: 5000n,
+      series: new Map([[1, { ts: [2500n, 3000n], value: [10, 20] }]]),
+    }, gen);
+
+    // No live events → tail is null → getBufferSnapshot returns spine unchanged.
+    const snapshot = result.current.getBufferSnapshot();
+    expect(snapshot).not.toBeNull();
+    expect(snapshot!.type).toBe('raw');
+    // Must be series.endTime (5000n), not per-tag last ts (3000n).
+    expect(snapshot!.endTime).toBe(5000n);
+  });
+});
+
+// ─── D-B: getBufferSnapshot type-coherence guard ─────────────────────────────
+
+describe('useLiveSubscription — getBufferSnapshot type-coherence guard (D-B)', () => {
+  it('D-B: returns spine unchanged and fires no console.warn when tailMode does not match spine type', () => {
+    // Simulates the one-render mismatch window: spine is aggregate but tailMode
+    // has been flipped to 'raw' (or vice-versa) before the next render propagates
+    // cachedData.type back to tailMode.
+    const { result, rerender } = renderHook(
+      ({ opts }) => useLiveSubscription(opts),
+      { initialProps: { opts: { tagIds: [1], trimThreshold: null, isLive: true, tailMode: 'aggregate' as const, bucketSMs: BUCKET_SMS } } },
+    );
+
+    // Seed an aggregate spine while tailMode is still 'aggregate'.
+    const gen = result.current.getCurrentGeneration();
+    const spine: AggregateSeriesData = {
+      type: 'aggregate', source: '1s_cagg',
+      startTime: BigInt(ORIGIN), endTime: BigInt(ORIGIN + 5 * Number(BUCKET_SMS)),
+      n: 5, bucketSMs: Number(BUCKET_SMS),
+      series: new Map([[1, { value: [1, 2, 3, 4, 5], min: [1, 2, 3, 4, 5], max: [1, 2, 3, 4, 5] }]]),
+    };
+    result.current.seedFromSpineFetch(1, spine, gen);
+
+    // Flip tailMode to 'raw' — now spine.type='aggregate' but tailMode='raw'.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    rerender({ opts: { tagIds: [1], trimThreshold: null, isLive: true, tailMode: 'raw' as const } });
+
+    // getBufferSnapshot must return spine unchanged (no mergeTrendData call).
+    const snapshot = result.current.getBufferSnapshot();
+    expect(snapshot).not.toBeNull();
+    expect(snapshot!.type).toBe('aggregate');
+    expect((snapshot as AggregateSeriesData).series.get(1)!.value).toEqual([1, 2, 3, 4, 5]);
+    // No type-mismatch warning from mergeTrendData.
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 });

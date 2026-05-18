@@ -371,7 +371,20 @@ export function TrendChartContainer({
       })()
     : mergedData;
 
-  if (!chartData) {
+  // Bridge across history↔live transitions: when chartData briefly drops to null
+  // (spine fetch in-flight after evictAll, or history fetch in-flight after
+  // commitAndDrain), the loading hint would unmount <TrendChart>, flickering the
+  // uPlot canvas. Hold the most-recent non-null chartData so the chart stays
+  // mounted across the in-flight window. New data replaces the bridge on arrival;
+  // the ref does not accumulate stale state because chartData is fresh on every
+  // render where it is non-null.
+  // Synchronous-ref-update-during-render matches the existing pattern at lines
+  // 117-118 (modeStateRef / trendDataRef).
+  const lastChartDataRef = useRef<typeof chartData>(null);
+  if (chartData !== null) lastChartDataRef.current = chartData;
+  const effectiveChartData = chartData ?? lastChartDataRef.current;
+
+  if (!effectiveChartData) {
     return (
       <div style={LOADING_HINT}>
         {isLoading ? 'Loading…' : tagIds.length === 0 ? 'No tags selected.' : null}
@@ -381,7 +394,7 @@ export function TrendChartContainer({
 
   return (
     <TrendChart
-      data={chartData}
+      data={effectiveChartData}
       tagIds={tagIds}
       siteTimezone={siteTimezone}
       height={height}

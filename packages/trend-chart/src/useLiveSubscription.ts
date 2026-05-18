@@ -159,6 +159,32 @@ function toNumericValue(v: number | boolean | string | null): number | null {
 }
 
 /**
+ * Returns true when `existing` and `incoming` share the same fetch identity —
+ * i.e. they came from the same spine fetch (same tile range, same dispatch
+ * shape). Used by seedFromSpineFetch to decide whether to mutate the existing
+ * shared series map (same fetch, subsequent tag) or replace it wholesale (new
+ * fetch with different preset/range/bucketSMs).
+ */
+function spineMetadataMatches(
+  existing: TrendData | null,
+  incoming: AggregateSeriesData | RawSeriesData,
+): boolean {
+  if (existing === null) return false;
+  if (existing.type !== incoming.type) return false;
+  if (existing.startTime !== incoming.startTime) return false;
+  if (existing.source !== incoming.source) return false;
+  if (existing.type === 'aggregate' && incoming.type === 'aggregate') {
+    if (existing.endTime !== incoming.endTime) return false;
+    if (existing.bucketSMs !== incoming.bucketSMs) return false;
+    if (existing.n !== incoming.n) return false;
+  }
+  if (existing.type === 'raw' && incoming.type === 'raw') {
+    if (existing.endTime !== incoming.endTime) return false;
+  }
+  return true;
+}
+
+/**
  * Floor-aligned bucket start for `moduleTs` on the TS_BUCKET_ORIGIN_MS grid.
  * Uses floorDiv so pre-origin timestamps are handled correctly.
  */
@@ -636,9 +662,11 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
       if (tagData.max) entry.max = tagData.max.slice(0, clippedN);
 
       const existing = spineRef.current;
-      if (existing !== null && existing.type === 'aggregate') {
-        existing.series.set(tagId, entry);
+      if (spineMetadataMatches(existing, series)) {
+        // Same fetch's subsequent tag — mutate the shared series map.
+        (existing as AggregateSeriesData).series.set(tagId, entry);
       } else {
+        // New fetch (different preset / range / bucketSMs) — replace wholesale.
         spineRef.current = {
           type:      'aggregate',
           source:    series.source,
@@ -669,10 +697,6 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
         }
       }
 
-      const newEndTime = filteredTs.length > 0
-        ? filteredTs[filteredTs.length - 1]!
-        : series.startTime;
-
       const entry: { ts: bigint[]; value: (number | null)[]; prev?: { ts: bigint; value: number | null } } = {
         ts:    filteredTs,
         value: filteredValue,
@@ -680,18 +704,20 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
       };
 
       const existing = spineRef.current;
-      if (existing !== null && existing.type === 'raw') {
-        const maxEnd = existing.endTime > newEndTime ? existing.endTime : newEndTime;
-        // Build a new object (spread copies metadata) then mutate the shared series map.
-        const newSeries = new Map(existing.series);
+      if (spineMetadataMatches(existing, series)) {
+        // Same fetch's subsequent tag — spread preserves tile-range metadata.
+        const rawExisting = existing as RawSeriesData;
+        const newSeries = new Map(rawExisting.series);
         newSeries.set(tagId, entry);
-        spineRef.current = { ...existing, endTime: maxEnd, series: newSeries };
+        spineRef.current = { ...rawExisting, series: newSeries };
       } else {
+        // New fetch — use series.endTime (tile range) so subsequent tags in the
+        // same fetch all see the same metadata and take the mutate branch above.
         spineRef.current = {
           type:      'raw',
           source:    'raw',
           startTime: series.startTime,
-          endTime:   newEndTime,
+          endTime:   series.endTime,
           series:    new Map([[tagId, entry]]),
         };
       }
@@ -703,12 +729,17 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
   const getBufferSnapshot = useCallback((): TrendData | null => {
     const spine = spineRef.current;
     if (spine === null) return null;
-
-    // Build a fresh tail from the current in-memory buffers (same data as
-    // flushTail but without touching React state) and merge it with the spine.
-    // This gives getBufferSnapshot() a view consistent with the current WS
-    // accumulation even between React renders.
     const mode = tailModeRef.current;
+    // Type-coherence guard: if the consumer's tailMode hasn't propagated to
+    // match the spine's actual type yet (e.g., one render between a new spine
+    // arriving via seedFromSpineFetch and TrendChartContainer recomputing
+    // tailMode from cachedData.type), pass null tail to mergeTrendData so the
+    // spine is returned unchanged. The mismatch resolves on the next render.
+    // Mirrors the tailToReturn guard at the hook surface.
+    const tailMatchesSpine =
+      (mode === 'aggregate' && spine.type === 'aggregate') ||
+      (mode === 'raw' && spine.type === 'raw');
+    if (!tailMatchesSpine) return spine;
     if (mode === 'aggregate') {
       const bSMs = bucketSMsRef.current;
       if (bSMs === null) return spine;
