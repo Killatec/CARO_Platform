@@ -400,11 +400,38 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
         if (isLiveRef.current) {
           const mode = tailModeRef.current;
           if (mode === 'aggregate' && bucketSMsRef.current !== null) {
+            const bSMs = bucketSMsRef.current;
             const state = accumulatorsRef.current.get(tagId);
             if (state) {
-              processEventIntoAccumulator(
-                state, moduleTs, toNumericValue(value), bucketSMsRef.current,
-              );
+              processEventIntoAccumulator(state, moduleTs, toNumericValue(value), bSMs);
+
+              // Trim aggregate tail to 2 × viewportSpanMs from latestSampleTs.
+              // Uses sessionHighWaterMarkRef (just bumped above to max(prev, moduleTs)).
+              // HWM ≥ currentMax across all subscribed ring entries, so it equals
+              // getLatestSampleTs() in this synchronous callback context.
+              const latestTs = sessionHighWaterMarkRef.current;
+              if (latestTs !== null) {
+                const trimLeftMs = latestTs - 2n * viewportSpanMsRef.current;
+                for (const [, accState] of accumulatorsRef.current) {
+                  const firstClosed = accState.firstClosedStartMs;
+                  if (firstClosed === null) continue;
+                  const diff = trimLeftMs - firstClosed;
+                  if (diff <= 0n) continue;
+                  // k = ⌈diff / bSMs⌉: first bucket index whose start ≥ trimLeftMs
+                  const k = Math.min(
+                    Number((diff + bSMs - 1n) / bSMs),
+                    accState.closed.value.length,
+                  );
+                  if (k <= 0) continue;
+                  accState.closed.value.splice(0, k);
+                  accState.closed.min.splice(0, k);
+                  accState.closed.max.splice(0, k);
+                  accState.firstClosedStartMs = accState.closed.value.length > 0
+                    ? firstClosed + BigInt(k) * bSMs
+                    : null;
+                }
+              }
+
               flushTail();
             }
           } else if (mode === 'raw') {

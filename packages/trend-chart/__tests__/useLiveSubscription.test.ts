@@ -787,6 +787,124 @@ describe('useLiveSubscription — viewportSpanMs 2×span trim', () => {
   });
 });
 
+// ─── Aggregate tail trim (2 × viewportSpanMs) ─────────────────────────────────
+
+describe('useLiveSubscription — aggregate tail trim', () => {
+  it('long-running aggregate session stays bounded at ≤ 2×viewportSpanMs buckets', () => {
+    const SPAN = 5_000n;   // 5 s viewport → max 10 retained buckets (2×5s / 1s)
+    const MAX_EXPECTED = 2 * Number(SPAN / BUCKET_SMS) + 2; // 12 (headroom for rounding)
+
+    const { result } = renderHook(() =>
+      useLiveSubscription({
+        tagIds: [1],
+        trimThreshold: null,
+        isLive: true,
+        bucketSMs: BUCKET_SMS,
+        tailMode: 'aggregate',
+        viewportSpanMs: SPAN,
+      }),
+    );
+
+    // Drive 61 consecutive bucket-advancing samples (each tAt(i) call closes bucket i-1).
+    act(() => {
+      for (let i = 0; i <= 60; i++) {
+        fireCb(1, tAt(i, 500), i);
+      }
+    });
+
+    const tail = result.current.tail;
+    expect(tail).not.toBeNull();
+    const count = tail!.perTag.get(1)!.value.length;
+    expect(count).toBeLessThanOrEqual(MAX_EXPECTED);
+    expect(count).toBeGreaterThan(0);
+  });
+
+  it('aggregate trim drops buckets older than latestSampleTs − 2×viewportSpanMs', () => {
+    const SPAN = 5_000n; // 5 s viewport → 2×SPAN trim window = 10 s
+
+    const { result } = renderHook(() =>
+      useLiveSubscription({
+        tagIds: [1],
+        trimThreshold: null,
+        isLive: true,
+        bucketSMs: BUCKET_SMS,
+        tailMode: 'aggregate',
+        viewportSpanMs: SPAN,
+      }),
+    );
+
+    // Close buckets 0, 1, 2 with distinct values.
+    act(() => {
+      fireCb(1, tAt(0, 500), 11);
+      fireCb(1, tAt(1, 500), 22); // closes bucket 0 (value=11)
+      fireCb(1, tAt(2, 500), 33); // closes bucket 1 (value=22)
+      fireCb(1, tAt(3, 500), 44); // closes bucket 2 (value=33), opens bucket 3
+    });
+    expect(result.current.tail!.perTag.get(1)!.value.slice(0, 3)).toEqual([11, 22, 33]);
+
+    // Jump to bucket 20: latestTs ≈ ORIGIN + 20_500.
+    // trimLeftMs = ORIGIN + 20_500 − 10_000 = ORIGIN + 10_500.
+    // k = ⌈10_500 / 1_000⌉ = 11 → evicts buckets 0..10 (including the originals 0..2).
+    act(() => {
+      fireCb(1, tAt(20, 500), 99);  // closes bucket 3, fills 4..19 with LOCF, opens 20
+      fireCb(1, tAt(21, 500), 100); // closes bucket 20; trim re-fires
+    });
+
+    const tail = result.current.tail as import('../src/useLiveSubscription.js').AggregateTail;
+    expect(tail).not.toBeNull();
+    // Original values must be gone.
+    const values = tail.perTag.get(1)!.value;
+    expect(values).not.toContain(11);
+    expect(values).not.toContain(22);
+    expect(values).not.toContain(33);
+    // startMs must have advanced past trimLeftMs (= ORIGIN + 10_500 → first surviving
+    // bucket starts at ORIGIN + 11_000 or later).
+    expect(tail.startMs).toBeGreaterThanOrEqual(BigInt(ORIGIN + 11_000));
+  });
+
+  it('rawBuffersRef is not trimmed by trimThreshold advance — only 2×viewportSpanMs applies (§10 invariant)', () => {
+    // trimThreshold at 2000 would prune raw entries at ts=100 and ts=1000 if applied
+    // to rawBuffers. viewportSpanMs is large (60 s) so 2×span cutoff ≪ 0 — no raw trim.
+    // All 3 raw entries must survive trimThreshold advancing.
+    const { result, rerender } = renderHook(
+      ({ opts }) => useLiveSubscription(opts),
+      {
+        initialProps: {
+          opts: {
+            tagIds: [1],
+            trimThreshold: null as number | null,
+            isLive: true,
+            tailMode: 'raw' as const,
+            viewportSpanMs: 60_000n,
+          },
+        },
+      },
+    );
+
+    act(() => {
+      fireCb(1, 100,  1);
+      fireCb(1, 1000, 2);
+      fireCb(1, 5000, 3);
+    });
+
+    // Advance trimThreshold to 2000: trims the ring (entries < 2000 removed),
+    // but rawBuffers must remain untouched — trimThreshold is ring-only.
+    rerender({
+      opts: {
+        tagIds: [1],
+        trimThreshold: 2000,
+        isLive: true,
+        tailMode: 'raw' as const,
+        viewportSpanMs: 60_000n,
+      },
+    });
+
+    const rawTail = result.current.tail as import('../src/useLiveSubscription.js').RawTail;
+    expect(rawTail.perTag.get(1)!.ts).toEqual([100n, 1000n, 5000n]);
+    expect(rawTail.perTag.get(1)!.value).toEqual([1, 2, 3]);
+  });
+});
+
 // ─── Raw mode: ring replay ─────────────────────────────────────────────────────
 
 describe('useLiveSubscription — raw ring replay', () => {
