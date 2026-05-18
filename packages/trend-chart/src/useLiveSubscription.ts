@@ -3,7 +3,6 @@ import { useHmiContext } from '@caro/hmi-context';
 import { TS_BUCKET_ORIGIN_MS, floorDiv } from './level.js';
 import type { AggregateSeriesData, RawSeriesData, TrendData } from './types.js';
 import { mergeTrendData } from './mergeTrendData.js';
-import { isSpineDiagArmed, getSpineDiagSession } from './__spineDiag.js';
 
 /**
  * Per-tag bounded buffer for samples arriving during the fetch-in-flight
@@ -640,49 +639,6 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
     // value. Drop silently — the caller will issue a new fetch if needed.
     if (generation !== generationRef.current) return;
 
-    if (isSpineDiagArmed()) {
-      const sid = getSpineDiagSession();
-      const ring = ringsRef.current.get(tagId) ?? [];
-      const accState = accumulatorsRef.current.get(tagId);
-      const existing = spineRef.current;
-      console.log(`[trend-diag #${sid}] SEED-START tag=${tagId}`, {
-        seriesType: series.type,
-        seriesStartTime: series.startTime.toString(),
-        seriesEndTime: series.endTime.toString(),
-        seriesBucketSMs: series.type === 'aggregate' ? series.bucketSMs : undefined,
-        seriesN: series.type === 'aggregate' ? series.n : undefined,
-        seriesThisTagValueLen: series.type === 'aggregate'
-          ? series.series.get(tagId)?.value.length ?? 0
-          : series.series.get(tagId)?.ts.length ?? 0,
-        ring: {
-          size: ring.length,
-          oldestModuleTs: ring.length > 0 ? ring[0]!.moduleTs : null,
-          newestModuleTs: ring.length > 0 ? ring[ring.length - 1]!.moduleTs : null,
-        },
-        accumulator: accState ? {
-          firstClosedStartMs: accState.firstClosedStartMs?.toString() ?? null,
-          closedBucketCount: accState.closed.value.length,
-          lastKnownValue: accState.lastKnownValue,
-          hasOpenBucket: accState.openBucket !== null,
-        } : null,
-        existingSpine: existing ? {
-          type: existing.type,
-          startTime: existing.startTime.toString(),
-          endTime: existing.endTime.toString(),
-          bucketSMs: existing.type === 'aggregate' ? existing.bucketSMs : undefined,
-          n: existing.type === 'aggregate' ? existing.n : undefined,
-        } : null,
-        refs: {
-          tailMode: tailModeRef.current,
-          bucketSMs: bucketSMsRef.current?.toString() ?? null,
-          viewportSpanMs: viewportSpanMsRef.current.toString(),
-          isLive: isLiveRef.current,
-        },
-        sessionHighWaterMark: sessionHighWaterMarkRef.current?.toString() ?? null,
-        generation: generationRef.current,
-      });
-    }
-
     if (series.type === 'aggregate') {
       const tagData = series.series.get(tagId);
       if (!tagData) return;
@@ -797,29 +753,6 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
       }
     }
 
-    if (isSpineDiagArmed()) {
-      const sid = getSpineDiagSession();
-      const final = spineRef.current;
-      const tagEntry = final === null ? null : final.series.get(tagId);
-      console.log(`[trend-diag #${sid}] SEED-END tag=${tagId}`, {
-        spineAfter: final === null ? null : {
-          type: final.type,
-          startTime: final.startTime.toString(),
-          endTime: final.endTime.toString(),
-          bucketSMs: final.type === 'aggregate' ? final.bucketSMs : undefined,
-          n: final.type === 'aggregate' ? final.n : undefined,
-          seriesMapSize: final.series.size,
-          thisTagValueLen: tagEntry === undefined || tagEntry === null
-            ? null
-            : final.type === 'aggregate'
-            ? (tagEntry as { value: (number | null)[] }).value.length
-            : (tagEntry as { ts: bigint[] }).ts.length,
-          thisTagNullCount: final.type === 'aggregate' && tagEntry !== null && tagEntry !== undefined
-            ? (tagEntry as { value: (number | null)[] }).value.filter(v => v === null).length
-            : null,
-        },
-      });
-    }
   }, []);
 
   // ── getBufferSnapshot ─────────────────────────────────────────────────────

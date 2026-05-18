@@ -35,8 +35,6 @@ export interface UseTrendDataOptions {
   getLiveGeneration?: () => number;
   /** Called per-tag when the live-spine fetch resolves; writes into the unified buffer. */
   onSpineResolved?: (tagId: number, series: AggregateSeriesData | RawSeriesData, generation: number) => void;
-  /** Called once after all per-tag seeds complete for a live-spine fetch, for diagnostic instrumentation. */
-  onPostSeed?: () => void;
 }
 
 export interface UseTrendDataResult extends HookState {
@@ -83,7 +81,6 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     cacheCapacityBytes = DEFAULT_CACHE_CAPACITY,
     getLiveGeneration,
     onSpineResolved,
-    onPostSeed,
   } = opts;
 
   const cache = useMemo(
@@ -136,8 +133,6 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
   getLiveGenerationRef.current = getLiveGeneration;
   const onSpineResolvedRef = useRef(onSpineResolved);
   onSpineResolvedRef.current = onSpineResolved;
-  const onPostSeedRef = useRef(onPostSeed);
-  onPostSeedRef.current = onPostSeed;
 
   // Stable dep keys: tagIds array → joined string; Viewport object → component fields.
   const tagIdsKey = tagIds.join(',');
@@ -176,7 +171,6 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
         getCurrentGeneration: () => getLiveGenerationRef.current?.() ?? 0,
         seedFromSpineFetch: (tagId: number, series: AggregateSeriesData | RawSeriesData, gen: number) =>
           onSpineResolvedRef.current?.(tagId, series, gen),
-        onPostSeed: () => onPostSeedRef.current?.(),
       });
       return () => { finalizeRef.current = null; };
     }
