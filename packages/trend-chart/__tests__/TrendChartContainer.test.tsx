@@ -851,6 +851,40 @@ describe('TrendChartContainer', () => {
       expect(screen.queryByTitle('Remove trace')).toBeNull();
     });
 
+    it('E: Live mergedData reads spine ref fresh on every render (wide-preset staleness fix)', () => {
+      // In the real hook, getBufferSnapshot is a stable useCallback ref whose
+      // return value changes when spineRef is updated by seedFromSpineFetch.
+      // The old useMemo had getBufferSnapshot in its dep array; since the ref
+      // was stable the memo returned a stale null after a spine arrival that
+      // didn't touch any other dep. The split-paths fix calls getBufferSnapshot()
+      // directly in render so any re-render picks up the latest spine.
+
+      // Initial state: spine in-flight, no data.
+      liveHoisted.setSnapshot(null);
+      mockUseTrendData.mockReturnValue(makeResult([1, 2], { data: null, isLoading: true }));
+      renderContainer([1, 2]);
+
+      // No spine yet → loading hint shown, TrendChart not mounted.
+      expect(screen.getByText('Loading…')).toBeTruthy();
+
+      // Spine resolves: simulate seedFromSpineFetch writing to spineRef.
+      const spineData = makeAggData([1, 2]);
+      liveHoisted.setSnapshot(spineData);
+
+      // Re-render triggered by a tick (mirrors swapCounter bump from live spine fetch).
+      act(() => {
+        (liveHoisted.getLastOpts()?.onDataReceived as ((ts: number) => void) | undefined)?.(
+          Date.now(),
+        );
+      });
+
+      // mergedData now reflects the new spine — chart replaces loading hint.
+      expect(screen.queryByText('Loading…')).toBeNull();
+      expect(capturedData).toBeDefined();
+      expect(capturedData!.startTime).toBe(spineData.startTime);
+      expect(capturedData!.endTime).toBe(spineData.endTime);
+    });
+
   });
 });
 

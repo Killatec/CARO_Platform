@@ -166,12 +166,17 @@ export function TrendChartContainer({
   liveSubRef.current = liveSub;
 
   // ── Merged data for rendering ─────────────────────────────────────────────
-  const mergedData = useMemo(() => {
-    if (isLive(modeState.mode)) {
-      return liveSub.getBufferSnapshot();
-    }
-    return mergeTrendData(data, liveSub.tail);
-  }, [modeState.mode, data, liveSub.tail, liveSub.getBufferSnapshot]);
+  // History path: useMemo on real state deps.
+  const historyMerged = useMemo(
+    () => mergeTrendData(data, liveSub.tail),
+    [data, liveSub.tail],
+  );
+  // Live path: getBufferSnapshot reads spineRef + tailModeRef (refs).
+  // Refs are not observable React state so useMemo cannot subscribe to them.
+  // Calling fresh every render is correct and cheap (bounded buffer merge).
+  const mergedData = isLive(modeState.mode)
+    ? liveSub.getBufferSnapshot()
+    : historyMerged;
 
   // ── xRange: passes the live mode viewport to TrendChart for imperative
   //    setScale — updated every tick in tailing, or on preset/EndPicker/zoom. ──
