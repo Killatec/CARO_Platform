@@ -3,7 +3,7 @@
 **Status:** Phase A Steps 1–11 complete. Step 12 (Tag picker) pending.
 **Companion Documents**
 
-CARO_Trending_Reference | hmi_functional_spec | hmi_API_spec | hmi_widget_spec | CARO_DB_Spec | DB_Config_Usage_And_Perf | platform_handoff
+hmi_trend_viewer_reference | hmi_functional_spec | hmi_API_spec | hmi_widget_spec | CARO_DB_Spec | DB_Config_Usage_And_Perf | platform_handoff
 
 ---
 
@@ -34,7 +34,7 @@ CARO_Trending_Reference | hmi_functional_spec | hmi_API_spec | hmi_widget_spec |
 
 ## 1. Introduction
 
-This document specifies the design of the CARO_HMI Trend Viewer: the operator-facing component for visualizing historical and live time-series data from tags captured in the `tag_samples` TimescaleDB hypertable. It complements `CARO_Trending_Reference.md` (which defines the trending subsystem's storage contract and pipeline) by defining the read side — the REST API, the client package, and the user experience.
+This document specifies the design of the CARO_HMI Trend Viewer: the operator-facing component for visualizing historical and live time-series data from tags captured in the `tag_samples` TimescaleDB hypertable. It complements `hmi_trend_viewer_reference.md` (which defines the trending subsystem's storage contract and pipeline) by defining the read side — the REST API, the client package, and the user experience.
 
 The trend viewer is an HMI-level feature, not a SCADA widget. It occupies a dedicated view within the HMI shell and is instantiated once per HMI client session. Operators use it to inspect process behavior over time, compare multiple tags, pan and zoom through history, and watch values update live.
 
@@ -180,7 +180,7 @@ The trend live tail uses a **dedicated WS channel** — not the existing `useLiv
 
 ### 5.1 Change-of-Value Storage
 
-The trending subsystem stores samples on change of value (COV). A tag that stays at `1.0` for eight hours produces one sample at the start of that period and no further samples until it changes. This is defined in `CARO_Trending_Reference.md` §1.4 as the storage contract.
+The trending subsystem stores samples on change of value (COV). A tag that stays at `1.0` for eight hours produces one sample at the start of that period and no further samples until it changes. This is defined in `hmi_trend_viewer_reference.md` §1.4 as the storage contract.
 
 ### 5.2 The Empty-Bucket Problem
 

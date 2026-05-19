@@ -1,7 +1,8 @@
 # CARO_Platform — Trending Reference
 
 **From tag change to hypertable row — the HMI historian end-to-end.**
-**Version:** 1.1 — May 2026
+**Version:** 1.2 — 2026-05-19
+*v1.2: Renamed from `CARO_Trending_Reference.md` to `hmi_trend_viewer_reference.md` (naming convention alignment). No content changes.*
 *v1.1: T004 chunk policy reflected (1h chunks, compress_after=10min); §15.1 removed (read endpoint shipped); cross-ref to trend viewer spec/handoff for the read path.*
 *Internal technical reference.*
 

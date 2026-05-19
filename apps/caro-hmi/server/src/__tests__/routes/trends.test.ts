@@ -337,7 +337,7 @@ describe('GET /api/v1/trends/tile — unit (mocked)', () => {
     expect(res.body.error.message).toBe('bad bucket');
   });
 
-  // Route INVALID_RANGE_TOO_NARROW validation removed (Phase 6 dispatch routes sub-100s tiles to raw COV); see hmi_trends_deltas.md.
+  // Route INVALID_RANGE_TOO_NARROW validation removed (Phase 6 dispatch routes sub-100s tiles to raw COV); see hmi_trend_viewer_deltas.md.
 
   it('205ms span at bucket_count=1000 → 200 raw COV via Phase 6 dispatch', async () => {
     mockGet.mockResolvedValueOnce({ tile: RAW_TILE_NO_PREV, meta: FAKE_META });

@@ -135,6 +135,6 @@ All platform and app documentation consolidated to `C:\KillaTec\CARO_Platform\Do
 | HMI Widget Spec | `hmi_widget_spec.md` |
 | HMI Trend Viewer Spec | `hmi_trend_viewer_spec.md` |
 | HMI Trend Viewer Handoff | `hmi_trend_viewer_handoff.md` |
-| HMI Trend Viewer Spec Delta | `hmi_trends_deltas.md` |
+| HMI Trend Viewer Spec Delta | `hmi_trend_viewer_deltas.md` |
 | HMI Trends Perf Test Spec | `hmi_trends_perf_test_spec.md` |
 | HMI Bootstrap | `hmi_bootstrap.md` |

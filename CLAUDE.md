@@ -23,7 +23,7 @@ Delta files are quick-note trackers for spec divergences that occur during imple
 - **During a task:** If you implement something that diverges from a spec, add a one-line entry to the relevant delta file immediately. Use the narrowest scope that applies:
   - `Docs/platform_deltas.md` — cross-app changes.
   - `Docs/{app}_deltas.md` — app-level changes (e.g. `hmi_deltas.md`, `tag_registry_deltas.md`, `mqtt_simulator_deltas.md`).
-  - `Docs/hmi_trends_deltas.md` — HMI trend viewer changes (REST endpoint, SnapshotEmitter, CAG migrations, `packages/trend-chart/`). Keeps trend churn out of the general HMI delta file.
+  - `Docs/hmi_trend_viewer_deltas.md` — HMI trend viewer changes (REST endpoint, SnapshotEmitter, CAG migrations, `packages/trend-chart/`). Keeps trend churn out of the general HMI delta file.
 
   Do not update handoff, bootstrap, or spec docs mid-task.
 - **At session end (when explicitly prompted):** Propagate each delta entry to its target doc (spec, handoff, or bootstrap), then delete the entry. The delta file should be empty or near-empty after propagation.
