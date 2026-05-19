@@ -6,7 +6,7 @@
 
 ## Pending propagation
 
-_(none)_
+- H1 fix: `TrendChartContainer.tsx:444` `showLastWhenIdle` now uses `isLive(modeState.mode)` (was `=== 'live-trailing'`); aligns with spec §8.4.
 
 ---
 

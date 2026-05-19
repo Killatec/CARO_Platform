@@ -441,7 +441,7 @@ export function TrendChartContainer({
       onDragZoom={handleDragZoom}
       footer={footerJsx}
       onCursorTsChange={setCursorTsMs}
-      showLastWhenIdle={modeState.mode === 'live-trailing'}
+      showLastWhenIdle={isLive(modeState.mode)}
       onXRangeChange={handleXRangeChange}
       onXPan={handleXPan}
       lastIntent={modeState.lastIntent}

@@ -961,8 +961,8 @@ describe('TrendChartContainer', () => {
       renderContainer([1]);
       enterLiveFixed(); // state.to = PHASE3_PAN_END = 1_700_000_000_000n
 
-      // In live-fixed: showLastWhenIdle=false → "fixed"
-      expect(screen.getByTestId('idle-mode').textContent).toBe('fixed');
+      // In live-fixed: showLastWhenIdle=true (isLive) → "live"
+      expect(screen.getByTestId('idle-mode').textContent).toBe('live');
       expect(screen.getByText('● Live')).toBeTruthy();
 
       // Dispatch tick with nowMs > state.to → auto-promote to live-trailing
@@ -972,7 +972,7 @@ describe('TrendChartContainer', () => {
         );
       });
 
-      // Auto-promoted: showLastWhenIdle flips to true → "live"
+      // Auto-promoted to live-trailing: still showLastWhenIdle=true → "live"
       expect(screen.getByTestId('idle-mode').textContent).toBe('live');
     });
 
@@ -988,8 +988,8 @@ describe('TrendChartContainer', () => {
         );
       });
 
-      // No state change: still in live-fixed → idle-mode "fixed", button "● Live"
-      expect(screen.getByTestId('idle-mode').textContent).toBe('fixed');
+      // No state change: still in live-fixed → idle-mode "live" (isLive), button "● Live"
+      expect(screen.getByTestId('idle-mode').textContent).toBe('live');
       expect(screen.getByText('● Live')).toBeTruthy();
     });
 
