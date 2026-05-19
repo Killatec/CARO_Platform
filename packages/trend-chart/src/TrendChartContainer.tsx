@@ -160,6 +160,7 @@ export function TrendChartContainer({
     bucketSMs,
     viewportSpanMs,
     onDataReceived: handleDataReceived,
+    modeStateRef,
   });
 
   // Synchronous ref update — liveSubRef is always fresh before any callback fires.

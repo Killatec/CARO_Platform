@@ -1400,8 +1400,11 @@ describe('useLiveSubscription — getBufferSnapshot type-coherence guard (D-B)',
     expect(snapshot).not.toBeNull();
     expect(snapshot!.type).toBe('aggregate');
     expect((snapshot as AggregateSeriesData).series.get(1)!.value).toEqual([1, 2, 3, 4, 5]);
-    // No type-mismatch warning from mergeTrendData.
-    expect(warnSpy).not.toHaveBeenCalled();
+    // No type-mismatch warning from mergeTrendData ([liveSub-diag] logs are expected).
+    const nonDiagCalls = warnSpy.mock.calls.filter(
+      (args) => !String(args[0]).startsWith('[liveSub-diag]'),
+    );
+    expect(nonDiagCalls).toHaveLength(0);
     warnSpy.mockRestore();
   });
 });
