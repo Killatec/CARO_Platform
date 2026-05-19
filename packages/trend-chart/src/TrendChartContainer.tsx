@@ -248,7 +248,13 @@ export function TrendChartContainer({
       const r = pendingRangeRef.current;
       pendingRangeRef.current = null;
       if (r) {
-        dispatchModeAction({ type: 'zoomApplied', from: r.min, to: r.max, nowMs: BigInt(Date.now()) });
+        dispatchModeAction({
+          type: 'zoomApplied',
+          from: r.min,
+          to: r.max,
+          nowMs: BigInt(Date.now()),
+          latestSampleTs: liveSubRef.current?.getLatestSampleTs() ?? null,
+        });
       }
     });
   }, [dispatchModeAction]);
@@ -307,6 +313,7 @@ export function TrendChartContainer({
         from: selectionStartMs,
         to: selectionEndMs,
         nowMs: BigInt(Date.now()),
+        latestSampleTs: liveSubRef.current?.getLatestSampleTs() ?? null,
       });
     },
     [_handleDragZoom, dispatchModeAction],

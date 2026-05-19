@@ -52,17 +52,27 @@ export type TrendModeAction =
   | { type: 'liveClicked'; nowMs: bigint }
   /**
    * latestSampleTs is read from useLiveSubscription.getLatestSampleTs() at
-   * dispatch time and carried here so the reducer stays pure. The reducer
-   * ignores it in Phase 1 — it is reserved for Phase 3 live→live-fixed routing.
+   * dispatch time and carried here so the reducer stays pure.
    */
   | { type: 'endPickerCommitted'; to: bigint; nowMs: bigint; latestSampleTs?: bigint | null }
-  | { type: 'zoomApplied'; from: bigint; to: bigint; nowMs: bigint }
-  // Pan translates the viewport without changing span. Always lands in fixed
-  // mode — pan never enters tailing. To enter live mode the user must click
-  // Live or commit End ≈ now via the End picker.
+  | { type: 'zoomApplied'; from: bigint; to: bigint; nowMs: bigint; latestSampleTs: bigint | null }
   /** latestSampleTs: same role as in endPickerCommitted above. */
   | { type: 'panApplied'; from: bigint; to: bigint; nowMs: bigint; latestSampleTs?: bigint | null }
   | { type: 'tick'; nowMs: bigint };
+
+/**
+ * Symmetric window-vs-live-edge classification for pan/zoom/endPicker.
+ * §3.3 null fallback: when latestSampleTs is null, state.modeViewport.end
+ * (nowMs for live-trailing, state.to otherwise) stands in for latestSampleTs.
+ */
+function classifyByWindow(
+  to: bigint,
+  latestSampleTs: bigint | null,
+  state: ModeState,
+): 'live-fixed' | 'fixed' {
+  const effectiveLts = latestSampleTs ?? (state.mode === 'live-trailing' ? state.nowMs : state.to);
+  return to > effectiveLts ? 'live-fixed' : 'fixed';
+}
 
 /** Pure reducer — exported for unit testing. */
 export function trendModeReducer(state: ModeState, action: TrendModeAction): ModeState {
@@ -90,9 +100,6 @@ export function trendModeReducer(state: ModeState, action: TrendModeAction): Mod
       // live-trailing: spread is safe because the shape already carries nowMs.
       return { ...state, nowMs: action.nowMs, lastIntent: 'live' };
 
-    // End picker commits End only. From fixed: always stays fixed (D6 asymmetry —
-    // endPicker never enters Live). From live-*: if to > latestSampleTs → live-fixed;
-    // else → fixed. latestSampleTs === null fallback: use state.modeViewport.end.
     case 'endPickerCommitted': {
       const { to } = action;
       // Defensive: require at least 1 ms of span. EndPicker UI prevents this; reducer
@@ -103,46 +110,22 @@ export function trendModeReducer(state: ModeState, action: TrendModeAction): Mod
       // the span rather than shifting End forward (unlike clampLowerBound for zoom/pan).
       const sizeMs = to - cappedSize >= 1n ? cappedSize : to - 1n;
       const from = to - sizeMs;
-      if (isLive(state.mode)) {
-        const lts = action.latestSampleTs ?? null;
-        const effectiveLts: bigint =
-          lts !== null
-            ? lts
-            : state.mode === 'live-trailing' ? state.nowMs : state.to;
-        if (to > effectiveLts) {
-          return { mode: 'live-fixed', from, to, sizeMs, lastIntent: 'endPicker' };
-        }
-        return { mode: 'fixed', from, to, sizeMs, lastIntent: 'endPicker' };
-      }
-      // From fixed: always stays fixed (D6 asymmetry).
-      return { mode: 'fixed', from, to, sizeMs, lastIntent: 'endPicker' };
+      const targetMode = classifyByWindow(to, action.latestSampleTs ?? null, state);
+      return { mode: targetMode, from, to, sizeMs, lastIntent: 'endPicker' };
     }
 
-    // Zoom always exits tailing. Zoom is an exploratory action — the operator
-    // wants to inspect a specific time region. Staying tailing because the right
-    // edge happens to land near "now" hides intent. Tailing requires a deliberate
-    // liveClicked or preset-from-tailing after any zoom.
     case 'zoomApplied': {
       const clamped = clampLowerBound(action.from, action.to);
       const sizeMs = clamped.to - clamped.from;
-      return { mode: 'fixed', from: clamped.from, to: clamped.to, sizeMs, lastIntent: 'zoom' };
+      const targetMode = classifyByWindow(clamped.to, action.latestSampleTs, state);
+      return { mode: targetMode, from: clamped.from, to: clamped.to, sizeMs, lastIntent: 'zoom' };
     }
 
     case 'panApplied': {
       const clamped = clampLowerBound(action.from, action.to);
       const sizeMs = state.sizeMs;
-      if (isLive(state.mode)) {
-        const lts = action.latestSampleTs ?? null;
-        const effectiveLts: bigint =
-          lts !== null
-            ? lts
-            : state.mode === 'live-trailing' ? state.nowMs : state.to;
-        if (clamped.to > effectiveLts) {
-          return { mode: 'live-fixed', from: clamped.from, to: clamped.to, sizeMs, lastIntent: 'pan' };
-        }
-        return { mode: 'fixed', from: clamped.from, to: clamped.to, sizeMs, lastIntent: 'pan' };
-      }
-      return { mode: 'fixed', from: clamped.from, to: clamped.to, sizeMs, lastIntent: 'pan' };
+      const targetMode = classifyByWindow(clamped.to, action.latestSampleTs ?? null, state);
+      return { mode: targetMode, from: clamped.from, to: clamped.to, sizeMs, lastIntent: 'pan' };
     }
 
     case 'tick':

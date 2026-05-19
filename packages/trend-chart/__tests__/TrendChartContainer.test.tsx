@@ -993,6 +993,75 @@ describe('TrendChartContainer', () => {
       expect(screen.getByText('● Live')).toBeTruthy();
     });
 
+    // ── Phase 4: symmetric window-vs-live-edge from container ────────────────
+
+    it('Phase 4: pan from fixed past LastTS → live-fixed; evictAll fires (fixed→live entry)', () => {
+      const mockR = makeResult([1]);
+      mockUseTrendData.mockReturnValue(mockR);
+      renderContainer([1]);
+
+      // Enter fixed mode via far-past EndPicker commit.
+      const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: '2020-01-02T00:00:00' } });
+      expect(screen.getByText('Go Live')).toBeTruthy();
+
+      liveHoisted.commitAndDrain.mockClear();
+      mockR.evictAll.mockClear();
+      mockR.refetchHistory.mockClear();
+
+      // Set LTS so pan target (PHASE3_PAN_END) is > LTS → fixed → live-fixed.
+      liveHoisted.setLatestSampleTs(PHASE3_LTS);
+      act(() => {
+        capturedOnXPan?.(PHASE3_PAN_START, PHASE3_PAN_END);
+        vi.runAllTimers();
+      });
+
+      // fixed → live-fixed: wasLive=false, willBeLive=true → evictAll fires.
+      expect(mockR.evictAll).toHaveBeenCalledOnce();
+      expect(liveHoisted.commitAndDrain).not.toHaveBeenCalled();
+      expect(mockR.refetchHistory).not.toHaveBeenCalled();
+      expect(screen.getByText('● Live')).toBeTruthy();
+    });
+
+    it('Phase 4: zoom from live-trailing with Window_End > LastTS → live-fixed; no teardown', () => {
+      liveHoisted.setLatestSampleTs(PHASE3_LTS);
+      const mockR = makeResult([1]);
+      mockUseTrendData.mockReturnValue(mockR);
+      renderContainer([1]);
+
+      // Wheel-zoom to PHASE3_PAN_END > PHASE3_LTS → live-trailing stays Live (live-fixed).
+      act(() => {
+        capturedOnXRangeChange?.(PHASE3_PAN_START, PHASE3_PAN_END);
+        vi.runAllTimers();
+      });
+
+      // live-trailing → live-fixed: internal Live flip — no teardown.
+      expect(liveHoisted.commitAndDrain).not.toHaveBeenCalled();
+      expect(mockR.evictAll).not.toHaveBeenCalled();
+      expect(mockR.refetchHistory).not.toHaveBeenCalled();
+      expect(screen.getByText('● Live')).toBeTruthy();
+    });
+
+    it('Phase 4: zoom from live-trailing with Window_End < LastTS → fixed; full teardown', () => {
+      liveHoisted.setLatestSampleTs(PHASE3_LTS);
+      const mockR = makeResult([1]);
+      mockUseTrendData.mockReturnValue(mockR);
+      renderContainer([1]);
+
+      // Zoom to a window ending well before PHASE3_LTS → wasLive && !willBeLive → drain.
+      const fixedEnd = PHASE3_LTS - 1_000_000n;
+      const fixedStart = fixedEnd - 2_700_000n;
+      act(() => {
+        capturedOnXRangeChange?.(fixedStart, fixedEnd);
+        vi.runAllTimers();
+      });
+
+      expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
+      expect(mockR.refetchHistory).toHaveBeenCalledOnce();
+      expect(mockR.evictAll).not.toHaveBeenCalled();
+      expect(screen.getByText('Go Live')).toBeTruthy();
+    });
+
     it('E: Live mergedData reads spine ref fresh on every render (wide-preset staleness fix)', () => {
       // In the real hook, getBufferSnapshot is a stable useCallback ref whose
       // return value changes when spineRef is updated by seedFromSpineFetch.

@@ -7,6 +7,7 @@
 ## Pending propagation
 
 - Phase 3: `isFreshLiveLanding` refined to `prev.mode === 'live-fixed' && next.mode === 'live-trailing'` (not the wider `willBeLive && next.mode === 'live-trailing'` in the proposal) — prevents spurious commitAndDrain+evictAll on `live-trailing → live-trailing` via preset/Live-click, which the existing "preset click in tailing → no commitAndDrain" test requires.
+- 2026-05-18. Symmetric window-vs-live-edge rule supersedes D6 + D7. pan / zoom / endPicker from ANY state classify mode by `latestSampleTs vs action.to`: `LastTS < Window_End → live-fixed`, `LastTS >= Window_End → fixed`. Extracted `classifyByWindow` helper. `zoomApplied` action gains required `latestSampleTs: bigint | null`. Preset and Live button unchanged. Phase 5 will propagate to spec §9.3 / proposal D6 / D7.
 
 ---
 
