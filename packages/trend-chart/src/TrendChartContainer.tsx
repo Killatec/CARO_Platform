@@ -160,11 +160,22 @@ export function TrendChartContainer({
     bucketSMs,
     viewportSpanMs,
     onDataReceived: handleDataReceived,
-    modeStateRef,
   });
 
   // Synchronous ref update — liveSubRef is always fresh before any callback fires.
   liveSubRef.current = liveSub;
+
+  // Phase 4 refinement: button is orange ONLY when the live edge is off-screen
+  // (latestSampleTs is BEFORE the viewport's left edge in live-fixed). When the
+  // live edge is visible inside [from, to] OR no live data has arrived yet, the
+  // button stays highlighted same as live-trailing. Read per render — refs update
+  // on every WS sample's setTail re-render, so this is fresh.
+  const liveEdgeBehindWindow = (() => {
+    if (modeState.mode !== 'live-fixed') return false;
+    const lts = liveSubRef.current?.getLatestSampleTs() ?? null;
+    if (lts === null) return false;
+    return lts < modeState.from;
+  })();
 
   // ── Merged data for rendering ─────────────────────────────────────────────
   // History path: useMemo on real state deps.
@@ -202,14 +213,22 @@ export function TrendChartContainer({
       prev.mode === 'live-fixed' && next.mode === 'live-trailing' &&
       (action.type === 'liveClicked' || action.type === 'presetClicked');
 
+    // Sync dataViewport to the new modeViewport unconditionally.
+    // useZoomState's reset effect skips on lastIntent='zoom'/'pan' (intentional —
+    // avoids per-wheel-tick fetch storms during continuous gestures). At
+    // action-dispatch time the gesture is complete and dataViewport SHOULD
+    // track modeViewport so useTrendData's effect fires and runLiveSpineFetch
+    // can decide whether to refetch (via spanChanged). Idempotent for
+    // transitions where useZoomState would have synced anyway (preset, live,
+    // endPicker).
+    syncDataViewport(modeToViewport(next));
+
     if (wasLive && !willBeLive) {
-      // Live → fixed: drain buffer, sync viewport, refetch history.
+      // Live → fixed: drain buffer, refetch history.
       liveSubRef.current?.commitAndDrain();
-      syncDataViewport(modeToViewport(next));
       trendDataRef.current.refetchHistory();
     } else if (!wasLive && willBeLive) {
-      // fixed → live-: evict cache. Buffer is empty in fixed mode; generation
-      // counter NOT bumped (nothing in flight to invalidate).
+      // fixed → live-: evict cache.
       trendDataRef.current.evictAll();
     } else if (isFreshLiveLanding && wasLive) {
       // live-* → live-trailing via preset/Live button: clear buffer (bumps
@@ -356,6 +375,7 @@ export function TrendChartContainer({
             siteTimezone={siteTimezone}
             onEndCommitted={handleEndCommitted}
             onLive={handleLive}
+            liveEdgeBehindWindow={liveEdgeBehindWindow}
           />
         </div>
       </div>

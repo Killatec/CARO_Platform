@@ -158,6 +158,13 @@ const LIVE_BTN_FIXED: CSSProperties = {
   color: '#6b7280',
 };
 
+const LIVE_BTN_ORANGE: CSSProperties = {
+  ...BASE_BTN,
+  background: '#ea580c',
+  color: '#fff',
+  borderColor: '#c2410c',
+};
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export interface EndPickerProps {
@@ -167,9 +174,15 @@ export interface EndPickerProps {
   /** Called with the parsed UTC ms when the user selects a time in the native picker. */
   onEndCommitted: (to: bigint) => void;
   onLive: () => void;
+  /**
+   * When true (live-fixed mode, latestSampleTs < viewport.from), the Live
+   * button turns orange to signal the live edge is off-screen to the left.
+   * Defaults to false. Has no effect outside live-fixed mode.
+   */
+  liveEdgeBehindWindow?: boolean;
 }
 
-export function EndPicker({ state, viewport, siteTimezone, onEndCommitted, onLive }: EndPickerProps) {
+export function EndPicker({ state, viewport, siteTimezone, onEndCommitted, onLive, liveEdgeBehindWindow }: EndPickerProps) {
   const [displayText, setDisplayText] = useState(() => formatDateTime(viewport.end, { timezone: siteTimezone }));
   const hiddenInputRef = useRef<HTMLInputElement>(null);
 
@@ -198,6 +211,8 @@ export function EndPicker({ state, viewport, siteTimezone, onEndCommitted, onLiv
   }
 
   const isLive = state.mode === 'live-trailing' || state.mode === 'live-fixed';
+  const isOrange = state.mode === 'live-fixed' && !!liveEdgeBehindWindow;
+  const activeLiveStyle = isOrange ? LIVE_BTN_ORANGE : LIVE_BTN;
 
   return (
     <div style={ROW}>
@@ -222,7 +237,7 @@ export function EndPicker({ state, viewport, siteTimezone, onEndCommitted, onLiv
           aria-hidden="true"
         />
       </div>
-      <button type="button" style={isLive ? LIVE_BTN : LIVE_BTN_FIXED} onClick={onLive}>
+      <button type="button" style={isLive ? activeLiveStyle : LIVE_BTN_FIXED} onClick={onLive}>
         {isLive ? '● Live' : 'Go Live'}
       </button>
     </div>

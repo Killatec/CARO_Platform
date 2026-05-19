@@ -1062,6 +1062,168 @@ describe('TrendChartContainer', () => {
       expect(screen.getByText('Go Live')).toBeTruthy();
     });
 
+    // ── Phase 5: syncDataViewport on fixed → live-* entry ────────────────────
+
+    it('Phase 5: zoom from fixed past LastTS → live-fixed; evictAll fires; dataViewport synced to new modeViewport', () => {
+      const mockR = makeResult([1]);
+      mockUseTrendData.mockReturnValue(mockR);
+      renderContainer([1]);
+
+      // Enter fixed via far-past EndPicker commit.
+      const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: '2020-01-02T00:00:00' } });
+      expect(screen.getByText('Go Live')).toBeTruthy();
+
+      liveHoisted.setLatestSampleTs(PHASE3_LTS);
+      mockR.evictAll.mockClear();
+      const callsBefore = mockUseTrendData.mock.calls.length;
+
+      // Zoom to window ending past LTS → fixed → live-fixed.
+      act(() => {
+        capturedOnXRangeChange?.(PHASE3_PAN_START, PHASE3_PAN_END);
+        vi.runAllTimers();
+      });
+
+      expect(mockR.evictAll).toHaveBeenCalledOnce();
+      expect(screen.getByText('● Live')).toBeTruthy();
+
+      // dataViewport synced: useTrendData called with viewport.end matching the zoom target.
+      const newCalls = mockUseTrendData.mock.calls.slice(callsBefore);
+      const synced = newCalls.some(([opts]) => opts.viewport.end === PHASE3_PAN_END);
+      expect(synced).toBe(true);
+    });
+
+    it('Phase 5: pan from fixed past LastTS → live-fixed; evictAll fires; dataViewport synced to new modeViewport', () => {
+      const mockR = makeResult([1]);
+      mockUseTrendData.mockReturnValue(mockR);
+      renderContainer([1]);
+
+      const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: '2020-01-02T00:00:00' } });
+      expect(screen.getByText('Go Live')).toBeTruthy();
+
+      liveHoisted.setLatestSampleTs(PHASE3_LTS);
+      mockR.evictAll.mockClear();
+      const callsBefore = mockUseTrendData.mock.calls.length;
+
+      act(() => {
+        capturedOnXPan?.(PHASE3_PAN_START, PHASE3_PAN_END);
+        vi.runAllTimers();
+      });
+
+      expect(mockR.evictAll).toHaveBeenCalledOnce();
+      expect(screen.getByText('● Live')).toBeTruthy();
+
+      const newCalls = mockUseTrendData.mock.calls.slice(callsBefore);
+      const synced = newCalls.some(([opts]) => opts.viewport.end === PHASE3_PAN_END);
+      expect(synced).toBe(true);
+    });
+
+    it('Phase 5: fixed → live-trailing via liveClicked; evictAll fires; no commitAndDrain (no regression)', () => {
+      const mockR = makeResult([1]);
+      mockUseTrendData.mockReturnValue(mockR);
+      renderContainer([1]);
+
+      const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: '2020-01-02T00:00:00' } });
+      expect(screen.getByText('Go Live')).toBeTruthy();
+
+      mockR.evictAll.mockClear();
+      liveHoisted.commitAndDrain.mockClear();
+      const callsBefore = mockUseTrendData.mock.calls.length;
+
+      fireEvent.click(screen.getByText('Go Live'));
+
+      expect(mockR.evictAll).toHaveBeenCalledOnce();
+      expect(liveHoisted.commitAndDrain).not.toHaveBeenCalled();
+      expect(screen.getByText('● Live')).toBeTruthy();
+      // syncDataViewport fired: useTrendData re-called after the transition.
+      expect(mockUseTrendData.mock.calls.length).toBeGreaterThan(callsBefore);
+    });
+
+    // ── Phase 6: unconditional syncDataViewport ───────────────────────────────
+
+    it('Phase 6: zoom within Live (live-trailing → live-fixed); dataViewport synced; no teardown (bug fix)', () => {
+      // This is the bug this refactor fixes: the wasLive && willBeLive branch had
+      // no syncDataViewport, so dataViewport stayed at the pre-zoom value and
+      // useTrendData's effect never fired to refetch the spine at the new span.
+      liveHoisted.setLatestSampleTs(PHASE3_LTS);
+      const mockR = makeResult([1]);
+      mockUseTrendData.mockReturnValue(mockR);
+      renderContainer([1]);
+
+      const callsBefore = mockUseTrendData.mock.calls.length;
+
+      // Zoom to PHASE3_PAN_END > PHASE3_LTS → live-trailing → live-fixed (wasLive && willBeLive).
+      act(() => {
+        capturedOnXRangeChange?.(PHASE3_PAN_START, PHASE3_PAN_END);
+        vi.runAllTimers();
+      });
+
+      // No teardown: wasLive && willBeLive internal flip.
+      expect(liveHoisted.commitAndDrain).not.toHaveBeenCalled();
+      expect(mockR.evictAll).not.toHaveBeenCalled();
+      expect(mockR.refetchHistory).not.toHaveBeenCalled();
+      expect(screen.getByText('● Live')).toBeTruthy();
+
+      // syncDataViewport now fires unconditionally: useTrendData called with the new viewport.
+      const newCalls = mockUseTrendData.mock.calls.slice(callsBefore);
+      const synced = newCalls.some(([opts]) => opts.viewport.end === PHASE3_PAN_END);
+      expect(synced).toBe(true);
+    });
+
+    it('Phase 6: live→fixed (wasLive && !willBeLive); syncDataViewport still fires from top (no regression)', () => {
+      liveHoisted.setLatestSampleTs(PHASE3_LTS);
+      const mockR = makeResult([1]);
+      mockUseTrendData.mockReturnValue(mockR);
+      renderContainer([1]);
+
+      // Pan to before LTS → live-trailing → fixed.
+      const fixedEnd = PHASE3_LTS - 1_000_000n;
+      const fixedStart = fixedEnd - 3_600_000n;
+      const callsBefore = mockUseTrendData.mock.calls.length;
+      act(() => {
+        capturedOnXPan?.(fixedStart, fixedEnd);
+        vi.runAllTimers();
+      });
+
+      expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
+      expect(mockR.refetchHistory).toHaveBeenCalledOnce();
+      expect(screen.getByText('Go Live')).toBeTruthy();
+
+      // syncDataViewport fires from the top-level call: useTrendData sees the new viewport.
+      const newCalls = mockUseTrendData.mock.calls.slice(callsBefore);
+      const synced = newCalls.some(([opts]) => opts.viewport.end === fixedEnd);
+      expect(synced).toBe(true);
+    });
+
+    it('Phase 6: fixed→live (!wasLive && willBeLive); syncDataViewport still fires from top (no regression)', () => {
+      const mockR = makeResult([1]);
+      mockUseTrendData.mockReturnValue(mockR);
+      renderContainer([1]);
+
+      const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: '2020-01-02T00:00:00' } });
+      expect(screen.getByText('Go Live')).toBeTruthy();
+
+      liveHoisted.setLatestSampleTs(PHASE3_LTS);
+      mockR.evictAll.mockClear();
+      const callsBefore = mockUseTrendData.mock.calls.length;
+
+      act(() => {
+        capturedOnXPan?.(PHASE3_PAN_START, PHASE3_PAN_END);
+        vi.runAllTimers();
+      });
+
+      expect(mockR.evictAll).toHaveBeenCalledOnce();
+      expect(screen.getByText('● Live')).toBeTruthy();
+
+      // syncDataViewport fires from the top-level call: useTrendData sees the new viewport.
+      const newCalls = mockUseTrendData.mock.calls.slice(callsBefore);
+      const synced = newCalls.some(([opts]) => opts.viewport.end === PHASE3_PAN_END);
+      expect(synced).toBe(true);
+    });
+
     it('E: Live mergedData reads spine ref fresh on every render (wide-preset staleness fix)', () => {
       // In the real hook, getBufferSnapshot is a stable useCallback ref whose
       // return value changes when spineRef is updated by seedFromSpineFetch.
@@ -1094,6 +1256,63 @@ describe('TrendChartContainer', () => {
       expect(capturedData).toBeDefined();
       expect(capturedData!.startTime).toBe(spineData.startTime);
       expect(capturedData!.endTime).toBe(spineData.endTime);
+    });
+
+    // ── Phase 4 refinement: liveEdgeBehindWindow button colour ──────────────
+
+    describe('Phase 4 refinement: liveEdgeBehindWindow', () => {
+      // JSDOM normalises hex colours to rgb on inline styles.
+      const GREEN  = 'rgb(220, 252, 231)'; // LIVE_BTN.background (#dcfce7)
+      const ORANGE = 'rgb(234, 88, 12)';   // LIVE_BTN_ORANGE.background (#ea580c)
+
+      it('live-trailing: button is highlighted (green) regardless of latestSampleTs', () => {
+        // LTS is well before the viewport start — in live-trailing the button is
+        // never orange; liveEdgeBehindWindow only applies in live-fixed.
+        liveHoisted.setLatestSampleTs(PHASE3_LTS);
+        renderContainer([1]);
+        expect(screen.getByText('● Live').style.background).toBe(GREEN);
+      });
+
+      it('live-fixed with lts < state.from: button is orange', () => {
+        // PHASE3_LTS < PHASE3_PAN_START (= state.from after enterLiveFixed).
+        liveHoisted.setLatestSampleTs(PHASE3_LTS);
+        renderContainer([1]);
+        enterLiveFixed();
+        expect(screen.getByText('● Live').style.background).toBe(ORANGE);
+      });
+
+      it('live-fixed with lts >= state.from: button is highlighted (green)', () => {
+        // Set lts = PHASE3_PAN_START (= state.from exactly → edge is at window left → not behind).
+        liveHoisted.setLatestSampleTs(PHASE3_PAN_START);
+        renderContainer([1]);
+        enterLiveFixed();
+        expect(screen.getByText('● Live').style.background).toBe(GREEN);
+      });
+
+      it('live-fixed with lts === null: button is highlighted (no data yet, treat as visible)', () => {
+        // Enter live-fixed with PHASE3_LTS so the button starts orange.
+        liveHoisted.setLatestSampleTs(PHASE3_LTS);
+        const { rerender } = renderContainer([1]);
+        enterLiveFixed();
+        expect(screen.getByText('● Live').style.background).toBe(ORANGE); // sanity
+
+        // Now null out lts and force a re-render — button must become green.
+        liveHoisted.setLatestSampleTs(null);
+        rerender(
+          <MockHmiProvider tagDefs={TAG_DEFS}>
+            <TrendChartContainer tagIds={[1]} siteTimezone="UTC" height={400} />
+          </MockHmiProvider>,
+        );
+        expect(screen.getByText('● Live').style.background).toBe(GREEN);
+      });
+
+      it('fixed mode: "Go Live" button shown (liveEdgeBehindWindow not applicable)', () => {
+        renderContainer([1]);
+        const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
+        fireEvent.change(input, { target: { value: '2020-01-02T00:00:00' } });
+        expect(screen.queryByText('● Live')).toBeNull();
+        expect(screen.getByText('Go Live')).toBeTruthy();
+      });
     });
 
   });

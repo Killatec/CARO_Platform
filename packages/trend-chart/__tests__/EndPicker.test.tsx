@@ -14,6 +14,7 @@ const ONE_HOUR = 3_600_000n;
 const VIEWPORT: Viewport = { start: NOW - ONE_HOUR, end: NOW };
 
 const LIVE_TRAILING: ModeState = { mode: 'live-trailing', sizeMs: ONE_HOUR, nowMs: NOW, lastIntent: null };
+const LIVE_FIXED: ModeState = { mode: 'live-fixed', from: NOW - ONE_HOUR, to: NOW, sizeMs: ONE_HOUR, lastIntent: null };
 const FIXED: ModeState = { mode: 'fixed', from: NOW - ONE_HOUR, to: NOW, sizeMs: ONE_HOUR, lastIntent: null };
 
 function renderPicker(opts: {
@@ -21,6 +22,7 @@ function renderPicker(opts: {
   viewport?: Viewport;
   onEndCommitted?: (to: bigint) => void;
   onLive?: () => void;
+  liveEdgeBehindWindow?: boolean;
 } = {}) {
   const onEndCommitted = opts.onEndCommitted ?? vi.fn();
   const onLive = opts.onLive ?? vi.fn();
@@ -34,6 +36,7 @@ function renderPicker(opts: {
         siteTimezone="UTC"
         onEndCommitted={onEndCommitted}
         onLive={onLive}
+        liveEdgeBehindWindow={opts.liveEdgeBehindWindow}
       />,
     ),
   };
@@ -196,6 +199,54 @@ describe('EndPicker — Live button', () => {
   it('calls onLive when "Go Live" clicked in fixed mode', () => {
     const { onLive } = renderPicker({ state: FIXED });
     fireEvent.click(screen.getByText('Go Live'));
+    expect(onLive).toHaveBeenCalledOnce();
+  });
+});
+
+// ── Live button visual states (Phase 4 refinement) ───────────────────────────
+// Orange means "live edge is off-screen left"; highlighted means data is flowing
+// visibly or no data has arrived yet. fixed → default ("Go Live").
+
+describe('EndPicker — Live button visual states', () => {
+  // JSDOM normalises hex colours to rgb on inline styles.
+  const GREEN  = 'rgb(220, 252, 231)'; // LIVE_BTN.background (#dcfce7)
+  const ORANGE = 'rgb(234, 88, 12)';   // LIVE_BTN_ORANGE.background (#ea580c)
+
+  it('fixed: default style, "Go Live" label', () => {
+    renderPicker({ state: FIXED });
+    expect(screen.getByText('Go Live')).toBeTruthy();
+    expect(screen.queryByText('● Live')).toBeNull();
+  });
+
+  it('live-trailing: highlighted (green) style', () => {
+    renderPicker({ state: LIVE_TRAILING });
+    expect(screen.getByText('● Live').style.background).toBe(GREEN);
+  });
+
+  it('live-fixed, liveEdgeBehindWindow=false: highlighted (same as live-trailing)', () => {
+    renderPicker({ state: LIVE_FIXED, liveEdgeBehindWindow: false });
+    expect(screen.getByText('● Live').style.background).toBe(GREEN);
+  });
+
+  it('live-fixed, liveEdgeBehindWindow=undefined: highlighted (defaults to false)', () => {
+    renderPicker({ state: LIVE_FIXED }); // prop omitted
+    expect(screen.getByText('● Live').style.background).toBe(GREEN);
+  });
+
+  it('live-fixed, liveEdgeBehindWindow=true: orange style', () => {
+    renderPicker({ state: LIVE_FIXED, liveEdgeBehindWindow: true });
+    expect(screen.getByText('● Live').style.background).toBe(ORANGE);
+  });
+
+  it('click on highlighted button in live-fixed (liveEdgeBehindWindow=false) calls onLive', () => {
+    const { onLive } = renderPicker({ state: LIVE_FIXED, liveEdgeBehindWindow: false });
+    fireEvent.click(screen.getByText('● Live'));
+    expect(onLive).toHaveBeenCalledOnce();
+  });
+
+  it('click on orange button in live-fixed (liveEdgeBehindWindow=true) calls onLive', () => {
+    const { onLive } = renderPicker({ state: LIVE_FIXED, liveEdgeBehindWindow: true });
+    fireEvent.click(screen.getByText('● Live'));
     expect(onLive).toHaveBeenCalledOnce();
   });
 });

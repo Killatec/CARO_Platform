@@ -6,8 +6,12 @@
 
 ## Pending propagation
 
+- 2026-05-19. Phase 4 refinement: Live button orange rule tightened — orange only when `latestSampleTs < state.from` in `live-fixed` (live edge off-screen left); button stays highlighted when edge is inside the viewport or no data has arrived yet. `liveEdgeBehindWindow` computed in `TrendChartContainer` from `liveSubRef.current.getLatestSampleTs()` per render and passed to `EndPicker` as a new prop. `LIVE_BTN_ORANGE` (#ea580c) added to `EndPicker.tsx`. No tooltip per D10.
+
 - Phase 3: `isFreshLiveLanding` refined to `prev.mode === 'live-fixed' && next.mode === 'live-trailing'` (not the wider `willBeLive && next.mode === 'live-trailing'` in the proposal) — prevents spurious commitAndDrain+evictAll on `live-trailing → live-trailing` via preset/Live-click, which the existing "preset click in tailing → no commitAndDrain" test requires.
 - 2026-05-18. Symmetric window-vs-live-edge rule supersedes D6 + D7. pan / zoom / endPicker from ANY state classify mode by `latestSampleTs vs action.to`: `LastTS < Window_End → live-fixed`, `LastTS >= Window_End → fixed`. Extracted `classifyByWindow` helper. `zoomApplied` action gains required `latestSampleTs: bigint | null`. Preset and Live button unchanged. Phase 5 will propagate to spec §9.3 / proposal D6 / D7.
+- 2026-05-19. Phase 5: `syncDataViewport(modeToViewport(next))` added to `!wasLive && willBeLive` branch in `dispatchModeAction`; fixes accumulator freeze in live-fixed by ensuring `dataViewport` matches the new live viewport on fixed→live-* entry.
+- 2026-05-19. Phase 6: hoisted `syncDataViewport(modeToViewport(next))` to top of `dispatchModeAction` (unconditional); removed redundant inline calls from the `wasLive && !willBeLive` and `!wasLive && willBeLive` branches. Fixes blank-window in zoom-within-Live (wasLive && willBeLive had no syncDataViewport).
 
 ---
 
