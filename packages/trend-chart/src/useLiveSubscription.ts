@@ -47,8 +47,6 @@ export interface UseLiveSubscriptionOptions {
   trimThreshold: number | null;
   /** Whether the chart is in live mode. Defaults to false. */
   isLive?: boolean;
-  /** Diagnostic only: ref to current mode state, used to gate live-fixed logs. */
-  modeStateRef?: { current: { mode: string } | null };
   /** Bucket size in ms from the current CAG level. null until first tile resolves. */
   bucketSMs?: bigint | null;
   /** Last known value per tag from the rightmost cached tile, for LOCF seeding. */
@@ -334,7 +332,6 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
     tailMode     = null,
     viewportSpanMs = 60_000n,
     onDataReceived,
-    modeStateRef,
   } = opts;
 
   const { subscribeTrend } = useHmiContext();
@@ -430,16 +427,6 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
           const mode = tailModeRef.current;
           if (mode === 'aggregate' && bucketSMsRef.current !== null) {
             const bSMs = bucketSMsRef.current;
-            if (modeStateRef?.current?.mode === 'live-fixed') {
-              console.warn('[liveSub-diag] aggregate WS sample in live-fixed', {
-                tagId,
-                mode: tailModeRef.current,
-                bucketSMs: bucketSMsRef.current?.toString() ?? null,
-                accumulatorsMapSize: accumulatorsRef.current.size,
-                hasStateForTag: accumulatorsRef.current.has(tagId),
-                moduleTs,
-              });
-            }
             const state = accumulatorsRef.current.get(tagId);
             if (state) {
               processEventIntoAccumulator(state, moduleTs, toNumericValue(value), bSMs);
