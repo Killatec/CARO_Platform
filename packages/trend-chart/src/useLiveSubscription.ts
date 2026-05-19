@@ -520,14 +520,6 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
   // the matching path and replays ring.
 
   useEffect(() => {
-    console.warn('[liveSub-diag] tailMode effect', {
-      isLive,
-      tailMode,
-      bucketSMs: bucketSMs?.toString() ?? null,
-      bucketSMsStr,
-      action: !isLive || tailMode === null ? 'clear-only' : 'clear-then-allocate',
-      accumulatorsMapSizeBefore: accumulatorsRef.current.size,
-    });
     if (!isLive || tailMode === null) {
       accumulatorsRef.current.clear();
       rawBuffersRef.current.clear();
@@ -581,9 +573,6 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
     }
 
     flushTail();
-    console.warn('[liveSub-diag] tailMode effect done', {
-      accumulatorsMapSizeAfter: accumulatorsRef.current.size,
-    });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLive, bucketSMsStr, tagIdsKey, tailMode]);
 

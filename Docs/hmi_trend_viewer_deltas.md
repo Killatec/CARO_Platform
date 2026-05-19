@@ -7,6 +7,7 @@
 ## Pending propagation
 
 - H1 fix: `TrendChartContainer.tsx:444` `showLastWhenIdle` now uses `isLive(modeState.mode)` (was `=== 'live-trailing'`); aligns with spec §8.4.
+- H2 fix: removed surviving `[liveSub-diag]` console.warn blocks in `useLiveSubscription.ts` (lines 523-530, 584-586) that escaped the 2026-05-18 diagnostic cleanup.
 
 ---
 
