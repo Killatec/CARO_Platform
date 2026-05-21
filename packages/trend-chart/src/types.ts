@@ -5,6 +5,28 @@ export interface Tile {
   bucketCount: number;
 }
 
+/**
+ * A slot in the bounded active-tile set.
+ * responseTailTs and shape are null until the first fetch for this tile resolves.
+ */
+export interface ActiveTileEntry {
+  tile: Tile;
+  /** Server-captured Date.now() at request entry. null until first fetch resolves. */
+  responseTailTs: number | null;
+  /**
+   * 'raw' for source==='raw' responses; 'aggregate' for tag_samples / *_cagg / mixed.
+   * null until first fetch resolves.
+   * Used by synthesizeNullTile on refetch failure to produce the correct shape.
+   */
+  shape: 'raw' | 'aggregate' | null;
+  /**
+   * When set, the tile is uncached (responseTailTs < tile.endTime) and this field
+   * holds the assembled response data for rendering. Cached (terminal) entries set
+   * this to null — data is read from the LRU by assembleData.
+   */
+  data: AggregateSeriesData | RawSeriesData | null;
+}
+
 /** The chart's currently visible time region. */
 export interface Viewport {
   start: bigint;

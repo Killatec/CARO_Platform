@@ -67,31 +67,6 @@ export function zoomYScale(
 
 // ── X-axis interaction helpers (pure, exported for testing) ──────────────────
 
-/**
- * Returns the range to pass to ensureCovered if the visible window has panned
- * within halfTileMs of the cached extent's edge, or null if comfortable inside.
- * tileSpanMs must be the active set's actual tile width (from getActiveRange().tileSpanMs),
- * not derived from the visible viewport — those can diverge after wheel-zoom that stays
- * within the 1.5× dataViewport threshold (spec §9.3), producing multiple candidates per
- * pan trigger if the visible-derived width is wider than the active set's tile width.
- */
-export function panThresholdCheck(
-  visMinMs: bigint,
-  visMaxMs: bigint,
-  cachedStartMs: bigint,
-  cachedEndMs: bigint,
-  tileSpanMs: bigint,
-): { startMs: bigint; endMs: bigint } | null {
-  const halfTileMs = tileSpanMs / 2n;
-  if (visMinMs < cachedStartMs + halfTileMs) {
-    return { startMs: cachedStartMs - tileSpanMs, endMs: cachedStartMs };
-  }
-  if (visMaxMs > cachedEndMs - halfTileMs) {
-    return { startMs: cachedEndMs, endMs: cachedEndMs + tileSpanMs };
-  }
-  return null;
-}
-
 /** True if (clientX, clientY) is in the X-axis margin (below u.over, full plot width). */
 export function isInXAxisHitZone(u: uPlot, clientX: number, clientY: number): boolean {
   const r = u.over.getBoundingClientRect();
@@ -140,22 +115,3 @@ export function zoomXScale(
   u.setScale('x', { min: newMin, max: newMax });
 }
 
-// Shared post-setScale threshold check — used by both X-pan and X-wheel handlers.
-// Fires ensureCovered when the visible X range crosses 50% into the cached extent's edge.
-// cachedStart/cachedEnd are derived from getActiveRange (tile metadata) rather than u.data[0],
-// because raw-mode responses only contain actual sample timestamps which may not reach tile edges.
-export function checkAndExtendXCoverage(
-  u: uPlot,
-  ensureCovered?: (startMs: bigint, endMs: bigint) => void,
-  getActiveRange?: () => { startMs: bigint; endMs: bigint; tileSpanMs: bigint } | null,
-): void {
-  if (!ensureCovered || !getActiveRange) return;
-  const xScale = u.scales['x'];
-  if (!xScale) return;
-  const range = getActiveRange();
-  if (!range) return;
-  const visMinMs = BigInt(Math.round((xScale.min ?? 0) * 1000));
-  const visMaxMs = BigInt(Math.round((xScale.max ?? 1) * 1000));
-  const need = panThresholdCheck(visMinMs, visMaxMs, range.startMs, range.endMs, range.tileSpanMs);
-  if (need) ensureCovered(need.startMs, need.endMs);
-}

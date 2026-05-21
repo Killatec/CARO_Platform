@@ -1,10 +1,11 @@
-export type { Tile, Viewport, AggregateSeriesData, RawSeriesData, TrendData } from './types.js';
+export type { Tile, ActiveTileEntry, Viewport, AggregateSeriesData, RawSeriesData, TrendData } from './types.js';
 export {
   TREND_VIEWER_DEFAULTS,
   TS_BUCKET_ORIGIN_MS,
   MAX_BUCKET_S,
   MAX_VIEWPORT_SPAN_MS,
   MIN_VIEWPORT_SPAN_MS,
+  REFETCH_LAG_MS,
   floorDiv,
   ceilDiv,
   alignedTilesInRange,
@@ -14,7 +15,7 @@ export {
 export { clampLowerBound } from './bigintMath.js';
 export { TileCache, makeTileCacheKey } from './tileCache.js';
 export { colorAssign, PALETTE, PALETTE_SIZE } from './colorAssign.js';
-export { useTrendData } from './useTrendData.js';
+export { useTrendData, pruneAndAdd } from './useTrendData.js';
 export type { UseTrendDataOptions, UseTrendDataResult } from './useTrendData.js';
 export { useLiveSubscription, TREND_RING_CAPACITY } from './useLiveSubscription.js';
 export type { UseLiveSubscriptionOptions, UseLiveSubscriptionResult, AggregateTail, RawTail, LiveTail } from './useLiveSubscription.js';

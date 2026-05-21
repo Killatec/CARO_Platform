@@ -1,9 +1,7 @@
 import { renderHook, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useLiveSubscription, TREND_RING_CAPACITY } from '../src/useLiveSubscription.js';
-import { TS_BUCKET_ORIGIN_MS } from '../src/level.js';
-import type { AggregateSeriesData, RawSeriesData } from '../src/types.js';
-import { mergeTrendData } from '../src/mergeTrendData.js';
+import { TS_BUCKET_ORIGIN_MS, REFETCH_LAG_MS } from '../src/level.js';
 
 // ─── Mock @caro/hmi-context ────────────────────────────────────────────────────
 
@@ -112,16 +110,16 @@ describe('useLiveSubscription — subscription lifecycle', () => {
 });
 
 describe('useLiveSubscription — ring buffer', () => {
-  it('commitAndDrain clears ring buffers but preserves subscriptions', () => {
+  it('drainBuffers clears ring buffers but preserves subscriptions', () => {
     const { result } = renderHook(() =>
       useLiveSubscription({ tagIds: [1], trimThreshold: null }),
     );
     act(() => { fireCb(1, 100, 1); });
-    result.current.commitAndDrain(); // clears
+    result.current.drainBuffers(); // clears
 
     // New callback after drain should still be received
     act(() => { fireCb(1, 200, 2); });
-    result.current.commitAndDrain();
+    result.current.drainBuffers();
     // Subscription is still active (callback count unchanged)
     expect(cbCount(1)).toBe(1);
   });
@@ -527,8 +525,8 @@ describe('useLiveSubscription — raw mode core', () => {
     expect(result.current.tail).toBeNull();
   });
 
-  // TG-7: commitAndDrain clears rawBuffers in raw mode.
-  it('commitAndDrain clears rawBuffers in raw mode (subscription preserved, new events still arrive)', () => {
+  // TG-7: drainBuffers clears rawBuffers in raw mode.
+  it('drainBuffers clears rawBuffers in raw mode (subscription preserved, new events still arrive)', () => {
     const { result } = renderHook(() => useLiveSubscription(rawOpts([1])));
 
     // Populate the raw buffer.
@@ -540,7 +538,7 @@ describe('useLiveSubscription — raw mode core', () => {
       .toEqual([3.5, 7.0]);
 
     // Drain.
-    act(() => { result.current.commitAndDrain(); });
+    act(() => { result.current.drainBuffers(); });
 
     // After drain: raw buffer cleared. Tail goes back to null (no events accumulated)
     // OR perTag.get(1) returns undefined / empty — assert whichever shape the hook produces.
@@ -1024,15 +1022,16 @@ describe('useLiveSubscription — getLatestSampleTs', () => {
     expect(result.current.getLatestSampleTs()).toBe(5000n);
   });
 
-  it('returns null immediately after commitAndDrain', () => {
+  it('ring samples remain visible via getLatestSampleTs after drainBuffers (ring is kept)', () => {
     const { result } = renderHook(() =>
       useLiveSubscription({ tagIds: [1], trimThreshold: null }),
     );
     act(() => { fireCb(1, 1000, 5); });
     expect(result.current.getLatestSampleTs()).toBe(1000n); // sanity
 
-    act(() => { result.current.commitAndDrain(); });
-    expect(result.current.getLatestSampleTs()).toBeNull();
+    act(() => { result.current.drainBuffers(); });
+    // HWM is reset, but ring is intact — getLatestSampleTs reads the ring.
+    expect(result.current.getLatestSampleTs()).toBe(1000n);
   });
 
   it('is monotonic-non-decreasing: sessionHighWaterMark floors value when tag is removed', () => {
@@ -1056,679 +1055,58 @@ describe('useLiveSubscription — getLatestSampleTs', () => {
     expect(result.current.getLatestSampleTs()).toBe(9000n);
   });
 
-  it('resumes from null and advances again after drain + new samples', () => {
+  it('advances getLatestSampleTs after drain + new samples (ring seed preserved)', () => {
     const { result } = renderHook(() =>
       useLiveSubscription({ tagIds: [1], trimThreshold: null }),
     );
     act(() => { fireCb(1, 5000, 1); });
-    act(() => { result.current.commitAndDrain(); });
-    expect(result.current.getLatestSampleTs()).toBeNull(); // reset
+    act(() => { result.current.drainBuffers(); });
+    // Ring is kept — returns the ring entry, not null.
+    expect(result.current.getLatestSampleTs()).toBe(5000n);
 
     act(() => { fireCb(1, 7000, 2); });
-    expect(result.current.getLatestSampleTs()).toBe(7000n); // new session
+    expect(result.current.getLatestSampleTs()).toBe(7000n);
   });
 });
 
-// ─── Generation counter ───────────────────────────────────────────────────────
 
-describe('useLiveSubscription — generation counter', () => {
-  it('getCurrentGeneration() starts at 0', () => {
+// ─── drainBuffers ─────────────────────────────────────────────────────────────
+
+describe('useLiveSubscription — drainBuffers', () => {
+  it('resets sessionHighWaterMark but ring keeps getLatestSampleTs non-null', () => {
     const { result } = renderHook(() =>
       useLiveSubscription({ tagIds: [1], trimThreshold: null }),
     );
-    expect(result.current.getCurrentGeneration()).toBe(0);
+    act(() => { fireCb(1, 5000, 1); });
+    expect(result.current.getLatestSampleTs()).toBe(5000n);
+    act(() => { result.current.drainBuffers(); });
+    // HWM is cleared, but ring still holds the sample — not null.
+    expect(result.current.getLatestSampleTs()).toBe(5000n);
   });
 
-  it('commitAndDrain increments generation by exactly 1', () => {
+  it('does not break subscriptions — new samples still arrive and advance HWM', () => {
     const { result } = renderHook(() =>
       useLiveSubscription({ tagIds: [1], trimThreshold: null }),
     );
-    act(() => { result.current.commitAndDrain(); });
-    expect(result.current.getCurrentGeneration()).toBe(1);
+    act(() => { fireCb(1, 1000, 42); });
+    act(() => { result.current.drainBuffers(); });
+    expect(cbCount(1)).toBe(1); // subscription preserved
+    act(() => { fireCb(1, 2000, 99); });
+    expect(result.current.getLatestSampleTs()).toBe(2000n);
   });
 
-  it('multiple commitAndDrain calls each increment generation by 1', () => {
+  it('clears aggregate accumulator — tail resets to null', () => {
     const { result } = renderHook(() =>
-      useLiveSubscription({ tagIds: [1], trimThreshold: null }),
+      useLiveSubscription(tailingOpts([1])),
     );
-    act(() => { result.current.commitAndDrain(); });
-    act(() => { result.current.commitAndDrain(); });
-    act(() => { result.current.commitAndDrain(); });
-    expect(result.current.getCurrentGeneration()).toBe(3);
-  });
-
-  it('commitAndDrain bumps generation even when buffer is empty (no events fired)', () => {
-    // Buffer is empty (no fireCb calls) — drain must still increment the counter.
-    const { result } = renderHook(() =>
-      useLiveSubscription({ tagIds: [1], trimThreshold: null }),
-    );
-    act(() => { result.current.commitAndDrain(); });
-    expect(result.current.getCurrentGeneration()).toBe(1);
-  });
-
-  it('seedFromSpineFetch with stale generation leaves buffer unchanged', () => {
-    // Capture generation, call commitAndDrain (generation advances), then attempt
-    // to seed with the old (now stale) generation — buffer must remain null.
-    const { result } = renderHook(() =>
-      useLiveSubscription({
-        tagIds: [1],
-        trimThreshold: null,
-        isLive: true,
-        tailMode: 'aggregate',
-        bucketSMs: BUCKET_SMS,
-      }),
-    );
-
-    const stalegen = result.current.getCurrentGeneration(); // 0
-
-    act(() => { result.current.commitAndDrain(); }); // generation → 1
-    expect(result.current.getCurrentGeneration()).toBe(1);
-
-    const staleSpine: AggregateSeriesData = {
-      type:      'aggregate',
-      source:    '1s_cagg',
-      startTime: BigInt(ORIGIN),
-      endTime:   BigInt(ORIGIN + 5000),
-      n:         5,
-      bucketSMs: Number(BUCKET_SMS),
-      series:    new Map([[1, { value: [1, 2, 3, 4, 5], min: [1, 2, 3, 4, 5], max: [1, 2, 3, 4, 5] }]]),
-    };
-
-    // Seed with the captured (stale) generation — must be silently dropped.
-    result.current.seedFromSpineFetch(1, staleSpine, stalegen);
-
-    // Buffer should remain null — nothing was stored.
-    expect(result.current.getBufferSnapshot()).toBeNull();
-  });
-});
-
-// ─── Phase 2b unified buffer ──────────────────────────────────────────────────
-
-describe('useLiveSubscription — Phase 2b unified buffer', () => {
-  const makeSpine = (): AggregateSeriesData => ({
-    type:      'aggregate',
-    source:    '1s_cagg',
-    startTime: BigInt(ORIGIN),
-    endTime:   BigInt(ORIGIN + 5 * Number(BUCKET_SMS)),
-    n:         5,
-    bucketSMs: Number(BUCKET_SMS),
-    series:    new Map([[1, { value: [10, 20, 30, 40, 50], min: [10, 20, 30, 40, 50], max: [10, 20, 30, 40, 50] }]]),
-  });
-
-  it('D2: matching generation seeds spine; getBufferSnapshot returns it', () => {
-    const { result } = renderHook(() =>
-      useLiveSubscription({ tagIds: [1], trimThreshold: null, isLive: true, tailMode: 'aggregate', bucketSMs: BUCKET_SMS }),
-    );
-
-    const gen = result.current.getCurrentGeneration(); // 0
-    const spine = makeSpine();
-
-    result.current.seedFromSpineFetch(1, spine, gen);
-
-    const snapshot = result.current.getBufferSnapshot();
-    expect(snapshot).not.toBeNull();
-    expect(snapshot!.type).toBe('aggregate');
-    expect(snapshot!.startTime).toBe(spine.startTime);
-    const snap = snapshot as AggregateSeriesData;
-    expect(snap.series.get(1)!.value).toEqual([10, 20, 30, 40, 50]);
-  });
-
-  it('commitAndDrain clears seeded spine; getBufferSnapshot returns null afterward', () => {
-    const { result } = renderHook(() =>
-      useLiveSubscription({ tagIds: [1], trimThreshold: null, isLive: true, tailMode: 'aggregate', bucketSMs: BUCKET_SMS }),
-    );
-
-    const gen = result.current.getCurrentGeneration();
-    result.current.seedFromSpineFetch(1, makeSpine(), gen);
-    expect(result.current.getBufferSnapshot()).not.toBeNull();
-
-    act(() => { result.current.commitAndDrain(); });
-
-    expect(result.current.getBufferSnapshot()).toBeNull();
-  });
-
-  it('D3: getBufferSnapshot() matches mergeTrendData(spine, tail) for same inputs', () => {
-    const { result } = renderHook(() =>
-      useLiveSubscription({ tagIds: [1], trimThreshold: null, isLive: true, tailMode: 'aggregate', bucketSMs: BUCKET_SMS }),
-    );
-
-    const gen = result.current.getCurrentGeneration();
-    const spine = makeSpine();
-    result.current.seedFromSpineFetch(1, spine, gen);
-
-    // Fire two samples in consecutive buckets so bucket 5 closes and a tail exists.
     act(() => {
-      fireCb(1, ORIGIN + 5 * Number(BUCKET_SMS) + 100, 99);  // bucket 5 opens
-      fireCb(1, ORIGIN + 6 * Number(BUCKET_SMS) + 100, 88);  // bucket 6 opens → bucket 5 closes
+      fireCb(1, tAt(0, 100), 10);
+      fireCb(1, tAt(1, 100), 20); // closes bucket 0
     });
-
-    const snapshot = result.current.getBufferSnapshot();
-    const tail = result.current.tail;
-    const expected = mergeTrendData(spine, tail);
-
-    expect(snapshot).not.toBeNull();
-    expect(expected).not.toBeNull();
-    expect(snapshot!.type).toBe(expected!.type);
-    expect(snapshot!.startTime).toBe(expected!.startTime);
-    expect(snapshot!.endTime).toBe(expected!.endTime);
-    const snap = snapshot as AggregateSeriesData;
-    const exp  = expected  as AggregateSeriesData;
-    expect(snap.n).toBe(exp.n);
-    expect(snap.series.get(1)!.value).toEqual(exp.series.get(1)!.value);
-  });
-
-  it('D4: WS push after spine seed advances getBufferSnapshot endTime without re-render', () => {
-    const { result } = renderHook(() =>
-      useLiveSubscription({ tagIds: [1], trimThreshold: null, isLive: true, tailMode: 'aggregate', bucketSMs: BUCKET_SMS }),
-    );
-
-    const gen = result.current.getCurrentGeneration();
-    result.current.seedFromSpineFetch(1, makeSpine(), gen);
-
-    // No tail yet — snapshot covers only the spine.
-    const beforeEnd = result.current.getBufferSnapshot()!.endTime;
-
-    // Fire two samples in consecutive buckets so a bucket closes.
-    act(() => {
-      fireCb(1, ORIGIN + 5 * Number(BUCKET_SMS) + 100, 77);
-      fireCb(1, ORIGIN + 6 * Number(BUCKET_SMS) + 100, 66);
-    });
-
-    // getBufferSnapshot reads from refs synchronously — picks up the new closed bucket.
-    const afterEnd = result.current.getBufferSnapshot()!.endTime;
-    expect(afterEnd).toBeGreaterThan(beforeEnd);
-  });
-});
-
-// ─── D-A: seedFromSpineFetch metadata matching ────────────────────────────────
-
-describe('useLiveSubscription — seedFromSpineFetch metadata matching (D-A)', () => {
-  const sharedAggMeta = {
-    type: 'aggregate' as const,
-    source: '1s_cagg' as const,
-    startTime: BigInt(ORIGIN),
-    endTime:   BigInt(ORIGIN + 5 * Number(BUCKET_SMS)),
-    n:         5,
-    bucketSMs: Number(BUCKET_SMS),
-  };
-
-  it('D-A-1: mismatched aggregate bucketSMs replaces spineRef wholesale, dropping prior tag', () => {
-    const { result } = renderHook(() =>
-      useLiveSubscription({ tagIds: [1, 2], trimThreshold: null, isLive: true, tailMode: 'aggregate', bucketSMs: BUCKET_SMS }),
-    );
-    const gen = result.current.getCurrentGeneration();
-
-    // First seed: tag 1, bucketSMs = BUCKET_SMS (1000 ms).
-    result.current.seedFromSpineFetch(1, {
-      ...sharedAggMeta,
-      series: new Map([[1, { value: [1, 2, 3, 4, 5], min: [1, 2, 3, 4, 5], max: [1, 2, 3, 4, 5] }]]),
-    }, gen);
-
-    // Second seed: tag 2, different bucketSMs (2000 ≠ 1000) → metadata mismatch → replace.
-    const differentBucket: AggregateSeriesData = {
-      ...sharedAggMeta,
-      endTime:   BigInt(ORIGIN + 5 * 2000),
-      bucketSMs: 2000,
-      series:    new Map([[2, { value: [6, 7, 8, 9, 10], min: [6, 7, 8, 9, 10], max: [6, 7, 8, 9, 10] }]]),
-    };
-    result.current.seedFromSpineFetch(2, differentBucket, gen);
-
-    const snapshot = result.current.getBufferSnapshot() as AggregateSeriesData;
-    expect(snapshot).not.toBeNull();
-    // Wholesale replacement: tag 1 gone, tag 2 present, bucketSMs updated.
-    expect(snapshot.series.has(1)).toBe(false);
-    expect(snapshot.series.has(2)).toBe(true);
-    expect(snapshot.bucketSMs).toBe(2000);
-  });
-
-  it('D-A-2: mismatched type (seed aggregate then raw) replaces spineRef with raw type', () => {
-    const { result } = renderHook(() =>
-      useLiveSubscription({ tagIds: [1], trimThreshold: null, isLive: true, tailMode: 'raw' }),
-    );
-    const gen = result.current.getCurrentGeneration();
-
-    // Seed an aggregate spine first.
-    result.current.seedFromSpineFetch(1, {
-      ...sharedAggMeta,
-      series: new Map([[1, { value: [1, 2, 3, 4, 5], min: [1, 2, 3, 4, 5], max: [1, 2, 3, 4, 5] }]]),
-    }, gen);
-
-    // Seed with raw series (type mismatch) → wholesale replacement.
-    const rawSpine: RawSeriesData = {
-      type:      'raw',
-      source:    'raw',
-      startTime: BigInt(ORIGIN),
-      endTime:   BigInt(ORIGIN + 3 * Number(BUCKET_SMS)),
-      series:    new Map([[1, { ts: [BigInt(ORIGIN + 500), BigInt(ORIGIN + 1500)], value: [10, 20] }]]),
-    };
-    result.current.seedFromSpineFetch(1, rawSpine, gen);
-
-    const snapshot = result.current.getBufferSnapshot();
-    expect(snapshot).not.toBeNull();
-    expect(snapshot!.type).toBe('raw');
-    expect(snapshot!.startTime).toBe(rawSpine.startTime);
-  });
-
-  it('D-A-3: matching aggregate metadata: second tag accumulates without replacement', () => {
-    const { result } = renderHook(() =>
-      useLiveSubscription({ tagIds: [1, 2], trimThreshold: null, isLive: true, tailMode: 'aggregate', bucketSMs: BUCKET_SMS }),
-    );
-    const gen = result.current.getCurrentGeneration();
-
-    // Seed tag 1 with the shared metadata.
-    result.current.seedFromSpineFetch(1, {
-      ...sharedAggMeta,
-      series: new Map([[1, { value: [1, 2, 3, 4, 5], min: [1, 2, 3, 4, 5], max: [1, 2, 3, 4, 5] }]]),
-    }, gen);
-
-    // Seed tag 2 with identical metadata → mutate branch, tag 1 must survive.
-    result.current.seedFromSpineFetch(2, {
-      ...sharedAggMeta,
-      series: new Map([[2, { value: [6, 7, 8, 9, 10], min: [6, 7, 8, 9, 10], max: [6, 7, 8, 9, 10] }]]),
-    }, gen);
-
-    const snapshot = result.current.getBufferSnapshot() as AggregateSeriesData;
-    expect(snapshot).not.toBeNull();
-    expect(snapshot.series.has(1)).toBe(true);
-    expect(snapshot.series.has(2)).toBe(true);
-    expect(snapshot.series.get(1)!.value).toEqual([1, 2, 3, 4, 5]);
-    expect(snapshot.series.get(2)!.value).toEqual([6, 7, 8, 9, 10]);
-    expect(snapshot.bucketSMs).toBe(Number(BUCKET_SMS));
-  });
-
-  it('D-A-4: mismatched raw startTime → replaces wholesale using series.endTime (not per-tag last ts)', () => {
-    // Validates that the new spineRef.endTime = series.endTime (tile range), not
-    // the per-tag filtered last ts (newEndTime). With series.endTime=5000n and
-    // filteredTs last = 3000n, snapshot.endTime must be 5000n after replacement.
-    const { result } = renderHook(() =>
-      useLiveSubscription({ tagIds: [1], trimThreshold: null, isLive: true, tailMode: 'raw' }),
-    );
-    const gen = result.current.getCurrentGeneration();
-
-    // First seed: startTime=0n, endTime=1000n.
-    result.current.seedFromSpineFetch(1, {
-      type: 'raw', source: 'raw',
-      startTime: 0n, endTime: 1000n,
-      series: new Map([[1, { ts: [100n, 200n], value: [1, 2] }]]),
-    }, gen);
-
-    // Second seed: different startTime (2000n ≠ 0n) → wholesale replace.
-    // series.endTime = 5000n but filteredTs last ts = 3000n.
-    result.current.seedFromSpineFetch(1, {
-      type: 'raw', source: 'raw',
-      startTime: 2000n, endTime: 5000n,
-      series: new Map([[1, { ts: [2500n, 3000n], value: [10, 20] }]]),
-    }, gen);
-
-    // No live events → tail is null → getBufferSnapshot returns spine unchanged.
-    const snapshot = result.current.getBufferSnapshot();
-    expect(snapshot).not.toBeNull();
-    expect(snapshot!.type).toBe('raw');
-    // Must be series.endTime (5000n), not per-tag last ts (3000n).
-    expect(snapshot!.endTime).toBe(5000n);
-  });
-});
-
-// ─── D-B: getBufferSnapshot type-coherence guard ─────────────────────────────
-
-describe('useLiveSubscription — getBufferSnapshot type-coherence guard (D-B)', () => {
-  it('D-B: returns spine unchanged and fires no console.warn when tailMode does not match spine type', () => {
-    // Simulates the one-render mismatch window: spine is aggregate but tailMode
-    // has been flipped to 'raw' (or vice-versa) before the next render propagates
-    // cachedData.type back to tailMode.
-    const { result, rerender } = renderHook(
-      ({ opts }) => useLiveSubscription(opts),
-      { initialProps: { opts: { tagIds: [1], trimThreshold: null, isLive: true, tailMode: 'aggregate' as const, bucketSMs: BUCKET_SMS } } },
-    );
-
-    // Seed an aggregate spine while tailMode is still 'aggregate'.
-    const gen = result.current.getCurrentGeneration();
-    const spine: AggregateSeriesData = {
-      type: 'aggregate', source: '1s_cagg',
-      startTime: BigInt(ORIGIN), endTime: BigInt(ORIGIN + 5 * Number(BUCKET_SMS)),
-      n: 5, bucketSMs: Number(BUCKET_SMS),
-      series: new Map([[1, { value: [1, 2, 3, 4, 5], min: [1, 2, 3, 4, 5], max: [1, 2, 3, 4, 5] }]]),
-    };
-    result.current.seedFromSpineFetch(1, spine, gen);
-
-    // Flip tailMode to 'raw' — now spine.type='aggregate' but tailMode='raw'.
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    rerender({ opts: { tagIds: [1], trimThreshold: null, isLive: true, tailMode: 'raw' as const } });
-
-    // getBufferSnapshot must return spine unchanged (no mergeTrendData call).
-    const snapshot = result.current.getBufferSnapshot();
-    expect(snapshot).not.toBeNull();
-    expect(snapshot!.type).toBe('aggregate');
-    expect((snapshot as AggregateSeriesData).series.get(1)!.value).toEqual([1, 2, 3, 4, 5]);
-    // No type-mismatch warning from mergeTrendData ([liveSub-diag] logs are expected).
-    const nonDiagCalls = warnSpy.mock.calls.filter(
-      (args) => !String(args[0]).startsWith('[liveSub-diag]'),
-    );
-    expect(nonDiagCalls).toHaveLength(0);
-    warnSpy.mockRestore();
-  });
-});
-
-// ─── F: seedFromSpineFetch clip gating on isContinuation ─────────────────────
-
-describe('useLiveSubscription — seedFromSpineFetch clip gated on isContinuation (F)', () => {
-  it('F-1: preset-change clip bug — bucketSMs mismatch → isContinuation=false → full spine, no clip', () => {
-    // Repro: accumulator populated at 300ms buckets (prior 5m preset).
-    // New spine arrives at 900ms buckets (15m preset). Different bucketSMs ≠ match.
-    // Pre-fix: isContinuation ignored; liveStartIndex = (ORIGIN - ORIGIN) / 900 = 0
-    //   → clippedN = 0 → ALL spine buckets gone → chart gap covering the full range.
-    // Post-fix: isContinuation=false → clip skipped → full spine preserved.
-    const OLD_BUCKET = 300n;
-    const NEW_BUCKET = 900n;
-
-    const { result } = renderHook(() =>
-      useLiveSubscription({ tagIds: [1], trimThreshold: null, isLive: true, tailMode: 'aggregate', bucketSMs: OLD_BUCKET }),
-    );
-
-    // Fire events to close one 300ms bucket so firstClosedStartMs = BigInt(ORIGIN).
-    // Event at ORIGIN+100 opens bucket at BigInt(ORIGIN).
-    // Event at ORIGIN+400 (bucket BigInt(ORIGIN+300)) closes it.
-    act(() => {
-      fireCb(1, ORIGIN + 100, 5);
-      fireCb(1, ORIGIN + 400, 6);
-    });
-
-    const newSpineN = 10;
-    const newSpine: AggregateSeriesData = {
-      type:      'aggregate',
-      source:    '1min_cagg' as const,
-      startTime: BigInt(ORIGIN),
-      endTime:   BigInt(ORIGIN + newSpineN * Number(NEW_BUCKET)),
-      n:         newSpineN,
-      bucketSMs: Number(NEW_BUCKET),
-      series: new Map([[1, {
-        value: Array.from({ length: newSpineN }, (_, i) => i),
-        min:   Array.from({ length: newSpineN }, (_, i) => i),
-        max:   Array.from({ length: newSpineN }, (_, i) => i),
-      }]]),
-    };
-
-    const gen = result.current.getCurrentGeneration();
-    result.current.seedFromSpineFetch(1, newSpine, gen);
-
-    // bucketSMsRef is still OLD_BUCKET (300n) while spine.bucketSMs = 900.
-    // mergeTrendData's bucketSMs-mismatch passthrough returns spine unchanged,
-    // so getBufferSnapshot gives a direct view of the seeded value lengths.
-    const snapshot = result.current.getBufferSnapshot() as AggregateSeriesData;
-    expect(snapshot).not.toBeNull();
-    // Under the fix: isContinuation=false → clippedN = series.n = 10.
-    // Under old code: liveStartIndex = (ORIGIN-ORIGIN)/900 = 0 → clippedN = 0.
-    const entry = snapshot.series.get(1)!;
-    expect(entry.value.length).toBe(newSpineN);
-  });
-
-  it('F-2: same-fetch continuation — matching bucketSMs → isContinuation=true → clip is applied', () => {
-    // Tag 1 arrives first (wholesale replace; spineRef was null).
-    // Tag 2 arrives second with identical metadata → isContinuation=true.
-    // Tag 2's accumulator has firstClosedStartMs = BigInt(ORIGIN); spine starts
-    // 2000ms before ORIGIN → liveStartIndex = 2 → clippedN = 2 out of 5.
-    const BATCH_BUCKET = BUCKET_SMS; // 1000n
-    const SPINE_N      = 5;
-    const spineStart   = BigInt(ORIGIN - 2000);
-    const spineEnd     = BigInt(ORIGIN - 2000 + SPINE_N * Number(BATCH_BUCKET));
-
-    const { result, rerender } = renderHook(
-      ({ opts }: { opts: Parameters<typeof useLiveSubscription>[0] }) => useLiveSubscription(opts),
-      { initialProps: { opts: { tagIds: [1, 2], trimThreshold: null, isLive: true, tailMode: 'aggregate' as const, bucketSMs: BATCH_BUCKET } } },
-    );
-
-    // Populate tag 2's accumulator: close one bucket at BigInt(ORIGIN).
-    // ORIGIN+100  → opens bucket BigInt(ORIGIN).
-    // ORIGIN+1100 → opens bucket BigInt(ORIGIN+1000), closing previous.
-    // → firstClosedStartMs = BigInt(ORIGIN).
-    act(() => {
-      fireCb(2, ORIGIN + 100, 5);
-      fireCb(2, ORIGIN + 1100, 6);
-    });
-
-    const spineData: AggregateSeriesData = {
-      type:      'aggregate',
-      source:    '1min_cagg' as const,
-      startTime: spineStart,
-      endTime:   spineEnd,
-      n:         SPINE_N,
-      bucketSMs: Number(BATCH_BUCKET),
-      series: new Map([
-        [1, { value: [10, 11, 12, 13, 14], min: [10, 11, 12, 13, 14], max: [10, 11, 12, 13, 14] }],
-        [2, { value: [20, 21, 22, 23, 24], min: [20, 21, 22, 23, 24], max: [20, 21, 22, 23, 24] }],
-      ]),
-    };
-
-    const gen = result.current.getCurrentGeneration();
-
-    // Tag 1: spineRef=null → isContinuation=false → no clip → 5 entries.
-    result.current.seedFromSpineFetch(1, spineData, gen);
-    // Tag 2: spineRef has tag1's metadata → isContinuation=true → clip applied.
-    // liveStartIndex = (ORIGIN - (ORIGIN-2000)) / 1000 = 2 → clippedN = min(5,2) = 2.
-    result.current.seedFromSpineFetch(2, spineData, gen);
-
-    // Switch tailMode to null so getBufferSnapshot returns spine unchanged
-    // (no tail merge) for direct inspection. spineRef survives the effect clear.
-    rerender({ opts: { tagIds: [1, 2], trimThreshold: null, isLive: true, tailMode: null, bucketSMs: null } });
-
-    const snapshot = result.current.getBufferSnapshot() as AggregateSeriesData;
-    expect(snapshot).not.toBeNull();
-    expect(snapshot.type).toBe('aggregate');
-
-    // Tag 1: no clip (wholesale replace, accumulator was fresh/ignored).
-    const tag1 = snapshot.series.get(1)!;
-    expect(tag1.value.length).toBe(SPINE_N);
-    expect(tag1.value).toEqual([10, 11, 12, 13, 14]);
-
-    // Tag 2: clip applied → 2 entries.
-    const tag2 = snapshot.series.get(2)!;
-    expect(tag2.value.length).toBe(2);
-    expect(tag2.value).toEqual([20, 21]);
-  });
-});
-
-// ─── G: wholesale replace clears accumulator/rawBuffer state ─────────────────
-//
-// Root cause: after a wholesale spine replace (bucketSMs/metadata change), the
-// OLD accumulator arrays are still present. When the NEXT render calls
-// getBufferSnapshot → buildAggregateTail, those arrays are stamped with the NEW
-// bucketSMs from the ref (already synced during that render). The merge then
-// places OLD-era buckets at wrong NEW-bucketSMs indices, cutting the chart's
-// right edge short. Fix: seedFromSpineFetch clears accumulators and rawBuffers
-// synchronously before the spineRef update whenever isContinuation=false.
-
-describe('useLiveSubscription — wholesale replace clears accumulator state (G)', () => {
-
-  it('G-1: aggregate wholesale replace → accumulators cleared → spine returned unchanged by next getBufferSnapshot', () => {
-    // Setup: populate an accumulator at OLD_BUCKET=1000ms (1 closed bucket, value=5).
-    // Wholesale-replace spine at NEW_BUCKET=3000ms, values=[10,11,12,13,14].
-    // Post-fix: accumulators cleared → buildAggregateTail(empty) = null → spine unchanged.
-    // Pre-fix: stale bucket (value=5, firstClosedStartMs=ORIGIN) would be merged at
-    //   NEW_BUCKET indices → spine.value[0] clobbered with 5 (not 10).
-    const OLD_BUCKET = 1000n;
-    const NEW_BUCKET = 3000n;
-
-    const { result, rerender } = renderHook(
-      ({ opts }: { opts: Parameters<typeof useLiveSubscription>[0] }) => useLiveSubscription(opts),
-      { initialProps: { opts: { tagIds: [1], trimThreshold: null, isLive: true, tailMode: 'aggregate' as const, bucketSMs: OLD_BUCKET } } },
-    );
-
-    // Close 1 bucket (value=5) so firstClosedStartMs is set.
-    act(() => {
-      fireCb(1, ORIGIN + 100, 5);
-      fireCb(1, ORIGIN + 1100, 6); // crosses into next bucket → closes bucket at ORIGIN
-    });
-    expect(result.current.tail).not.toBeNull(); // sanity: accumulator populated
-
-    const gen = result.current.getCurrentGeneration();
-    const newSpineN = 5;
-    const newSpine: AggregateSeriesData = {
-      type: 'aggregate', source: '5min_cagg' as const,
-      startTime: BigInt(ORIGIN),
-      endTime:   BigInt(ORIGIN + newSpineN * Number(NEW_BUCKET)),
-      n: newSpineN, bucketSMs: Number(NEW_BUCKET),
-      series: new Map([[1, { value: [10, 11, 12, 13, 14], min: [10, 11, 12, 13, 14], max: [10, 11, 12, 13, 14] }]]),
-    };
-
-    // Wholesale seed: isContinuation=false → accumulators cleared, then spine written.
-    result.current.seedFromSpineFetch(1, newSpine, gen);
-
-    // Sync bucketSMsRef to NEW_BUCKET so getBufferSnapshot uses it correctly.
-    rerender({ opts: { tagIds: [1], trimThreshold: null, isLive: true, tailMode: 'aggregate' as const, bucketSMs: NEW_BUCKET } });
-
-    const snapshot = result.current.getBufferSnapshot() as AggregateSeriesData;
-    expect(snapshot).not.toBeNull();
-    // Accumulators cleared → buildAggregateTail(empty, NEW_BUCKET) = null
-    // → mergeTrendData(spine, null) returns spine unchanged.
-    // Without fix: stale accumulator value=5 would overwrite spine.value[0] (was 10).
-    expect(snapshot.series.get(1)!.value).toEqual([10, 11, 12, 13, 14]);
-  });
-
-  it('G-2: aggregate continuation seed (isContinuation=true) does NOT clear accumulator state', () => {
-    // Seed tag1 (wholesale → clears, writes spineRef). Re-seed tag1 with same metadata
-    // (isContinuation=true → mutate path → no clear). Tail should remain non-null
-    // (WS-driven accumulator data survives; the continuation path ran, not wholesale).
-    const { result } = renderHook(() =>
-      useLiveSubscription({ tagIds: [1], trimThreshold: null, isLive: true, tailMode: 'aggregate', bucketSMs: BUCKET_SMS }),
-    );
-
-    // Build accumulator: 1 closed bucket.
-    act(() => {
-      fireCb(1, ORIGIN + 100, 99);
-      fireCb(1, ORIGIN + 1100, 88); // closes bucket at ORIGIN
-    });
-    expect(result.current.tail).not.toBeNull(); // sanity
-
-    const gen = result.current.getCurrentGeneration();
-    const spineA: AggregateSeriesData = {
-      type: 'aggregate', source: '1s_cagg' as const,
-      startTime: BigInt(ORIGIN - 5000), endTime: BigInt(ORIGIN - 5000 + 5 * Number(BUCKET_SMS)),
-      n: 5, bucketSMs: Number(BUCKET_SMS),
-      series: new Map([[1, { value: [1, 2, 3, 4, 5], min: [1, 2, 3, 4, 5], max: [1, 2, 3, 4, 5] }]]),
-    };
-
-    // First seed: wholesale (existing=null → isContinuation=false → clears + writes).
-    result.current.seedFromSpineFetch(1, spineA, gen);
-
-    // Second seed: same spine metadata → isContinuation=true → mutate path, no clear.
-    // Continuation spine has tag1's series in it for the clip computation.
-    const spineACopy: AggregateSeriesData = { ...spineA, series: new Map([[1, { value: [1, 2, 3, 4, 5], min: [1,2,3,4,5], max: [1,2,3,4,5] }]]) };
-    result.current.seedFromSpineFetch(1, spineACopy, gen);
-
-    // isContinuation=true: accumulator not cleared by the second seed.
-    // tail React state unchanged by seedFromSpineFetch (it only mutates refs) →
-    // still reflects the WS bucket built before the seeds.
     expect(result.current.tail).not.toBeNull();
-  });
-
-  it('G-3: raw wholesale replace → rawBuffers cleared → spine returned unchanged by next getBufferSnapshot', () => {
-    // Mirror of G-1 for the raw path: populate rawBuffer, wholesale-replace spine.
-    // Post-fix: rawBuffers cleared → buildRawTail(empty) = null → spine unchanged.
-    //
-    // Fire rawBuffer events AFTER the spine's endTime so the merge path would
-    // normally append them. Do NOT rerender (that would trigger the tailMode effect
-    // independently); assert directly from getBufferSnapshot that only the two
-    // spine entries are returned — the old rawBuffer events are gone.
-    const { result } = renderHook(() =>
-      useLiveSubscription({ tagIds: [1], trimThreshold: null, isLive: true, tailMode: 'raw' as const }),
-    );
-
-    const gen = result.current.getCurrentGeneration();
-    const rawSpine: RawSeriesData = {
-      type: 'raw', source: 'raw',
-      startTime: BigInt(ORIGIN - 1000), endTime: BigInt(ORIGIN + 5000),
-      series: new Map([[1, { ts: [BigInt(ORIGIN - 500), BigInt(ORIGIN)], value: [10, 20] }]]),
-    };
-
-    // First: seed the spine (wholesale — existing=null).
-    result.current.seedFromSpineFetch(1, rawSpine, gen);
-
-    // Push raw samples that land AFTER spine.endTime so without the clear they
-    // would be merged into the snapshot as extra trailing entries.
-    act(() => {
-      fireCb(1, ORIGIN + 6000, 42);
-      fireCb(1, ORIGIN + 7000, 43);
-    });
-
-    // Now wholesale-replace again with the same spine data (triggers clear).
-    const gen2 = result.current.getCurrentGeneration();
-    result.current.seedFromSpineFetch(1, rawSpine, gen2);
-
-    // rawBuffers cleared → buildRawTail(empty) = null → mergeTrendData returns spine unchanged.
-    // Without fix: rawBuffer events at ORIGIN+6000/7000 would appear after the spine entries.
-    const snapshot = result.current.getBufferSnapshot();
-    expect(snapshot).not.toBeNull();
-    expect(snapshot!.type).toBe('raw');
-    const entry = (snapshot as RawSeriesData).series.get(1)!;
-    expect(entry.ts).toEqual([BigInt(ORIGIN - 500), BigInt(ORIGIN)]);
-    expect(entry.value).toEqual([10, 20]);
-  });
-
-  it('G-4: sessionHighWaterMark reset on wholesale replace — getLatestSampleTs drops to ring max', () => {
-    // HWM is inflated to 9000n by a tag-2 event. Tag 2 is then removed (ring entry
-    // deleted). With HWM still 9000n, getLatestSampleTs() = 9000. Wholesale spine
-    // replace resets HWM to null → getLatestSampleTs() falls back to ring max (100n).
-    const { result, rerender } = renderHook(
-      ({ opts }: { opts: Parameters<typeof useLiveSubscription>[0] }) => useLiveSubscription(opts),
-      { initialProps: { opts: { tagIds: [1, 2], trimThreshold: null, isLive: true, tailMode: 'aggregate' as const, bucketSMs: BUCKET_SMS } } },
-    );
-
-    act(() => {
-      fireCb(1, 100, 1);   // tag1: ring=[100], HWM → 100
-      fireCb(2, 9000, 2);  // tag2: ring=[9000], HWM → 9000
-    });
-    expect(result.current.getLatestSampleTs()).toBe(9000n); // sanity
-
-    // Remove tag2: its ring entry is deleted; HWM still 9000.
-    rerender({ opts: { tagIds: [1], trimThreshold: null, isLive: true, tailMode: 'aggregate' as const, bucketSMs: BUCKET_SMS } });
-    expect(result.current.getLatestSampleTs()).toBe(9000n); // HWM floors it
-
-    // Wholesale spine replace with a DIFFERENT bucketSMs → HWM reset to null.
-    // bucketSMs must differ from BUCKET_SMS (1000n) to satisfy the conditional clear.
-    const gen = result.current.getCurrentGeneration();
-    const spine: AggregateSeriesData = {
-      type: 'aggregate', source: '5min_cagg' as const,
-      startTime: BigInt(ORIGIN), endTime: BigInt(ORIGIN + 5 * Number(BUCKET_SMS) * 5),
-      n: 5, bucketSMs: Number(BUCKET_SMS) * 5, // 5000 ≠ 1000 → triggers clear
-      series: new Map([[1, { value: [1, 2, 3, 4, 5] }]]),
-    };
-    result.current.seedFromSpineFetch(1, spine, gen);
-
-    // HWM is null; getLatestSampleTs() falls back to ring max = 100.
-    // Without fix: HWM still 9000 → returns 9000 (wrong, inflated from removed tag).
-    expect(result.current.getLatestSampleTs()).toBe(100n);
-  });
-
-  it('G-5: generation guard fires before the accumulator clear — stale seed is a no-op', () => {
-    // Verify that a stale-generation seed (which would otherwise be a wholesale replace)
-    // neither clears accumulators nor writes the spine.
-    const { result } = renderHook(() =>
-      useLiveSubscription({ tagIds: [1], trimThreshold: null, isLive: true, tailMode: 'aggregate', bucketSMs: BUCKET_SMS }),
-    );
-
-    // Build accumulator: 1 closed bucket.
-    act(() => {
-      fireCb(1, ORIGIN + 100, 77);
-      fireCb(1, ORIGIN + 1100, 88);
-    });
-    expect(result.current.tail).not.toBeNull(); // sanity
-
-    const staleGen = result.current.getCurrentGeneration(); // 0
-    act(() => { result.current.commitAndDrain(); }); // gen → 1, buffer cleared
-
-    // Attempt to seed with the STALE generation using mismatched metadata
-    // (would be wholesale if the generation guard were absent).
-    const staleSpine: AggregateSeriesData = {
-      type: 'aggregate', source: '5min_cagg' as const,
-      startTime: BigInt(ORIGIN), endTime: BigInt(ORIGIN + 3 * Number(BUCKET_SMS) * 5),
-      n: 3, bucketSMs: Number(BUCKET_SMS) * 5,
-      series: new Map([[1, { value: [99, 99, 99] }]]),
-    };
-    result.current.seedFromSpineFetch(1, staleSpine, staleGen);
-
-    // Generation guard fires first → early return → spine NOT written, no clear.
-    expect(result.current.getBufferSnapshot()).toBeNull();
-    // tail is null from commitAndDrain; the stale seed did not re-populate anything.
+    act(() => { result.current.drainBuffers(); });
     expect(result.current.tail).toBeNull();
   });
 });
+
+// ─── Refetch trigger scan (§4.2) ─────────────────────────────────────────────

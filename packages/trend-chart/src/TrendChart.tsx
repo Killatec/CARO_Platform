@@ -9,11 +9,9 @@ import { Legend } from './Legend.js';
 import {
   pruneRemovedTagOverrides,
   isInYAxisHitZone,
-  panYScale,
   zoomYScale,
   isInXAxisHitZone,
   zoomXScale,
-  checkAndExtendXCoverage,
 } from './axisInteractions.js';
 import { buildUplotConfig } from './render/uplotConfig.js';
 import { bandsFromTrendData } from './render/bandsFromTrendData.js';
@@ -29,8 +27,6 @@ export interface TrendChartProps {
   xRange?: { startMs: bigint; endMs: bigint };
   /** Called when the legend remove button is clicked for a tag. */
   onTagRemove?: (tagId: number) => void;
-  /** Triggers background prefetch when the visible window approaches the cached extent. */
-  ensureCovered?: (startMs: bigint, endMs: bigint) => void;
   /** Visible span (ms) at which the current zoom level was last set. Used by the wheel handler to detect 1.5× threshold crossings. */
   zoomAnchorSpan?: bigint;
   /** Called when continuous wheel-zoom crosses the 1.5× threshold. Container responds by switching bucket size and dataViewport. */
@@ -60,9 +56,6 @@ export interface TrendChartProps {
    *  rangeExceeded; keeps xScale aligned with modeViewport during continuous wheel-zoom in
    *  the under-range (< 1 second) state. */
   rangeTooNarrow?: boolean;
-  /** Returns the time bounds of the current active tile set. Passed to checkAndExtendXCoverage
-   *  so the threshold check uses tile metadata rather than sparse u.data[0] sample timestamps. */
-  getActiveRange?: () => { startMs: bigint; endMs: bigint; tileSpanMs: bigint } | null;
 }
 
 const WRAPPER: CSSProperties = {
@@ -94,7 +87,6 @@ export function TrendChart({
   height = 400,
   xRange,
   onTagRemove,
-  ensureCovered,
   zoomAnchorSpan,
   onZoomLevelSwitch,
   swapCounter,
@@ -108,7 +100,6 @@ export function TrendChart({
   lastIntent,
   rangeExceeded = false,
   rangeTooNarrow = false,
-  getActiveRange,
 }: TrendChartProps) {
   const tagMap = useTagMap();
 
@@ -154,13 +145,6 @@ export function TrendChart({
   // making it a rebuild dep.
   const xRangeRef = useRef(xRange);
   xRangeRef.current = xRange;
-
-  // Stable ref so onXMove never stale-closes over ensureCovered.
-  const ensureCoveredRef = useRef(ensureCovered);
-  ensureCoveredRef.current = ensureCovered;
-
-  const getActiveRangeRef = useRef(getActiveRange);
-  getActiveRangeRef.current = getActiveRange;
 
   // Stable refs for zoom-level switch — updated each render so the wheel handler never stale-closes.
   const zoomAnchorSpanRef = useRef(zoomAnchorSpan);
@@ -398,8 +382,6 @@ export function TrendChart({
           const panToMs   = BigInt(Math.round(xScalePan.max * 1000));
           onXPanRef.current?.(panFromMs, panToMs);
         }
-        // Prefetch check: fire ensureCovered when visible edge approaches cached extent.
-        checkAndExtendXCoverage(u, ensureCoveredRef.current, getActiveRangeRef.current);
       }
     };
 
@@ -445,13 +427,9 @@ export function TrendChart({
             const cursorXSec = xScale.min + (cursorXPx / u.over.clientWidth) * newSpanSec;
             const cursorTimeMs = BigInt(Math.round(cursorXSec * 1000));
             switchCb(transition, cursorTimeMs);
-            return; // Skip coverage check — fresh fetches will fire from the new dataViewport.
           }
         }
       }
-
-      // No level transition: standard coverage check.
-      checkAndExtendXCoverage(u, ensureCoveredRef.current, getActiveRangeRef.current);
     };
 
     wrap.addEventListener('mousemove', onYMove);
@@ -502,19 +480,6 @@ export function TrendChart({
     uplotRef.current.setData(newData);
   }, [data, tagIds]);
 
-  // ── Coverage check: fires when the active CAG bucket size changes (zoom across a
-  // §6.3 dispatch threshold). Pan-driven coverage extensions are handled by onXMove's
-  // checkAndExtendXCoverage call instead. swapCounter is intentionally NOT used here —
-  // it increments on every viewport tick in tailing mode (performSwap is unconditional),
-  // and using it would cause the panThresholdCheck to fire spuriously on every frame,
-  // triggering a constant fetch→evict→fetch loop.
-  const bucketSMsKey = data?.type === 'aggregate' ? data.bucketSMs : null;
-  useEffect(() => {
-    if (uplotRef.current && ensureCoveredRef.current && getActiveRangeRef.current) {
-      checkAndExtendXCoverage(uplotRef.current, ensureCoveredRef.current, getActiveRangeRef.current);
-    }
-  }, [bucketSMsKey]);
-
   // ── Imperative X-scale update — does NOT rebuild uPlot ───────────────────
   // Skipped when lastIntent === 'zoom' or 'pan': uPlot already has the right
   // scale from the gesture handler; firing here would overwrite it or cause jitter.
@@ -547,14 +512,14 @@ export function TrendChart({
         data={data}
         tagMap={tagMap}
         selectedTagId={effectiveSelectedId}
-        cursorIdx={cursorState?.idx}
+        cursorTsMs={cursorState?.tsMs}
         showLastWhenIdle={showLastWhenIdle}
         onSelect={setSelectedTagId}
         onRemove={tagId => onTagRemove?.(tagId)}
       />
     ) : null
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  ), [tagIds, data, tagMap, effectiveSelectedId, cursorState?.idx, onTagRemove, showLastWhenIdle]);
+  ), [tagIds, data, tagMap, effectiveSelectedId, cursorState?.tsMs, onTagRemove, showLastWhenIdle]);
 
   return (
     <div style={WRAPPER}>

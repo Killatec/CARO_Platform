@@ -3,14 +3,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { MockHmiProvider } from '@caro/hmi-context';
 import type { TagDef } from '@caro/hmi-context';
 import { TrendChart } from '../src/TrendChart.js';
-import { checkAndExtendXCoverage } from '../src/axisInteractions.js';
 import type { AggregateSeriesData, RawSeriesData } from '../src/types.js';
-
-// ── Partial mock: spy on checkAndExtendXCoverage; keep zoomXScale real ────────
-vi.mock('../src/axisInteractions.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../src/axisInteractions.js')>();
-  return { ...actual, checkAndExtendXCoverage: vi.fn() };
-});
 
 // ── uPlot mock (canvas not available in jsdom) ────────────────────────────────
 
@@ -319,62 +312,6 @@ describe('TrendChart', () => {
     fireEvent.mouseMove(containerDiv, { clientX: 0, clientY: 1 }); // sets inXZone=true
     fireEvent.wheel(containerDiv, { clientX: 0, clientY: 1, deltaY: 100 }); // zoom-out
     expect(onXRangeChange).toHaveBeenCalled();
-  });
-
-  it('regression — coverage check fires on bucketSMs change, not on swapCounter increment', () => {
-    // In tailing mode performSwap fires on every viewport tick, incrementing swapCounter
-    // each time. Keying the coverage useEffect on swapCounter caused checkAndExtendXCoverage
-    // to fire on every tick, triggering a constant fetch→evict loop. The fix keys on
-    // bucketSMsKey instead — stable unless the CAG zoom level actually changes.
-    const ensureCovered = vi.fn();
-    const getActiveRange = () => ({ startMs: 0n, endMs: 3_600_000n });
-    const { rerender } = render(
-      <MockHmiProvider tagDefs={TAG_DEFS}>
-        <TrendChart
-          data={makeData([1])}       // bucketSMs = 1000
-          tagIds={[1]}
-          siteTimezone="UTC"
-          height={400}
-          ensureCovered={ensureCovered}
-          getActiveRange={getActiveRange}
-          swapCounter={0}
-        />
-      </MockHmiProvider>,
-    );
-    const callsAfterMount = vi.mocked(checkAndExtendXCoverage).mock.calls.length;
-
-    // Simulate tailing: swapCounter increments but bucketSMs is unchanged.
-    rerender(
-      <MockHmiProvider tagDefs={TAG_DEFS}>
-        <TrendChart
-          data={makeData([1])}       // bucketSMs still 1000
-          tagIds={[1]}
-          siteTimezone="UTC"
-          height={400}
-          ensureCovered={ensureCovered}
-          getActiveRange={getActiveRange}
-          swapCounter={1}            // changed — should NOT trigger coverage effect
-        />
-      </MockHmiProvider>,
-    );
-    expect(vi.mocked(checkAndExtendXCoverage).mock.calls.length).toBe(callsAfterMount);
-
-    // Simulate a real CAG level switch: bucketSMs changes.
-    const levelSwitchData = { ...makeData([1]), bucketSMs: 2000 };
-    rerender(
-      <MockHmiProvider tagDefs={TAG_DEFS}>
-        <TrendChart
-          data={levelSwitchData}     // bucketSMs changed → SHOULD trigger coverage effect
-          tagIds={[1]}
-          siteTimezone="UTC"
-          height={400}
-          ensureCovered={ensureCovered}
-          getActiveRange={getActiveRange}
-          swapCounter={1}
-        />
-      </MockHmiProvider>,
-    );
-    expect(vi.mocked(checkAndExtendXCoverage).mock.calls.length).toBe(callsAfterMount + 1);
   });
 
   // ── Imperative setScale: rangeExceeded overrides zoom gate ───────────────────

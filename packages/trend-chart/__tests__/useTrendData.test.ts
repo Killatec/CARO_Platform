@@ -1,9 +1,9 @@
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { useTrendData, pruneAndAdd, assembleLiveSpine } from '../src/useTrendData.js';
+import { useTrendData, pruneAndAdd } from '../src/useTrendData.js';
 import { fetchTile } from '../src/api.js';
 import { MAX_BUCKET_S, MIN_VIEWPORT_SPAN_MS, TREND_VIEWER_DEFAULTS } from '../src/level.js';
-import type { Viewport, Tile } from '../src/types.js';
+import type { Viewport, Tile, ActiveTileEntry } from '../src/types.js';
 import type { TileApiResponse } from '../src/api.js';
 
 vi.mock('../src/api.js', () => ({
@@ -61,164 +61,90 @@ function makeTile(startMs: bigint, endMs: bigint, bucketCount = 500): Tile {
   return { startTime: startMs, endTime: endMs, bucketCount };
 }
 
+function makeEntry(startMs: bigint, endMs: bigint, bucketCount = 500): ActiveTileEntry {
+  return { tile: makeTile(startMs, endMs, bucketCount), responseTailTs: null, shape: null, data: null };
+}
+
 // ─── pruneAndAdd ─────────────────────────────────────────────────────────────
 
 describe('pruneAndAdd', () => {
   const SPAN = 1_800_000n; // 30 min tiles
 
-  it('empty active set → returns [newTile]', () => {
-    const newTile = makeTile(0n, SPAN);
-    expect(pruneAndAdd([], newTile)).toEqual([newTile]);
+  it('empty active set → returns [newEntry]', () => {
+    const newEntry = makeEntry(0n, SPAN);
+    expect(pruneAndAdd([], newEntry)).toEqual([newEntry]);
   });
 
-  it('active set of 3 + left tile → 4 tiles, all originals kept', () => {
-    const tiles = [makeTile(0n, SPAN), makeTile(SPAN, SPAN * 2n), makeTile(SPAN * 2n, SPAN * 3n)];
-    const newTile = makeTile(-SPAN, 0n);
-    const result = pruneAndAdd(tiles, newTile);
+  it('active set of 3 + left entry → 4 entries, all originals kept', () => {
+    const entries = [makeEntry(0n, SPAN), makeEntry(SPAN, SPAN * 2n), makeEntry(SPAN * 2n, SPAN * 3n)];
+    const newEntry = makeEntry(-SPAN, 0n);
+    const result = pruneAndAdd(entries, newEntry);
     expect(result).toHaveLength(4);
-    expect(result[0]).toEqual(newTile);
-    expect(result[3]).toEqual(tiles[2]);
+    expect(result[0]).toEqual(newEntry);
+    expect(result[3]).toEqual(entries[2]);
   });
 
-  it('active set of 8 + left tile → 8 tiles, rightmost dropped', () => {
-    const tiles = [
-      makeTile(0n, SPAN), makeTile(SPAN, SPAN * 2n), makeTile(SPAN * 2n, SPAN * 3n), makeTile(SPAN * 3n, SPAN * 4n),
-      makeTile(SPAN * 4n, SPAN * 5n), makeTile(SPAN * 5n, SPAN * 6n), makeTile(SPAN * 6n, SPAN * 7n), makeTile(SPAN * 7n, SPAN * 8n),
+  it('active set of 8 + left entry → 8 entries, rightmost dropped', () => {
+    const entries = [
+      makeEntry(0n, SPAN), makeEntry(SPAN, SPAN * 2n), makeEntry(SPAN * 2n, SPAN * 3n), makeEntry(SPAN * 3n, SPAN * 4n),
+      makeEntry(SPAN * 4n, SPAN * 5n), makeEntry(SPAN * 5n, SPAN * 6n), makeEntry(SPAN * 6n, SPAN * 7n), makeEntry(SPAN * 7n, SPAN * 8n),
     ];
-    const newTile = makeTile(-SPAN, 0n);
-    const result = pruneAndAdd(tiles, newTile);
+    const newEntry = makeEntry(-SPAN, 0n);
+    const result = pruneAndAdd(entries, newEntry);
     expect(result).toHaveLength(8);
-    expect(result[0]).toEqual(newTile);
-    // Rightmost tile (SPAN*7n:SPAN*8n) must be gone.
-    expect(result.some(t => t.startTime === SPAN * 7n)).toBe(false);
+    expect(result[0]).toEqual(newEntry);
+    // Rightmost entry (SPAN*7n:SPAN*8n) must be gone.
+    expect(result.some(e => e.tile.startTime === SPAN * 7n)).toBe(false);
   });
 
-  it('active set of 8 + right tile → 8 tiles, leftmost dropped', () => {
-    const tiles = [
-      makeTile(0n, SPAN), makeTile(SPAN, SPAN * 2n), makeTile(SPAN * 2n, SPAN * 3n), makeTile(SPAN * 3n, SPAN * 4n),
-      makeTile(SPAN * 4n, SPAN * 5n), makeTile(SPAN * 5n, SPAN * 6n), makeTile(SPAN * 6n, SPAN * 7n), makeTile(SPAN * 7n, SPAN * 8n),
+  it('active set of 8 + right entry → 8 entries, leftmost dropped', () => {
+    const entries = [
+      makeEntry(0n, SPAN), makeEntry(SPAN, SPAN * 2n), makeEntry(SPAN * 2n, SPAN * 3n), makeEntry(SPAN * 3n, SPAN * 4n),
+      makeEntry(SPAN * 4n, SPAN * 5n), makeEntry(SPAN * 5n, SPAN * 6n), makeEntry(SPAN * 6n, SPAN * 7n), makeEntry(SPAN * 7n, SPAN * 8n),
     ];
-    const newTile = makeTile(SPAN * 8n, SPAN * 9n);
-    const result = pruneAndAdd(tiles, newTile);
+    const newEntry = makeEntry(SPAN * 8n, SPAN * 9n);
+    const result = pruneAndAdd(entries, newEntry);
     expect(result).toHaveLength(8);
-    expect(result[result.length - 1]).toEqual(newTile);
-    // Leftmost tile (0n:SPAN) must be gone.
-    expect(result.some(t => t.startTime === 0n)).toBe(false);
+    expect(result[result.length - 1]).toEqual(newEntry);
+    // Leftmost entry (0n:SPAN) must be gone.
+    expect(result.some(e => e.tile.startTime === 0n)).toBe(false);
   });
 
-  it('active set of 8 + middle tile (gap-fill) → 8 tiles, leftmost dropped, no warn', () => {
+  it('active set of 8 + middle entry (gap-fill) → 8 entries, leftmost dropped, no warn', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    const tiles = [
-      makeTile(0n, SPAN * 2n), makeTile(SPAN * 2n, SPAN * 4n), makeTile(SPAN * 4n, SPAN * 6n), makeTile(SPAN * 6n, SPAN * 8n),
-      makeTile(SPAN * 8n, SPAN * 10n), makeTile(SPAN * 10n, SPAN * 12n), makeTile(SPAN * 12n, SPAN * 14n), makeTile(SPAN * 14n, SPAN * 16n),
+    const entries = [
+      makeEntry(0n, SPAN * 2n), makeEntry(SPAN * 2n, SPAN * 4n), makeEntry(SPAN * 4n, SPAN * 6n), makeEntry(SPAN * 6n, SPAN * 8n),
+      makeEntry(SPAN * 8n, SPAN * 10n), makeEntry(SPAN * 10n, SPAN * 12n), makeEntry(SPAN * 12n, SPAN * 14n), makeEntry(SPAN * 14n, SPAN * 16n),
     ];
-    // Middle tile: startTime > tiles[0].startTime, endTime < tiles[last].endTime (gap-fill).
-    const newTile = makeTile(SPAN, SPAN * 3n);
-    const result = pruneAndAdd(tiles, newTile);
+    // Middle entry: tile.startTime > entries[0].tile.startTime, tile.endTime < entries[last].tile.endTime (gap-fill).
+    const newEntry = makeEntry(SPAN, SPAN * 3n);
+    const result = pruneAndAdd(entries, newEntry);
     expect(result).toHaveLength(8);
-    // Leftmost tile (0n:SPAN*2n) must be dropped.
-    expect(result.some(t => t.startTime === 0n)).toBe(false);
+    // Leftmost entry (0n:SPAN*2n) must be dropped.
+    expect(result.some(e => e.tile.startTime === 0n)).toBe(false);
     // No warn — middle insertion is a legitimate gap-fill scenario post-F7.
     expect(warnSpy).not.toHaveBeenCalled();
     warnSpy.mockRestore();
   });
 
   it('maxSize override: no pruning until count exceeds maxSize', () => {
-    const tiles = [makeTile(0n, SPAN), makeTile(SPAN, SPAN * 2n), makeTile(SPAN * 2n, SPAN * 3n), makeTile(SPAN * 3n, SPAN * 4n)];
-    const newTile = makeTile(SPAN * 4n, SPAN * 5n);
-    const result = pruneAndAdd(tiles, newTile, 6);
+    const entries = [makeEntry(0n, SPAN), makeEntry(SPAN, SPAN * 2n), makeEntry(SPAN * 2n, SPAN * 3n), makeEntry(SPAN * 3n, SPAN * 4n)];
+    const newEntry = makeEntry(SPAN * 4n, SPAN * 5n);
+    const result = pruneAndAdd(entries, newEntry, 6);
     // 4 + 1 = 5 ≤ 6 → no pruning.
     expect(result).toHaveLength(5);
-    expect(result[result.length - 1]).toEqual(newTile);
+    expect(result[result.length - 1]).toEqual(newEntry);
   });
 
-  it('sorted output: inserted tile in correct position regardless of insertion order', () => {
-    const tiles = [makeTile(SPAN, SPAN * 2n), makeTile(SPAN * 2n, SPAN * 3n), makeTile(SPAN * 3n, SPAN * 4n)];
-    const newTile = makeTile(0n, SPAN); // prepend
-    const result = pruneAndAdd(tiles, newTile, 5);
-    expect(result[0]).toEqual(newTile);
-    expect(result[1]).toEqual(tiles[0]);
-  });
-});
-
-// ─── assembleLiveSpine ────────────────────────────────────────────────────────
-// Pure-function tests — no renderHook, no jsdom dependency.
-
-describe('assembleLiveSpine', () => {
-  const spineTile: Tile = { startTime: 0n, endTime: ONE_HOUR, bucketCount: 1000 };
-
-  it('single aggregate response → AggregateSeriesData with correct shape', () => {
-    const res = makeAggResponse([1, 2], { n: 1000, bucketSMs: 3600, source: '1min_cagg' });
-    const result = assembleLiveSpine([res], spineTile, [1, 2]);
-    expect(result).not.toBeNull();
-    expect(result!.type).toBe('aggregate');
-    if (result!.type !== 'aggregate') return;
-    expect(result!.source).toBe('1min_cagg');
-    expect(result!.startTime).toBe(0n);
-    expect(result!.endTime).toBe(ONE_HOUR);
-    expect(result!.n).toBe(1000);
-    expect(result!.bucketSMs).toBe(3600);
-    expect(result!.series.has(1)).toBe(true);
-    expect(result!.series.has(2)).toBe(true);
-    expect(result!.series.get(1)!.value).toHaveLength(1000);
-  });
-
-  it('single raw response → RawSeriesData with bigint ts', () => {
-    const res = makeRawResponse([1, 2]);
-    const result = assembleLiveSpine([res], spineTile, [1, 2]);
-    expect(result).not.toBeNull();
-    expect(result!.type).toBe('raw');
-    if (result!.type !== 'raw') return;
-    expect(result!.source).toBe('raw');
-    const s1 = result!.series.get(1)!;
-    expect(s1.ts).toHaveLength(3);
-    // ts values should be bigints
-    expect(typeof s1.ts[0]).toBe('bigint');
-    expect(s1.ts[0]).toBe(100n);
-  });
-
-  it('multi-group aggregate: two responses for different tagId subsets are merged', () => {
-    const res1 = makeAggResponse([1, 2], { n: 1000, bucketSMs: 3600 });
-    const res2 = makeAggResponse([3, 4], { n: 1000, bucketSMs: 3600 });
-    const result = assembleLiveSpine([res1, res2], spineTile, [1, 2, 3, 4]);
-    expect(result).not.toBeNull();
-    expect(result!.type).toBe('aggregate');
-    if (result!.type !== 'aggregate') return;
-    expect(result!.series.has(1)).toBe(true);
-    expect(result!.series.has(3)).toBe(true);
-    expect(result!.series.size).toBe(4);
-  });
-
-  it('tagId absent from response → null-filled entry added', () => {
-    const res = makeAggResponse([1], { n: 1000, bucketSMs: 3600 });
-    const result = assembleLiveSpine([res], spineTile, [1, 99]);
-    expect(result).not.toBeNull();
-    if (result!.type !== 'aggregate') return;
-    expect(result!.series.has(99)).toBe(true);
-    const s99 = result!.series.get(99)!;
-    expect(s99.value.every(v => v === null)).toBe(true);
-    expect(s99.value).toHaveLength(1000);
-  });
-
-  it('tile boundaries are preserved exactly — no alignment fudge', () => {
-    // Spine bounds must equal viewport bounds regardless of grid alignment.
-    const oddTile: Tile = { startTime: 12_345_678n, endTime: 99_999_999n, bucketCount: 1000 };
-    const res = makeAggResponse([1], { n: 1000, bucketSMs: 88 });
-    const result = assembleLiveSpine([res], oddTile, [1]);
-    expect(result).not.toBeNull();
-    expect(result!.startTime).toBe(12_345_678n);
-    expect(result!.endTime).toBe(99_999_999n);
-  });
-
-  it('empty responses → returns null', () => {
-    expect(assembleLiveSpine([], spineTile, [1])).toBeNull();
-  });
-
-  it('empty tagIds → returns null', () => {
-    const res = makeAggResponse([1]);
-    expect(assembleLiveSpine([res], spineTile, [])).toBeNull();
+  it('sorted output: inserted entry in correct position regardless of insertion order', () => {
+    const entries = [makeEntry(SPAN, SPAN * 2n), makeEntry(SPAN * 2n, SPAN * 3n), makeEntry(SPAN * 3n, SPAN * 4n)];
+    const newEntry = makeEntry(0n, SPAN); // prepend
+    const result = pruneAndAdd(entries, newEntry, 5);
+    expect(result[0]).toEqual(newEntry);
+    expect(result[1]).toEqual(entries[0]);
   });
 });
+
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
@@ -602,303 +528,6 @@ describe('useTrendData', () => {
     }
   });
 
-  // ── ensureCovered ─────────────────────────────────────────────────────────
-
-  it('ensureCovered: range inside cached tiles fires no new fetches', async () => {
-    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
-
-    const { result } = renderHook(() =>
-      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
-    );
-
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-    const callsAfterLoad = mockFetchTile.mock.calls.length;
-
-    // The visible range [0, ONE_HOUR] maps to tiles that are already cached.
-    act(() => {
-      result.current.ensureCovered(0n, ONE_HOUR);
-    });
-
-    expect(mockFetchTile.mock.calls.length).toBe(callsAfterLoad);
-  });
-
-  it('ensureCovered: tile outside active set fires fetch and rotates active window', async () => {
-    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
-
-    const { result } = renderHook(() =>
-      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
-    );
-
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-    const callsAfterLoad = mockFetchTile.mock.calls.length;
-
-    // One tile to the right of the prefetch-after tile (tileSpan = HALF_HOUR).
-    // defaultViewport active set ends at ONE_HOUR + HALF_HOUR (3 tiles; left-prefetch
-    // at -HALF_HOUR is pre-epoch and is filtered out by tilesForViewport).
-    act(() => {
-      result.current.ensureCovered(ONE_HOUR + HALF_HOUR, ONE_HOUR * 2n);
-    });
-
-    // Exactly one new fetch for the new tile.
-    expect(mockFetchTile.mock.calls.length).toBe(callsAfterLoad + 1);
-
-    // After the fetch settles: active set grows to 4 tiles (3 initial + 1 new, maxSize=8 → no prune).
-    // Data = 4 × 500 = 2000 values.
-    await waitFor(() => {
-      const data = result.current.data;
-      expect(data?.type).toBe('aggregate');
-      if (data?.type === 'aggregate') {
-        expect(data.series.get(1)!.value.length).toBe(2000);
-      }
-    });
-  });
-
-  it('ensureCovered: two calls for the same in-flight tile fire no duplicate fetch', async () => {
-    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
-
-    const { result } = renderHook(() =>
-      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
-    );
-
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-
-    // Stall subsequent fetches so the tile stays in-flight.
-    const resolvers: Array<(v: TileApiResponse) => void> = [];
-    mockFetchTile.mockImplementation(() => new Promise<TileApiResponse>(r => resolvers.push(r)));
-
-    act(() => { result.current.ensureCovered(-ONE_HOUR, -HALF_HOUR); });
-    const callsAfterFirst = mockFetchTile.mock.calls.length;
-
-    // Second call — tile is in-flight, must be deduped.
-    act(() => { result.current.ensureCovered(-ONE_HOUR, -HALF_HOUR); });
-    expect(mockFetchTile.mock.calls.length).toBe(callsAfterFirst);
-
-    // Clean up: resolve the pending fetch.
-    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
-    act(() => { for (const r of resolvers) r(makeAggResponse([1])); });
-  });
-
-  it('ensureCovered: repeated leftward additions keep active set bounded at 8 tiles', async () => {
-    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
-
-    const { result } = renderHook(() =>
-      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
-    );
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-
-    // Each ensureCovered call covers 2 tile-spans to the right, generating 2 candidates.
-    // Initial load: 3 tiles (left-prefetch at -HALF_HOUR is pre-epoch, filtered).
-    // maxSize=8: no pruning until 9th tile. Tiles grow 3→5→7→8.
-    const tileSpan = HALF_HOUR; // defaultViewport: tileSpan = ONE_HOUR / 2
-    const initialCachedEnd = ONE_HOUR + HALF_HOUR; // rightmost tile end after initial load
-    const expectedLengths = [2500, 3500, 4000]; // 5, 7, 8 tiles × 500 buckets
-    for (let i = 1; i <= 3; i++) {
-      const startMs = initialCachedEnd + tileSpan * 2n * BigInt(i - 1);
-      const endMs = startMs + tileSpan * 2n; // exactly 2 tile-spans → 2 right-extension candidates
-      act(() => { result.current.ensureCovered(startMs, endMs); });
-      const expected = expectedLengths[i - 1]!;
-      await waitFor(() => {
-        const data = result.current.data;
-        if (data?.type === 'aggregate') {
-          // Bounded at 8 tiles × 500 buckets max.
-          expect(data.series.get(1)!.value.length).toBe(expected);
-        }
-      });
-    }
-  });
-
-  it('ensureCovered: viewport change resets in-flight set so same tile can be re-requested', async () => {
-    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
-
-    const { result, rerender } = renderHook(
-      (props: { viewport: Viewport }) => useTrendData({ ...props, tagIds: [1] }),
-      { initialProps: { viewport: defaultViewport } },
-    );
-
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-
-    // Stall a dynamic fetch so it stays in-flight across the viewport change.
-    mockFetchTile.mockImplementation(() => new Promise(() => {})); // never resolves
-
-    act(() => { result.current.ensureCovered(-ONE_HOUR, -HALF_HOUR); });
-    const callsWithInFlight = mockFetchTile.mock.calls.length;
-
-    // Same range while in-flight → deduped.
-    act(() => { result.current.ensureCovered(-ONE_HOUR, -HALF_HOUR); });
-    expect(mockFetchTile.mock.calls.length).toBe(callsWithInFlight);
-
-    // Change viewport — effect re-runs, resets inFlightTilesRef.
-    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
-    rerender({ viewport: { start: ONE_HOUR * 5n, end: ONE_HOUR * 6n } });
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-
-    // Now the same range fires again (in-flight set was cleared).
-    const callsAfterReset = mockFetchTile.mock.calls.length;
-    act(() => { result.current.ensureCovered(-ONE_HOUR, -HALF_HOUR); });
-    expect(mockFetchTile.mock.calls.length).toBeGreaterThan(callsAfterReset);
-  });
-
-  it('ensureCovered: range entirely in the future fires no fetches', async () => {
-    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
-
-    const { result } = renderHook(() =>
-      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
-    );
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-    const callsAfterLoad = mockFetchTile.mock.calls.length;
-
-    // Active set after load: rightmost tile ends at ONE_HOUR + HALF_HOUR = 5_400_000n.
-    // Mock now to epoch (0ms): right-extension tiles start at ≥ 5_400_000n which is NOT < 0 → all filtered.
-    const dateSpy = vi.spyOn(Date, 'now').mockReturnValue(0);
-    const cachedEnd = ONE_HOUR + HALF_HOUR;
-    act(() => {
-      result.current.ensureCovered(cachedEnd, cachedEnd + ONE_HOUR);
-    });
-
-    expect(mockFetchTile.mock.calls.length).toBe(callsAfterLoad);
-    dateSpy.mockRestore();
-  });
-
-  it('ensureCovered: range straddling now only fetches tiles with past start time', async () => {
-    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
-
-    const { result } = renderHook(() =>
-      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
-    );
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-    const callsAfterLoad = mockFetchTile.mock.calls.length;
-
-    // Active set after load: rightmost tile ends at ONE_HOUR + HALF_HOUR.
-    // Set nowAnchor = cachedEnd + HALF_HOUR:
-    //   right tile 0: startTime = cachedEnd < nowAnchor → included (1 fetch)
-    //   right tile 1: startTime = cachedEnd + HALF_HOUR = nowAnchor → NOT < nowMs → filtered
-    const cachedEnd = ONE_HOUR + HALF_HOUR;
-    const nowAnchor = cachedEnd + HALF_HOUR;
-    const dateSpy = vi.spyOn(Date, 'now').mockReturnValue(Number(nowAnchor));
-
-    act(() => {
-      result.current.ensureCovered(cachedEnd, cachedEnd + 2n * HALF_HOUR);
-    });
-
-    expect(mockFetchTile.mock.calls.length).toBe(callsAfterLoad + 1);
-    dateSpy.mockRestore();
-  });
-
-  it('ensureCovered: candidate tiles extend active set without overlap', async () => {
-    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
-
-    const { result } = renderHook(() =>
-      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
-    );
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-    const callsAfterLoad = mockFetchTile.mock.calls.length;
-
-    // Request exactly 1 tile past the active set's right edge.
-    // The fetched tile must start at cachedEnd (clean extension — no overlap with existing tiles).
-    const cachedEnd = ONE_HOUR + HALF_HOUR;
-    act(() => {
-      result.current.ensureCovered(cachedEnd, cachedEnd + HALF_HOUR);
-    });
-
-    expect(mockFetchTile.mock.calls.length).toBe(callsAfterLoad + 1);
-    const fetchParams = mockFetchTile.mock.calls[callsAfterLoad]![0] as Parameters<typeof fetchTile>[0];
-    expect(fetchParams.startTime).toBe(cachedEnd);
-  });
-
-  it('ensureCovered: active set at future boundary fires no fetch', async () => {
-    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
-
-    const { result } = renderHook(() =>
-      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
-    );
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-    const callsAfterLoad = mockFetchTile.mock.calls.length;
-
-    // Mock now to exactly cachedEnd. The first right-extension tile starts at cachedEnd = nowMs,
-    // so startTime < nowMs is false → filtered. No fetches fire.
-    const cachedEnd = ONE_HOUR + HALF_HOUR;
-    const dateSpy = vi.spyOn(Date, 'now').mockReturnValue(Number(cachedEnd));
-
-    act(() => {
-      result.current.ensureCovered(cachedEnd, cachedEnd + ONE_HOUR);
-    });
-
-    expect(mockFetchTile.mock.calls.length).toBe(callsAfterLoad);
-    dateSpy.mockRestore();
-  });
-
-  it('ensureCovered: candidate geometry matches active-set tile width (same-geometry pan)', async () => {
-    // After initial load with visibleTilesPerWindow=2, active set has 3 tiles each HALF_HOUR wide.
-    // Pan 50% right: ensureCovered asks for [cachedEnd, cachedEnd + HALF_HOUR/2).
-    // The candidate must start at cachedEnd and have width = HALF_HOUR (active set tile width),
-    // NOT derived from the viewport formula.
-    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
-
-    const { result } = renderHook(() =>
-      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
-    );
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-    const callsAfterLoad = mockFetchTile.mock.calls.length;
-
-    const cachedEnd = ONE_HOUR + HALF_HOUR; // 3 HALF_HOUR tiles: [-HALF_HOUR, 0), [0, HALF_HOUR), [HALF_HOUR, ONE_HOUR), + prefetch [ONE_HOUR, cachedEnd)
-    act(() => {
-      result.current.ensureCovered(HALF_HOUR, cachedEnd + HALF_HOUR / 2n);
-    });
-
-    expect(mockFetchTile.mock.calls.length).toBe(callsAfterLoad + 1);
-    const fetchParams = mockFetchTile.mock.calls[callsAfterLoad]![0] as Parameters<typeof fetchTile>[0];
-    // Candidate must start at the active set's right edge.
-    expect(fetchParams.startTime).toBe(cachedEnd);
-    // Candidate width must equal the active set's tile width (HALF_HOUR), not the viewport width.
-    expect(fetchParams.endTime - fetchParams.startTime).toBe(HALF_HOUR);
-  });
-
-  it('ensureCovered: candidate geometry tracks active-set width after zoom (mismatched-viewport scenario)', async () => {
-    // Simulate a zoom that would change the viewport-derived tileSpanMs but the active set
-    // still has the old geometry. With N=2 visible tiles and ONE_HOUR viewport, active tiles
-    // are HALF_HOUR wide. If the viewport were doubled to 2*ONE_HOUR, the old formula would
-    // produce ONE_HOUR-wide candidates — wrong. The fix anchors on active[0] width instead.
-    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
-
-    const { result } = renderHook(() =>
-      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
-    );
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-    const callsAfterLoad = mockFetchTile.mock.calls.length;
-
-    // Ask ensureCovered with a range 2x wider than the original viewport — mimics the
-    // in-flight window after a zoom commit where viewport jumped but active set didn't.
-    const cachedEnd = ONE_HOUR + HALF_HOUR;
-    act(() => {
-      result.current.ensureCovered(0n, cachedEnd + ONE_HOUR);
-    });
-
-    // At least one fetch fires for the gap past cachedEnd.
-    expect(mockFetchTile.mock.calls.length).toBeGreaterThan(callsAfterLoad);
-    const fetchParams = mockFetchTile.mock.calls[callsAfterLoad]![0] as Parameters<typeof fetchTile>[0];
-    // Regardless of the range width passed in, each candidate must use the active set's tile width.
-    expect(fetchParams.endTime - fetchParams.startTime).toBe(HALF_HOUR);
-  });
-
-  it('getActiveRange: returns tileSpanMs equal to active-set tile width', async () => {
-    // panThresholdCheck reads tileSpanMs from getActiveRange() to stay symmetric with
-    // ensureCovered (both use the active set's actual tile width, not visible-span/2).
-    // This test verifies getActiveRange exposes the correct field.
-    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
-
-    const { result } = renderHook(() =>
-      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
-    );
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-
-    const range = result.current.getActiveRange();
-    expect(range).not.toBeNull();
-    // With visibleTilesPerWindow=2 and ONE_HOUR viewport, each active tile is HALF_HOUR wide.
-    expect(range!.tileSpanMs).toBe(HALF_HOUR);
-    expect(range!.startMs).toBeDefined();
-    expect(range!.endMs).toBeDefined();
-  });
-
   it('empty tagIds: hook returns data:null with isLoading=false (no fetch)', async () => {
     const { result } = renderHook(() =>
       useTrendData({ viewport: defaultViewport, tagIds: [] }),
@@ -1067,7 +696,7 @@ describe('useTrendData — zoom-level switch', () => {
     expect(result.current.data).not.toBeNull();
   });
 
-  it('cache eviction: old-level tiles are evicted on swap so re-zoom fires fresh fetches', async () => {
+  it('FIX 4: terminal tiles are retained in LRU after level switch — pan-back is a cache hit', async () => {
     mockFetchTile.mockResolvedValue(makeAggResponse([1]));
 
     const { result, rerender } = renderHook(
@@ -1084,70 +713,12 @@ describe('useTrendData — zoom-level switch', () => {
 
     expect(mockFetchTile.mock.calls.length).toBeGreaterThan(callsAfterFirstLoad); // new fetches fired
 
-    // Return to original viewport. Old tiles were evicted → fresh fetches must fire.
+    // Return to original viewport. FIX 4: tiles were NOT evicted → pan-back is a cache hit.
     const callsAfterSwitch = mockFetchTile.mock.calls.length;
     rerender({ viewport: defaultViewport });
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
-    expect(mockFetchTile.mock.calls.length).toBeGreaterThan(callsAfterSwitch); // re-fetched (eviction confirmed)
-  });
-
-  it('ensureCovered no-ops during level transition (levelTransitionPending blocks fetch)', async () => {
-    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
-
-    const { result, rerender } = renderHook(
-      (props: { viewport: Viewport }) => useTrendData({ ...props, tagIds: [1] }),
-      { initialProps: { viewport: defaultViewport } },
-    );
-
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-
-    // Stall new-level fetches indefinitely — transition stays pending.
-    mockFetchTile.mockImplementation(() => new Promise(() => {}));
-
-    rerender({ viewport: { start: 0n, end: ONE_HOUR * 4n } });
-
-    const callsWhenTransitionStarts = mockFetchTile.mock.calls.length;
-
-    act(() => {
-      // Range to the left of the active set — would normally fire a fetch.
-      result.current.ensureCovered(-ONE_HOUR * 3n, -ONE_HOUR * 2n);
-    });
-
-    // ensureCovered must be a no-op while the transition is pending.
-    expect(mockFetchTile.mock.calls.length).toBe(callsWhenTransitionStarts);
-  });
-
-  it('ensureCovered resumes normally after swap completes', async () => {
-    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
-
-    const { result, rerender } = renderHook(
-      (props: { viewport: Viewport }) => useTrendData({ ...props, tagIds: [1] }),
-      { initialProps: { viewport: defaultViewport } },
-    );
-
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-
-    // Switch to wider viewport and let the swap complete.
-    rerender({ viewport: { start: 0n, end: ONE_HOUR * 4n } });
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-
-    const callsAfterSwap = mockFetchTile.mock.calls.length;
-
-    // Mock Date.now far into the future so the future-tile filter doesn't block us.
-    const dateSpy = vi.spyOn(Date, 'now').mockReturnValue(Number(ONE_HOUR * 100n));
-
-    // Active set after swap to ONE_HOUR*4n viewport: ends at ONE_HOUR*6n (3 tiles).
-    // Use nowMs = ONE_HOUR*100n; request a tile that's well past the active set but
-    // before nowMs so both filters (>= 0n and < nowMs) pass.
-    act(() => {
-      result.current.ensureCovered(ONE_HOUR * 6n + 1n, ONE_HOUR * 7n);
-    });
-
-    // ensureCovered must fire a fetch for the out-of-active-set tile.
-    expect(mockFetchTile.mock.calls.length).toBeGreaterThan(callsAfterSwap);
-
-    dateSpy.mockRestore();
+    expect(mockFetchTile.mock.calls.length).toBe(callsAfterSwitch); // cache hit — no re-fetch
   });
 });
 
@@ -1223,37 +794,6 @@ describe('useTrendData — lastFetchMs', () => {
     expect(result.current.lastFetchMs).not.toBeNull();
     expect(Number.isInteger(result.current.lastFetchMs)).toBe(true);
   });
-
-  it('ensureCovered DOES update lastFetchMs after each tile resolves', async () => {
-    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
-
-    const { result } = renderHook(() =>
-      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
-    );
-
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-    const fetchMsAfterBatch = result.current.lastFetchMs;
-    expect(fetchMsAfterBatch).not.toBeNull();
-
-    // Mock Date.now far into the future so future-tile filter doesn't suppress the fetch.
-    const dateSpy = vi.spyOn(Date, 'now').mockReturnValue(Number(ONE_HOUR * 100n));
-
-    // ensureCovered fires a real fetch for a tile outside the active set.
-    const cachedEnd = ONE_HOUR + HALF_HOUR;
-    act(() => {
-      result.current.ensureCovered(cachedEnd, cachedEnd + HALF_HOUR);
-    });
-
-    // Wait for the ensureCovered fetch to resolve and activeTileCount to increase.
-    // Initial load = 3 tiles (left-prefetch at -HALF_HOUR filtered as pre-epoch).
-    await waitFor(() => expect(result.current.activeTileCount).toBeGreaterThan(3));
-
-    // lastFetchMs must have been updated by the ensureCovered tile fetch.
-    expect(result.current.lastFetchMs).not.toBeNull();
-    expect(Number.isInteger(result.current.lastFetchMs)).toBe(true);
-
-    dateSpy.mockRestore();
-  });
 });
 
 // ── responseTailTs ────────────────────────────────────────────────────────────
@@ -1315,324 +855,6 @@ describe('useTrendData — responseTailTs', () => {
 
     // responseTailTs reflects only active tiles; LRU-evicted prefetch tiles don't affect it.
     expect(result.current.responseTailTs).toBe(TAIL_TS);
-  });
-});
-
-// ── evictAll ──────────────────────────────────────────────────────────────────
-
-describe('useTrendData — evictAll', () => {
-  it('clears entire cache: activeTileCount → 0, responseTailTs → null', async () => {
-    mockFetchTile.mockResolvedValue(makeAggResponse([1], { responseTailTs: DEFAULT_RESPONSE_TAIL_TS }));
-
-    const { result } = renderHook(() =>
-      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
-    );
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-
-    expect(result.current.activeTileCount).toBeGreaterThan(0);
-    expect(result.current.responseTailTs).toBe(DEFAULT_RESPONSE_TAIL_TS);
-
-    await act(() => {
-      result.current.evictAll();
-    });
-
-    expect(result.current.activeTileCount).toBe(0);
-    expect(result.current.responseTailTs).toBeNull();
-  });
-
-  it('in-flight fetch after evictAll is dropped (generation bumped)', async () => {
-    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
-
-    const { result } = renderHook(() =>
-      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
-    );
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-    const swapBefore = result.current.swapCounter;
-
-    // Stall next fetch so it stays in-flight across evictAll.
-    const resolvers: ((v: ReturnType<typeof makeAggResponse>) => void)[] = [];
-    mockFetchTile.mockImplementation(() => new Promise(r => resolvers.push(r)));
-
-    // ensureCovered queues an in-flight fetch.
-    act(() => { result.current.ensureCovered(-ONE_HOUR * 5n, -ONE_HOUR * 4n); });
-
-    // evictAll bumps generation; the in-flight fetch should be dropped.
-    await act(() => { result.current.evictAll(); });
-
-    // Resolve the stale fetch — swap counter must NOT advance.
-    await act(async () => {
-      for (const r of resolvers) r(makeAggResponse([1], { responseTailTs: 9_999_999_999_999 }));
-    });
-
-    expect(result.current.swapCounter).toBe(swapBefore);
-    expect(result.current.activeTileCount).toBe(0);
-  });
-});
-
-// ─── isTailing skip guard ─────────────────────────────────────────────────────
-
-describe('useTrendData — isTailing skip guard', () => {
-  it('live entry fires one spine fetch; same-span tick after spine settles fires no additional fetch', async () => {
-    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
-
-    const { rerender } = renderHook(
-      ({ viewport, isLive }: { viewport: Viewport; isLive: boolean }) =>
-        useTrendData({ viewport, tagIds: [1], isLive }),
-      { initialProps: { viewport: defaultViewport, isLive: false } },
-    );
-
-    // History-mode fetches settle first.
-    await waitFor(() => expect(mockFetchTile).toHaveBeenCalled());
-    const callsAfterHistory = mockFetchTile.mock.calls.length;
-
-    // Enter tailing mode with a new viewport (Go Live always changes nowMs → new viewport).
-    // isTailing is no longer in the effect dep array; only the viewport change triggers a re-run.
-    const liveViewport: Viewport = { start: ONE_HOUR * 10n, end: ONE_HOUR * 11n };
-    rerender({ viewport: liveViewport, isLive: true });
-    await waitFor(() => expect(mockFetchTile.mock.calls.length).toBeGreaterThan(callsAfterHistory));
-    const callsAfterSpine = mockFetchTile.mock.calls.length;
-
-    // Tick viewport forward keeping the same span → spineLoadedRef=true, skip guard fires.
-    const tickedViewport: Viewport = { start: ONE_HOUR * 10n + 1000n, end: ONE_HOUR * 11n + 1000n };
-    rerender({ viewport: tickedViewport, isLive: true });
-
-    await act(async () => {});
-    // No additional fetches beyond the spine fetch.
-    expect(mockFetchTile.mock.calls.length).toBe(callsAfterSpine);
-  });
-
-  it('isTailing=true with empty active set → initial fetch fires', async () => {
-    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
-
-    const { result } = renderHook(() =>
-      useTrendData({ viewport: defaultViewport, tagIds: [1], isLive: true }),
-    );
-
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-    // At least one visible-tile fetch must have fired (empty active set → guard skipped).
-    expect(mockFetchTile).toHaveBeenCalled();
-    // Phase 2b: data is always null in live mode; spine goes to onSpineResolved / unified buffer.
-    expect(result.current.data).toBeNull();
-  });
-
-  it('isTailing=true + span change (preset switch) → fetch fires', async () => {
-    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
-
-    const { rerender } = renderHook(
-      ({ viewport, isLive }: { viewport: Viewport; isLive: boolean }) =>
-        useTrendData({ viewport, tagIds: [1], isLive }),
-      { initialProps: { viewport: defaultViewport, isLive: false } },
-    );
-
-    await waitFor(() => expect(mockFetchTile).toHaveBeenCalled());
-    const callsAfterInitial = mockFetchTile.mock.calls.length;
-
-    // Switch to 2h span (simulates preset change during tailing).
-    const widerViewport: Viewport = { start: 0n, end: ONE_HOUR * 2n };
-    rerender({ viewport: widerViewport, isLive: true });
-
-    await waitFor(() => expect(mockFetchTile.mock.calls.length).toBeGreaterThan(callsAfterInitial));
-  });
-
-  it('live entry: fetchTile called with exact viewport bounds, not tile-grid-aligned bounds', async () => {
-    // Viewport ending at a non-round timestamp — tile-grid alignment would shift
-    // startTime to a boundary earlier than viewport.start, creating a left-side gap.
-    const oddViewport: Viewport = { start: 12_345_678_000n, end: 12_345_678_000n + ONE_HOUR };
-
-    let seededBounds: { startTime: bigint; endTime: bigint } | undefined;
-    renderHook(() =>
-      useTrendData({
-        viewport: oddViewport,
-        tagIds: [1],
-        isLive: true,
-        onSpineResolved: (_tagId, series) => { seededBounds = series; },
-      }),
-    );
-
-    await waitFor(() => expect(mockFetchTile).toHaveBeenCalled());
-
-    // Fetch params must use raw viewport bounds (no grid alignment).
-    const call = mockFetchTile.mock.calls[0]!;
-    expect(call[0].startTime).toBe(oddViewport.start);
-    expect(call[0].endTime).toBe(oddViewport.end);
-    // Phase 2b: assembled spine goes to onSpineResolved, not hookResult.data.
-    await waitFor(() => seededBounds !== undefined);
-    expect(seededBounds!.startTime).toBe(oddViewport.start);
-    expect(seededBounds!.endTime).toBe(oddViewport.end);
-  });
-
-  it('live entry: exactly one spine tile fetch; data:null + activeTileCount:0 (spine bypasses cache)', async () => {
-    let onSpineResolvedCallCount = 0;
-
-    const { result } = renderHook(
-      ({ viewport, isLive }: { viewport: Viewport; isLive: boolean }) =>
-        useTrendData({
-          viewport, tagIds: [1], isLive,
-          onSpineResolved: () => { onSpineResolvedCallCount++; },
-        }),
-      { initialProps: { viewport: defaultViewport, isLive: true } },
-    );
-
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-
-    // Spine fetch fires exactly once (1 group of 1 tag → 1 call).
-    expect(mockFetchTile).toHaveBeenCalledTimes(1);
-    // Phase 2b: data is null in live mode; spine is delivered via onSpineResolved.
-    expect(result.current.data).toBeNull();
-    expect(onSpineResolvedCallCount).toBe(1);
-    // activeTileCount stays 0 in live mode — spine is not a cached tile.
-    expect(result.current.activeTileCount).toBe(0);
-  });
-
-  it('live mode: viewport tick (same span) does not trigger additional fetch', async () => {
-    const { result, rerender } = renderHook(
-      ({ viewport }: { viewport: Viewport }) =>
-        useTrendData({ viewport, tagIds: [1], isLive: true }),
-      { initialProps: { viewport: defaultViewport } },
-    );
-
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-    const callsAfterSpine = mockFetchTile.mock.calls.length;
-
-    // Tick viewport end forward by 1s (same span, just later).
-    rerender({ viewport: { start: 1000n, end: ONE_HOUR + 1000n } });
-
-    // Spine is already loaded and span unchanged — no additional fetch.
-    await act(async () => {});
-    expect(mockFetchTile.mock.calls.length).toBe(callsAfterSpine);
-  });
-
-  it('in-flight guard: second effect run while spine fetch in-flight fires no duplicate fetch', async () => {
-    // Stall the spine fetch so spineFetchInFlightRef stays true.
-    const resolvers: Array<(v: TileApiResponse) => void> = [];
-    mockFetchTile.mockImplementation(() => new Promise<TileApiResponse>(r => resolvers.push(r)));
-
-    const { rerender } = renderHook(
-      ({ viewport }: { viewport: Viewport }) =>
-        useTrendData({ viewport, tagIds: [1], isLive: true }),
-      { initialProps: { viewport: defaultViewport } },
-    );
-
-    // Wait for the first effect to fire and start the in-flight fetch.
-    await waitFor(() => expect(mockFetchTile).toHaveBeenCalledTimes(1));
-
-    // Translate the viewport (same span, different start/end) → effect re-fires.
-    // spanChanged=false + spineFetchInFlightRef=true → skip guard blocks the second fetch.
-    rerender({ viewport: { start: 1000n, end: ONE_HOUR + 1000n } });
-    await act(async () => {});
-
-    // Only the original spine fetch was initiated — no duplicate.
-    expect(mockFetchTile).toHaveBeenCalledTimes(1);
-
-    // Clean up: resolve the pending fetch so no hanging promises remain.
-    act(() => { for (const r of resolvers) r(makeAggResponse([1])); });
-  });
-});
-
-// ── refetchHistory ─────────────────────────────────────────────────────────────
-
-describe('useTrendData — refetchHistory', () => {
-  it('forces a history fetch with 1 left prefetch and 0 right prefetch tiles', async () => {
-    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
-
-    // Start in tailing mode so spineLoadedRef is set, then switch to fixed
-    // to simulate the live → fixed transition. refetchHistory() is called
-    // on the fixed-mode side to trigger the asymmetric history fetch.
-    const { result, rerender } = renderHook(
-      ({ viewport, isLive }: { viewport: Viewport; isLive: boolean }) =>
-        useTrendData({ viewport, tagIds: [1], isLive }),
-      { initialProps: { viewport: defaultViewport, isLive: false } },
-    );
-
-    // Let history mode settle first.
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-
-    // Enter live mode with a new viewport (Go Live produces a new modeViewport).
-    const liveViewport: Viewport = { start: ONE_HOUR * 10n, end: ONE_HOUR * 11n };
-    rerender({ viewport: liveViewport, isLive: true });
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-
-    // Simulate live → fixed transition: switch to fixed mode at the live viewport.
-    rerender({ viewport: liveViewport, isLive: false });
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-    const callsBeforeRefetch = mockFetchTile.mock.calls.length;
-
-    // Call refetchHistory() — same viewport, no dep change, but version bump forces effect.
-    act(() => { result.current.refetchHistory(); });
-
-    await waitFor(() => expect(mockFetchTile.mock.calls.length).toBeGreaterThan(callsBeforeRefetch));
-
-    // Collect the new calls from the refetch.
-    const newCalls = mockFetchTile.mock.calls.slice(callsBeforeRefetch);
-
-    // With visibleTilesPerWindow=2 and overfetchPerSide=1 (but rightCount=0):
-    // visible = 2 tiles, prefetch = 1 left tile. Total = 3 tile fetches.
-    expect(newCalls.length).toBe(3);
-
-    // Verify the 1 left-prefetch tile ends at firstVisibleStart (i.e. it's left of visible).
-    const tileSpan = (liveViewport.end - liveViewport.start) / 2n; // visibleTilesPerWindow=2
-    // All tiles returned by tilesForViewport use endTime = startTime + tileSpan.
-    // The left prefetch tile has the smallest startTime of the batch.
-    const starts = newCalls.map(([p]) => (p as Parameters<typeof fetchTile>[0]).startTime);
-    const minStart = starts.reduce((a, b) => (a < b ? a : b));
-    const maxStart = starts.reduce((a, b) => (a > b ? a : b));
-    // Left prefetch is exactly one tileSpan before the first visible tile.
-    // First visible start = lastVisibleEnd - 2*tileSpan; leftPrefetch start = firstVisible - tileSpan.
-    // Equivalently: maxStart - minStart should be exactly 2*tileSpan (covering 3 tiles).
-    expect(maxStart - minStart).toBe(tileSpan * 2n);
-
-    // No right-side prefetch: no call should have startTime >= lastVisibleEnd.
-    // lastVisibleEnd = minStart + 3*tileSpan.
-    const lastVisibleEnd = minStart + tileSpan * 3n;
-    for (const [p] of newCalls) {
-      expect((p as Parameters<typeof fetchTile>[0]).startTime).toBeLessThan(lastVisibleEnd);
-    }
-  });
-});
-
-// ── Phase 2b: liveGeneration capture ─────────────────────────────────────────
-
-describe('useTrendData — Phase 2b live-generation capture', () => {
-  it('D1: liveGeneration captured at dispatch; stale gen → onSpineResolved still called with dispatch-time gen', async () => {
-    // Verify that dispatchGeneration is captured from getLiveGeneration() at the moment the
-    // fetch is dispatched, not at the moment the fetch resolves. If the live generation
-    // advances between dispatch and resolve, useLiveSubscription's seedFromSpineFetch will
-    // silently drop the stale result — but useTrendData's responsibility is solely to pass
-    // the dispatch-time generation to onSpineResolved, not to re-check it.
-
-    let liveGen = 0;
-    const onSpineResolved = vi.fn();
-
-    // Stall the fetch so we can advance liveGen before it resolves.
-    const resolvers: Array<(v: TileApiResponse) => void> = [];
-    mockFetchTile.mockImplementation(
-      () => new Promise<TileApiResponse>(r => resolvers.push(r)),
-    );
-
-    renderHook(() =>
-      useTrendData({
-        viewport: defaultViewport,
-        tagIds: [1],
-        isLive: true,
-        getLiveGeneration: () => liveGen,
-        onSpineResolved,
-      }),
-    );
-
-    // Wait for the fetch to be dispatched.
-    await waitFor(() => expect(mockFetchTile).toHaveBeenCalledTimes(1));
-
-    // Simulate commitAndDrain: advance the live generation AFTER dispatch.
-    liveGen = 1;
-
-    // Resolve the fetch with the stale generation still in dispatchGeneration.
-    act(() => {
-      for (const r of resolvers) r(makeAggResponse([1]));
-    });
-
-    // onSpineResolved is called with the dispatch-time generation (0), not the current (1).
-    await waitFor(() => expect(onSpineResolved).toHaveBeenCalled());
-    expect(onSpineResolved).toHaveBeenCalledWith(1, expect.objectContaining({ type: 'aggregate' }), 0);
   });
 });
 

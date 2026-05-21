@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useHmiContext } from '@caro/hmi-context';
 import { TS_BUCKET_ORIGIN_MS, floorDiv } from './level.js';
-import type { AggregateSeriesData, RawSeriesData, TrendData } from './types.js';
-import { mergeTrendData } from './mergeTrendData.js';
 
 /**
  * Per-tag bounded buffer for samples arriving during the fetch-in-flight
@@ -10,10 +8,7 @@ import { mergeTrendData } from './mergeTrendData.js';
  * so effective contents are samples newer than the most recent tile's
  * request entry time. Capacity bounds the pathological case of an
  * unusually slow fetch (cold CAG query, network blip) at ~5 s of live
- * history at 4 Hz. The ring's role narrowed when the original
- * "ring-survives-transition" architecture was abandoned in favor of
- * eviction-on-live-entry — state-change replay is bounded by the same
- * fetch window, so a small capacity suffices.
+ * history at 4 Hz.
  */
 export const TREND_RING_CAPACITY = 20;
 
@@ -72,51 +67,20 @@ export interface UseLiveSubscriptionOptions {
 
 export interface UseLiveSubscriptionResult {
   /**
-   * Clears ring, accumulator, raw-buffer, and unified-buffer state.
-   * Increments the generation counter as its FIRST action so any in-flight
-   * seedFromSpineFetch calls become stale immediately. Synchronous; safe to
-   * call inside dispatchModeAction wrappers.
+   * Clears accumulator and raw-buffer (live-tail) state. The ring is left intact:
+   * it is capacity-bounded and self-refreshing (the WS push is unconditional), and is
+   * the seed source the tailMode effect rebuilds the buffer from on re-entry to Live.
+   * Does NOT bump any counter — tile-fetch staleness is handled by
+   * useTrendData.generationRef which is independent (§4.4).
+   * Synchronous; safe to call inside dispatchModeAction wrappers.
    */
-  commitAndDrain(): void;
+  drainBuffers(): void;
   /**
    * Returns max(sessionHighWaterMark, currentMaxAcrossSubscribedTags).
    * Returns null before the first TREND_DELTA frame arrives in the session.
-   * Monotonic-non-decreasing within a session — the high-water-mark floor
-   * prevents regression when the max-providing tag is removed. Reset to null
-   * by commitAndDrain. See proposal §4 preamble / §11 glossary.
+   * Monotonic-non-decreasing within a session. Reset to null by drainBuffers.
    */
   getLatestSampleTs(): bigint | null;
-  /**
-   * Returns the current generation counter. Incremented by commitAndDrain
-   * (even when the buffer is empty). Callers capture this at fetch-dispatch
-   * time and pass it to seedFromSpineFetch; arrivals whose generation no
-   * longer matches are dropped silently. See proposal §4.4 / §11 glossary.
-   */
-  getCurrentGeneration(): number;
-  /**
-   * Merges a per-tag spine fetch result into the unified buffer, applying
-   * live-wins-on-coverage once at seed time (same rule as mergeTrendData,
-   * applied once instead of per-render). Drops silently if `generation`
-   * does not match the current generation counter — i.e. a commitAndDrain
-   * was called after the fetch was dispatched.
-   *
-   * Aggregate: clips spine at the first live bucket's start so WS-accumulated
-   * entries always win on their coverage range.
-   * Raw: drops spine entries with ts >= minLiveTs (the first raw-buffer entry).
-   */
-  seedFromSpineFetch(
-    tagId: number,
-    series: AggregateSeriesData | RawSeriesData,
-    generation: number,
-  ): void;
-  /**
-   * Returns the unified buffer — spine (seeded via seedFromSpineFetch) merged
-   * with the current WS-accumulated tail — in the same TrendData shape that
-   * mergeTrendData returns. Returns null when no spine has been seeded yet.
-   * Phase 2a: thin view over existing ring + accumulator + rawBuffers with the
-   * spine stored alongside. No callers wired yet.
-   */
-  getBufferSnapshot(): TrendData | null;
   /**
    * Live tail extension for chart rendering. null when not tailing, when
    * tailMode is null, or when no data has closed/arrived yet.
@@ -131,11 +95,8 @@ type TrendSample = { moduleTs: number; value: number | boolean | string | null }
 interface OpenBucket {
   startMs: bigint;
   lastTs: number;
-  /** Most-recent value by moduleTs order, including null. */
   last: number | null;
-  /** Running min of non-null values; null if none yet. */
   min: number | null;
-  /** Running max of non-null values; null if none yet. */
   max: number | null;
   nullCount: number;
   valueCount: number;
@@ -144,9 +105,7 @@ interface OpenBucket {
 interface AccumulatorState {
   openBucket: OpenBucket | null;
   closed: { value: (number | null)[]; min: (number | null)[]; max: (number | null)[] };
-  /** startMs of the first closed bucket, set on first close. */
   firstClosedStartMs: bigint | null;
-  /** LOCF seed for empty-bucket close; null if no good value ever seen. */
   lastKnownValue: number | null;
 }
 
@@ -158,36 +117,6 @@ function toNumericValue(v: number | boolean | string | null): number | null {
   return null;
 }
 
-/**
- * Returns true when `existing` and `incoming` share the same fetch identity —
- * i.e. they came from the same spine fetch (same tile range, same dispatch
- * shape). Used by seedFromSpineFetch to decide whether to mutate the existing
- * shared series map (same fetch, subsequent tag) or replace it wholesale (new
- * fetch with different preset/range/bucketSMs).
- */
-function spineMetadataMatches(
-  existing: TrendData | null,
-  incoming: AggregateSeriesData | RawSeriesData,
-): boolean {
-  if (existing === null) return false;
-  if (existing.type !== incoming.type) return false;
-  if (existing.startTime !== incoming.startTime) return false;
-  if (existing.source !== incoming.source) return false;
-  if (existing.type === 'aggregate' && incoming.type === 'aggregate') {
-    if (existing.endTime !== incoming.endTime) return false;
-    if (existing.bucketSMs !== incoming.bucketSMs) return false;
-    if (existing.n !== incoming.n) return false;
-  }
-  if (existing.type === 'raw' && incoming.type === 'raw') {
-    if (existing.endTime !== incoming.endTime) return false;
-  }
-  return true;
-}
-
-/**
- * Floor-aligned bucket start for `moduleTs` on the TS_BUCKET_ORIGIN_MS grid.
- * Uses floorDiv so pre-origin timestamps are handled correctly.
- */
 function bucketStartFor(moduleTs: number, bucketSMs: bigint): bigint {
   const ts = BigInt(moduleTs);
   return TS_BUCKET_ORIGIN_MS + floorDiv(ts - TS_BUCKET_ORIGIN_MS, bucketSMs) * bucketSMs;
@@ -202,7 +131,7 @@ function addToOpenBucket(b: OpenBucket, moduleTs: number, numValue: number | nul
   b.valueCount++;
   if (numValue === null) {
     b.nullCount++;
-    b.last = null;  // last tracks most-recent-by-ts, including null values
+    b.last = null;
   } else {
     b.last = numValue;
     b.min = b.min === null ? numValue : Math.min(b.min, numValue);
@@ -210,21 +139,16 @@ function addToOpenBucket(b: OpenBucket, moduleTs: number, numValue: number | nul
   }
 }
 
-/** Three-case rule from §5.4. Sets state.openBucket to null after close. */
 function closeCurrentBucket(state: AccumulatorState): void {
   const b = state.openBucket!;
   const closedStartMs = b.startMs;
   let v: number | null, mn: number | null, mx: number | null;
   if (b.nullCount > 0) {
-    // Mixed-null: any null present → emit (null, null, null)
     v = null; mn = null; mx = null;
     state.lastKnownValue = null;
   } else if (b.valueCount === 0) {
-    // Empty: LOCF from lastKnownValue
     v = state.lastKnownValue; mn = v; mx = v;
-    // lastKnownValue unchanged
   } else {
-    // Normal: all non-null
     v = b.last; mn = b.min; mx = b.max;
     state.lastKnownValue = v;
   }
@@ -255,28 +179,21 @@ function processEventIntoAccumulator(
   }
 
   if (eventBucketStart < state.openBucket.startMs) {
-    // Out-of-order: drop silently
-    return;
+    return; // out-of-order: drop
   }
 
-  // Event is in a later bucket: close current, fill intermediate empties, open new.
   const prevStartMs = state.openBucket.startMs;
-  closeCurrentBucket(state); // sets state.openBucket = null
+  closeCurrentBucket(state);
   let nextStart = prevStartMs + bucketSMs;
   while (nextStart < eventBucketStart) {
     state.openBucket = newOpenBucket(nextStart);
-    closeCurrentBucket(state); // empty rule applies
+    closeCurrentBucket(state);
     nextStart += bucketSMs;
   }
   state.openBucket = newOpenBucket(eventBucketStart);
   addToOpenBucket(state.openBucket, moduleTs, numValue);
 }
 
-/**
- * Builds an AggregateTail snapshot from current accumulator state.
- * Returns null when no tag has closed any buckets yet.
- * Shares array references with accumulator state — always rebuild after mutations.
- */
 function buildAggregateTail(
   accumulators: Map<number, AccumulatorState>,
   bucketSMs: bigint,
@@ -296,17 +213,10 @@ function buildAggregateTail(
     }
   }
   if (earliestStart === null) return null;
-
   return { mode: 'aggregate', startMs: earliestStart, bucketSMs, perTag };
 }
 
-/**
- * Builds a RawTail from current raw buffers.
- * Returns null when no tag has any buffered entries.
- */
-function buildRawTail(
-  rawBuffers: Map<number, TrendSample[]>,
-): RawTail | null {
+function buildRawTail(rawBuffers: Map<number, TrendSample[]>): RawTail | null {
   const perTag = new Map<number, { ts: bigint[]; value: (number | null)[] }>();
   let hasAny = false;
   for (const [tagId, buf] of rawBuffers) {
@@ -340,8 +250,7 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
   const accumulatorsRef = useRef<Map<number, AccumulatorState>>(new Map());
   const rawBuffersRef   = useRef<Map<number, TrendSample[]>>(new Map());
 
-  // Prop shadows in refs — always current, safe to read from callbacks.
-  const isLiveRef        = useRef(isLive);
+  const isLiveRef           = useRef(isLive);
   const bucketSMsRef        = useRef<bigint | null>(bucketSMs);
   const trimThresholdRef    = useRef<number | null>(trimThreshold);
   const seedRef             = useRef<Map<number, number | boolean | string | null> | null>(seedFromCachedTile);
@@ -349,39 +258,25 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
   const viewportSpanMsRef   = useRef<bigint>(viewportSpanMs);
   const onDataReceivedRef   = useRef<((maxModuleTs: number) => void) | undefined>(onDataReceived);
 
-  // Frame-coalescing state for onDataReceived.
+  isLiveRef.current            = isLive;
+  bucketSMsRef.current         = bucketSMs;
+  trimThresholdRef.current     = trimThreshold;
+  seedRef.current              = seedFromCachedTile;
+  tailModeRef.current          = tailMode;
+  viewportSpanMsRef.current    = viewportSpanMs;
+  onDataReceivedRef.current    = onDataReceived;
+
   const pendingFrameMaxTsRef   = useRef<number>(0);
   const frameFlushScheduledRef = useRef(false);
 
-  // Session-scoped high-water-mark: highest moduleTs seen since Live entry.
-  // Floors latestSampleTs so it never regresses when the max-providing tag
-  // is removed. Reset to null by commitAndDrain. See proposal §4 preamble.
+  // Session-scoped high-water-mark. Reset to null by drainBuffers.
   const sessionHighWaterMarkRef = useRef<bigint | null>(null);
-
-  // Monotonic generation counter. Incremented by commitAndDrain as its FIRST
-  // action, before any buffer clears. seedFromSpineFetch callers capture this
-  // at fetch-dispatch time and pass it back; stale arrivals are dropped.
-  const generationRef = useRef<number>(0);
-
-  // Unified buffer: spine fetch result merged with WS-accumulated entries.
-  // Seeded via seedFromSpineFetch; cleared by commitAndDrain.
-  const spineRef = useRef<TrendData | null>(null);
-
-  isLiveRef.current      = isLive;
-  bucketSMsRef.current      = bucketSMs;
-  trimThresholdRef.current  = trimThreshold;
-  seedRef.current           = seedFromCachedTile;
-  tailModeRef.current       = tailMode;
-  viewportSpanMsRef.current = viewportSpanMs;
-  onDataReceivedRef.current = onDataReceived;
 
   const [tail, setTail] = useState<LiveTail>(null);
 
   const tagIdsKey    = tagIds.join(',');
   const bucketSMsStr = bucketSMs?.toString() ?? 'null';
 
-  // Flush accumulator/raw state to React — React 18 auto-batching coalesces
-  // multiple calls within the same synchronous event handler.
   function flushTail(): void {
     if (!isLiveRef.current || tailModeRef.current === null) {
       setTail(null);
@@ -401,7 +296,6 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
   useEffect(() => {
     const tagIdSet = new Set(tagIds);
 
-    // Prune ring entries for removed tags (runs after previous cleanup unsubscribes).
     for (const key of [...ringsRef.current.keys()]) {
       if (!tagIdSet.has(key)) ringsRef.current.delete(key);
     }
@@ -431,10 +325,6 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
             if (state) {
               processEventIntoAccumulator(state, moduleTs, toNumericValue(value), bSMs);
 
-              // Trim aggregate tail to 2 × viewportSpanMs from latestSampleTs.
-              // Uses sessionHighWaterMarkRef (just bumped above to max(prev, moduleTs)).
-              // HWM ≥ currentMax across all subscribed ring entries, so it equals
-              // getLatestSampleTs() in this synchronous callback context.
               const latestTs = sessionHighWaterMarkRef.current;
               if (latestTs !== null) {
                 const trimLeftMs = latestTs - 2n * viewportSpanMsRef.current;
@@ -443,7 +333,6 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
                   if (firstClosed === null) continue;
                   const diff = trimLeftMs - firstClosed;
                   if (diff <= 0n) continue;
-                  // k = ⌈diff / bSMs⌉: first bucket index whose start ≥ trimLeftMs
                   const k = Math.min(
                     Number((diff + bSMs - 1n) / bSMs),
                     accState.closed.value.length,
@@ -464,8 +353,6 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
             const buf = rawBuffersRef.current.get(tagId);
             if (buf) {
               buf.push({ moduleTs, value });
-              // Trim all raw buffers to 2×viewportSpanMs so memory is bounded
-              // to ~2 spans of recent data regardless of session length.
               const cutoff = moduleTs - Number(2n * viewportSpanMsRef.current);
               for (const [, b] of rawBuffersRef.current) {
                 while (b.length > 0 && b[0]!.moduleTs < cutoff) b.shift();
@@ -475,8 +362,6 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
           }
         }
 
-        // Coalesce all per-tag callbacks within the same WS frame into one
-        // onDataReceived call with the frame's max moduleTs.
         pendingFrameMaxTsRef.current = Math.max(pendingFrameMaxTsRef.current, moduleTs);
         if (!frameFlushScheduledRef.current) {
           frameFlushScheduledRef.current = true;
@@ -501,23 +386,12 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
 
   useEffect(() => {
     if (trimThreshold === null) return;
-    // Trim ring only. rawBuffersRef is intentionally NOT trimmed here:
-    // trimming it forward as new tiles load pushes minLiveTs forward in
-    // mergeRaw, letting LOCF gapfill from newly-fetched after-prefetch
-    // tiles leak through the cached-drop filter as a flatline gap.
-    // rawBuffersRef is cleared on tailing exit via commitAndDrain.
     for (const [tagId, arr] of ringsRef.current) {
       ringsRef.current.set(tagId, arr.filter(e => e.moduleTs >= trimThreshold));
     }
   }, [trimThreshold]);
 
   // ── Tailing / tailMode effect ─────────────────────────────────────────────
-  //
-  // Runs on: isTailing flip, bucketSMs change, tagIds change, or tailMode change.
-  // tailMode change while tailing is treated as tailing-exit-then-re-enter.
-  // On true→false or tailMode→null: clears both accumulators and raw buffers.
-  // On false→true (or bucketSMs/tagIds/tailMode change while true): re-inits
-  // the matching path and replays ring.
 
   useEffect(() => {
     if (!isLive || tailMode === null) {
@@ -530,7 +404,7 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
     const threshold = trimThresholdRef.current;
 
     if (tailMode === 'aggregate') {
-      if (bucketSMs === null) return; // wait for first tile to resolve
+      if (bucketSMs === null) return;
 
       accumulatorsRef.current.clear();
       rawBuffersRef.current.clear();
@@ -544,7 +418,6 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
         });
       }
 
-      // Replay ring (filtered by current trimThreshold)
       for (const tagId of tagIds) {
         const ring = ringsRef.current.get(tagId) ?? [];
         const entries = threshold !== null ? ring.filter(s => s.moduleTs >= threshold) : ring;
@@ -554,14 +427,12 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
         }
       }
     } else {
-      // raw mode
       accumulatorsRef.current.clear();
       rawBuffersRef.current.clear();
       for (const tagId of tagIds) {
         rawBuffersRef.current.set(tagId, []);
       }
 
-      // Replay ring (filtered by current trimThreshold)
       for (const tagId of tagIds) {
         const ring = ringsRef.current.get(tagId) ?? [];
         const entries = threshold !== null ? ring.filter(s => s.moduleTs >= threshold) : ring;
@@ -576,39 +447,21 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLive, bucketSMsStr, tagIdsKey, tailMode]);
 
-  // ── commitAndDrain ────────────────────────────────────────────────────────
+  // ── drainBuffers ──────────────────────────────────────────────────────────
+  // Clears accumulators, raw buffers, sessionHighWaterMark. Ring is left intact.
+  // Does NOT bump any counter — tile-fetch staleness is handled by
+  // useTrendData.generationRef which is independent (§4.4).
 
-  const commitAndDrain = useCallback((): void => {
-    // Generation bump is the FIRST action — any seedFromSpineFetch call that
-    // captured the old generation becomes stale immediately, even before the
-    // buffer clears complete. Fires unconditionally (even on empty buffers)
-    // so the invalidation contract holds regardless of buffer state.
-    generationRef.current += 1;
-    // Empty per-tag arrays in place rather than .clear() the maps so the
-    // subscribe callback's `if (buf)` guard still passes on subsequent events.
-    // Production masks this via the mode-flip lifecycle (tailMode-change effect
-    // re-allocates), but TG-7 surfaced it under stable-mode drain. See spec §10.6.
-    for (const arr of ringsRef.current.values()) arr.length = 0;
+  const drainBuffers = useCallback((): void => {
     accumulatorsRef.current.clear();
     for (const arr of rawBuffersRef.current.values()) arr.length = 0;
-    // Reset session high-water-mark alongside the other in-place clears so
-    // getLatestSampleTs() returns null immediately after drain.
     sessionHighWaterMarkRef.current = null;
-    // Clear unified buffer (spine portion) so getBufferSnapshot() returns null
-    // immediately after drain. Proposal §4.4 / Phase 2.4 contract.
-    spineRef.current = null;
-    // Clear React state so consumers see the drain immediately, without waiting
-    // on a subsequent re-render triggered by mode flip.
     setTail(null);
   }, []);
 
   // ── getLatestSampleTs ─────────────────────────────────────────────────────
 
   const getLatestSampleTs = useCallback((): bigint | null => {
-    // currentMaxAcrossSubscribedTags: derived from the last (most-recent)
-    // ring entry per currently-subscribed tag. The ring is keyed only for
-    // active tags; removed tags' entries are deleted by the subscribe-lifecycle
-    // effect, so this scan covers exactly the subscribed set.
     let currentMax: bigint | null = null;
     for (const arr of ringsRef.current.values()) {
       if (arr.length > 0) {
@@ -623,183 +476,14 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
     return hwm > currentMax ? hwm : currentMax;
   }, []);
 
-  // ── getCurrentGeneration ──────────────────────────────────────────────────
-
-  const getCurrentGeneration = useCallback((): number => generationRef.current, []);
-
-  // ── seedFromSpineFetch ────────────────────────────────────────────────────
-
-  const seedFromSpineFetch = useCallback((
-    tagId: number,
-    series: AggregateSeriesData | RawSeriesData,
-    generation: number,
-  ): void => {
-    // Stale-arrival guard: if commitAndDrain was called after the fetch was
-    // dispatched, the generation counter will have advanced past the captured
-    // value. Drop silently — the caller will issue a new fetch if needed.
-    if (generation !== generationRef.current) return;
-
-    if (series.type === 'aggregate') {
-      const tagData = series.series.get(tagId);
-      if (!tagData) return;
-
-      const existing = spineRef.current;
-      const isContinuation = spineMetadataMatches(existing, series);
-      // Live-wins-on-coverage clip applies only when this is a same-fetch
-      // continuation. On a wholesale replacement (preset change with different
-      // bucketSMs), the accumulator's firstClosedStartMs reflects OLD bucketing
-      // and is about to be reset by the tailMode effect — clipping based on it
-      // produces a gap. spineMetadataMatches is the right signal because
-      // bucketSMs is part of the metadata match.
-      if (!isContinuation) {
-        // The corruption window is specific to a bucketSMs change: bucketSMsRef
-        // is synced to the new value during the next render, before the tailMode
-        // effect runs. If the accumulators still hold OLD-bucketSMs data at that
-        // point, buildAggregateTail stamps them with the NEW bucketSMs — placing
-        // OLD-era buckets at wrong indices and cutting the merge right edge short.
-        // Clear only when bucketSMs actually changes; same-bucketSMs wholesale
-        // replaces (viewport shift, etc.) have valid accumulator data for the new
-        // spine and must not lose it.
-        const newBucketSMs = series.bucketSMs;
-        const curBucketSMs = bucketSMsRef.current !== null ? Number(bucketSMsRef.current) : null;
-        if (newBucketSMs !== curBucketSMs) {
-          accumulatorsRef.current.clear();
-          rawBuffersRef.current.clear();
-          sessionHighWaterMarkRef.current = null;
-        }
-      }
-      const accState = accumulatorsRef.current.get(tagId);
-      let clippedN = series.n;
-      if (isContinuation && accState && accState.firstClosedStartMs !== null) {
-        const liveStartIndex = Number(
-          (accState.firstClosedStartMs - series.startTime) / BigInt(series.bucketSMs),
-        );
-        clippedN = Math.max(0, Math.min(series.n, liveStartIndex));
-      }
-
-      const entry: { value: (number | null)[]; min?: (number | null)[]; max?: (number | null)[] } = {
-        value: tagData.value.slice(0, clippedN),
-      };
-      if (tagData.min) entry.min = tagData.min.slice(0, clippedN);
-      if (tagData.max) entry.max = tagData.max.slice(0, clippedN);
-
-      if (isContinuation) {
-        // Same fetch's subsequent tag — mutate the shared series map.
-        (existing as AggregateSeriesData).series.set(tagId, entry);
-      } else {
-        // New fetch (different preset / range / bucketSMs) — replace wholesale.
-        spineRef.current = {
-          type:      'aggregate',
-          source:    series.source,
-          startTime: series.startTime,
-          endTime:   series.endTime,
-          n:         series.n,
-          bucketSMs: series.bucketSMs,
-          series:    new Map([[tagId, entry]]),
-        };
-      }
-    } else {
-      // raw path
-      const tagData = series.series.get(tagId);
-      if (!tagData) return;
-
-      const existing = spineRef.current;
-      const isContinuation = spineMetadataMatches(existing, series);
-      // Live-wins-on-coverage (raw): drop spine entries with ts >= minLiveTs.
-      // Gate on isContinuation: on wholesale replacement, rawBuffersRef reflects
-      // an OLD session and is about to be reset by the tailMode effect.
-      if (!isContinuation) {
-        // Mirror the aggregate clear: wipe stale-bucketed state synchronously
-        // before the spineRef update so the next render's merge sees a clean tail.
-        accumulatorsRef.current.clear();
-        rawBuffersRef.current.clear();
-        sessionHighWaterMarkRef.current = null;
-      }
-      const rawBuf = rawBuffersRef.current.get(tagId);
-      let filteredTs    = [...tagData.ts];
-      let filteredValue = [...tagData.value];
-
-      if (isContinuation && rawBuf && rawBuf.length > 0) {
-        const minLiveTs = BigInt(rawBuf[0]!.moduleTs);
-        const cutIdx = filteredTs.findIndex(t => t >= minLiveTs);
-        if (cutIdx >= 0) {
-          filteredTs    = filteredTs.slice(0, cutIdx);
-          filteredValue = filteredValue.slice(0, cutIdx);
-        }
-      }
-
-      const entry: { ts: bigint[]; value: (number | null)[]; prev?: { ts: bigint; value: number | null } } = {
-        ts:    filteredTs,
-        value: filteredValue,
-        ...(tagData.prev ? { prev: tagData.prev } : {}),
-      };
-
-      if (isContinuation) {
-        // Same fetch's subsequent tag — spread preserves tile-range metadata.
-        const rawExisting = existing as RawSeriesData;
-        const newSeries = new Map(rawExisting.series);
-        newSeries.set(tagId, entry);
-        spineRef.current = { ...rawExisting, series: newSeries };
-      } else {
-        // New fetch — use series.endTime (tile range) so subsequent tags in the
-        // same fetch all see the same metadata and take the mutate branch above.
-        spineRef.current = {
-          type:      'raw',
-          source:    'raw',
-          startTime: series.startTime,
-          endTime:   series.endTime,
-          series:    new Map([[tagId, entry]]),
-        };
-      }
-    }
-
-  }, []);
-
-  // ── getBufferSnapshot ─────────────────────────────────────────────────────
-
-  const getBufferSnapshot = useCallback((): TrendData | null => {
-    const spine = spineRef.current;
-    if (spine === null) return null;
-    const mode = tailModeRef.current;
-    // Type-coherence guard: if the consumer's tailMode hasn't propagated to
-    // match the spine's actual type yet (e.g., one render between a new spine
-    // arriving via seedFromSpineFetch and TrendChartContainer recomputing
-    // tailMode from cachedData.type), pass null tail to mergeTrendData so the
-    // spine is returned unchanged. The mismatch resolves on the next render.
-    // Mirrors the tailToReturn guard at the hook surface.
-    const tailMatchesSpine =
-      (mode === 'aggregate' && spine.type === 'aggregate') ||
-      (mode === 'raw' && spine.type === 'raw');
-    if (!tailMatchesSpine) return spine;
-    if (mode === 'aggregate') {
-      const bSMs = bucketSMsRef.current;
-      if (bSMs === null) return spine;
-      return mergeTrendData(spine, buildAggregateTail(accumulatorsRef.current, bSMs));
-    }
-    if (mode === 'raw') {
-      return mergeTrendData(spine, buildRawTail(rawBuffersRef.current));
-    }
-    return spine;
-  }, []);
-
-  // Suppress the brief mismatch window during a tailMode transition
-  // (e.g., preset change crossing the §6.3 raw/aggregate dispatch
-  // boundary). The tail state is updated via useEffect after the render
-  // where tailMode prop changed; until then, returning the stale tail
-  // would surface as a [mergeTrendData] type mismatch warning. Returning
-  // null while modes are inconsistent lets mergeTrendData fall through
-  // to cached-only rendering (correct behavior) until the effect runs.
   const tailToReturn = useMemo(
     () => (tail !== null && tail.mode !== tailMode ? null : tail),
     [tail, tailMode],
   );
 
   return {
-    commitAndDrain,
+    drainBuffers,
     getLatestSampleTs,
-    getCurrentGeneration,
-    seedFromSpineFetch,
-    getBufferSnapshot,
     tail: tailToReturn,
   };
 }

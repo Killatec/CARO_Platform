@@ -555,6 +555,7 @@ Expected operator-visible state:
 const shutdown = async (signal: string): Promise<void> => {
   hmiTags.stopPublishing();
   intake.stopWatchdog();
+  trendSnapshotScheduler.stop();
   if (sizeMonitor) await sizeMonitor.stop();
   await dbPipeline.stop();
   await mqttBridge.stop().catch(() => {});

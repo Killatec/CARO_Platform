@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useState, useMemo, useRef } from 'react';
 import type { CSSProperties } from 'react';
-import { useTrendMode, trendModeReducer, modeToViewport, isLive } from './useTrendMode.js';
+import { useTrendMode, trendModeReducer, isLive } from './useTrendMode.js';
 import type { TrendModeAction } from './useTrendMode.js';
 import { useTrendData } from './useTrendData.js';
-import type { UseTrendDataResult } from './useTrendData.js';
 import { useLiveSubscription } from './useLiveSubscription.js';
 import type { UseLiveSubscriptionResult } from './useLiveSubscription.js';
 import { mergeTrendData } from './mergeTrendData.js';
@@ -14,7 +13,7 @@ import { SpanPresets } from './SpanPresets.js';
 import { EndPicker } from './EndPicker.js';
 import { CursorDisplay } from './CursorDisplay.js';
 import { TREND_VIEWER_DEFAULTS, MIN_VIEWPORT_SPAN_MS, MAX_VIEWPORT_SPAN_MS } from './level.js';
-import type { AggregateSeriesData, RawSeriesData } from './types.js';
+import type { ActiveTileEntry, AggregateSeriesData } from './types.js';
 
 const VISIBLE_TILES_PER_WINDOW = TREND_VIEWER_DEFAULTS.visibleTilesPerWindow;
 const BUCKET_COUNT = TREND_VIEWER_DEFAULTS.bucketCount;
@@ -36,6 +35,13 @@ const FOOTER: CSSProperties = {
   width: '100%',
   padding: '8px 0 0 0',
 };
+
+/** Returns responseTailTs of the rightmost active tile — used as the merge seam point (§5.2). */
+function getSeamResponseTailTs(activeTilesRef: { readonly current: ActiveTileEntry[] }): number | null {
+  const active = activeTilesRef.current;
+  if (active.length === 0) return null;
+  return active[active.length - 1]!.responseTailTs;
+}
 
 const FOOTER_LEFT: CSSProperties = {
   display: 'flex',
@@ -87,63 +93,52 @@ export function TrendChartContainer({
   const [cursorTsMs, setCursorTsMs] = useState<number | null>(null);
 
   // ── Zoom-level state ──────────────────────────────────────────────────────
-  const { zoomAnchorSpan, dataViewport, syncDataViewport, handleDragZoom: _handleDragZoom, handleZoomLevelSwitch: _handleZoomLevelSwitch } = useZoomState({
+  const { zoomAnchorSpan, dataViewport, handleDragZoom: _handleDragZoom, handleZoomLevelSwitch: _handleZoomLevelSwitch } = useZoomState({
     modeViewport,
     visibleTilesPerWindow: VISIBLE_TILES_PER_WINDOW,
     bucketCount: BUCKET_COUNT,
     lastIntent: modeState.lastIntent,
   });
 
-  // ── Live subscription ref (declared before useTrendData so the spine callbacks
-  //    can reference it; stable ref, never null after first render) ─────────────
+  // ── Live subscription ref (stable ref; populated synchronously after useLiveSubscription) ──
   const liveSubRef = useRef<UseLiveSubscriptionResult | null>(null);
-  const getLiveGeneration = useCallback(() => liveSubRef.current?.getCurrentGeneration() ?? 0, []);
-  const onSpineResolved = useCallback(
-    (tagId: number, series: AggregateSeriesData | RawSeriesData, gen: number) => {
-      liveSubRef.current?.seedFromSpineFetch(tagId, series, gen);
-    },
-    [],
-  );
+
+  // Stable callback — reads from liveSubRef so useTrendData's fetch effect can sample
+  // the latest HWM timestamp without creating a dependency cycle.
+  const getLatestSampleTs = useCallback(() => liveSubRef.current?.getLatestSampleTs() ?? null, []);
 
   // ── Data fetch (driven by explicit dataViewport) ──────────────────────────
-  const trendData = useTrendData({ viewport: dataViewport, tagIds, isLive: isLive(modeState.mode), getLiveGeneration, onSpineResolved });
-  const { data, isLoading, ensureCovered, getActiveRange, swapCounter, activeTileCount, lastFetchMs } = trendData;
+  const trendData = useTrendData({ viewport: dataViewport, tagIds, isLive: isLive(modeState.mode), getLatestSampleTs });
+  const { data, isLoading, swapCounter, activeTileCount, lastFetchMs } = trendData;
 
-  // ── Stable refs for synchronous access from callbacks and cleanup ─────────
-  // Updated synchronously during render so callbacks always see the latest values.
+  // ── Stable ref for synchronous access from callbacks ─────────────────────
   const modeStateRef = useRef(modeState);
-  const trendDataRef = useRef<UseTrendDataResult>(trendData);
-
   modeStateRef.current = modeState;
-  trendDataRef.current = trendData;
 
   // ── Live subscription inputs ──────────────────────────────────────────────
   const viewportSpanMs = modeViewport.end - modeViewport.start;
-  // In Live mode, read from the unified buffer (previous render's getBufferSnapshot) so
-  // tailMode and bucketSMs are derivable without holding spine data in useTrendData state.
-  const cachedData = isLive(modeState.mode)
-    ? (liveSubRef.current?.getBufferSnapshot() ?? null)
-    : data;
 
+  // Derived from tile data (unified path — no spine).
   const tailMode: 'aggregate' | 'raw' | null =
-    cachedData?.type === 'aggregate' ? 'aggregate'
-    : cachedData?.type === 'raw'       ? 'raw'
+    data?.type === 'aggregate' ? 'aggregate'
+    : data?.type === 'raw'       ? 'raw'
     : null;
 
   const bucketSMs: bigint | null =
-    cachedData?.type === 'aggregate' ? BigInt(cachedData.bucketSMs) : null;
+    data?.type === 'aggregate' ? BigInt(data.bucketSMs) : null;
 
+  // Active-set-aware trim threshold (§4.2): max responseTailTs − 1000 ms absorbs writer lag.
   const trimThreshold: number | null =
     trendData.responseTailTs != null ? trendData.responseTailTs - 1000 : null;
 
   const seedFromCachedTile = useMemo(() => {
-    if (cachedData?.type !== 'aggregate') return null;
+    if (data?.type !== 'aggregate') return null;
     const m = new Map<number, number | boolean | string | null>();
-    for (const [tagId, arrs] of cachedData.series) {
+    for (const [tagId, arrs] of data.series) {
       m.set(tagId, arrs.value[arrs.value.length - 1] ?? null);
     }
     return m;
-  }, [cachedData]);
+  }, [data, swapCounter]);
 
   // Advances nowMs from WS frame's max moduleTs — only while tailing.
   const handleDataReceived = useCallback((maxModuleTs: number) => {
@@ -178,17 +173,15 @@ export function TrendChartContainer({
   })();
 
   // ── Merged data for rendering ─────────────────────────────────────────────
-  // History path: useMemo on real state deps.
-  const historyMerged = useMemo(
-    () => mergeTrendData(data, liveSub.tail),
-    [data, liveSub.tail],
+  // Single unified path: tile data + live tail (§5.2).
+  // swapCounter drives recompute when the active tile set changes;
+  // seamResponseTailTs aligns the seam-bucket min/max combination.
+  const mergedData = useMemo(
+    () => mergeTrendData(data, liveSub.tail, {
+      seamResponseTailTs: getSeamResponseTailTs(trendData.activeTilesRef),
+    }),
+    [data, liveSub.tail, swapCounter], // eslint-disable-line react-hooks/exhaustive-deps
   );
-  // Live path: getBufferSnapshot reads spineRef + tailModeRef (refs).
-  // Refs are not observable React state so useMemo cannot subscribe to them.
-  // Calling fresh every render is correct and cheap (bounded buffer merge).
-  const mergedData = isLive(modeState.mode)
-    ? liveSub.getBufferSnapshot()
-    : historyMerged;
 
   // ── xRange: passes the live mode viewport to TrendChart for imperative
   //    setScale — updated every tick in tailing, or on preset/EndPicker/zoom. ──
@@ -197,50 +190,19 @@ export function TrendChartContainer({
     [modeViewport.start, modeViewport.end],
   );
 
-  const bucketSMsIndicator = cachedData?.type === 'aggregate' ? BigInt(cachedData.bucketSMs) : null;
+  const bucketSMsIndicator = data?.type === 'aggregate' ? BigInt(data.bucketSMs) : null;
 
-  // ── dispatchModeAction: side-effects at mode-boundary crossings ──────────
+  // ── dispatchModeAction: drain on Live→fixed, then dispatch ──────────────
+  // dataViewport is owned by useZoomState: reset effect for non-zoom intents,
+  // zoom handlers for wheel-zoom. No syncDataViewport needed here (§4.5 v1.5).
   const dispatchModeAction = useCallback((action: TrendModeAction) => {
     const prev = modeStateRef.current;
     const next = trendModeReducer(prev, action);
-    const wasLive = isLive(prev.mode);
-    const willBeLive = isLive(next.mode);
-    // A "fresh live landing" is live-fixed → live-trailing via an explicit user gesture
-    // (Live button or preset click). Triggers full buffer + cache teardown so the new
-    // Live session starts clean (D3). Does NOT fire for live-trailing → live-trailing
-    // (preset change while already tailing), which needs no teardown.
-    const isFreshLiveLanding =
-      prev.mode === 'live-fixed' && next.mode === 'live-trailing' &&
-      (action.type === 'liveClicked' || action.type === 'presetClicked');
-
-    // Sync dataViewport to the new modeViewport unconditionally.
-    // useZoomState's reset effect skips on lastIntent='zoom'/'pan' (intentional —
-    // avoids per-wheel-tick fetch storms during continuous gestures). At
-    // action-dispatch time the gesture is complete and dataViewport SHOULD
-    // track modeViewport so useTrendData's effect fires and runLiveSpineFetch
-    // can decide whether to refetch (via spanChanged). Idempotent for
-    // transitions where useZoomState would have synced anyway (preset, live,
-    // endPicker).
-    syncDataViewport(modeToViewport(next));
-
-    if (wasLive && !willBeLive) {
-      // Live → fixed: drain buffer, refetch history.
-      liveSubRef.current?.commitAndDrain();
-      trendDataRef.current.refetchHistory();
-    } else if (!wasLive && willBeLive) {
-      // fixed → live-: evict cache.
-      trendDataRef.current.evictAll();
-    } else if (isFreshLiveLanding && wasLive) {
-      // live-* → live-trailing via preset/Live button: clear buffer (bumps
-      // generation) + evict cache (defensive — kept symmetric with fixed→live).
-      liveSubRef.current?.commitAndDrain();
-      trendDataRef.current.evictAll();
+    if (isLive(prev.mode) && !isLive(next.mode)) {
+      liveSubRef.current?.drainBuffers();
     }
-    // live-trailing ↔ live-fixed flips (auto-promote, pan-within-Live): no teardown.
-    // fixed → fixed: no teardown.
-
     dispatch(action);
-  }, [dispatch, syncDataViewport]);
+  }, [dispatch]);
 
   // ── Callbacks ─────────────────────────────────────────────────────────────
 
@@ -403,15 +365,10 @@ export function TrendChartContainer({
       })()
     : mergedData;
 
-  // Bridge across history↔live transitions: when chartData briefly drops to null
-  // (spine fetch in-flight after evictAll, or history fetch in-flight after
-  // commitAndDrain), the loading hint would unmount <TrendChart>, flickering the
-  // uPlot canvas. Hold the most-recent non-null chartData so the chart stays
-  // mounted across the in-flight window. New data replaces the bridge on arrival;
-  // the ref does not accumulate stale state because chartData is fresh on every
-  // render where it is non-null.
-  // Synchronous-ref-update-during-render matches the existing pattern at lines
-  // 117-118 (modeStateRef / trendDataRef).
+  // Bridge across mode transitions: when chartData briefly drops to null
+  // (tile fetch in-flight after a mode change) the loading hint would unmount
+  // <TrendChart>, flickering the uPlot canvas. Hold the most-recent non-null
+  // chartData so the chart stays mounted across the in-flight window.
   const lastChartDataRef = useRef<typeof chartData>(null);
   if (chartData !== null) lastChartDataRef.current = chartData;
   const effectiveChartData = chartData ?? lastChartDataRef.current;
@@ -432,8 +389,6 @@ export function TrendChartContainer({
       height={height}
       xRange={xRange}
       onTagRemove={handleTagRemove}
-      ensureCovered={ensureCovered}
-      getActiveRange={getActiveRange}
       zoomAnchorSpan={zoomAnchorSpan}
       onZoomLevelSwitch={handleZoomLevelSwitch}
       swapCounter={swapCounter}

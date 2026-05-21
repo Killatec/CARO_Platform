@@ -92,6 +92,13 @@ export const MAX_VIEWPORT_SPAN_MS =
 export const MIN_VIEWPORT_SPAN_MS = 1000n;
 
 /**
+ * Lag in ms between a tile's endTime and the sessionHighWaterMark before a
+ * refetch is triggered. Matches the ring trim threshold (responseTailTs − 1000)
+ * from spec §6.2 so both thresholds absorb the same writer-lag window.
+ */
+export const REFETCH_LAG_MS = 1000;
+
+/**
  * Returns bucket-grid-aligned tiles covering [rangeStart, rangeEnd).
  *
  * Alignment strategy: right-anchor on the bucket grid. lastEnd is the first

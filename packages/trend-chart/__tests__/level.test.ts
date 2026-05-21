@@ -373,6 +373,47 @@ describe('tilesForViewport', () => {
     expect(advVis).toEqual(baseVis);
     expect(advPre).toEqual(basePre);
   });
+
+  it('tilesForViewport — Live-mode call shape (overfetchRightCount=0)', () => {
+    // Viewport deliberately misaligned with TS_BUCKET_ORIGIN_MS: start is 12_345n past
+    // the origin, end is 72_345n past. At the 1m preset (span=60_000n, tileSpanMs=30_000n):
+    //   lastVisibleEnd    = ORIGIN + ceilDiv(72_345n, 30_000n) * 30_000n = ORIGIN + 90_000n
+    //   firstVisibleStart = ORIGIN + 30_000n
+    //   prefetch[0]       = [ORIGIN, ORIGIN+30_000n)  (left-only; overfetchRightCount=0)
+    const span = 60_000n;
+    const vpStart = TS_BUCKET_ORIGIN_MS + 12_345n;
+    const vpEnd   = vpStart + span;
+    const viewport: Viewport = { start: vpStart, end: vpEnd };
+    const tileSpanMs = span / 2n; // 30_000n
+
+    // Live-mode call shape per unified tile architecture proposal §4.8.
+    const { visible, prefetch } = tilesForViewport({
+      viewport,
+      visibleTilesPerWindow: 2,
+      bucketCount: 500,
+      overfetchLeftCount: 1,
+      overfetchRightCount: 0,
+    });
+
+    // (a/c) exactly 2 visible tiles
+    expect(visible).toHaveLength(2);
+
+    // (b/d) exactly 1 prefetch tile, immediately left of visible[0]
+    expect(prefetch).toHaveLength(1);
+    expect(prefetch[0]!.endTime).toBe(visible[0]!.startTime);
+
+    // (e) no prefetch tile to the right of visible[1]
+    const rightPrefetch = prefetch.filter(t => t.startTime >= visible[1]!.endTime);
+    expect(rightPrefetch).toHaveLength(0);
+
+    // (f) tile-grid alignment: every startTime is a multiple of tileSpanMs from TS_BUCKET_ORIGIN_MS
+    for (const tile of [...visible, ...prefetch]) {
+      expect((tile.startTime - TS_BUCKET_ORIGIN_MS) % tileSpanMs).toBe(0n);
+    }
+
+    // (g) rightmost visible tile covers viewport's right edge (may extend past it)
+    expect(visible[1]!.endTime >= vpEnd).toBe(true);
+  });
 });
 
 // ─── deriveBucketSMs ─────────────────────────────────────────────────────────

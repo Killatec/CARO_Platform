@@ -8,7 +8,8 @@ import type { LiveTail, AggregateTail, RawTail } from './useLiveSubscription.js'
  *   - live === null or empty   → cached unchanged (fast-path)
  *   - aggregate mode: live's coverage = [liveStartBucketTs, liveEndBucketTs].
  *     Within those bucket indices, live owns value/min/max (nulls included).
- *     Cached is clipped at liveEndIndex unconditionally.
+ *     Cached is clipped at max(0, liveEndIndex) when the live tail extends past
+ *     cached.startTime; otherwise cached.n is kept.
  *   - raw mode: live's coverage = [minLiveTs, maxLiveTs].
  *     Cached entries with ts ≥ minLiveTs are dropped; live entries are appended.
  *   - type mismatch            → cached returned unchanged + console.warn
@@ -19,6 +20,7 @@ import type { LiveTail, AggregateTail, RawTail } from './useLiveSubscription.js'
 export function mergeTrendData(
   cached: TrendData | null,
   live: LiveTail,
+  opts?: { seamResponseTailTs?: number | null },
 ): TrendData | null {
   if (cached === null) return null;
   if (live === null) return cached;
@@ -30,7 +32,7 @@ export function mergeTrendData(
       if (a.value.length > 0) { anyEntry = true; break; }
     }
     if (!anyEntry) return cached;
-    return mergeAggregate(cached, live);
+    return mergeAggregate(cached, live, opts?.seamResponseTailTs ?? null);
   }
 
   if (cached.type === 'raw' && live.mode === 'raw') {
@@ -53,6 +55,7 @@ export function mergeTrendData(
 function mergeAggregate(
   cached: AggregateSeriesData,
   live: AggregateTail,
+  seamResponseTailTs: number | null,
 ): AggregateSeriesData {
   if (cached.bucketSMs !== Number(live.bucketSMs)) return cached;
 
@@ -67,13 +70,21 @@ function mergeAggregate(
   }
   const liveEndIndex = liveStartIndex + maxLiveLen;
 
-  // Clip cached at liveEndIndex unconditionally — live wins on its coverage range.
-  // Guard: only clip when liveEndIndex > 0 (live has data that extends past cached.startTime).
+  // Clip cached at max(0, liveEndIndex) when live data extends past cached.startTime
+  // (liveEndIndex > 0); live wins on its coverage range. When the live tail does not
+  // overlap cached, cached.n is kept unchanged.
   const effectiveCachedN = liveEndIndex > 0
     ? Math.min(cached.n, Math.max(0, liveEndIndex))
     : cached.n;
 
   const totalN = Math.max(effectiveCachedN, liveEndIndex);
+
+  // Seam bucket: the bucket that contains seamResponseTailTs (where the tile's coverage
+  // ends mid-bucket and the live accumulator picks up). At this index both tile and live
+  // have partial data, so we combine their min/max instead of letting live overwrite.
+  const seamBucketIndex = seamResponseTailTs !== null
+    ? Math.max(0, Math.floor(Number(BigInt(seamResponseTailTs) - cached.startTime) / cached.bucketSMs))
+    : -1;
 
   const allTagIds = new Set([...cached.series.keys(), ...live.perTag.keys()]);
 
@@ -102,8 +113,18 @@ function mergeAggregate(
 
       if (inLive) {
         value.push(liveArrs.value[li] ?? null);
-        min.push(liveArrs.min[li] ?? null);
-        max.push(liveArrs.max[li] ?? null);
+        // At the seam bucket, tile and live both have partial coverage: combine min/max.
+        if (i === seamBucketIndex && cachedArrs && i < effectiveCachedN) {
+          const cm = cachedArrs.min ? (cachedArrs.min[i] ?? null) : null;
+          const cx = cachedArrs.max ? (cachedArrs.max[i] ?? null) : null;
+          const lm = liveArrs.min[li] ?? null;
+          const lx = liveArrs.max[li] ?? null;
+          min.push(cm !== null && lm !== null ? Math.min(cm, lm) : cm ?? lm);
+          max.push(cx !== null && lx !== null ? Math.max(cx, lx) : cx ?? lx);
+        } else {
+          min.push(liveArrs.min[li] ?? null);
+          max.push(liveArrs.max[li] ?? null);
+        }
       } else if (cachedArrs && i < effectiveCachedN) {
         value.push(cachedArrs.value[i] ?? null);
         min.push(cachedArrs.min ? (cachedArrs.min[i] ?? null) : null);

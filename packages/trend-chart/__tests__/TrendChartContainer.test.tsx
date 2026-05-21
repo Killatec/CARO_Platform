@@ -9,25 +9,21 @@ import { useTrendData } from '../src/useTrendData.js';
 import { formatDateTime } from '@caro/ui';
 import type { UseTrendDataResult } from '../src/useTrendData.js';
 import { MIN_VIEWPORT_SPAN_MS, MAX_VIEWPORT_SPAN_MS } from '../src/level.js';
-import { expectCallOrder } from './testUtils.js';
 
 // ── useLiveSubscription mock (hoisted so vi.mock factory can close over it) ───
 
 const liveHoisted = vi.hoisted(() => {
-  const commitAndDrain = vi.fn();
+  const drainBuffers = vi.fn();
   let _tail: unknown = null;
   let _lastOpts: Record<string, unknown> | null = null;
-  let _snapshot: unknown = null;
   let _latestSampleTs: bigint | null = null;
 
   return {
-    commitAndDrain,
+    drainBuffers,
     setTail: (t: unknown) => { _tail = t; },
     getTail: () => _tail,
     setLastOpts: (o: Record<string, unknown>) => { _lastOpts = o; },
     getLastOpts: () => _lastOpts,
-    setSnapshot: (s: unknown) => { _snapshot = s; },
-    getSnapshot: () => _snapshot,
     setLatestSampleTs: (ts: bigint | null) => { _latestSampleTs = ts; },
     getLatestSampleTs: () => _latestSampleTs,
   };
@@ -38,11 +34,8 @@ vi.mock('../src/useLiveSubscription.js', () => ({
     liveHoisted.setLastOpts(opts);
     return {
       tail: liveHoisted.getTail(),
-      commitAndDrain: liveHoisted.commitAndDrain,
+      drainBuffers: liveHoisted.drainBuffers,
       getLatestSampleTs: vi.fn().mockImplementation(() => liveHoisted.getLatestSampleTs()),
-      getBufferSnapshot: vi.fn(() => liveHoisted.getSnapshot()),
-      getCurrentGeneration: vi.fn().mockReturnValue(0),
-      seedFromSpineFetch: vi.fn(),
     };
   }),
   TREND_RING_CAPACITY: 20,
@@ -129,14 +122,11 @@ function makeResult(tagIds: number[], opts: Partial<UseTrendDataResult> = {}): U
     data: makeAggData(tagIds),
     isLoading: false,
     error: null,
-    ensureCovered: vi.fn(),
-    getActiveRange: vi.fn().mockReturnValue(null),
-    evictAll: vi.fn(),
-    refetchHistory: vi.fn(),
     swapCounter: 0,
     activeTileCount: 0,
     lastFetchMs: null,
     responseTailTs: null,
+    activeTilesRef: { current: [] },
     ...opts,
   };
 }
@@ -160,7 +150,6 @@ describe('TrendChartContainer', () => {
     capturedOnDragZoom = undefined;
     capturedData = undefined;
     liveHoisted.setTail(null);
-    liveHoisted.setSnapshot(makeAggData([1, 2]));
     liveHoisted.setLatestSampleTs(null);
     mockUseTrendData.mockReturnValue(makeResult([1, 2]));
     // EndPicker calls showPicker() on the hidden input; jsdom doesn't implement it.
@@ -253,15 +242,12 @@ describe('TrendChartContainer', () => {
   });
 
   it('shows loading hint when data is null and isLoading=true', () => {
-    // In Live mode chart data comes from getBufferSnapshot(); null snapshot keeps chartData null.
-    liveHoisted.setSnapshot(null);
     mockUseTrendData.mockReturnValue(makeResult([1, 2], { data: null, isLoading: true }));
     renderContainer();
     expect(screen.getByText('Loading…')).toBeTruthy();
   });
 
   it('shows no-tags hint when tagIds is empty', () => {
-    liveHoisted.setSnapshot(null);
     mockUseTrendData.mockReturnValue(makeResult([], { data: null, isLoading: false }));
     renderContainer([]);
     expect(screen.getByText('No tags selected.')).toBeTruthy();
@@ -570,8 +556,7 @@ describe('TrendChartContainer', () => {
       expect(mockUseTrendData.mock.calls.length).toBe(beforeCount);
     });
 
-    it('pan in tailing → calls commitAndDrain, mode goes fixed, no evictAll', () => {
-      // Live mode never writes to cache, so no eviction is needed on tailing→fixed.
+    it('pan in tailing → calls drainBuffers, mode goes fixed', () => {
       renderContainer([1]);
 
       const farPastEnd = 1_700_000_000_000n;
@@ -581,13 +566,11 @@ describe('TrendChartContainer', () => {
         vi.runAllTimers();
       });
 
-      expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
-      expect(mockResult.refetchHistory).toHaveBeenCalledOnce();
-      expect(mockResult.evictAll).not.toHaveBeenCalled();
+      expect(liveHoisted.drainBuffers).toHaveBeenCalledOnce();
       expect(screen.getByText('Go Live')).toBeTruthy();
     });
 
-    it('zoom (onXRangeChange) in tailing → calls commitAndDrain, no evictAll', () => {
+    it('zoom (onXRangeChange) in tailing → calls drainBuffers', () => {
       renderContainer([1]);
 
       const farPastEnd = 1_700_000_000_000n;
@@ -597,13 +580,11 @@ describe('TrendChartContainer', () => {
         vi.runAllTimers();
       });
 
-      expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
-      expect(mockResult.refetchHistory).toHaveBeenCalledOnce();
-      expect(mockResult.evictAll).not.toHaveBeenCalled();
+      expect(liveHoisted.drainBuffers).toHaveBeenCalledOnce();
       expect(screen.getByText('Go Live')).toBeTruthy();
     });
 
-    it('drag-zoom in tailing → calls commitAndDrain, no evictAll', () => {
+    it('drag-zoom in tailing → calls drainBuffers', () => {
       renderContainer([1]);
 
       const farPastEnd = 1_700_000_000_000n;
@@ -612,42 +593,36 @@ describe('TrendChartContainer', () => {
         capturedOnDragZoom?.(farPastStart, farPastEnd);
       });
 
-      expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
-      expect(mockResult.refetchHistory).toHaveBeenCalledOnce();
-      expect(mockResult.evictAll).not.toHaveBeenCalled();
+      expect(liveHoisted.drainBuffers).toHaveBeenCalledOnce();
       expect(screen.getByText('Go Live')).toBeTruthy();
     });
 
-    it('EndPicker commit in tailing → calls commitAndDrain, no evictAll', () => {
+    it('EndPicker commit in tailing → calls drainBuffers', () => {
       renderContainer([1]);
 
       const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
       fireEvent.change(input, { target: { value: '2020-01-02T00:00:00' } });
 
-      expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
-      expect(mockResult.refetchHistory).toHaveBeenCalledOnce();
-      expect(mockResult.evictAll).not.toHaveBeenCalled();
+      expect(liveHoisted.drainBuffers).toHaveBeenCalledOnce();
       expect(screen.getByText('Go Live')).toBeTruthy();
     });
 
-    it('preset click in tailing → no commitAndDrain (stays tailing)', () => {
+    it('preset click in tailing → no drainBuffers (stays tailing)', () => {
       renderContainer([1]);
       fireEvent.click(screen.getByText('4h'));
 
-      expect(liveHoisted.commitAndDrain).not.toHaveBeenCalled();
-      expect(mockResult.evictAll).not.toHaveBeenCalled();
+      expect(liveHoisted.drainBuffers).not.toHaveBeenCalled();
       expect(screen.getByText('● Live')).toBeTruthy();
     });
 
-    it('Live button click in tailing → no commitAndDrain (stays tailing)', () => {
+    it('Live button click in tailing → no drainBuffers (stays tailing)', () => {
       renderContainer([1]);
       fireEvent.click(screen.getByText('● Live'));
 
-      expect(liveHoisted.commitAndDrain).not.toHaveBeenCalled();
-      expect(mockResult.evictAll).not.toHaveBeenCalled();
+      expect(liveHoisted.drainBuffers).not.toHaveBeenCalled();
     });
 
-    it('tailing→fixed: commitAndDrain + refetchHistory fire; evictAll never fires', () => {
+    it('tailing→fixed: drainBuffers fires', () => {
       renderContainer([1]);
 
       const farPastEnd = 1_700_000_000_000n;
@@ -657,30 +632,11 @@ describe('TrendChartContainer', () => {
         vi.runAllTimers();
       });
 
-      expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
-      expect(mockResult.refetchHistory).toHaveBeenCalledOnce();
-      expect(mockResult.evictAll).not.toHaveBeenCalled();
+      expect(liveHoisted.drainBuffers).toHaveBeenCalledOnce();
+      expect(screen.getByText('Go Live')).toBeTruthy();
     });
 
-    it('tailing→fixed: commitAndDrain fires BEFORE refetchHistory (TG-5 ordering)', () => {
-      renderContainer([1]);
-
-      const farPastEnd = 1_700_000_000_000n;
-      const farPastStart = farPastEnd - 3_600_000n;
-      act(() => {
-        capturedOnXPan?.(farPastStart, farPastEnd);
-        vi.runAllTimers();
-      });
-
-      // Order matters: commitAndDrain must clear live state BEFORE refetchHistory
-      // triggers the post-transition history fetch. Inversion would let live-buffer
-      // residue leak into the fetched range (spec §10.6).
-      expectCallOrder(liveHoisted.commitAndDrain, mockResult.refetchHistory);
-    });
-
-    it('Live click in fixed → evictAll called once to clear stale cache; mode returns to tailing', () => {
-      // evictAll on fixed→tailing ensures every subsequent live exit fetches
-      // fresh tiles, preventing Gap B (stale CAG-lag nulls accumulating in cache).
+    it('Live click in fixed → mode returns to tailing; no drainBuffers (wasLive=false)', () => {
       renderContainer([1]);
 
       // Pan to enter fixed mode.
@@ -691,138 +647,18 @@ describe('TrendChartContainer', () => {
         vi.runAllTimers();
       });
       expect(screen.getByText('Go Live')).toBeTruthy();
+      liveHoisted.drainBuffers.mockClear();
 
-      // Clear spies accumulated during the tailing→fixed transition.
-      mockResult.evictAll.mockClear();
-      mockResult.refetchHistory.mockClear();
-      liveHoisted.commitAndDrain.mockClear();
-
-      // Click Live: fixed → tailing → evictAll fires; no commitAndDrain; no refetchHistory.
+      // Click Live: fixed → tailing; no drainBuffers (wasLive=false).
       fireEvent.click(screen.getByText('Go Live'));
 
-      expect(mockResult.evictAll).toHaveBeenCalledOnce();
-      expect(mockResult.refetchHistory).not.toHaveBeenCalled();
-      expect(liveHoisted.commitAndDrain).not.toHaveBeenCalled();
+      expect(liveHoisted.drainBuffers).not.toHaveBeenCalled();
       expect(screen.getByText('● Live')).toBeTruthy();
-    });
-
-    it('spine-fetch window: bucketSMs=null during in-flight, correct after spine settles', () => {
-      // Cold start: data=null (spine in flight). useLiveSubscription must see
-      // tailMode=null so it accumulates in ring only (no accumulator writes).
-      // When spine settles, tailMode→'aggregate' triggers ring replay with the
-      // correct bucketSMs. This verifies no deltas are misrouted during the
-      // spine-fetch window.
-      //
-      // Phase 2b: cachedData comes from getBufferSnapshot() in live mode.
-      // Null snapshot simulates "no spine seeded yet" (spine in-flight).
-      liveHoisted.setSnapshot(null);
-      mockUseTrendData.mockReturnValue(makeResult([1], { data: null, isLoading: true, responseTailTs: null }));
-      renderContainer([1]);
-
-      // Spine in flight → tailMode=null, bucketSMs=null propagated to useLiveSubscription.
-      expect(liveHoisted.getLastOpts()?.tailMode).toBeNull();
-      expect(liveHoisted.getLastOpts()?.bucketSMs).toBeNull();
-
-      // Spine settles: update snapshot to simulate seedFromSpineFetch writing to spineRef.
-      liveHoisted.setSnapshot(makeAggData([1]));
-      mockUseTrendData.mockReturnValue(makeResult([1]));
-      // Trigger a re-render by simulating a tick (onDataReceived advances nowMs).
-      act(() => {
-        (liveHoisted.getLastOpts()?.onDataReceived as ((ts: number) => void) | undefined)?.(
-          Date.now(),
-        );
-      });
-
-      // tailMode and bucketSMs now reflect the settled spine data.
-      expect(liveHoisted.getLastOpts()?.tailMode).toBe('aggregate');
-      expect(liveHoisted.getLastOpts()?.bucketSMs).toBe(3600n);
-    });
-
-    // ── evictAll on Live entry (Gap B fix) ───────────────────────────────────
-
-    it('evictAll called exactly once on fixed→tailing (Live button click)', () => {
-      renderContainer([1]);
-
-      // Pan to enter fixed mode.
-      const farPastEnd = 1_700_000_000_000n;
-      const farPastStart = farPastEnd - 3_600_000n;
-      act(() => {
-        capturedOnXPan?.(farPastStart, farPastEnd);
-        vi.runAllTimers();
-      });
-      mockResult.evictAll.mockClear();
-
-      fireEvent.click(screen.getByText('Go Live'));
-      expect(mockResult.evictAll).toHaveBeenCalledOnce();
-    });
-
-    it('Live click: evictAll fires BEFORE the re-render with isTailing=true (TG-6 ordering)', () => {
-      renderContainer([1]);
-
-      // Pan into fixed mode first.
-      const farPastEnd = 1_700_000_000_000n;
-      const farPastStart = farPastEnd - 3_600_000n;
-      act(() => {
-        capturedOnXPan?.(farPastStart, farPastEnd);
-        vi.runAllTimers();
-      });
-
-      // Reset spies so we only observe the Live-click activity.
-      mockResult.evictAll.mockClear();
-      mockUseTrendData.mockClear();
-
-      // Click Live: synchronously evictAll → dispatch(liveClicked); React re-renders;
-      // useTrendData is called with isTailing=true on that next render.
-      act(() => {
-        fireEvent.click(screen.getByText('Go Live'));
-      });
-
-      // Find the first useTrendData re-render where isTailing flipped to true.
-      const tailingCallIdx = mockUseTrendData.mock.calls.findIndex(
-        args => args[0].isLive === true,
-      );
-      expect(tailingCallIdx).toBeGreaterThanOrEqual(0);
-
-      // Ordering: evictAll fired BEFORE the useTrendData call that has isTailing=true.
-      // Raw invocationCallOrder comparison rather than expectCallOrder because the
-      // two spies aren't peers — evictAll is called once in the click handler, while
-      // useTrendData is called N times across re-renders; we target the Nth call.
-      const evictAllOrder = mockResult.evictAll.mock.invocationCallOrder[0]!;
-      const tailingCallOrder = mockUseTrendData.mock.invocationCallOrder[tailingCallIdx]!;
-      expect(evictAllOrder).toBeLessThan(tailingCallOrder);
-    });
-
-    it('evictAll NOT called on tailing→fixed transitions (pan, EndPicker commit)', () => {
-      renderContainer([1]);
-
-      // Pan (tailing→fixed): no evictAll.
-      const farPastEnd = 1_700_000_000_000n;
-      const farPastStart = farPastEnd - 3_600_000n;
-      act(() => {
-        capturedOnXPan?.(farPastStart, farPastEnd);
-        vi.runAllTimers();
-      });
-      expect(mockResult.evictAll).not.toHaveBeenCalled();
-    });
-
-    it('evictAll NOT called on same-mode transitions (preset click while fixed)', () => {
-      renderContainer([1]);
-
-      // Enter fixed mode first.
-      const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
-      fireEvent.change(input, { target: { value: '2020-01-02T00:00:00' } });
-      mockResult.evictAll.mockClear();
-
-      // Preset click stays within fixed mode — no evictAll.
-      fireEvent.click(screen.getByText('4h'));
-      expect(mockResult.evictAll).not.toHaveBeenCalled();
     });
 
     // ── D-C: bridge-data ref (Bug 3 fix) ─────────────────────────────────────
 
     it('D-C: <TrendChart> stays mounted when chartData briefly drops to null (bridge via lastChartDataRef)', () => {
-      // First render: spine available → TrendChart rendered.
-      liveHoisted.setSnapshot(makeAggData([1, 2]));
       mockUseTrendData.mockReturnValue(makeResult([1, 2]));
       const { rerender } = renderContainer([1, 2]);
 
@@ -830,8 +666,7 @@ describe('TrendChartContainer', () => {
       expect(screen.queryByText('Loading…')).toBeNull();
       expect(screen.getAllByTitle('Remove trace').length).toBeGreaterThan(0);
 
-      // Transition: snapshot drops to null (spine in-flight after mode change).
-      liveHoisted.setSnapshot(null);
+      // Transition: data drops to null (e.g. in-flight after mode change).
       mockUseTrendData.mockReturnValue(makeResult([1, 2], { data: null, isLoading: true }));
       rerender(
         <MockHmiProvider tagDefs={TAG_DEFS}>
@@ -844,9 +679,7 @@ describe('TrendChartContainer', () => {
       expect(screen.getAllByTitle('Remove trace').length).toBeGreaterThan(0);
     });
 
-    it('D-C: initial load with null snapshot renders loading hint (no bridge before first data)', () => {
-      // lastChartDataRef is null on first render → effectiveChartData is null → loading hint.
-      liveHoisted.setSnapshot(null);
+    it('D-C: initial load with null data renders loading hint (no bridge before first data)', () => {
       mockUseTrendData.mockReturnValue(makeResult([1], { data: null, isLoading: true }));
       renderContainer([1]);
 
@@ -870,7 +703,7 @@ describe('TrendChartContainer', () => {
       });
     }
 
-    it('Phase 3: pan within Live (to > latestSampleTs) → live-fixed; no commitAndDrain, no evictAll, no refetchHistory', () => {
+    it('Phase 3: pan within Live (to > latestSampleTs) → live-fixed; no drainBuffers', () => {
       liveHoisted.setLatestSampleTs(PHASE3_LTS);
       const mockR = makeResult([1]);
       mockUseTrendData.mockReturnValue(mockR);
@@ -878,9 +711,7 @@ describe('TrendChartContainer', () => {
 
       enterLiveFixed();
 
-      expect(liveHoisted.commitAndDrain).not.toHaveBeenCalled();
-      expect(mockR.evictAll).not.toHaveBeenCalled();
-      expect(mockR.refetchHistory).not.toHaveBeenCalled();
+      expect(liveHoisted.drainBuffers).not.toHaveBeenCalled();
       // Still in Live mode (live-fixed shows "● Live" same as live-trailing)
       expect(screen.getByText('● Live')).toBeTruthy();
     });
@@ -892,54 +723,45 @@ describe('TrendChartContainer', () => {
       expect(liveHoisted.getLastOpts()?.isLive).toBe(true);
     });
 
-    it('Phase 3: preset click from live-fixed → live-trailing: commitAndDrain + evictAll (D3 teardown)', () => {
+    it('Phase 3: preset click from live-fixed → live-trailing: no drainBuffers (both live)', () => {
       liveHoisted.setLatestSampleTs(PHASE3_LTS);
       const mockR = makeResult([1]);
       mockUseTrendData.mockReturnValue(mockR);
       renderContainer([1]);
 
       enterLiveFixed();
-      liveHoisted.commitAndDrain.mockClear();
-      mockR.evictAll.mockClear();
-      mockR.refetchHistory.mockClear();
+      liveHoisted.drainBuffers.mockClear();
 
-      // Preset click from live-fixed → live-trailing = isFreshLiveLanding → full D3 teardown
+      // Preset click: live-fixed → live-trailing (wasLive && willBeLive → no drainBuffers).
       fireEvent.click(screen.getByText('4h'));
 
-      expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
-      expect(mockR.evictAll).toHaveBeenCalledOnce();
-      expect(mockR.refetchHistory).not.toHaveBeenCalled();
+      expect(liveHoisted.drainBuffers).not.toHaveBeenCalled();
       expect(screen.getByText('● Live')).toBeTruthy();
     });
 
-    it('Phase 3: Live button from live-fixed → live-trailing: commitAndDrain + evictAll', () => {
+    it('Phase 3: Live button from live-fixed → live-trailing: no drainBuffers (both live)', () => {
       liveHoisted.setLatestSampleTs(PHASE3_LTS);
       const mockR = makeResult([1]);
       mockUseTrendData.mockReturnValue(mockR);
       renderContainer([1]);
 
       enterLiveFixed();
-      liveHoisted.commitAndDrain.mockClear();
-      mockR.evictAll.mockClear();
+      liveHoisted.drainBuffers.mockClear();
 
-      // Click "● Live" in live-fixed → live-trailing: isFreshLiveLanding → D3 teardown
+      // Click "● Live" in live-fixed → live-trailing: wasLive && willBeLive → no drainBuffers.
       fireEvent.click(screen.getByText('● Live'));
 
-      expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
-      expect(mockR.evictAll).toHaveBeenCalledOnce();
-      expect(mockR.refetchHistory).not.toHaveBeenCalled();
+      expect(liveHoisted.drainBuffers).not.toHaveBeenCalled();
     });
 
-    it('Phase 3: live-fixed → fixed via second pan past LTS: commitAndDrain + refetchHistory, no evictAll', () => {
+    it('Phase 3: live-fixed → fixed via pan past LTS: drainBuffers fires', () => {
       liveHoisted.setLatestSampleTs(PHASE3_LTS);
       const mockR = makeResult([1]);
       mockUseTrendData.mockReturnValue(mockR);
       renderContainer([1]);
 
       enterLiveFixed();
-      liveHoisted.commitAndDrain.mockClear();
-      mockR.evictAll.mockClear();
-      mockR.refetchHistory.mockClear();
+      liveHoisted.drainBuffers.mockClear();
 
       // Second pan: to < LTS → panApplied returns 'fixed' from 'live-fixed'
       const fixedEnd = PHASE3_LTS - 1_000_000n;
@@ -949,10 +771,8 @@ describe('TrendChartContainer', () => {
         vi.runAllTimers();
       });
 
-      // wasLive && !willBeLive → drain + refetch
-      expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
-      expect(mockR.refetchHistory).toHaveBeenCalledOnce();
-      expect(mockR.evictAll).not.toHaveBeenCalled();
+      // wasLive && !willBeLive → drain only
+      expect(liveHoisted.drainBuffers).toHaveBeenCalledOnce();
       expect(screen.getByText('Go Live')).toBeTruthy();
     });
 
@@ -995,34 +815,6 @@ describe('TrendChartContainer', () => {
 
     // ── Phase 4: symmetric window-vs-live-edge from container ────────────────
 
-    it('Phase 4: pan from fixed past LastTS → live-fixed; evictAll fires (fixed→live entry)', () => {
-      const mockR = makeResult([1]);
-      mockUseTrendData.mockReturnValue(mockR);
-      renderContainer([1]);
-
-      // Enter fixed mode via far-past EndPicker commit.
-      const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
-      fireEvent.change(input, { target: { value: '2020-01-02T00:00:00' } });
-      expect(screen.getByText('Go Live')).toBeTruthy();
-
-      liveHoisted.commitAndDrain.mockClear();
-      mockR.evictAll.mockClear();
-      mockR.refetchHistory.mockClear();
-
-      // Set LTS so pan target (PHASE3_PAN_END) is > LTS → fixed → live-fixed.
-      liveHoisted.setLatestSampleTs(PHASE3_LTS);
-      act(() => {
-        capturedOnXPan?.(PHASE3_PAN_START, PHASE3_PAN_END);
-        vi.runAllTimers();
-      });
-
-      // fixed → live-fixed: wasLive=false, willBeLive=true → evictAll fires.
-      expect(mockR.evictAll).toHaveBeenCalledOnce();
-      expect(liveHoisted.commitAndDrain).not.toHaveBeenCalled();
-      expect(mockR.refetchHistory).not.toHaveBeenCalled();
-      expect(screen.getByText('● Live')).toBeTruthy();
-    });
-
     it('Phase 4: zoom from live-trailing with Window_End > LastTS → live-fixed; no teardown', () => {
       liveHoisted.setLatestSampleTs(PHASE3_LTS);
       const mockR = makeResult([1]);
@@ -1036,13 +828,11 @@ describe('TrendChartContainer', () => {
       });
 
       // live-trailing → live-fixed: internal Live flip — no teardown.
-      expect(liveHoisted.commitAndDrain).not.toHaveBeenCalled();
-      expect(mockR.evictAll).not.toHaveBeenCalled();
-      expect(mockR.refetchHistory).not.toHaveBeenCalled();
+      expect(liveHoisted.drainBuffers).not.toHaveBeenCalled();
       expect(screen.getByText('● Live')).toBeTruthy();
     });
 
-    it('Phase 4: zoom from live-trailing with Window_End < LastTS → fixed; full teardown', () => {
+    it('Phase 4: zoom from live-trailing with Window_End < LastTS → fixed; drainBuffers fires', () => {
       liveHoisted.setLatestSampleTs(PHASE3_LTS);
       const mockR = makeResult([1]);
       mockUseTrendData.mockReturnValue(mockR);
@@ -1056,44 +846,13 @@ describe('TrendChartContainer', () => {
         vi.runAllTimers();
       });
 
-      expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
-      expect(mockR.refetchHistory).toHaveBeenCalledOnce();
-      expect(mockR.evictAll).not.toHaveBeenCalled();
+      expect(liveHoisted.drainBuffers).toHaveBeenCalledOnce();
       expect(screen.getByText('Go Live')).toBeTruthy();
     });
 
-    // ── Phase 5: syncDataViewport on fixed → live-* entry ────────────────────
+    // ── Phase 5: dataViewport synced on mode transitions ─────────────────────
 
-    it('Phase 5: zoom from fixed past LastTS → live-fixed; evictAll fires; dataViewport synced to new modeViewport', () => {
-      const mockR = makeResult([1]);
-      mockUseTrendData.mockReturnValue(mockR);
-      renderContainer([1]);
-
-      // Enter fixed via far-past EndPicker commit.
-      const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
-      fireEvent.change(input, { target: { value: '2020-01-02T00:00:00' } });
-      expect(screen.getByText('Go Live')).toBeTruthy();
-
-      liveHoisted.setLatestSampleTs(PHASE3_LTS);
-      mockR.evictAll.mockClear();
-      const callsBefore = mockUseTrendData.mock.calls.length;
-
-      // Zoom to window ending past LTS → fixed → live-fixed.
-      act(() => {
-        capturedOnXRangeChange?.(PHASE3_PAN_START, PHASE3_PAN_END);
-        vi.runAllTimers();
-      });
-
-      expect(mockR.evictAll).toHaveBeenCalledOnce();
-      expect(screen.getByText('● Live')).toBeTruthy();
-
-      // dataViewport synced: useTrendData called with viewport.end matching the zoom target.
-      const newCalls = mockUseTrendData.mock.calls.slice(callsBefore);
-      const synced = newCalls.some(([opts]) => opts.viewport.end === PHASE3_PAN_END);
-      expect(synced).toBe(true);
-    });
-
-    it('Phase 5: pan from fixed past LastTS → live-fixed; evictAll fires; dataViewport synced to new modeViewport', () => {
+    it('Phase 5: pan from fixed past LastTS → live-fixed; useTrendData receives new viewport', () => {
       const mockR = makeResult([1]);
       mockUseTrendData.mockReturnValue(mockR);
       renderContainer([1]);
@@ -1103,7 +862,6 @@ describe('TrendChartContainer', () => {
       expect(screen.getByText('Go Live')).toBeTruthy();
 
       liveHoisted.setLatestSampleTs(PHASE3_LTS);
-      mockR.evictAll.mockClear();
       const callsBefore = mockUseTrendData.mock.calls.length;
 
       act(() => {
@@ -1111,7 +869,6 @@ describe('TrendChartContainer', () => {
         vi.runAllTimers();
       });
 
-      expect(mockR.evictAll).toHaveBeenCalledOnce();
       expect(screen.getByText('● Live')).toBeTruthy();
 
       const newCalls = mockUseTrendData.mock.calls.slice(callsBefore);
@@ -1119,7 +876,7 @@ describe('TrendChartContainer', () => {
       expect(synced).toBe(true);
     });
 
-    it('Phase 5: fixed → live-trailing via liveClicked; evictAll fires; no commitAndDrain (no regression)', () => {
+    it('Phase 5: fixed → live-trailing via liveClicked; no drainBuffers; useTrendData re-called', () => {
       const mockR = makeResult([1]);
       mockUseTrendData.mockReturnValue(mockR);
       renderContainer([1]);
@@ -1128,51 +885,20 @@ describe('TrendChartContainer', () => {
       fireEvent.change(input, { target: { value: '2020-01-02T00:00:00' } });
       expect(screen.getByText('Go Live')).toBeTruthy();
 
-      mockR.evictAll.mockClear();
-      liveHoisted.commitAndDrain.mockClear();
+      liveHoisted.drainBuffers.mockClear();
       const callsBefore = mockUseTrendData.mock.calls.length;
 
       fireEvent.click(screen.getByText('Go Live'));
 
-      expect(mockR.evictAll).toHaveBeenCalledOnce();
-      expect(liveHoisted.commitAndDrain).not.toHaveBeenCalled();
+      expect(liveHoisted.drainBuffers).not.toHaveBeenCalled();
       expect(screen.getByText('● Live')).toBeTruthy();
-      // syncDataViewport fired: useTrendData re-called after the transition.
+      // Reset effect fires on mode transition: useTrendData re-called with new viewport.
       expect(mockUseTrendData.mock.calls.length).toBeGreaterThan(callsBefore);
     });
 
-    // ── Phase 6: unconditional syncDataViewport ───────────────────────────────
+    // ── Phase 6: pan-driven mode transitions update useTrendData viewport ───────
 
-    it('Phase 6: zoom within Live (live-trailing → live-fixed); dataViewport synced; no teardown (bug fix)', () => {
-      // This is the bug this refactor fixes: the wasLive && willBeLive branch had
-      // no syncDataViewport, so dataViewport stayed at the pre-zoom value and
-      // useTrendData's effect never fired to refetch the spine at the new span.
-      liveHoisted.setLatestSampleTs(PHASE3_LTS);
-      const mockR = makeResult([1]);
-      mockUseTrendData.mockReturnValue(mockR);
-      renderContainer([1]);
-
-      const callsBefore = mockUseTrendData.mock.calls.length;
-
-      // Zoom to PHASE3_PAN_END > PHASE3_LTS → live-trailing → live-fixed (wasLive && willBeLive).
-      act(() => {
-        capturedOnXRangeChange?.(PHASE3_PAN_START, PHASE3_PAN_END);
-        vi.runAllTimers();
-      });
-
-      // No teardown: wasLive && willBeLive internal flip.
-      expect(liveHoisted.commitAndDrain).not.toHaveBeenCalled();
-      expect(mockR.evictAll).not.toHaveBeenCalled();
-      expect(mockR.refetchHistory).not.toHaveBeenCalled();
-      expect(screen.getByText('● Live')).toBeTruthy();
-
-      // syncDataViewport now fires unconditionally: useTrendData called with the new viewport.
-      const newCalls = mockUseTrendData.mock.calls.slice(callsBefore);
-      const synced = newCalls.some(([opts]) => opts.viewport.end === PHASE3_PAN_END);
-      expect(synced).toBe(true);
-    });
-
-    it('Phase 6: live→fixed (wasLive && !willBeLive); syncDataViewport still fires from top (no regression)', () => {
+    it('Phase 6: live→fixed (wasLive && !willBeLive); pan triggers reset effect, useTrendData sees new viewport', () => {
       liveHoisted.setLatestSampleTs(PHASE3_LTS);
       const mockR = makeResult([1]);
       mockUseTrendData.mockReturnValue(mockR);
@@ -1187,17 +913,16 @@ describe('TrendChartContainer', () => {
         vi.runAllTimers();
       });
 
-      expect(liveHoisted.commitAndDrain).toHaveBeenCalledOnce();
-      expect(mockR.refetchHistory).toHaveBeenCalledOnce();
+      expect(liveHoisted.drainBuffers).toHaveBeenCalledOnce();
       expect(screen.getByText('Go Live')).toBeTruthy();
 
-      // syncDataViewport fires from the top-level call: useTrendData sees the new viewport.
+      // Reset effect fires on pan (non-zoom intent): useTrendData sees the new viewport.
       const newCalls = mockUseTrendData.mock.calls.slice(callsBefore);
       const synced = newCalls.some(([opts]) => opts.viewport.end === fixedEnd);
       expect(synced).toBe(true);
     });
 
-    it('Phase 6: fixed→live (!wasLive && willBeLive); syncDataViewport still fires from top (no regression)', () => {
+    it('Phase 6: fixed→live (!wasLive && willBeLive); pan triggers reset effect, useTrendData sees new viewport', () => {
       const mockR = makeResult([1]);
       mockUseTrendData.mockReturnValue(mockR);
       renderContainer([1]);
@@ -1207,7 +932,6 @@ describe('TrendChartContainer', () => {
       expect(screen.getByText('Go Live')).toBeTruthy();
 
       liveHoisted.setLatestSampleTs(PHASE3_LTS);
-      mockR.evictAll.mockClear();
       const callsBefore = mockUseTrendData.mock.calls.length;
 
       act(() => {
@@ -1215,47 +939,68 @@ describe('TrendChartContainer', () => {
         vi.runAllTimers();
       });
 
-      expect(mockR.evictAll).toHaveBeenCalledOnce();
       expect(screen.getByText('● Live')).toBeTruthy();
 
-      // syncDataViewport fires from the top-level call: useTrendData sees the new viewport.
+      // Reset effect fires on pan (non-zoom intent): useTrendData sees the new viewport.
       const newCalls = mockUseTrendData.mock.calls.slice(callsBefore);
       const synced = newCalls.some(([opts]) => opts.viewport.end === PHASE3_PAN_END);
       expect(synced).toBe(true);
     });
 
-    it('E: Live mergedData reads spine ref fresh on every render (wide-preset staleness fix)', () => {
-      // In the real hook, getBufferSnapshot is a stable useCallback ref whose
-      // return value changes when spineRef is updated by seedFromSpineFetch.
-      // The old useMemo had getBufferSnapshot in its dep array; since the ref
-      // was stable the memo returned a stale null after a spine arrival that
-      // didn't touch any other dep. The split-paths fix calls getBufferSnapshot()
-      // directly in render so any re-render picks up the latest spine.
+    // ── FIX 3: zoom isolation — zoomApplied does not push to useTrendData ────
 
-      // Initial state: spine in-flight, no data.
-      liveHoisted.setSnapshot(null);
-      mockUseTrendData.mockReturnValue(makeResult([1, 2], { data: null, isLoading: true }));
-      renderContainer([1, 2]);
+    it('FIX 3: within-mode zoomApplied (fixed→fixed) does not push zoomed viewport to useTrendData', () => {
+      renderContainer([1]);
+      const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: '2020-06-01T12:00:00' } });
+      const callsBefore = mockUseTrendData.mock.calls.length;
 
-      // No spine yet → loading hint shown, TrendChart not mounted.
-      expect(screen.getByText('Loading…')).toBeTruthy();
-
-      // Spine resolves: simulate seedFromSpineFetch writing to spineRef.
-      const spineData = makeAggData([1, 2]);
-      liveHoisted.setSnapshot(spineData);
-
-      // Re-render triggered by a tick (mirrors swapCounter bump from live spine fetch).
+      // zoomApplied sets lastIntent='zoom' → reset effect skips → dataViewport unchanged.
+      const zoomEnd = 1_578_000_000_000n; // 2020-01-03
+      const zoomStart = zoomEnd - 2_700_000n;
       act(() => {
-        (liveHoisted.getLastOpts()?.onDataReceived as ((ts: number) => void) | undefined)?.(
-          Date.now(),
-        );
+        capturedOnXRangeChange?.(zoomStart, zoomEnd);
+        vi.runAllTimers();
       });
 
-      // mergedData now reflects the new spine — chart replaces loading hint.
-      expect(screen.queryByText('Loading…')).toBeNull();
-      expect(capturedData).toBeDefined();
-      expect(capturedData!.startTime).toBe(spineData.startTime);
-      expect(capturedData!.endTime).toBe(spineData.endTime);
+      const newCalls = mockUseTrendData.mock.calls.slice(callsBefore);
+      const contaminated = newCalls.some(([opts]) => opts.viewport.end === zoomEnd);
+      expect(contaminated).toBe(false);
+    });
+
+    it('FIX 3: mode-crossing panApplied (live-trailing→fixed) triggers reset effect; useTrendData sees new viewport', () => {
+      liveHoisted.setLatestSampleTs(PHASE3_LTS);
+      renderContainer([1]);
+      const callsBefore = mockUseTrendData.mock.calls.length;
+
+      // Pan to before LTS → live-trailing → fixed; reset effect fires on pan intent.
+      const fixedEnd = PHASE3_LTS - 1_000_000n;
+      const fixedStart = fixedEnd - 3_600_000n;
+      act(() => {
+        capturedOnXPan?.(fixedStart, fixedEnd);
+        vi.runAllTimers();
+      });
+
+      expect(screen.getByText('Go Live')).toBeTruthy();
+      const newCalls = mockUseTrendData.mock.calls.slice(callsBefore);
+      const synced = newCalls.some(([opts]) => opts.viewport.end === fixedEnd);
+      expect(synced).toBe(true);
+    });
+
+    it('FIX 3: presetClicked (non-zoom intent) triggers reset effect; useTrendData sees new span', () => {
+      renderContainer([1]);
+      const callsBefore = mockUseTrendData.mock.calls.length;
+
+      // presetClicked: lastIntent not 'zoom' → reset effect runs, useTrendData gets new viewport.
+      fireEvent.click(screen.getByText('4h'));
+
+      const expected4hMs = 4n * 60n * 60n * 1000n;
+      const newCalls = mockUseTrendData.mock.calls.slice(callsBefore);
+      const synced = newCalls.some(([opts]) => {
+        const span = opts.viewport.end - opts.viewport.start;
+        return span === expected4hMs;
+      });
+      expect(synced).toBe(true);
     });
 
     // ── Phase 4 refinement: liveEdgeBehindWindow button colour ──────────────

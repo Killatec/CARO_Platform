@@ -44,9 +44,6 @@ export interface UseZoomStateOpts {
 export interface UseZoomStateResult {
   zoomAnchorSpan: bigint;
   dataViewport: Viewport;
-  /** Forces dataViewport to the given viewport, bypassing the lastIntent skip logic.
-   *  Used on live → fixed transition where the reset effect would otherwise skip. */
-  syncDataViewport: (v: Viewport) => void;
   handleDragZoom: (selectionStartMs: bigint, selectionEndMs: bigint) => void;
   handleZoomLevelSwitch: (direction: 'in' | 'out', cursorTimeMs: bigint) => void;
 }
@@ -65,11 +62,10 @@ export function useZoomState({
   );
   const [dataViewport, setDataViewport] = useState<Viewport>(modeViewport);
 
-  // Reset zoom level when modeViewport changes (preset click, custom commit, Live tick).
-  // Skipped when lastIntent === 'zoom' or 'pan': both gestures keep the anchor/bucket
-  // size intact so incremental threshold accumulation works correctly.
+  // Reset zoom level when modeViewport changes (preset click, custom commit, Live tick, pan).
+  // Skipped only when lastIntent === 'zoom': wheel-zoom gestures own dataViewport directly.
   useEffect(() => {
-    if (lastIntent === 'zoom' || lastIntent === 'pan') return;
+    if (lastIntent === 'zoom') return;
     const span = modeViewport.end - modeViewport.start;
     const bucketSMs = span / BigInt(visibleTilesPerWindow * bucketCount);
     setCurrentBucketSMs(bucketSMs);
@@ -107,9 +103,5 @@ export function useZoomState({
     [currentBucketSMs, visibleTilesPerWindow, bucketCount],
   );
 
-  const syncDataViewport = useCallback((v: Viewport) => {
-    setDataViewport({ start: v.start, end: v.end });
-  }, []);
-
-  return { zoomAnchorSpan, dataViewport, syncDataViewport, handleDragZoom, handleZoomLevelSwitch };
+  return { zoomAnchorSpan, dataViewport, handleDragZoom, handleZoomLevelSwitch };
 }

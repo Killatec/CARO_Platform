@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type uPlot from 'uplot';
-import { isInYAxisHitZone, panYScale, zoomYScale, pruneRemovedTagOverrides, isInXAxisHitZone, panXScale, panThresholdCheck, zoomXScale, checkAndExtendXCoverage } from '../src/axisInteractions.js';
+import { isInYAxisHitZone, panYScale, zoomYScale, pruneRemovedTagOverrides, isInXAxisHitZone, panXScale, zoomXScale } from '../src/axisInteractions.js';
 
 // TrendChart.tsx imports uPlot and its CSS — mock both so the module loads in jsdom.
 vi.mock('uplot', () => {
@@ -366,77 +366,6 @@ describe('panXScale', () => {
   });
 });
 
-// ── panThresholdCheck ─────────────────────────────────────────────────────────
-//
-// Setup: tileSpan = 1800s, halfTile = 900s. Cached extent: [0, 7200000).
-// tileSpanMs is passed explicitly (sourced from the active set, not from visSpan).
-
-describe('panThresholdCheck', () => {
-  // Cached extent spans 4 tiles × 1800 s = 7200 s.
-  const cachedStart = 0n;
-  const cachedEnd = 7_200_000n;
-  const TILE_SPAN = 1_800_000n; // active-set tile width; halfTile = 900_000n.
-
-  it('returns null when visible window is comfortably inside the cached extent', () => {
-    // vis=[1800000, 5400000]: visMin(1800000) >= 0+900000 and visMax(5400000) <= 7200000-900000=6300000.
-    expect(panThresholdCheck(1_800_000n, 5_400_000n, cachedStart, cachedEnd, TILE_SPAN)).toBeNull();
-  });
-
-  it('returns left-side range when visible left edge approaches cached start', () => {
-    // vis=[500000, 4100000]: visMin(500000) < 0+900000 → triggers left prefetch.
-    const result = panThresholdCheck(500_000n, 4_100_000n, cachedStart, cachedEnd, TILE_SPAN);
-    expect(result).not.toBeNull();
-    expect(result!.startMs).toBe(-1_800_000n); // cachedStart - tileSpan
-    expect(result!.endMs).toBe(0n);            // cachedStart
-  });
-
-  it('returns right-side range when visible right edge approaches cached end', () => {
-    // vis=[3500000, 7100000]: visMax(7100000) > 7200000-900000=6300000 → right prefetch.
-    const result = panThresholdCheck(3_500_000n, 7_100_000n, cachedStart, cachedEnd, TILE_SPAN);
-    expect(result).not.toBeNull();
-    expect(result!.startMs).toBe(7_200_000n);  // cachedEnd
-    expect(result!.endMs).toBe(9_000_000n);    // cachedEnd + tileSpan
-  });
-
-  it('returns null when visMin is exactly cachedStart + halfTileMs (boundary is strict <)', () => {
-    // vis=[900000, 4500000]: visMin === cachedStart + halfTile — NOT strictly less, so null.
-    expect(panThresholdCheck(900_000n, 4_500_000n, cachedStart, cachedEnd, TILE_SPAN)).toBeNull();
-  });
-
-  it('returns null when visMax is exactly cachedEnd - halfTileMs (boundary is strict >)', () => {
-    // vis=[2700000, 6300000]: visMax === cachedEnd - halfTile — NOT strictly greater, so null.
-    expect(panThresholdCheck(2_700_000n, 6_300_000n, cachedStart, cachedEnd, TILE_SPAN)).toBeNull();
-  });
-
-  it('left trigger fires one bucket before the exact boundary', () => {
-    // visMin = 900000 - 1 = 899999 < 900000 → triggers.
-    const result = panThresholdCheck(899_999n, 4_499_999n, cachedStart, cachedEnd, TILE_SPAN);
-    expect(result).not.toBeNull();
-    expect(result!.endMs).toBe(0n);
-  });
-
-  it('right trigger fires one bucket before the exact boundary', () => {
-    // visMax = 6300000 + 1 = 6300001 > 6300000 → triggers.
-    const result = panThresholdCheck(2_700_001n, 6_300_001n, cachedStart, cachedEnd, TILE_SPAN);
-    expect(result).not.toBeNull();
-    expect(result!.startMs).toBe(7_200_000n);
-  });
-
-  it('mismatched tileSpanMs: returned range width equals tileSpanMs, not visible-derived width', () => {
-    // Simulates wheel-zoom-out where visible span > 2 × active tileSpan (dataViewport unchanged).
-    // visSpan = 3_000_000n (3000s). If tileSpanMs were derived from visSpan: tileSpan = 1_500_000n.
-    // But active set has tileSpanMs = 1_000_000n (1000s). Passing active-set width must win.
-    const activeTileSpan = 1_000_000n; // active-set actual tile width
-    const halfTile = activeTileSpan / 2n; // 500_000n
-    // Trigger right: visMax(7_100_000n) > cachedEnd(7_200_000n) - halfTile(500_000n) = 6_700_000n → true.
-    const result = panThresholdCheck(4_100_000n, 7_100_000n, cachedStart, cachedEnd, activeTileSpan);
-    expect(result).not.toBeNull();
-    expect(result!.startMs).toBe(7_200_000n);
-    // Range width must equal the active set's tileSpanMs (1_000_000n), not visSpan/2 (1_500_000n).
-    expect(result!.endMs - result!.startMs).toBe(activeTileSpan);
-  });
-});
-
 // ── zoomXScale ────────────────────────────────────────────────────────────────
 //
 // scale x: 0→3600 (span=3600s), overW=800px unless noted.
@@ -504,117 +433,6 @@ describe('zoomXScale', () => {
     const [, opts] = setScale.mock.calls[0] as [string, { min: number; max: number }];
     expect(opts.min).toBeCloseTo(-1800);
     expect(opts.max).toBeCloseTo(5400);
-  });
-});
-
-// ── checkAndExtendXCoverage ───────────────────────────────────────────────────
-//
-// Tile covers [1_000_000_000_000 ms, 1_000_000_060_000 ms] (60 s).
-// Active set tileSpanMs = 30 s (half tile); halfTile = 15 s.
-// Threshold: visMin must be < tileStart + 15 s to trigger left, visMax > tileEnd - 15 s for right.
-// In the raw-data test, u.data[0] only spans a narrow window *inside* the tile; the function
-// must use getActiveRange (tile bounds) rather than u.data[0] to compute the extent.
-
-describe('checkAndExtendXCoverage', () => {
-  // Tile bounds in seconds (uPlot uses seconds).
-  const TILE_START_S = 1_000_000_000;  // ms: 1_000_000_000_000
-  const TILE_END_S   = 1_000_000_060;  // ms: 1_000_000_060_000
-
-  function makeUWithData(
-    xScaleMinS: number,
-    xScaleMaxS: number,
-    dataSamples: number[],
-  ): uPlot {
-    return {
-      data: [dataSamples],
-      scales: { x: { min: xScaleMinS, max: xScaleMaxS } },
-    } as unknown as uPlot;
-  }
-
-  // tileSpanMs = 30_000n (30 s) — active set's actual tile width, not derived from visible span.
-  const getActiveRange = () => ({
-    startMs:    BigInt(TILE_START_S) * 1000n,
-    endMs:      BigInt(TILE_END_S)   * 1000n,
-    tileSpanMs: 30_000n,
-  });
-
-  it('returns early and does not call ensureCovered when ensureCovered is absent', () => {
-    const u = makeUWithData(TILE_START_S, TILE_END_S, [TILE_START_S, TILE_END_S]);
-    const ensureCovered = vi.fn();
-    checkAndExtendXCoverage(u, undefined, getActiveRange);
-    expect(ensureCovered).not.toHaveBeenCalled();
-  });
-
-  it('returns early and does not call ensureCovered when getActiveRange is absent', () => {
-    const u = makeUWithData(TILE_START_S, TILE_END_S, [TILE_START_S, TILE_END_S]);
-    const ensureCovered = vi.fn();
-    checkAndExtendXCoverage(u, ensureCovered, undefined);
-    expect(ensureCovered).not.toHaveBeenCalled();
-  });
-
-  it('returns early when getActiveRange returns null (no active tiles)', () => {
-    const u = makeUWithData(TILE_START_S, TILE_END_S, [TILE_START_S, TILE_END_S]);
-    const ensureCovered = vi.fn();
-    checkAndExtendXCoverage(u, ensureCovered, () => null);
-    expect(ensureCovered).not.toHaveBeenCalled();
-  });
-
-  it('does NOT call ensureCovered when visible window is comfortably inside tile bounds', () => {
-    // vis=[tile+20s, tile+40s]: well within [tile, tile+60s], halfTile=15s threshold not crossed.
-    const u = makeUWithData(
-      TILE_START_S + 20, TILE_START_S + 40,
-      // Sparse u.data[0] that does NOT span the tile bounds — should be ignored.
-      [TILE_START_S + 22, TILE_START_S + 23, TILE_START_S + 38],
-    );
-    const ensureCovered = vi.fn();
-    checkAndExtendXCoverage(u, ensureCovered, getActiveRange);
-    expect(ensureCovered).not.toHaveBeenCalled();
-  });
-
-  it('uses tile bounds (not u.data[0]) to decide threshold — sparse samples inside tile do not trigger spurious right extension', () => {
-    // Scenario: tile covers [0, 60s]. Visible window is [10s, 50s] — well inside tile.
-    // u.data[0] only has samples up to 46s (13.8 s short of tile end, as in the raw-mode repro).
-    // If the function used u.data[0][last]=46s as cachedEnd:
-    //   visMax(50s) > 46s - 15s(halfTile) = 31s → would wrongly fire a right extension.
-    // With tile bounds (cachedEnd=60s):
-    //   visMax(50s) > 60s - 15s = 45s → 50 > 45, would still fire...
-    // Let's set up where u.data[0] WOULD trigger but tile bounds would NOT.
-    // u.data[0] last sample = tile_start + 30 s (halfway). visMax = tile_start + 20 s.
-    // halfTile = (visSpan)/4. visSpan = tile_end - tile_start = 60s → halfTile = 15s.
-    // Using u.data[0]: cachedEnd = tile_start+30. visMax(tile_start+20) > (tile_start+30)-15=(tile_start+15) → triggers.
-    // Using tile bounds: cachedEnd = tile_end = tile_start+60. visMax(tile_start+20) > (tile_start+60)-15=(tile_start+45) → false → no trigger.
-    const visMinS = TILE_START_S + 5;
-    const visMaxS = TILE_START_S + 20;
-    const u = makeUWithData(
-      visMinS, visMaxS,
-      [TILE_START_S + 10, TILE_START_S + 18, TILE_START_S + 30], // last sample at +30s
-    );
-    const ensureCovered = vi.fn();
-    checkAndExtendXCoverage(u, ensureCovered, getActiveRange);
-    // tile bounds say cachedEnd=+60s, threshold = +45s. visMax=+20s < +45s → no right trigger.
-    // tile bounds say cachedStart=0s, threshold = +15s. visMin=+5s < +15s → LEFT trigger fires.
-    // Only left should fire (if at all), not right.
-    if (ensureCovered.mock.calls.length > 0) {
-      const [startMs] = ensureCovered.mock.calls[0] as [bigint, bigint];
-      // If it fired, it must be a left-extension (startMs < tileStart), not a spurious right one.
-      expect(startMs).toBeLessThan(BigInt(TILE_START_S) * 1000n);
-    }
-  });
-
-  it('fires left extension when visMin crosses tile start + halfTile threshold', () => {
-    // vis=[tile_start+5s, tile_start+65s]: visMin < tile_start + 15s → left trigger.
-    const u = makeUWithData(
-      TILE_START_S + 5, TILE_START_S + 65,
-      [TILE_START_S + 22, TILE_START_S + 58], // sparse, would not trigger with u.data[0]
-    );
-    const ensureCovered = vi.fn();
-    checkAndExtendXCoverage(u, ensureCovered, getActiveRange);
-    expect(ensureCovered).toHaveBeenCalledOnce();
-    const [startMs, endMs] = ensureCovered.mock.calls[0] as [bigint, bigint];
-    // Left extension: startMs = tileStart - tileSpan, endMs = tileStart.
-    // tileSpan = visSpan/2 = (65-5)/2 = 30s.
-    expect(endMs).toBe(BigInt(TILE_START_S) * 1000n);
-    expect(startMs).toBe(BigInt(TILE_START_S) * 1000n - 30_000n);
   });
 });
 

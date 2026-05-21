@@ -347,3 +347,38 @@ describe('mergeTrendData — cross-bucketSMs (bucketSMs mismatch)', () => {
     expect(result).toBe(cached);
   });
 });
+
+describe('mergeTrendData — seamResponseTailTs=null is a no-op (smell #1)', () => {
+  it('null seamResponseTailTs produces identical output to omitting opts', () => {
+    // getSeamResponseTailTs returns null when all active-tile responseTailTs are null.
+    // mergeTrendData must treat null the same as the no-opts path (seamBucketIndex=-1).
+    const cached = makeAgg(5, new Map([[1, [1, 2, 3, 4, 5]]]));
+    const tail = makeAggTail(3000n, new Map([[1, [99]]]));
+
+    const withNull = mergeTrendData(cached, tail, { seamResponseTailTs: null }) as AggregateSeriesData;
+    const withOmit = mergeTrendData(cached, tail) as AggregateSeriesData;
+
+    expect(withNull.n).toBe(withOmit.n);
+    const sNull = withNull.series.get(1)!;
+    const sOmit = withOmit.series.get(1)!;
+    expect(sNull.value).toEqual(sOmit.value);
+    expect(sNull.min).toEqual(sOmit.min);
+    expect(sNull.max).toEqual(sOmit.max);
+  });
+
+  it('null seamResponseTailTs with multiple tags — live min/max wins at every bucket', () => {
+    const cached = makeAgg(3, new Map([[1, [10, 20, 30]], [2, [100, 200, 300]]]));
+    const tail = makeAggTail(0n, new Map([[1, [1, 2, 3]], [2, [10, 20, 30]]]));
+
+    const withNull = mergeTrendData(cached, tail, { seamResponseTailTs: null }) as AggregateSeriesData;
+    const withOmit = mergeTrendData(cached, tail) as AggregateSeriesData;
+
+    for (const tagId of [1, 2]) {
+      const sNull = withNull.series.get(tagId)!;
+      const sOmit = withOmit.series.get(tagId)!;
+      expect(sNull.value).toEqual(sOmit.value);
+      expect(sNull.min).toEqual(sOmit.min);
+      expect(sNull.max).toEqual(sOmit.max);
+    }
+  });
+});
