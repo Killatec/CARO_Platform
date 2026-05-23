@@ -11,19 +11,25 @@ test.describe('Drag and Drop', () => {
   let po;
   let tagTName, modMName;
 
+  let sysName;
+
   test.beforeEach(async ({ page }) => {
     po = createPageObjects(page);
 
     const ts = Date.now();
     tagTName = `tag_dd_${ts}`;
     modMName = `mod_dd_${ts}`;
-    created.push(tagTName, modMName);
+    sysName  = `sys_dd_${ts}`;
+    created.push(tagTName, modMName, sysName);
 
     await createTagTemplate(tagTName);
     await createStructuralTemplate(modMName, 'module'); // no children initially
+    await createStructuralTemplate(sysName, 'system', [
+      { template_name: modMName, asset_name: modMName, fields: {} },
+    ]);
 
     await page.goto('/');
-    await po.selectRoot(modMName);
+    await po.selectRoot(sysName);
   });
 
   test.afterEach(async ({ page }) => {
@@ -41,9 +47,15 @@ test.describe('Drag and Drop', () => {
     await po.expandTemplateFolder('tag');
 
     const tagLeaf = po.templatesTree.getByText(tagTName, { exact: true });
-    const modNode = po.systemTree.getByText(modMName, { exact: false }).first();
+    const modNode = po.systemTree
+      .locator('span.flex-1')
+      .filter({ hasText: new RegExp(`^${modMName}$`) })
+      .locator('..');
 
     await tagLeaf.dragTo(modNode);
+
+    // Module defaults to collapsed when non-root; expand to reveal new child.
+    await modNode.locator('button').first().click();
 
     await expect(po.systemTree).toContainText(tagTName);
     await expect(po.saveButton).toBeVisible();
@@ -54,8 +66,14 @@ test.describe('Drag and Drop', () => {
     await po.expandTemplateFolder('tag');
 
     const tagLeaf = po.templatesTree.getByText(tagTName, { exact: true });
-    const modNode = po.systemTree.getByText(modMName, { exact: false }).first();
+    const modNode = po.systemTree
+      .locator('span.flex-1')
+      .filter({ hasText: new RegExp(`^${modMName}$`) })
+      .locator('..');
     await tagLeaf.dragTo(modNode);
+
+    // Module defaults to collapsed when non-root; expand to reveal new child.
+    await modNode.locator('button').first().click();
 
     await expect(po.systemTree).toContainText(tagTName);
 
@@ -74,8 +92,14 @@ test.describe('Drag and Drop', () => {
     // First add tagT to modM via drag so it appears in the system tree
     await po.expandTemplateFolder('tag');
     const tagLeaf = po.templatesTree.getByText(tagTName, { exact: true });
-    const modNode = po.systemTree.getByText(modMName, { exact: false }).first();
+    const modNode = po.systemTree
+      .locator('span.flex-1')
+      .filter({ hasText: new RegExp(`^${modMName}$`) })
+      .locator('..');
     await tagLeaf.dragTo(modNode);
+
+    // Module defaults to collapsed when non-root; expand to reveal new child.
+    await modNode.locator('button').first().click();
     await expect(po.systemTree).toContainText(tagTName);
 
     // Now try to drag tagT2 onto the tagT node in the system tree.

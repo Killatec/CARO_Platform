@@ -40,7 +40,7 @@ test.describe('Validation Panel', () => {
 
     // Create a structural template with two children sharing the same asset_name.
     // The server accepts this (client-side validation catches DUPLICATE_SIBLING_NAME).
-    await createStructuralTemplate(sName, 'parameter', [
+    await createStructuralTemplate(sName, 'system', [
       { template_name: tagName, asset_name: 'SameName', fields: {} },
       { template_name: tagName, asset_name: 'SameName', fields: {} },
     ]);
@@ -66,7 +66,7 @@ test.describe('Validation Panel', () => {
     created.push(tagName, modName);
 
     await createTagTemplate(tagName);
-    await createStructuralTemplate(modName, 'module', [
+    await createStructuralTemplate(modName, 'system', [
       { template_name: tagName, asset_name: 'valid_name', fields: {} },
     ]);
 
@@ -91,7 +91,7 @@ test.describe('Validation Panel', () => {
     created.push(tagName, modName);
 
     await createTagTemplate(tagName);
-    await createStructuralTemplate(modName, 'module', [
+    await createStructuralTemplate(modName, 'system', [
       { template_name: tagName, asset_name: 'valid_name', fields: {} },
     ]);
 
@@ -124,7 +124,7 @@ test.describe('Validation Panel', () => {
     const emptyName = `mod_val_empty_${Date.now()}`;
     created.push(emptyName);
 
-    await createStructuralTemplate(emptyName, 'module');
+    await createStructuralTemplate(emptyName, 'system');
     await po.selectRoot(emptyName);
 
     // Validation panel is visible but contains no error codes

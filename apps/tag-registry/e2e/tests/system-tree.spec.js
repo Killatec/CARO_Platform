@@ -25,7 +25,7 @@ test.describe('System Tree', () => {
     await createStructuralTemplate(paramPName, 'parameter', [
       { template_name: tagTName, asset_name: 'monitor', fields: {} },
     ]);
-    await createStructuralTemplate(modMName, 'module', [
+    await createStructuralTemplate(modMName, 'system', [
       { template_name: paramPName, asset_name: 'Channel1', fields: {} },
     ]);
 
@@ -41,6 +41,14 @@ test.describe('System Tree', () => {
   // ── Test 1 ─────────────────────────────────────────────────────────────────
   test('system tree renders the full hierarchy', async () => {
     await expect(po.systemTree).toContainText('Channel1');
+
+    // Channel1 is a non-root node and defaults to collapsed; expand it first.
+    const channel1Toggle = po.systemTree
+      .getByText('Channel1', { exact: true })
+      .locator('..')
+      .getByRole('button', { name: /[▼▶]/ });
+    await channel1Toggle.click();
+
     await expect(po.systemTree).toContainText('monitor');
   });
 
@@ -56,12 +64,19 @@ test.describe('System Tree', () => {
 
   // ── Test 3 ─────────────────────────────────────────────────────────────────
   test('collapse button hides child nodes', async ({ page }) => {
-    // Target Channel1's expand toggle by its exact text span → parent row div →
-    // button whose accessible name is the collapse arrow (▼ or ▶).
+    // Channel1 defaults to collapsed (non-root). Expand it first so the test
+    // starts from the expanded state, then collapse and verify monitor hides.
     const channel1Toggle = po.systemTree
       .getByText('Channel1', { exact: true })
       .locator('..') // node row div
       .getByRole('button', { name: /[▼▶]/ });
+
+    // Expand Channel1 so monitor is visible
+    await channel1Toggle.click();
+    await page.waitForTimeout(300);
+    await expect(po.systemTree).toContainText('monitor');
+
+    // Now collapse — monitor should disappear
     await channel1Toggle.click();
     await page.waitForTimeout(300);
 
@@ -74,6 +89,11 @@ test.describe('System Tree', () => {
       .getByText('Channel1', { exact: true })
       .locator('..') // node row div
       .getByRole('button', { name: /[▼▶]/ });
+
+    // Channel1 defaults to collapsed; expand it first so we can verify collapse.
+    await channel1Toggle.click();
+    await page.waitForTimeout(300);
+    await expect(po.systemTree).toContainText('monitor');
 
     // Collapse
     await channel1Toggle.click();

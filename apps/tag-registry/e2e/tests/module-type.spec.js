@@ -27,15 +27,19 @@ test.describe('Module Type — end-to-end', () => {
     const ts = Date.now();
     const tagName = `tag_mt1_${ts}`;
     const modName = `mod_mt1_${ts}`;
-    created.push(tagName, modName);
+    const sysName = `sys_mt1_${ts}`;
+    created.push(tagName, modName, sysName);
 
     await createTagTemplate(tagName);
     // Module template with NO Module_Type field
     await createStructuralTemplate(modName, 'module', [
       { template_name: tagName, asset_name: 'ch', fields: {} },
     ]);
+    await createStructuralTemplate(sysName, 'system', [
+      { template_name: modName, asset_name: modName, fields: {} },
+    ]);
 
-    await po.selectRoot(modName);
+    await po.selectRoot(sysName);
 
     // Validation panel should show Module_Type-related error
     await expect(po.validationPanel).toContainText('Module_Type');
@@ -46,14 +50,18 @@ test.describe('Module Type — end-to-end', () => {
     const ts = Date.now();
     const tagName = `tag_mt2_${ts}`;
     const modName = `mod_mt2_${ts}`;
-    created.push(tagName, modName);
+    const sysName = `sys_mt2_${ts}`;
+    created.push(tagName, modName, sysName);
 
     await createTagTemplate(tagName);
     await createStructuralTemplate(modName, 'module', [
       { template_name: tagName, asset_name: 'ch', fields: {} },
     ], { Module_Type: { field_type: 'ModuleType', default: 'HMI' } });
+    await createStructuralTemplate(sysName, 'system', [
+      { template_name: modName, asset_name: modName, fields: {} },
+    ]);
 
-    await po.selectRoot(modName);
+    await po.selectRoot(sysName);
 
     // Validation panel should NOT contain Module_Type error
     await expect(po.validationPanel).not.toContainText('Module_Type');
@@ -164,12 +172,17 @@ test.describe('Module Type — end-to-end', () => {
     await createStructuralTemplate(modName, 'module', [
       { template_name: paramName, asset_name: 'chan', fields: {} },
     ], { Module_Type: { field_type: 'ModuleType', default: 'MQTT' } });
+    const sysName5 = `sys_mt5_${ts}`;
+    created.push(sysName5);
+    await createStructuralTemplate(sysName5, 'system', [
+      { template_name: modName, asset_name: modName, fields: {} },
+    ]);
 
     // Apply registry via API to populate DB
-    await applyRegistryApi(modName, 'E2E module_type test');
+    await applyRegistryApi(sysName5, 'E2E module_type test');
 
     // Load UI and navigate to Registry page
-    await po.selectRoot(modName);
+    await po.selectRoot(sysName5);
     await po.navigateToRegistry();
 
     // Wait for table to render

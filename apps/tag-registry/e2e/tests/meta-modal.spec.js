@@ -14,7 +14,7 @@ import { createPageObjects } from '../helpers/pageObjects.js';
 test.describe('Meta Modal', () => {
   const created = [];
   let po;
-  let tagName, paramName, modName;
+  let tagName, paramName, modName, sysName;
 
   // Setup: hierarchy with two tag children so tests can open View on
   // different rows without modifying state between assertions.
@@ -25,7 +25,8 @@ test.describe('Meta Modal', () => {
     tagName   = `tag_meta_${ts}`;
     paramName = `param_meta_${ts}`;
     modName   = `mod_meta_${ts}`;
-    created.push(tagName, paramName, modName);
+    sysName   = `sys_meta_${ts}`;
+    created.push(tagName, paramName, modName, sysName);
 
     await createTagTemplate(tagName, 'f32', false, {
       eng_min: { field_type: 'Numeric', default: 0 },
@@ -38,8 +39,11 @@ test.describe('Meta Modal', () => {
     await createStructuralTemplate(modName, 'module', [
       { template_name: paramName, asset_name: 'Chan1', fields: {} },
     ], { Module_Type: { field_type: 'ModuleType', default: 'HMI' } });
+    await createStructuralTemplate(sysName, 'system', [
+      { template_name: modName, asset_name: modName, fields: {} },
+    ]);
 
-    await po.selectRoot(modName);
+    await po.selectRoot(sysName);
     await po.navigateToRegistry();
     await expect(page.locator('table')).toBeVisible({ timeout: 10000 });
   });
@@ -56,7 +60,7 @@ test.describe('Meta Modal', () => {
 
   // ── Test 1 ─────────────────────────────────────────────────────────────────
   test('clicking View on a registry row opens meta modal with tag_path as title', async ({ page }) => {
-    const tagPath = `${modName}.Chan1.setpoint`;
+    const tagPath = `${sysName}.${modName}.Chan1.setpoint`;
     const row = page.locator('tr').filter({ hasText: tagPath });
     await row.getByRole('button', { name: 'View' }).click();
 
@@ -70,7 +74,7 @@ test.describe('Meta Modal', () => {
 
   // ── Test 2 ─────────────────────────────────────────────────────────────────
   test('meta modal closes when Close button is clicked', async ({ page }) => {
-    const tagPath = `${modName}.Chan1.setpoint`;
+    const tagPath = `${sysName}.${modName}.Chan1.setpoint`;
     const row = page.locator('tr').filter({ hasText: tagPath });
     await row.getByRole('button', { name: 'View' }).click();
     await expect(metaModal(page, tagPath)).toBeVisible({ timeout: 5000 });
@@ -84,7 +88,7 @@ test.describe('Meta Modal', () => {
   // so that the row shows as modified and the modal includes diff highlights.
   test('modified row meta modal shows diff legend when meta field value differs', async ({ page }) => {
     // Apply registry so DB meta has eng_min=5 for setpoint
-    await applyRegistryApi(modName, 'meta-modal test: apply before modify');
+    await applyRegistryApi(sysName, 'meta-modal test: apply before modify');
 
     // Change setpoint eng_min to 99 (differs from DB value of 5)
     const { template: paramTemplate, hash: paramHash } = await getTemplate(paramName);
@@ -101,12 +105,12 @@ test.describe('Meta Modal', () => {
     }], [], true);
 
     // Reload store to pick up modified template
-    await po.selectRoot(modName);
+    await po.selectRoot(sysName);
     await po.navigateToRegistry();
     await expect(page.locator('table')).toBeVisible({ timeout: 10000 });
 
     // Open View modal on the modified row
-    const tagPath = `${modName}.Chan1.setpoint`;
+    const tagPath = `${sysName}.${modName}.Chan1.setpoint`;
     const row = page.locator('tr').filter({ hasText: tagPath });
     await row.getByRole('button', { name: 'View' }).click();
 

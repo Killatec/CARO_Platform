@@ -11,9 +11,9 @@
  * RegistryTable. No database apply is required — the proposed (in-memory)
  * registry is sufficient to observe the trends column.
  *
- * Column order in RegistryTable: tag_id(0), tag_path(1), module(2),
- * module_type(3), data_type(4), is_setpoint(5), trends(6), meta(7).
- * The trends cell is td.nth(6).
+ * Column order in RegistryTable: tag_id(0), tag_path(1), tag_name(2),
+ * module(3), module_type(4), data_type(5), is_setpoint(6), trends(7), meta(...).
+ * The trends cell is td.nth(7).
  */
 import { test, expect } from '@playwright/test';
 import {
@@ -44,7 +44,8 @@ test.describe('Registry Table — trends column', () => {
     const tagName   = `tag_tr1_${ts}`;
     const paramName = `param_tr1_${ts}`;
     const modName   = `mod_tr1_${ts}`;
-    created.push(tagName, paramName, modName);
+    const sysName   = `sys_tr1_${ts}`;
+    created.push(tagName, paramName, modName, sysName);
 
     await createTagTemplate(tagName);
     await createStructuralTemplate(paramName, 'parameter', [
@@ -53,8 +54,11 @@ test.describe('Registry Table — trends column', () => {
     await createStructuralTemplate(modName, 'module', [
       { template_name: paramName, asset_name: 'chan', fields: {} },
     ], { Module_Type: { field_type: 'ModuleType', default: 'HMI' } });
+    await createStructuralTemplate(sysName, 'system', [
+      { template_name: modName, asset_name: modName, fields: {} },
+    ]);
 
-    await po.selectRoot(modName);
+    await po.selectRoot(sysName);
     await po.navigateToRegistry();
 
     await expect(page.locator('table')).toBeVisible({ timeout: 10000 });
@@ -68,7 +72,8 @@ test.describe('Registry Table — trends column', () => {
     const tagName   = `tag_tr2_${ts}`;
     const paramName = `param_tr2_${ts}`;
     const modName   = `mod_tr2_${ts}`;
-    created.push(tagName, paramName, modName);
+    const sysName   = `sys_tr2_${ts}`;
+    created.push(tagName, paramName, modName, sysName);
 
     // No trends field on any template
     await createTagTemplate(tagName, 'f32', false, {});
@@ -78,17 +83,20 @@ test.describe('Registry Table — trends column', () => {
     await createStructuralTemplate(modName, 'module', [
       { template_name: paramName, asset_name: 'chan', fields: {} },
     ], { Module_Type: { field_type: 'ModuleType', default: 'HMI' } });
+    await createStructuralTemplate(sysName, 'system', [
+      { template_name: modName, asset_name: modName, fields: {} },
+    ]);
 
-    await po.selectRoot(modName);
+    await po.selectRoot(sysName);
     await po.navigateToRegistry();
 
     await expect(page.locator('table')).toBeVisible({ timeout: 10000 });
 
-    const tagPath = `${modName}.chan.setpoint`;
+    const tagPath = `${sysName}.${modName}.chan.setpoint`;
     const row = page.locator('tr').filter({ hasText: tagPath });
-    // trends is the 7th td (0-indexed: 6) in column order:
-    // tag_id(0), tag_path(1), module(2), module_type(3), data_type(4), is_setpoint(5), trends(6), meta(7)
-    const trendsCell = row.locator('td').nth(6);
+    // trends is td.nth(7): tag_id(0), tag_path(1), tag_name(2), module(3),
+    // module_type(4), data_type(5), is_setpoint(6), trends(7), meta(...)
+    const trendsCell = row.locator('td').nth(7);
     await expect(trendsCell).toContainText('false');
   });
 
@@ -101,7 +109,8 @@ test.describe('Registry Table — trends column', () => {
     const tagName   = `tag_tr3_${ts}`;
     const paramName = `param_tr3_${ts}`;
     const modName   = `mod_tr3_${ts}`;
-    created.push(tagName, paramName, modName);
+    const sysName   = `sys_tr3_${ts}`;
+    created.push(tagName, paramName, modName, sysName);
 
     await createTagTemplate(tagName, 'f32', false, {});
     await createStructuralTemplate(paramName, 'parameter', [
@@ -114,16 +123,20 @@ test.describe('Registry Table — trends column', () => {
       Module_Type: { field_type: 'ModuleType', default: 'HMI' },
       trends: { field_type: 'Boolean', default: true },
     });
+    await createStructuralTemplate(sysName, 'system', [
+      { template_name: modName, asset_name: modName, fields: {} },
+    ]);
 
-    await po.selectRoot(modName);
+    await po.selectRoot(sysName);
     await po.navigateToRegistry();
 
     await expect(page.locator('table')).toBeVisible({ timeout: 10000 });
 
-    const tagPath = `${modName}.chan.setpoint`;
+    const tagPath = `${sysName}.${modName}.chan.setpoint`;
     const row = page.locator('tr').filter({ hasText: tagPath });
-    // trends is the 7th td (0-indexed: 6)
-    const trendsCell = row.locator('td').nth(6);
+    // trends is td.nth(7): tag_id(0), tag_path(1), tag_name(2), module(3),
+    // module_type(4), data_type(5), is_setpoint(6), trends(7), meta(...)
+    const trendsCell = row.locator('td').nth(7);
     await expect(trendsCell).toContainText('true');
   });
 });

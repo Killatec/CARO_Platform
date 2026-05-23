@@ -13,9 +13,9 @@ import { createPageObjects } from '../helpers/pageObjects.js';
 test.describe('Registry Apply Flow', () => {
   const created = [];
   let po;
-  let tagName, paramName, modName;
+  let tagName, paramName, modName, sysName;
 
-  // Setup: minimal hierarchy, navigate to registry.
+  // Setup: minimal hierarchy wrapped in a system root, navigate to registry.
   // New timestamp names mean the tag_paths are not yet in the DB (all added).
   test.beforeEach(async ({ page }) => {
     po = createPageObjects(page);
@@ -24,7 +24,8 @@ test.describe('Registry Apply Flow', () => {
     tagName   = `tag_apply_${ts}`;
     paramName = `param_apply_${ts}`;
     modName   = `mod_apply_${ts}`;
-    created.push(tagName, paramName, modName);
+    sysName   = `sys_apply_${ts}`;
+    created.push(tagName, paramName, modName, sysName);
 
     await createTagTemplate(tagName);
     await createStructuralTemplate(paramName, 'parameter', [
@@ -33,8 +34,11 @@ test.describe('Registry Apply Flow', () => {
     await createStructuralTemplate(modName, 'module', [
       { template_name: paramName, asset_name: 'Chan1', fields: {} },
     ], { Module_Type: { field_type: 'ModuleType', default: 'HMI' } });
+    await createStructuralTemplate(sysName, 'system', [
+      { template_name: modName, asset_name: modName, fields: {} },
+    ]);
 
-    await po.selectRoot(modName);
+    await po.selectRoot(sysName);
     await po.navigateToRegistry();
     await expect(page.locator('table')).toBeVisible({ timeout: 10000 });
   });
@@ -54,8 +58,8 @@ test.describe('Registry Apply Flow', () => {
   // ── Test 1 ─────────────────────────────────────────────────────────────────
   test('Update DB button is disabled when all tags are unchanged', async ({ page }) => {
     // Apply first so there are no changes
-    await applyRegistryApi(modName, 'registry-apply test: no-op check');
-    await po.selectRoot(modName);
+    await applyRegistryApi(sysName, 'registry-apply test: no-op check');
+    await po.selectRoot(sysName);
     await po.navigateToRegistry();
     await expect(page.locator('table')).toBeVisible({ timeout: 10000 });
 

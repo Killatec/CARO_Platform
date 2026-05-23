@@ -29,10 +29,10 @@ function getOwnRows(page, rootName) {
 test.describe('Registry Diff Display', () => {
   const created = [];
   let po;
-  let tagName, paramName, modName;
+  let tagName, paramName, modName, sysName;
 
   // Setup: minimal hierarchy with one tag that has a field
-  // (tag with eng_min field → parameter with instance override → module)
+  // (tag with eng_min field → parameter with instance override → module → system root)
   // New timestamp-based names ensure tag_paths are unique per run
   // and never appear in the DB before the test applies them.
   test.beforeEach(async ({ page }) => {
@@ -42,7 +42,8 @@ test.describe('Registry Diff Display', () => {
     tagName   = `tag_diff_${ts}`;
     paramName = `param_diff_${ts}`;
     modName   = `mod_diff_${ts}`;
-    created.push(tagName, paramName, modName);
+    sysName   = `sys_diff_${ts}`;
+    created.push(tagName, paramName, modName, sysName);
 
     await createTagTemplate(tagName, 'f32', false, {
       eng_min: { field_type: 'Numeric', default: 0 },
@@ -53,8 +54,11 @@ test.describe('Registry Diff Display', () => {
     await createStructuralTemplate(modName, 'module', [
       { template_name: paramName, asset_name: 'Chan1', fields: {} },
     ], { Module_Type: { field_type: 'ModuleType', default: 'HMI' } });
+    await createStructuralTemplate(sysName, 'system', [
+      { template_name: modName, asset_name: modName, fields: {} },
+    ]);
 
-    await po.selectRoot(modName);
+    await po.selectRoot(sysName);
     await po.navigateToRegistry();
   });
 
@@ -73,7 +77,7 @@ test.describe('Registry Diff Display', () => {
     await expect(page.getByText(/\+\d+ added/)).toBeVisible();
 
     // Every own row (tag paths starting with modName) should be green (added)
-    const ownRows = getOwnRows(page, modName);
+    const ownRows = getOwnRows(page, sysName);
     const count = await ownRows.count();
     expect(count).toBeGreaterThan(0);
     for (let i = 0; i < count; i++) {
@@ -84,10 +88,10 @@ test.describe('Registry Diff Display', () => {
   // ── Test 2 ─────────────────────────────────────────────────────────────────
   test('shows all rows as unchanged after applying registry', async ({ page }) => {
     // Apply the registry so DB matches the resolved hierarchy
-    await applyRegistryApi(modName, 'registry-diff test: initial apply');
+    await applyRegistryApi(sysName,'registry-diff test: initial apply');
 
     // Reload the store and navigate to registry
-    await po.selectRoot(modName);
+    await po.selectRoot(sysName);
     await po.navigateToRegistry();
     await expect(page.locator('table')).toBeVisible({ timeout: 10000 });
 
@@ -95,7 +99,7 @@ test.describe('Registry Diff Display', () => {
     await expect(page.getByText(/unchanged/)).toBeVisible();
 
     // No own row (tag paths for this root) should have a colored background
-    const ownRows = getOwnRows(page, modName);
+    const ownRows = getOwnRows(page, sysName);
     const count = await ownRows.count();
     expect(count).toBeGreaterThan(0);
     for (let i = 0; i < count; i++) {
@@ -107,7 +111,7 @@ test.describe('Registry Diff Display', () => {
   // ── Test 3 ─────────────────────────────────────────────────────────────────
   test('shows new child as added (green) after registry was applied', async ({ page }) => {
     // Apply current state
-    await applyRegistryApi(modName, 'registry-diff test: before add');
+    await applyRegistryApi(sysName,'registry-diff test: before add');
 
     // Add a second tag instance to the parameter (monitor channel)
     const { template: paramTemplate, hash: paramHash } = await getTemplate(paramName);
@@ -124,7 +128,7 @@ test.describe('Registry Diff Display', () => {
     }], [], true);
 
     // Reload and navigate to registry
-    await po.selectRoot(modName);
+    await po.selectRoot(sysName);
     await po.navigateToRegistry();
     await expect(page.locator('table')).toBeVisible({ timeout: 10000 });
 
@@ -132,7 +136,7 @@ test.describe('Registry Diff Display', () => {
     await expect(page.getByText('+1 added')).toBeVisible();
 
     // The new tag row should be green
-    const monitorPath = `${modName}.Chan1.monitor`;
+    const monitorPath = `${sysName}.${modName}.Chan1.monitor`;
     const newRow = page.locator('tr').filter({ hasText: monitorPath });
     await expect(newRow).toHaveClass(/bg-green-500/);
   });
@@ -140,7 +144,7 @@ test.describe('Registry Diff Display', () => {
   // ── Test 4 ─────────────────────────────────────────────────────────────────
   test('shows removed tag as retired (red) after registry was applied', async ({ page }) => {
     // Apply current state (setpoint is now in DB)
-    await applyRegistryApi(modName, 'registry-diff test: before remove');
+    await applyRegistryApi(sysName,'registry-diff test: before remove');
 
     // Remove all children from the parameter so the tag disappears from hierarchy
     const { template: paramTemplate, hash: paramHash } = await getTemplate(paramName);
@@ -151,12 +155,12 @@ test.describe('Registry Diff Display', () => {
     }], [], true);
 
     // Reload and navigate to registry
-    await po.selectRoot(modName);
+    await po.selectRoot(sysName);
     await po.navigateToRegistry();
     await expect(page.locator('table')).toBeVisible({ timeout: 10000 });
 
     // The retired row should be red
-    const retiredPath = `${modName}.Chan1.setpoint`;
+    const retiredPath = `${sysName}.${modName}.Chan1.setpoint`;
     const retiredRow = page.locator('tr').filter({ hasText: retiredPath });
     await expect(retiredRow).toHaveClass(/bg-red-500/);
   });
@@ -164,7 +168,7 @@ test.describe('Registry Diff Display', () => {
   // ── Test 5 ─────────────────────────────────────────────────────────────────
   test('shows modified row with cell-level highlight when field value changes', async ({ page }) => {
     // Apply current state (eng_min=5 in DB)
-    await applyRegistryApi(modName, 'registry-diff test: before modify');
+    await applyRegistryApi(sysName,'registry-diff test: before modify');
 
     // Change the instance override: eng_min from 5 to 99
     const { template: paramTemplate, hash: paramHash } = await getTemplate(paramName);
@@ -180,7 +184,7 @@ test.describe('Registry Diff Display', () => {
     }], [], true);
 
     // Reload and navigate to registry
-    await po.selectRoot(modName);
+    await po.selectRoot(sysName);
     await po.navigateToRegistry();
     await expect(page.locator('table')).toBeVisible({ timeout: 10000 });
 
@@ -188,7 +192,7 @@ test.describe('Registry Diff Display', () => {
     await expect(page.getByText('~1 modified')).toBeVisible();
 
     // The modified row should NOT have a full-row amber background
-    const tagPath = `${modName}.Chan1.setpoint`;
+    const tagPath = `${sysName}.${modName}.Chan1.setpoint`;
     const modRow = page.locator('tr').filter({ hasText: tagPath });
     await expect(modRow).not.toHaveClass(/bg-amber-500/);
 
@@ -200,7 +204,7 @@ test.describe('Registry Diff Display', () => {
   // ── Test 6 ─────────────────────────────────────────────────────────────────
   test('tag_id column shows new for added rows and numeric id for unchanged rows', async ({ page }) => {
     // Apply so the existing tag gets a tag_id in the DB
-    await applyRegistryApi(modName, 'registry-diff test: tag_id check');
+    await applyRegistryApi(sysName,'registry-diff test: tag_id check');
 
     // Add a second child so there is one unchanged (has id) + one added (shows "new")
     const { template: paramTemplate, hash: paramHash } = await getTemplate(paramName);
@@ -216,17 +220,17 @@ test.describe('Registry Diff Display', () => {
       },
     }], [], true);
 
-    await po.selectRoot(modName);
+    await po.selectRoot(sysName);
     await po.navigateToRegistry();
     await expect(page.locator('table')).toBeVisible({ timeout: 10000 });
 
     // The added row should show 'new' in its first cell (tag_id column)
-    const monitorRow = page.locator('tr').filter({ hasText: `${modName}.Chan1.monitor` });
+    const monitorRow = page.locator('tr').filter({ hasText: `${sysName}.${modName}.Chan1.monitor` });
     const addedTagIdCell = monitorRow.locator('td').first();
     await expect(addedTagIdCell).toContainText('new');
 
     // The unchanged row should show a numeric tag_id
-    const setpointRow = page.locator('tr').filter({ hasText: `${modName}.Chan1.setpoint` });
+    const setpointRow = page.locator('tr').filter({ hasText: `${sysName}.${modName}.Chan1.setpoint` });
     const existingTagIdCell = setpointRow.locator('td').first();
     const idText = await existingTagIdCell.textContent();
     expect(parseInt(idText?.trim() ?? '', 10)).toBeGreaterThan(0);

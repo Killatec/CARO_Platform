@@ -69,7 +69,7 @@ test.describe('Tree Reorder', () => {
     await createStructuralTemplate(c1, 'parameter');
     await createStructuralTemplate(c2, 'parameter');
     await createStructuralTemplate(c3, 'parameter');
-    await createStructuralTemplate(root, 'parameter', [childRef(c1), childRef(c2), childRef(c3)]);
+    await createStructuralTemplate(root, 'system', [childRef(c1), childRef(c2), childRef(c3)]);
 
     await po.selectRoot(root);
 
@@ -108,7 +108,7 @@ test.describe('Tree Reorder', () => {
     await createStructuralTemplate(c1, 'parameter');
     await createStructuralTemplate(c2, 'parameter');
     await createStructuralTemplate(c3, 'parameter');
-    await createStructuralTemplate(root, 'parameter', [childRef(c1), childRef(c2), childRef(c3)]);
+    await createStructuralTemplate(root, 'system', [childRef(c1), childRef(c2), childRef(c3)]);
 
     await po.selectRoot(root);
 
@@ -147,7 +147,7 @@ test.describe('Tree Reorder', () => {
     await createStructuralTemplate(c1, 'parameter');
     await createStructuralTemplate(c2, 'parameter');
     await createStructuralTemplate(c3, 'parameter');
-    await createStructuralTemplate(root, 'parameter', [childRef(c1), childRef(c2)]);
+    await createStructuralTemplate(root, 'system', [childRef(c1), childRef(c2)]);
 
     await po.selectRoot(root);
     await po.expandTemplateFolder('parameter');
@@ -180,9 +180,13 @@ test.describe('Tree Reorder', () => {
     await createStructuralTemplate(cc1, 'parameter');
     await createStructuralTemplate(p2, 'parameter');
     await createStructuralTemplate(p1, 'parameter', [childRef(cc1)]);
-    await createStructuralTemplate(root, 'parameter', [childRef(p1), childRef(p2)]);
+    await createStructuralTemplate(root, 'system', [childRef(p1), childRef(p2)]);
 
     await po.selectRoot(root);
+
+    // p1 is a non-root node and defaults to collapsed; expand it to reveal cc1.
+    const p1Row = getNodeRow(po.systemTree, p1);
+    await p1Row.locator('button').first().click();
 
     // cc1 is visible nested under p1
     await expect(po.systemTree).toContainText(cc1);
@@ -216,7 +220,7 @@ test.describe('Tree Reorder', () => {
     await createStructuralTemplate(c1, 'parameter');
     await createStructuralTemplate(c2, 'parameter');
     await createStructuralTemplate(c3, 'parameter');
-    await createStructuralTemplate(root, 'parameter', [childRef(c1), childRef(c2), childRef(c3)]);
+    await createStructuralTemplate(root, 'system', [childRef(c1), childRef(c2), childRef(c3)]);
 
     await po.selectRoot(root);
 

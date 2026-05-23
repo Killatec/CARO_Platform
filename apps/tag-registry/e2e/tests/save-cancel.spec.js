@@ -90,12 +90,12 @@ test.describe('Save and Cancel', () => {
     // A solo parameter with its own eng_min field has nothing to cascade into.
     const soloName = `solo_sc_${Date.now()}`;
     created.push(soloName);
-    await createStructuralTemplate(soloName, 'parameter', [], {
+    await createStructuralTemplate(soloName, 'system', [], {
       eng_min: { field_type: 'Numeric', default: 0 },
     });
 
     await po.selectRoot(soloName);
-    await po.expandTemplateFolder('parameter');
+    await po.expandTemplateFolder('system');
     await po.clickTemplateLeaf(soloName);
 
     const engMinInput = po.fieldsPanel.locator('input[type="number"]').first();
@@ -107,7 +107,7 @@ test.describe('Save and Cancel', () => {
 
     // Reload and verify the value was persisted
     await po.selectRoot(soloName);
-    await po.expandTemplateFolder('parameter');
+    await po.expandTemplateFolder('system');
     await po.clickTemplateLeaf(soloName);
     await expect(po.fieldsPanel.locator('input[type="number"]').first()).toHaveValue('99');
   });
@@ -116,17 +116,21 @@ test.describe('Save and Cancel', () => {
   test('Save triggers CascadeConfirmModal when upstream parents are affected', async ({ page }) => {
     const pName = `param_sc_${Date.now()}`;
     const mName = `mod_sc_${Date.now()}`;
-    created.push(pName, mName);
+    const sName = `sys_sc_${Date.now()}`;
+    created.push(pName, mName, sName);
     await createStructuralTemplate(pName, 'parameter', [
       { template_name: tName, asset_name: 'mon', fields: {} },
     ]);
     await createStructuralTemplate(mName, 'module', [
       { template_name: pName, asset_name: 'Chan1', fields: {} },
     ], { Module_Type: { field_type: 'ModuleType', default: 'HMI' } });
+    await createStructuralTemplate(sName, 'system', [
+      { template_name: mName, asset_name: mName, fields: {} },
+    ]);
 
-    // selectRoot(mName) loads the full hierarchy (mName + pName + tName) into the store
+    // selectRoot(sName) loads the full hierarchy into the store
     // so simulateCascade can detect that editing tName affects pName.
-    await po.selectRoot(mName);
+    await po.selectRoot(sName);
     await po.expandTemplateFolder('tag');
     await po.clickTemplateLeaf(tName);
 
@@ -149,17 +153,21 @@ test.describe('Save and Cancel', () => {
   test('Confirming the cascade modal completes the save', async ({ page }) => {
     const pName = `param_sc2_${Date.now()}`;
     const mName2 = `mod_sc2_${Date.now()}`;
-    created.push(pName, mName2);
+    const sName2 = `sys_sc2_${Date.now()}`;
+    created.push(pName, mName2, sName2);
     await createStructuralTemplate(pName, 'parameter', [
       { template_name: tName, asset_name: 'mon', fields: {} },
     ]);
     await createStructuralTemplate(mName2, 'module', [
       { template_name: pName, asset_name: 'Chan1', fields: {} },
     ], { Module_Type: { field_type: 'ModuleType', default: 'HMI' } });
+    await createStructuralTemplate(sName2, 'system', [
+      { template_name: mName2, asset_name: mName2, fields: {} },
+    ]);
 
-    // selectRoot(mName2) loads the full hierarchy (mName2 + pName + tName) into the store
+    // selectRoot(sName2) loads the full hierarchy into the store
     // so simulateCascade can detect that editing tName affects pName.
-    await po.selectRoot(mName2);
+    await po.selectRoot(sName2);
     await po.expandTemplateFolder('tag');
     await po.clickTemplateLeaf(tName);
 

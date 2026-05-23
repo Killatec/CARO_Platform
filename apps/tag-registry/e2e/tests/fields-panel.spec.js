@@ -23,8 +23,8 @@ test.describe('Fields Panel', () => {
       eng_min: { field_type: 'Numeric', default: 0 },
     });
 
-    // S: structural template with T as a child
-    await createStructuralTemplate(sName, 'parameter', [
+    // S: system root with T as a child (root dropdown only shows system templates)
+    await createStructuralTemplate(sName, 'system', [
       { template_name: tName, asset_name: 'mon_channel', fields: {} },
     ]);
 
@@ -42,10 +42,12 @@ test.describe('Fields Panel', () => {
     await po.expandTemplateFolder('tag');
     await po.clickTemplateLeaf(tName);
 
-    // Template Name and Template Type are rendered as disabled <input> elements —
-    // their values are NOT in innerText, so check .toHaveValue() instead.
+    // Template Name is a disabled input; Template Type is now an editable text input
+    // with a datalist. Target each via the row label.
     await expect(po.fieldsPanel.locator('input[disabled]').first()).toHaveValue(tName);
-    await expect(po.fieldsPanel.locator('input[disabled]').nth(1)).toHaveValue('tag');
+    await expect(
+      po.fieldsPanel.locator('tr').filter({ hasText: 'Template Type' }).locator('input')
+    ).toHaveValue('tag');
   });
 
   // ── Test 2 ─────────────────────────────────────────────────────────────────
@@ -158,5 +160,37 @@ test.describe('Fields Panel', () => {
 
     // Input should now carry an orange class (dirty)
     await expect(assetNameInput).toHaveClass(/orange/);
+  });
+
+  // ── Test 9 ─────────────────────────────────────────────────────────────────
+  test('template mode: In_Tag_Name pinned row is visible and toggleable', async () => {
+    await po.expandTemplateFolder('tag');
+    await po.clickTemplateLeaf(tName);
+
+    const inTagNameRow = po.fieldsPanel.locator('tr').filter({ hasText: 'In_Tag_Name' });
+    await expect(inTagNameRow).toBeVisible();
+
+    const checkbox = inTagNameRow.locator('input[type="checkbox"]');
+    await expect(checkbox).toBeChecked(); // default is true
+
+    await checkbox.click();
+    await expect(checkbox).not.toBeChecked();
+    await expect(po.saveButton).toBeVisible(); // toggling makes template dirty
+  });
+
+  // ── Test 10 ────────────────────────────────────────────────────────────────
+  test('template mode: AddFieldModal shows reserved-name error for In_Tag_Name', async ({ page }) => {
+    await po.expandTemplateFolder('tag');
+    await po.clickTemplateLeaf(tName);
+
+    await po.fieldsPanel.getByRole('button', { name: 'New' }).click();
+    const dialog = page.locator('.shadow-xl').first();
+    await expect(dialog).toBeVisible();
+
+    await dialog.locator('input[type="text"]').first().fill('In_Tag_Name');
+    await dialog.getByRole('button', { name: /confirm/i }).click();
+
+    await expect(dialog).toContainText('reserved');
+    await expect(dialog).toBeVisible(); // modal stays open (not dismissed)
   });
 });

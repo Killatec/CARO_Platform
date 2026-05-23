@@ -37,6 +37,7 @@ export async function createTagTemplate(name, dataType = 'f32', isSetpoint = fal
       data_type:   { field_type: 'TagType',  default: dataType   },
       is_setpoint: { field_type: 'Boolean',  default: isSetpoint },
       Trends:      { field_type: 'Boolean',  default: false      },
+      In_Tag_Name: { field_type: 'Boolean',  default: true       },
       ...extraFields,
     },
     children: [],
