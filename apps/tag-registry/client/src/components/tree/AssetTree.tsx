@@ -4,10 +4,14 @@ import { resolveTree } from '../../utils/resolveTree.js';
 import { exportTree } from '../../utils/exportTree.js';
 import { useTemplateGraphStore } from '../../stores/useTemplateGraphStore.js';
 
+interface AssetTreeProps {
+  pathSeverityMap?: Map<string, 'error' | 'warning'>;
+}
+
 /**
  * AssetTree - displays template hierarchy as collapsible tree
  */
-export function AssetTree(): React.ReactElement {
+export function AssetTree({ pathSeverityMap }: AssetTreeProps): React.ReactElement {
   const templateMap = useTemplateGraphStore(state => state.templateMap);
   const rootTemplateName = useTemplateGraphStore(state => state.rootTemplateName);
   const isLoading = useTemplateGraphStore(state => state.isLoading);
@@ -85,6 +89,7 @@ export function AssetTree(): React.ReactElement {
           key={rootTemplateName}
           node={tree}
           ownPath={tree.template_name}
+          pathSeverityMap={pathSeverityMap}
         />
       </div>
     </div>

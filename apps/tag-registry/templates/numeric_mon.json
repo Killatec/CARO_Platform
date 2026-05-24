@@ -2,6 +2,10 @@
   "template_type": "tag",
   "template_name": "numeric_mon",
   "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": true
+    },
     "data_type": {
       "field_type": "TagType",
       "default": "f32"

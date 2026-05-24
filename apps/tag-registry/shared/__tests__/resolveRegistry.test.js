@@ -798,3 +798,77 @@ describe('tag path too long', () => {
     expect(result).toHaveLength(0);
   });
 });
+
+// ── tag_name resolution ───────────────────────────────────────────────────────
+
+describe('tag_name resolution', () => {
+  it('no level has In_Tag_Name → tag_name is empty string', () => {
+    // makeTag/makeStruct do not set In_Tag_Name; all levels have it absent/false
+    const tag = makeTag('T');
+    const mod = makeStruct('M', 'module', [{ template_name: 'T', asset_name: 'ch', fields: {} }]);
+    const map = { M: wrap(mod), T: wrap(tag) };
+    expect(resolveRegistry(map, 'M')[0].tag_name).toBe('');
+  });
+
+  it('only the tag level is flagged → tag_name equals the tag asset name', () => {
+    const tag = makeTag('T', 'f32', false, { In_Tag_Name: { field_type: 'Boolean', default: true } });
+    const mod = makeStruct('M', 'module', [{ template_name: 'T', asset_name: 'myTag', fields: {} }]);
+    const map = { M: wrap(mod), T: wrap(tag) };
+    expect(resolveRegistry(map, 'M')[0].tag_name).toBe('myTag');
+  });
+
+  it('root + tag both flagged → dot-joined in root→leaf order', () => {
+    const tag = makeTag('T', 'f32', false, { In_Tag_Name: { field_type: 'Boolean', default: true } });
+    const mod = makeStruct('M', 'module', [
+      { template_name: 'T', asset_name: 'ch', fields: {} },
+    ], { In_Tag_Name: { field_type: 'Boolean', default: true } });
+    const map = { M: wrap(mod), T: wrap(tag) };
+    // meta[0].name = 'M' (root, flagged), meta[1].name = 'ch' (tag, flagged)
+    expect(resolveRegistry(map, 'M')[0].tag_name).toBe('M.ch');
+  });
+
+  it('parameter ancestor + tag flagged → dotted root→leaf, module level excluded', () => {
+    const tag = makeTag('T', 'f32', false, { In_Tag_Name: { field_type: 'Boolean', default: true } });
+    const param = makeStruct('P', 'parameter', [
+      { template_name: 'T', asset_name: 'setpoint', fields: {} },
+    ], { In_Tag_Name: { field_type: 'Boolean', default: true } });
+    const mod = makeStruct('M', 'module', [{ template_name: 'P', asset_name: 'chan', fields: {} }]);
+    const map = { M: wrap(mod), P: wrap(param), T: wrap(tag) };
+    // module level 'M': no In_Tag_Name → excluded
+    // parameter meta name = 'chan' (asset), flagged → included
+    // tag meta name = 'setpoint' (asset), flagged → included
+    expect(resolveRegistry(map, 'M')[0].tag_name).toBe('chan.setpoint');
+  });
+
+  it('ChildRef override true→false: instance suppresses tag-level flag', () => {
+    const tag = makeTag('T', 'f32', false, { In_Tag_Name: { field_type: 'Boolean', default: true } });
+    const mod = makeStruct('M', 'module', [
+      { template_name: 'T', asset_name: 'ch', fields: { In_Tag_Name: false } },
+    ]);
+    const map = { M: wrap(mod), T: wrap(tag) };
+    expect(resolveRegistry(map, 'M')[0].tag_name).toBe('');
+  });
+
+  it('ChildRef override false→true: instance enables tag-level flag', () => {
+    const tag = makeTag('T', 'f32', false, { In_Tag_Name: { field_type: 'Boolean', default: false } });
+    const mod = makeStruct('M', 'module', [
+      { template_name: 'T', asset_name: 'ch', fields: { In_Tag_Name: true } },
+    ]);
+    const map = { M: wrap(mod), T: wrap(tag) };
+    expect(resolveRegistry(map, 'M')[0].tag_name).toBe('ch');
+  });
+
+  it('non-flagged middle level is excluded from tag_name', () => {
+    // root (module) flagged, parameter NOT flagged, tag flagged → skip parameter name
+    const tag = makeTag('T', 'f32', false, { In_Tag_Name: { field_type: 'Boolean', default: true } });
+    const param = makeStruct('P', 'parameter', [
+      { template_name: 'T', asset_name: 'setpoint', fields: {} },
+    ]); // no In_Tag_Name → excluded
+    const mod = makeStruct('M', 'module', [
+      { template_name: 'P', asset_name: 'chan', fields: {} },
+    ], { In_Tag_Name: { field_type: 'Boolean', default: true } });
+    const map = { M: wrap(mod), P: wrap(param), T: wrap(tag) };
+    // 'M' flagged, 'chan' (parameter) not flagged, 'setpoint' (tag) flagged
+    expect(resolveRegistry(map, 'M')[0].tag_name).toBe('M.setpoint');
+  });
+});

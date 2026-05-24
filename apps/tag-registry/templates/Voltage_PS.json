@@ -1,7 +1,12 @@
 {
   "template_name": "Voltage_PS",
   "template_type": "Power_Supply",
-  "fields": {},
+  "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": false
+    }
+  },
   "children": [
     {
       "template_name": "boolean_set",

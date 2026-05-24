@@ -1,7 +1,12 @@
 {
   "template_name": "Pulser",
   "template_type": "Power",
-  "fields": {},
+  "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": false
+    }
+  },
   "children": [
     {
       "template_name": "Analog_In",

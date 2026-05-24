@@ -2,6 +2,10 @@
   "template_name": "RF_Control",
   "template_type": "module",
   "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": false
+    },
     "Module_Type": {
       "field_type": "ModuleType",
       "default": "MQTT"
@@ -15,33 +19,42 @@
         "unit": "GHz",
         "format": "#.###",
         "eng_min": 2,
-        "eng_max": 3
+        "eng_max": 3,
+        "In_Tag_Name": true
       }
     },
     {
       "template_name": "boolean_set",
-      "asset_name": "Auto",
+      "asset_name": "Freq_Auto",
       "fields": {}
     },
     {
       "template_name": "Acc_RF",
       "asset_name": "Acc_1",
-      "fields": {}
+      "fields": {
+        "In_Tag_Name": true
+      }
     },
     {
       "template_name": "Acc_RF",
       "asset_name": "Acc_2",
-      "fields": {}
+      "fields": {
+        "In_Tag_Name": true
+      }
     },
     {
       "template_name": "Acc_RF",
       "asset_name": "Acc_3",
-      "fields": {}
+      "fields": {
+        "In_Tag_Name": true
+      }
     },
     {
       "template_name": "Acc_RF",
       "asset_name": "Acc_4",
-      "fields": {}
+      "fields": {
+        "In_Tag_Name": true
+      }
     }
   ]
 }

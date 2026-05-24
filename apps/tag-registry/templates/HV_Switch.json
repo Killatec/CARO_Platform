@@ -1,7 +1,12 @@
 {
   "template_name": "HV_Switch",
   "template_type": "Power",
-  "fields": {},
+  "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": false
+    }
+  },
   "children": [
     {
       "template_name": "boolean_set",
@@ -11,12 +16,16 @@
     {
       "template_name": "Voltage_PS",
       "asset_name": "Heater",
-      "fields": {}
+      "fields": {
+        "In_Tag_Name": true
+      }
     },
     {
       "template_name": "Voltage_PS",
       "asset_name": "Res",
-      "fields": {}
+      "fields": {
+        "In_Tag_Name": true
+      }
     },
     {
       "template_name": "Warm_Up",

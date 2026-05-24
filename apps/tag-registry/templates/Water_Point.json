@@ -1,7 +1,12 @@
 {
   "template_name": "Water_Point",
   "template_type": "Cooling",
-  "fields": {},
+  "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": false
+    }
+  },
   "children": [
     {
       "template_name": "Analog_In",

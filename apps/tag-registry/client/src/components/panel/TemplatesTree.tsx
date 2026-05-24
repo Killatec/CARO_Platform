@@ -4,7 +4,7 @@ import { useUIStore } from '../../stores/useUIStore.js';
 import { useTemplateGraphStore } from '../../stores/useTemplateGraphStore.js';
 import { NewTemplateModal } from '../shared/NewTemplateModal.jsx';
 import { TrashIcon } from '../shared/TrashIcon.jsx';
-import { deepNotEqual } from '@caro/tag-registry-shared';
+import { deepNotEqual, IN_TAG_NAME_FIELD } from '@caro/tag-registry-shared';
 import type { TemplateEntry } from '@caro/tag-registry-shared';
 import { setActiveDragData, clearActiveDragData } from '../../utils/dragTypes.js';
 
@@ -51,7 +51,7 @@ function TemplateLeaf({
       onDragEnd={() => clearActiveDragData()}
       onClick={() => onSelect(name)}
     >
-      <span className={`flex-1 text-sm ${isDirty ? 'font-semibold text-orange-700' : isSelected ? 'font-normal text-blue-800' : 'font-normal text-gray-800'}`}>
+      <span className={`flex-1 text-sm ${isDirty ? 'font-semibold italic text-gray-800' : isSelected ? 'font-normal text-blue-800' : 'font-normal text-gray-800'}`}>
         {name}
       </span>
       <button
@@ -209,7 +209,13 @@ export function TemplatesTree({ onTemplateSelect }: TemplatesTreeProps): React.R
   };
 
   const handleNewTemplate = (name: string, type: string) => {
-    const template = { template_name: name, template_type: type, fields: {}, children: [] };
+    const inTagNameDefault = type === 'parameter' || type === 'tag';
+    const template = {
+      template_name: name,
+      template_type: type,
+      fields: { [IN_TAG_NAME_FIELD]: { field_type: 'Boolean' as const, default: inTagNameDefault } },
+      children: [],
+    };
     addTemplate(template, null);
     setGrouped(prev => {
       const next = { ...prev };
@@ -238,7 +244,7 @@ export function TemplatesTree({ onTemplateSelect }: TemplatesTreeProps): React.R
   return (
     <div className="select-none" data-testid="templates-tree">
       <div className="px-3 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide border-b border-gray-100 flex items-center justify-between">
-        All Templates
+        Templates
         <button
           onClick={() => setNewTemplateOpen(true)}
           className="text-xs font-semibold text-white bg-gray-500 hover:bg-gray-600 px-2 py-0.5 rounded"

@@ -55,6 +55,13 @@ hmi_API_spec*
                                           Resolved by path-aware resolveDisplayField
                                           in resolveRegistry.ts; gated to numeric
                                           types (f32, i16). Migration 013.
+
+  1.6           2026-05-24   PM / Claude  Added tag_name column to tag_registry
+                                          (§3.1): VARCHAR(40) NULL. Resolved by
+                                          resolveRegistry via In_Tag_Name field
+                                          convention; uniqueness enforced in-app by
+                                          validateResolvedTags (no DB UNIQUE
+                                          constraint). Migration 015.
   ------------- ------------ ------------ ------------------------------------------
 
 **1. Purpose**
@@ -122,6 +129,8 @@ Current migrations:
 -   011_add_module_columns.sql
 -   012_add_i16_tag_type.sql
 -   013_add_display_columns.sql
+-   014_add_array_tag_types.sql
+-   015_add_tag_name_column.sql
 
 > *NOTE: The schema_migrations table is created programmatically inside
 > migrations.js on every runMigrations() call — it is not created via a
@@ -205,6 +214,13 @@ false.
   eng_max          DOUBLE PRECISION Engineering range maximum. NULL for
                    NULL             non-numeric tags and tags with no
                                     eng_max defined.
+
+  tag_name         VARCHAR(40)      Resolved tag name: dot-joined
+                   NULL             asset_names of meta levels where
+                                    In_Tag_Name is true, root→leaf.
+                                    Uniqueness enforced in-app by
+                                    validateResolvedTags — no DB UNIQUE
+                                    constraint. Added by migration 015.
   ---------------- ---------------- -------------------------------------
 
 > *NOTE: Unique constraint on (tag_id, registry_rev). GIN index on meta.

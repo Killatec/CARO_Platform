@@ -2,6 +2,10 @@
   "template_name": "Analog_In",
   "template_type": "parameter",
   "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": true
+    },
     "format": {
       "field_type": "String",
       "default": "#.##"
@@ -17,13 +21,19 @@
     "eng_max": {
       "field_type": "Numeric",
       "default": 100
+    },
+    "RSS.unit": {
+      "field_type": "String",
+      "default": "#"
     }
   },
   "children": [
     {
       "template_name": "numeric_set",
       "asset_name": "Set",
-      "fields": {}
+      "fields": {
+        "In_Tag_Name": true
+      }
     },
     {
       "template_name": "numeric_mon",

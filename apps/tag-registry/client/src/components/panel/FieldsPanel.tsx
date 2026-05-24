@@ -6,7 +6,7 @@ import { useTagTypesStore } from '../../stores/useTagTypesStore.js';
 import { useModuleTypesStore } from '../../stores/useModuleTypesStore.js';
 import { AddFieldModal } from '../shared/AddFieldModal.jsx';
 import { TrashIcon } from '../shared/TrashIcon.jsx';
-import { deepNotEqual } from '@caro/tag-registry-shared';
+import { deepNotEqual, IN_TAG_NAME_FIELD } from '@caro/tag-registry-shared';
 import type { FieldDef } from '@caro/tag-registry-shared';
 
 type FieldType = 'Numeric' | 'String' | 'Boolean' | 'TagType' | 'ModuleType';
@@ -38,7 +38,7 @@ function FieldTableRow({
   const tagTypes = useTagTypesStore(state => state.tagTypes);
   const moduleTypes = useModuleTypesStore(state => state.moduleTypes);
   const colorClass = isDirtyField
-    ? 'text-orange-700 font-semibold'
+    ? 'text-gray-700 font-semibold italic'
     : isOverride
       ? 'text-blue-600 font-normal'
       : 'text-gray-700 font-normal';
@@ -110,7 +110,7 @@ function FieldTableRow({
             checked={!!value}
             onChange={onChange ? (e) => onChange(e.target.checked) : undefined}
             disabled={readOnly}
-            className={isDirtyField ? 'accent-orange-600' : isOverride ? 'accent-blue-600' : ''}
+            className={isOverride ? 'accent-blue-600' : ''}
           />
         </td>
         <td className="py-1.5 pl-1 w-6">
@@ -274,7 +274,7 @@ export function FieldsPanel(): React.ReactElement {
             {(() => {
               const origType = originalTemplateMap.get(selectedTemplateTree)?.template?.template_type;
               const isTypeDirty = origType !== undefined && template.template_type !== origType;
-              const colorClass = isTypeDirty ? 'text-orange-700 font-semibold' : 'text-gray-700 font-normal';
+              const colorClass = isTypeDirty ? 'text-gray-700 font-semibold italic' : 'text-gray-700 font-normal';
               return (
                 <tr>
                   <td className={`py-1.5 pr-4 text-sm whitespace-nowrap pl-2 ${colorClass}`}>Template Type</td>
@@ -298,7 +298,26 @@ export function FieldsPanel(): React.ReactElement {
                 </tr>
               );
             })()}
-            {Object.entries(fields).map(([key, fieldDef]) => {
+            {(() => {
+              const inTagNameFieldDef = fields[IN_TAG_NAME_FIELD];
+              const inTagNameValue = !!(inTagNameFieldDef?.default);
+              const inTagNameDirty = inTagNameFieldDef !== undefined && (
+                !(IN_TAG_NAME_FIELD in originalFields) ||
+                originalFields[IN_TAG_NAME_FIELD]?.default !== inTagNameFieldDef.default
+              );
+              return (
+                <FieldTableRow
+                  fieldName={IN_TAG_NAME_FIELD}
+                  value={inTagNameValue}
+                  fieldType="Boolean"
+                  isDirtyField={inTagNameDirty}
+                  onChange={(checked) => updateTemplate(template.template_name, {
+                    fields: { ...fields, [IN_TAG_NAME_FIELD]: { field_type: 'Boolean', default: checked as boolean } },
+                  })}
+                />
+              );
+            })()}
+            {Object.entries(fields).filter(([key]) => key !== IN_TAG_NAME_FIELD).map(([key, fieldDef]) => {
               const isDirtyField = !(key in originalFields) ||
                 originalFields[key]?.default !== fieldDef.default;
               return (
@@ -314,7 +333,7 @@ export function FieldsPanel(): React.ReactElement {
                 />
               );
             })}
-            {Object.keys(fields).length === 0 && (
+            {Object.keys(fields).filter(k => k !== IN_TAG_NAME_FIELD).length === 0 && (
               <tr>
                 <td colSpan={2} className="px-3 py-3 text-sm text-gray-500">
                   No fields defined.
@@ -343,8 +362,8 @@ export function FieldsPanel(): React.ReactElement {
     const defaultFields = (template.fields || {}) as Record<string, FieldDef>;
 
     const allKeys = [
-      ...Object.keys(defaultFields),
-      ...Object.keys(instanceOverrides).filter(k => !(k in defaultFields)),
+      ...Object.keys(defaultFields).filter(k => k !== IN_TAG_NAME_FIELD),
+      ...Object.keys(instanceOverrides).filter(k => !(k in defaultFields) && k !== IN_TAG_NAME_FIELD),
     ];
 
     const originalParent = originalTemplateMap.get(selectedSystemTreeNodeParentTemplate!)?.template;
@@ -406,6 +425,24 @@ export function FieldsPanel(): React.ReactElement {
                 onChange={(value) => handleAssetNameChange(value)}
               />
             )}
+
+            {(() => {
+              const hasOverride = IN_TAG_NAME_FIELD in instanceOverrides;
+              const displayValue = hasOverride
+                ? instanceOverrides[IN_TAG_NAME_FIELD]
+                : (defaultFields[IN_TAG_NAME_FIELD]?.default ?? false);
+              return (
+                <FieldTableRow
+                  fieldName={IN_TAG_NAME_FIELD}
+                  value={displayValue}
+                  fieldType="Boolean"
+                  isOverride={hasOverride}
+                  isDirtyField={isDirtyField(IN_TAG_NAME_FIELD)}
+                  readOnly={isRoot}
+                  onChange={!isRoot ? (value) => handleInstanceFieldChange(IN_TAG_NAME_FIELD, value) : undefined}
+                />
+              );
+            })()}
 
             {allKeys.map(key => {
               const fieldDef = defaultFields[key];

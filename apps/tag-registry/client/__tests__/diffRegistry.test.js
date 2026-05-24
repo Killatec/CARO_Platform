@@ -423,3 +423,54 @@ describe('multiple tags', () => {
     expect(result.filter(r => r.diffStatus === 'retired')).toHaveLength(0);
   });
 });
+
+// ── tag_name ──────────────────────────────────────────────────────────────────
+
+describe('classification — modified (tag_name)', () => {
+  it('tag_name differs → diffStatus modified', () => {
+    const proposed = makeProposed(PATH_A, { tag_name: 'new_name' });
+    const db       = makeDb(PATH_A, 1001, { tag_name: 'old_name' });
+    const [row] = diffRegistry([proposed], [db]);
+    expect(row.diffStatus).toBe('modified');
+  });
+
+  it('tag_name change → changedFields includes tag_name', () => {
+    const proposed = makeProposed(PATH_A, { tag_name: 'new_name' });
+    const db       = makeDb(PATH_A, 1001, { tag_name: 'old_name' });
+    const [row] = diffRegistry([proposed], [db]);
+    expect(row.changedFields).toContain('tag_name');
+  });
+
+  it('tag_name change only → changedFields does not include data_type or meta', () => {
+    const proposed = makeProposed(PATH_A, { tag_name: 'new_name' });
+    const db       = makeDb(PATH_A, 1001, { tag_name: 'old_name' });
+    const [row] = diffRegistry([proposed], [db]);
+    expect(row.changedFields).not.toContain('data_type');
+    expect(row.changedFields).not.toContain('meta');
+  });
+
+  it('same tag_name → diffStatus unchanged, tag_name not in changedFields', () => {
+    const proposed = makeProposed(PATH_A, { tag_name: 'same' });
+    const db       = makeDb(PATH_A, 1001, { tag_name: 'same' });
+    const [row] = diffRegistry([proposed], [db]);
+    expect(row.diffStatus).toBe('unchanged');
+    expect(row.changedFields).toBeUndefined();
+  });
+
+  it('null proposed tag_name vs non-null db tag_name → modified', () => {
+    const proposed = makeProposed(PATH_A, { tag_name: null });
+    const db       = makeDb(PATH_A, 1001, { tag_name: 'old_name' });
+    const [row] = diffRegistry([proposed], [db]);
+    expect(row.diffStatus).toBe('modified');
+    expect(row.changedFields).toContain('tag_name');
+  });
+
+  it('both tag_name absent (undefined) → no-op, diffStatus unchanged', () => {
+    // Existing makeProposed/makeDb fixtures omit tag_name; null-normalization keeps equal
+    const proposed = makeProposed(PATH_A);
+    const db       = makeDb(PATH_A, 1001);
+    const [row] = diffRegistry([proposed], [db]);
+    expect(row.diffStatus).toBe('unchanged');
+    expect(row.changedFields).toBeUndefined();
+  });
+});

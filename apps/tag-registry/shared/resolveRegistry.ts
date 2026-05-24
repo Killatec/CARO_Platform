@@ -1,4 +1,4 @@
-import { MAX_TAG_PATH_LENGTH, DEFAULT_DATA_TYPE, TYPES_WITH_UNIT, type DataType } from './constants.js';
+import { MAX_TAG_PATH_LENGTH, DEFAULT_DATA_TYPE, TYPES_WITH_UNIT, IN_TAG_NAME_FIELD, type DataType } from './constants.js';
 import type { Template, TemplateEntry, MetaLevel, ResolvedTag } from './types.js';
 import { extractTemplate } from './types.js';
 
@@ -139,6 +139,11 @@ export function resolveRegistry(
       const rawMin    = hasUnit ? resolveDisplayField('eng_min', meta, assetPath) : null;
       const rawMax    = hasUnit ? resolveDisplayField('eng_max', meta, assetPath) : null;
 
+      const tag_name = meta
+        .filter(level => level.fields?.[IN_TAG_NAME_FIELD] === true)
+        .map(level => level.name)
+        .join('.');
+
       tags.push({
         tag_path,
         data_type: resolvedDataType,
@@ -150,6 +155,7 @@ export function resolveRegistry(
         format:  typeof rawFormat === 'string' ? rawFormat : null,
         eng_min: typeof rawMin    === 'number' ? rawMin    : null,
         eng_max: typeof rawMax    === 'number' ? rawMax    : null,
+        tag_name,
         meta,
       });
 

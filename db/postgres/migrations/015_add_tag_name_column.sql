@@ -1,0 +1,1 @@
+ALTER TABLE tag_registry ADD COLUMN IF NOT EXISTS tag_name VARCHAR(40);

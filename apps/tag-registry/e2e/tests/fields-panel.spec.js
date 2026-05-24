@@ -124,7 +124,7 @@ test.describe('Fields Panel', () => {
   });
 
   // ── Test 7 ─────────────────────────────────────────────────────────────────
-  test('instance mode: override value shown in blue, dirty override shown in orange', async () => {
+  test('instance mode: override value shown in blue, dirty override shown in bold italic', async () => {
     await po.selectRoot(sName);
     await po.clickSystemTreeNode('mon_channel');
 
@@ -137,12 +137,12 @@ test.describe('Fields Panel', () => {
     await input.clear();
     await input.fill('99');
 
-    // Input should now carry an orange class (dirty override)
-    await expect(input).toHaveClass(/orange/);
+    // Input should now carry bold italic classes (dirty override)
+    await expect(input).toHaveClass(/italic/);
   });
 
   // ── Test 8 ─────────────────────────────────────────────────────────────────
-  test('Instance mode: editing asset name turns it orange', async () => {
+  test('Instance mode: editing asset name turns it bold italic', async () => {
     await po.selectRoot(sName);
     await po.clickSystemTreeNode('mon_channel');
 
@@ -158,8 +158,8 @@ test.describe('Fields Panel', () => {
     await assetNameInput.clear();
     await assetNameInput.fill('renamed_param');
 
-    // Input should now carry an orange class (dirty)
-    await expect(assetNameInput).toHaveClass(/orange/);
+    // Input should now carry bold italic classes (dirty)
+    await expect(assetNameInput).toHaveClass(/italic/);
   });
 
   // ── Test 9 ─────────────────────────────────────────────────────────────────

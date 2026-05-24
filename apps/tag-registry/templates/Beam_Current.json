@@ -1,12 +1,19 @@
 {
   "template_name": "Beam_Current",
   "template_type": "Beam",
-  "fields": {},
+  "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": false
+    }
+  },
   "children": [
     {
       "template_name": "Gun",
       "asset_name": "Gun",
-      "fields": {}
+      "fields": {
+        "In_Tag_Name": true
+      }
     },
     {
       "template_name": "Analog_In",
@@ -32,7 +39,8 @@
       "fields": {
         "format": "#.###",
         "unit": "mA",
-        "eng_max": 10
+        "eng_max": 10,
+        "RSS.unit": "mA/s"
       }
     },
     {

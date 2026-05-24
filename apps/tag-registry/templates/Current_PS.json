@@ -2,6 +2,10 @@
   "template_name": "Current_PS",
   "template_type": "Power_Supply",
   "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": false
+    },
     "I.format": {
       "field_type": "String",
       "default": "#.##"

@@ -127,7 +127,7 @@ test.describe('System Tree', () => {
   });
 
   // ── Test 7 ─────────────────────────────────────────────────────────────────
-  test('dirty node label shown in orange after instance edit', async () => {
+  test('dirty node label shown in bold italic after instance edit', async () => {
     await po.clickSystemTreeNode('Channel1');
 
     // Edit the asset name input
@@ -138,13 +138,13 @@ test.describe('System Tree', () => {
     await assetNameInput.clear();
     await assetNameInput.fill('Channel1_renamed');
 
-    // The Channel1 node label in the system tree should now carry an orange class.
+    // The Channel1 node label in the system tree should now carry bold italic classes.
     // Target the span directly with an anchored regex to avoid matching ancestor
     // [data-tree-node] containers that contain 'Channel1_renamed' in their subtree.
     const nodeLabel = po.systemTree
       .locator('span.flex-1')
       .filter({ hasText: /^Channel1_renamed$/ })
       .first();
-    await expect(nodeLabel).toHaveClass(/orange/);
+    await expect(nodeLabel).toHaveClass(/italic/);
   });
 });

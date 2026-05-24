@@ -482,6 +482,9 @@ Returns 404 if no rows exist for the given revision number.
 | PARENT_TYPE_MISSING | 422 | A tag is missing a required ancestor type (VALIDATE_REQUIRED_PARENT_TYPES). |
 | DUPLICATE_PARENT_TYPE | 422 | A tag has more than one ancestor of the same type (VALIDATE_UNIQUE_PARENT_TYPES). |
 | EMPTY_BRANCH | warning | A structural template in the root hierarchy contains no tag descendants. Declared but not yet emitted in Phase 1 validation. |
+| TAG_NAME_EMPTY | 422 | A resolved tag has an empty `tag_name` — no level in its ancestor path has `In_Tag_Name` set to `true`. Emitted by `validateResolvedTags`; surfaces on registry apply and template save. |
+| TAG_NAME_TOO_LONG | 422 | A resolved `tag_name` exceeds `MAX_TAG_NAME_LENGTH` (40 characters). Emitted by `validateResolvedTags`; surfaces on registry apply and template save. |
+| DUPLICATE_TAG_NAME | 422 | Two or more resolved tags share the same `tag_name` (case-insensitive comparison, entire-registry scope). One error emitted per offending tag. Enforced in-app by `validateResolvedTags` — no DB UNIQUE constraint. Surfaces on registry apply and template save. |
 | VALIDATION_ERROR | 422 | One or more validation rules failed. See details array. Graph validation errors from batchSave (INVALID_REFERENCE, CIRCULAR_REFERENCE) are returned as VALIDATION_ERROR with specific codes in the details array — not as top-level error codes. |
 
 ---

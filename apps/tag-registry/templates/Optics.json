@@ -1,7 +1,12 @@
 {
   "template_name": "Optics",
   "template_type": "Beam",
-  "fields": {},
+  "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": false
+    }
+  },
   "children": [
     {
       "template_name": "Current_PS",
@@ -16,7 +21,8 @@
         "V.unit": "kV",
         "V.RSS.unit": "kV/s",
         "V.eng_min": 5,
-        "V.eng_max": 200
+        "V.eng_max": 200,
+        "In_Tag_Name": true
       }
     },
     {
@@ -24,48 +30,65 @@
       "asset_name": "Lens_2",
       "fields": {
         "I.eng_max": 500,
-        "V.eng_max": 500
+        "V.eng_max": 500,
+        "In_Tag_Name": true
       }
     },
     {
       "template_name": "Current_PS",
       "asset_name": "Bend_1",
-      "fields": {}
+      "fields": {
+        "In_Tag_Name": true
+      }
     },
     {
       "template_name": "Current_PS",
       "asset_name": "Bend_2",
-      "fields": {}
+      "fields": {
+        "In_Tag_Name": true
+      }
     },
     {
       "template_name": "Current_PS",
       "asset_name": "Bend_3",
-      "fields": {}
+      "fields": {
+        "In_Tag_Name": true
+      }
     },
     {
       "template_name": "Current_PS",
       "asset_name": "Bend_4",
-      "fields": {}
+      "fields": {
+        "In_Tag_Name": true
+      }
     },
     {
       "template_name": "Current_PS",
       "asset_name": "Sol_1",
-      "fields": {}
+      "fields": {
+        "In_Tag_Name": true
+      }
     },
     {
       "template_name": "Current_PS",
       "asset_name": "Sol_2",
-      "fields": {}
+      "fields": {
+        "In_Tag_Name": true
+      }
     },
     {
       "template_name": "Current_PS",
       "asset_name": "Sol_3",
-      "fields": {}
+      "fields": {
+        "In_Tag_Name": true
+      }
     },
     {
       "template_name": "Current_PS",
       "asset_name": "Sol_4",
-      "fields": {}
+      "fields": {
+        "In_Tag_Name": true
+      }
     }
   ]
 }

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { AssetTree } from '../components/tree/AssetTree.jsx';
 import { TemplatesTree } from '../components/panel/TemplatesTree.jsx';
 import { FieldsPanel } from '../components/panel/FieldsPanel.jsx';
@@ -20,20 +20,35 @@ export function EditorPage(): React.ReactElement {
 
   const { messages } = useValidation(templateMap, rootTemplateName);
 
+  const pathSeverityMap = useMemo(() => {
+    const map = new Map<string, 'error' | 'warning'>();
+    for (const msg of messages) {
+      const tagPath = msg.ref?.tag_path;
+      if (!tagPath) continue;
+      const parts = tagPath.split('.');
+      for (let i = 1; i <= parts.length; i++) {
+        const prefix = parts.slice(0, i).join('.');
+        if (msg.severity === 'error' || !map.has(prefix)) {
+          map.set(prefix, msg.severity);
+        }
+      }
+    }
+    return map;
+  }, [messages]);
+
   return (
     <div className="flex flex-col h-full">
       <div className="flex flex-1 min-h-0">
         <div className="min-w-[25rem] border-r border-gray-200 bg-white overflow-y-auto">
-          <AssetTree />
+          <AssetTree pathSeverityMap={pathSeverityMap} />
         </div>
 
-        <div className="min-w-[20rem] flex flex-col bg-white overflow-y-auto">
-          <div className="flex-shrink-0 border-b border-gray-200">
-            <TemplatesTree onTemplateSelect={setSelectedTemplateTree} />
-          </div>
-          <div className="flex-shrink-0">
-            <FieldsPanel />
-          </div>
+        <div className="min-w-[20rem] border-r border-gray-200 bg-white overflow-y-auto">
+          <FieldsPanel />
+        </div>
+
+        <div className="min-w-[20rem] bg-white overflow-y-auto">
+          <TemplatesTree onTemplateSelect={setSelectedTemplateTree} />
         </div>
       </div>
 

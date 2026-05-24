@@ -2,6 +2,10 @@
   "template_name": "Beam_Control",
   "template_type": "module",
   "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": false
+    },
     "Module_Type": {
       "field_type": "ModuleType",
       "default": "MQTT"
@@ -26,7 +30,9 @@
     {
       "template_name": "Scanning",
       "asset_name": "Scanning",
-      "fields": {}
+      "fields": {
+        "In_Tag_Name": true
+      }
     }
   ]
 }

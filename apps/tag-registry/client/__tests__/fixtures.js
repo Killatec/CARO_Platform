@@ -3,8 +3,9 @@ export function makeTag(name, fields = {}) {
     template_type: 'tag',
     template_name: name,
     fields: {
-      data_type: { field_type: 'TagType', default: 'f32' },
-      is_setpoint: { field_type: 'Boolean', default: false },
+      data_type:   { field_type: 'TagType',  default: 'f32'  },
+      is_setpoint: { field_type: 'Boolean',  default: false  },
+      In_Tag_Name: { field_type: 'Boolean',  default: true   },
       ...fields,
     },
     children: [],

@@ -2,6 +2,10 @@
   "template_type": "system",
   "template_name": "CARO_1",
   "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": false
+    },
     "description": {
       "field_type": "String",
       "default": "CARO_1 System"

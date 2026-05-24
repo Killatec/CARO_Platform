@@ -1,22 +1,33 @@
 {
   "template_name": "Acc_RF",
   "template_type": "RF",
-  "fields": {},
+  "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": false
+    }
+  },
   "children": [
     {
       "template_name": "Coupler",
       "asset_name": "Driver",
-      "fields": {}
+      "fields": {
+        "In_Tag_Name": true
+      }
     },
     {
       "template_name": "Coupler",
       "asset_name": "Kly",
-      "fields": {}
+      "fields": {
+        "In_Tag_Name": true
+      }
     },
     {
       "template_name": "Coupler_w_Phase",
       "asset_name": "Acc",
-      "fields": {}
+      "fields": {
+        "In_Tag_Name": true
+      }
     }
   ]
 }

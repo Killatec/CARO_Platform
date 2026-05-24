@@ -1,7 +1,12 @@
 {
   "template_name": "Pump",
   "template_type": "Cooling",
-  "fields": {},
+  "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": false
+    }
+  },
   "children": [
     {
       "template_name": "boolean_set",

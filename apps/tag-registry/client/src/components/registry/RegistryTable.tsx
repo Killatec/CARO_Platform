@@ -102,6 +102,13 @@ export function RegistryTable({ rows }: RegistryTableProps): React.ReactElement 
             </TableHeaderCell>
             <TableHeaderCell
               sortable
+              onClick={() => setSort('tag_name')}
+              className={`px-4 w-px whitespace-nowrap cursor-pointer hover:bg-gray-100 ${HDR_BORDER} ${COL_BORDER}`}
+            >
+              tag_name {sortField === 'tag_name' && (sortDirection === 'asc' ? '↑' : '↓')}
+            </TableHeaderCell>
+            <TableHeaderCell
+              sortable
               onClick={() => setSort('module')}
               className={`px-4 w-px whitespace-nowrap cursor-pointer hover:bg-gray-100 ${HDR_BORDER} ${COL_BORDER}`}
             >
@@ -184,6 +191,9 @@ export function RegistryTable({ rows }: RegistryTableProps): React.ReactElement 
                 </TableCell>
                 <TableCell className={`px-4 w-0 whitespace-nowrap ${ROW_BORDER} ${COL_BORDER} ${cellClass('tag_path')}`}>
                   <TagPathLabel tagPath={tag.tag_path} />
+                </TableCell>
+                <TableCell className={`px-4 w-px whitespace-nowrap text-center ${ROW_BORDER} ${COL_BORDER} ${cellClass('tag_name')}`}>
+                  {tag.tag_name ?? '—'}
                 </TableCell>
                 <TableCell className={`px-4 w-px whitespace-nowrap text-center ${ROW_BORDER} ${COL_BORDER} ${cellClass('module')}`}>
                   {tag.module ?? '—'}

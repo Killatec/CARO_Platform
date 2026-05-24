@@ -2,6 +2,10 @@
   "template_name": "Power_Control",
   "template_type": "module",
   "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": false
+    },
     "Module_Type": {
       "field_type": "ModuleType",
       "default": "MQTT"
@@ -16,17 +20,23 @@
     {
       "template_name": "Main_TX",
       "asset_name": "Main_TX",
-      "fields": {}
+      "fields": {
+        "In_Tag_Name": true
+      }
     },
     {
       "template_name": "HV_Switch",
       "asset_name": "HV_Switch",
-      "fields": {}
+      "fields": {
+        "In_Tag_Name": true
+      }
     },
     {
       "template_name": "Pulser",
       "asset_name": "Pulser",
-      "fields": {}
+      "fields": {
+        "In_Tag_Name": true
+      }
     }
   ]
 }

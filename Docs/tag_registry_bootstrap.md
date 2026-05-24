@@ -153,7 +153,8 @@ Returns `{ errors: [], warnings: [] }`.
 Options: `{ requiredParentTypes: string[], uniqueParentTypes: boolean }`.
 
 **`resolveRegistry(templateMap, rootName)`**
-Returns `[{ tag_path, module, module_type, data_type, is_setpoint, trends, unit, format, eng_min, eng_max, meta }]`.
+Returns `[{ tag_path, tag_name, module, module_type, data_type, is_setpoint, trends, unit, format, eng_min, eng_max, meta }]`.
+- `tag_name` is the dot-joined `asset_name`s of meta levels where `In_Tag_Name === true`, root→leaf. `In_Tag_Name` is a reserved Boolean field seeded into all templates: true for `parameter` and `tag` types, false for others.
 - First segment of every `tag_path` is `rootName` (not the literal string `'root'`).
 - Extracts `.default` from field definitions before merging with instance overrides.
 - `module` is the `asset_name` of the nearest ancestor with `template_type: "module"` (null if none). `module_type` is the `Module_Type` field value from that ancestor (null if none).
@@ -169,7 +170,7 @@ Returns `[{ tag_path, module, module_type, data_type, is_setpoint, trends, unit,
 Returns 6-character hex SHA-1 string.
 
 **`validateResolvedTags(resolvedTags)`**
-Returns `{ errors: string[] }`. Post-resolution cross-field rules: `trends: true` only on `f32`, `i16`, `bool`; `is_setpoint: true` only on scalar types. Called by `useValidation` after each `resolveRegistry` and by the server on batch save.
+Returns `{ valid, errors, warnings }`. Post-resolution cross-field rules: `trends: true` only on `f32`, `i16`, `bool`; `is_setpoint: true` only on scalar types; `TAG_NAME_EMPTY` (empty `tag_name`); `TAG_NAME_TOO_LONG` (>40 chars); `DUPLICATE_TAG_NAME` (case-insensitive duplicate within entire registry, one error per offending tag, empty names excluded). Called by `useValidation` after each `resolveRegistry` and by the server on batch save.
 
 **`getModuleNames(tagMap)`**
 Returns `string[]` — distinct `module_id` values from the tag map, sorted by each module's minimum `tag_id`. Used by `HmiTagSource` and `ModuleInfoTable` for consistent module index assignment.
@@ -322,7 +323,7 @@ Runs `validateTemplate`, `validateGraph`, `validateParentTypes`, and `validateRe
 - Collapsing a parent unmounts its subtree (`{isExpanded && hasChildren && ...}`). Re-expanding remounts children with their stored state.
 - `AssetTree` passes `key={rootTemplateName}` to the root `TreeNode`. Switching roots remounts the tree, but the store retains state for each root independently so a previously visited root reopens at its last state.
 - Non-`tag` nodes are valid drop targets. `handleDrop` is async — reads parent template via `getState()` after `await` to avoid stale closure.
-- Dirty nodes: `font-semibold text-orange-700`.
+- Dirty nodes: `font-semibold italic text-gray-800` (bold italic gray). Validation error path: `border-l-4 border-red-500 bg-red-50`; warning path: `border-l-4 border-yellow-400 bg-yellow-50`. Selection (`border-l-4 border-blue-600 bg-blue-50`) takes visual priority over tinting.
 - **Drag-and-drop reorder:** Each non-root row is draggable. Three drop zones: top 8 px = insert before (sibling), bottom 8 px = insert after (sibling), body = add child (existing). Root nodes are body-only; tag nodes are top/bottom only. Cross-parent drops are blocked (`computeDropZone` returns `'none'` when `data.parentTemplateName !== parentTemplateName`). `onDragOver` cannot read `dataTransfer` values (HTML5 DnD security restriction) — uses module-level `getActiveDragData()` from `dragTypes.ts` instead. `onDrop` reads via `parseDragData(e)` which does have transfer access.
 
 ### `TemplatesTree`
@@ -333,10 +334,10 @@ Runs `validateTemplate`, `validateGraph`, `validateParentTypes`, and `validateRe
 
 ### `FieldsPanel`
 - Uses `selectionKey + setTimeout(0)` blank-tick pattern on every selection switch. Dependency array must be `[selectionKey]` — not the raw selection fields.
-- **Template mode:** `template_type` is editable — rendered as `<input type="text" list="template-type-options">` with a `<datalist>` providing suggestions (`system`, `module`, `Group`, `parameter`, `tag`). Custom values are allowed. Changes call `updateTemplate(name, { template_type: newValue })` and participate in dirty tracking. The cell is highlighted orange bold when dirty. `template_type` in instance/system-tree mode remains read-only.
+- **Template mode:** `template_type` is editable — rendered as `<input type="text" list="template-type-options">` with a `<datalist>` providing suggestions (`system`, `module`, `Group`, `parameter`, `tag`). Custom values are allowed. Changes call `updateTemplate(name, { template_type: newValue })` and participate in dirty tracking. The cell is highlighted bold italic gray when dirty. `template_type` in instance/system-tree mode remains read-only.
 - **Template mode:** `data_type` (field_type `TagType`) and `is_setpoint` (field_type `Boolean`) are entries inside `fields{}`, rendered via the tag-types dropdown and boolean toggle respectively. `Module_Type` (field_type `ModuleType`) renders as a dropdown populated from `useModuleTypesStore`. Same pattern as `TagType` / `useTagTypesStore`.
 - **Instance mode:** child lookup uses `children[selectedSystemTreeNodeChildIndex]` (index-based, not asset_name match).
-- `isDirtyField` color: dirty → `font-semibold text-orange-700`; non-dirty override → `text-blue-600`; default → `text-gray-700`.
+- `isDirtyField` color: dirty → `font-semibold italic text-gray-700`; non-dirty override → `text-blue-600`; default → `text-gray-700`.
 - `FieldTableRow` is a `<tr>`-based component local to `FieldsPanel.jsx`. Distinct from `FieldRow.jsx` (div/flex). `FieldRow` is not used inside `FieldsPanel`.
 
 ### `CascadeDiffContent`
@@ -364,7 +365,8 @@ Shared by `CascadeModal` and `CascadePreviewModal`. Props: `newTemplates`, `chil
 - `_buildDiffEnrichment()` computes `new_templates`, `pending_deletions`, `children_changed`, `children_reordered` from store state for both `handleSeeChanges` and `handleSave`. Reorder detection uses ordered intersection: compares only children present in both original and current arrays to avoid false positives on add/remove.
 
 ### `EditorPage`
-- Layout: `h-full flex flex-col` outer container. Tree panels row: `flex-1 min-h-0`. Each tree column (`AssetTree`, right panel) has `overflow-y-auto` for independent scrolling. `ValidationPanel` pinned to bottom via `flex-shrink-0` wrapper.
+- Layout: `h-full flex flex-col` outer container. Tree panels row (`flex-1 min-h-0`): three independent columns — System Tree (`AssetTree`), Properties (`FieldsPanel`), Templates (`TemplatesTree`) — each `overflow-y-auto`. `ValidationPanel` pinned below all three columns as a full-width bar via `flex-shrink-0` wrapper. Panel is `max-h-[50vh]`; header is `flex-shrink-0`; message list is `overflow-y-auto`.
+- `pathSeverityMap` — computed via `useMemo` from `validationState.messages`; splits each `msg.ref.tag_path` by `.` and maps every prefix to worst severity; passed as prop through `AssetTree → TreeNode` for tinting.
 
 ### `HistoryPage`
 Columns: rev (right-aligned), applied_by, applied_at (`formatDateTime`), comment. Ordered DESC. Read-only.

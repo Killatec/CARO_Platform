@@ -22,9 +22,10 @@ async function writeTemplate(dir, subdir, template) {
 const validTag = {
   template_type: 'tag', template_name: 'good_tag',
   fields: {
-    data_type: { field_type: 'TagType', default: 'f32' },
-    is_setpoint: { field_type: 'Boolean', default: false },
-    Trends: { field_type: 'Boolean', default: true },
+    data_type:   { field_type: 'TagType',  default: 'f32'  },
+    is_setpoint: { field_type: 'Boolean',  default: false  },
+    Trends:      { field_type: 'Boolean',  default: true   },
+    In_Tag_Name: { field_type: 'Boolean',  default: true   },
   },
   children: [],
 };
@@ -92,9 +93,10 @@ describe('validateAll', () => {
     const illegalTag = {
       template_type: 'tag', template_name: 'illegal_tag',
       fields: {
-        data_type:   { field_type: 'TagType',  default: 'f32' },
-        is_setpoint: { field_type: 'Boolean',  default: false },
-        Trends:      { field_type: 'Boolean',  default: false },
+        data_type:   { field_type: 'TagType',  default: 'f32'  },
+        is_setpoint: { field_type: 'Boolean',  default: false  },
+        Trends:      { field_type: 'Boolean',  default: false  },
+        In_Tag_Name: { field_type: 'Boolean',  default: true   },
       },
       children: [],
     };

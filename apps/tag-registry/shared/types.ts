@@ -108,6 +108,7 @@ export interface ResolvedTag {
   format: string | null;
   eng_min: number | null;
   eng_max: number | null;
+  tag_name: string;
   meta: MetaLevel[];
 }
 

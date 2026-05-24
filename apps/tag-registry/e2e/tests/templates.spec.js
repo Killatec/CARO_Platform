@@ -53,7 +53,7 @@ test.describe('Templates Tree', () => {
   });
 
   // ── Test 3 ─────────────────────────────────────────────────────────────────
-  test('editing a template default field value marks it dirty (orange)', async ({ page }) => {
+  test('editing a template default field value marks it dirty (bold italic)', async ({ page }) => {
     const name = `tag_dirty_${Date.now()}`;
     created.push(name);
     await createTagTemplate(name, 'f32', false, {
@@ -69,9 +69,9 @@ test.describe('Templates Tree', () => {
     await engMinInput.clear();
     await engMinInput.fill('42');
 
-    // The label cell for the edited field should carry an orange class
+    // The label cell for the edited field should carry bold italic classes
     const engMinLabel = po.fieldsPanel.locator('td').filter({ hasText: /^eng_min$/ }).first();
-    await expect(engMinLabel).toHaveClass(/orange/);
+    await expect(engMinLabel).toHaveClass(/italic/);
 
     await expect(po.seeChangesButton).toBeVisible();
   });

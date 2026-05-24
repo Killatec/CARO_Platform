@@ -1,7 +1,12 @@
 {
   "template_name": "Trend_Info",
   "template_type": "HMI",
-  "fields": {},
+  "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": false
+    }
+  },
   "children": [
     {
       "template_name": "boolean_mon",

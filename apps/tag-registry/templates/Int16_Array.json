@@ -2,6 +2,10 @@
   "template_name": "Int16_Array",
   "template_type": "tag",
   "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": true
+    },
     "data_type": {
       "field_type": "TagType",
       "default": "i16[]"

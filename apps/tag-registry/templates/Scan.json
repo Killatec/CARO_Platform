@@ -1,22 +1,33 @@
 {
   "template_name": "Scan",
   "template_type": "Scan",
-  "fields": {},
+  "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": false
+    }
+  },
   "children": [
     {
       "template_name": "boolean_set",
       "asset_name": "Enable",
-      "fields": {}
+      "fields": {
+        "In_Tag_Name": false
+      }
     },
     {
       "template_name": "Current_PS",
       "asset_name": "Min",
-      "fields": {}
+      "fields": {
+        "In_Tag_Name": true
+      }
     },
     {
       "template_name": "Current_PS",
       "asset_name": "Max",
-      "fields": {}
+      "fields": {
+        "In_Tag_Name": true
+      }
     },
     {
       "template_name": "Analog_In",

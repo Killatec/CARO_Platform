@@ -77,8 +77,8 @@ The shared module exports:
 - `simulateCascade(currentTemplateMap, proposedChanges, originalTemplateMap?)` — computes field-level diffs, dropped instance values, and the list of affected parent templates given a proposed set of changes.
 - `applyFieldCascade(templateMap, changedTemplate)` — given a template that has changed, propagates the effect to all child instances in the map. Returns an updated `templateMap`. Pure function — does not mutate its input.
 - `validateParentTypes(templateMap, rootName, options)` — evaluates `VALIDATE_REQUIRED_PARENT_TYPES` and `VALIDATE_UNIQUE_PARENT_TYPES` rules. Returns `{ errors: [], warnings: [] }`.
-- `resolveRegistry(templateMap, rootName)` — resolves the full hierarchy into a flat tag list with `tag_path`, `module`, `module_type`, `data_type`, `is_setpoint`, `trends`, `unit`, `format`, `eng_min`, `eng_max`, and `meta`. Pure function. Extracts `.default` from each field definition before merging with instance overrides. `module` is the name of the nearest ancestor with `template_type: "module"` (null if none). `module_type` is the `Module_Type` field value from that module template (null if none). The `trends` field is `true` if any level in the resolved hierarchy has a field key matching `"trends"` (case-insensitive) with value `true` after instance override resolution, `false` otherwise. The display columns `unit`, `format`, `eng_min`, `eng_max` are resolved via `resolveDisplayField` and are `null` for non-numeric tags (see §11.3). The `meta` array is ordered root-to-tag: `meta[0]` is the root level entry, `meta[meta.length - 1]` is the tag-level entry.
-- `validateResolvedTags(resolvedTags)` — post-resolution cross-field validator. Enforces: `trends` only on `f32`, `i16`, or `bool`; `is_setpoint` only on non-array types. Returns `{ errors: string[] }`. Called by both client (live validation panel) and server (authoritative re-run on batch save) after `resolveRegistry`. See §10.9.
+- `resolveRegistry(templateMap, rootName)` — resolves the full hierarchy into a flat tag list with `tag_path`, `tag_name`, `module`, `module_type`, `data_type`, `is_setpoint`, `trends`, `unit`, `format`, `eng_min`, `eng_max`, and `meta`. Pure function. Extracts `.default` from each field definition before merging with instance overrides. `module` is the name of the nearest ancestor with `template_type: "module"` (null if none). `module_type` is the `Module_Type` field value from that module template (null if none). The `trends` field is `true` if any level in the resolved hierarchy has a field key matching `"trends"` (case-insensitive) with value `true` after instance override resolution, `false` otherwise. `tag_name` is the dot-joined `asset_name`s of meta levels where `In_Tag_Name === true`, root→leaf (see §16.11). The display columns `unit`, `format`, `eng_min`, `eng_max` are resolved via `resolveDisplayField` and are `null` for non-numeric tags (see §11.3). The `meta` array is ordered root-to-tag: `meta[0]` is the root level entry, `meta[meta.length - 1]` is the tag-level entry.
+- `validateResolvedTags(resolvedTags)` — post-resolution cross-field validator. Enforces: `trends` only on `f32`, `i16`, or `bool`; `is_setpoint` only on non-array types; `TAG_NAME_EMPTY`, `TAG_NAME_TOO_LONG`, `DUPLICATE_TAG_NAME` (see §10.9 and §16.11). Returns `{ valid, errors, warnings }`. Called by both client (live validation panel) and server (authoritative re-run on batch save) after `resolveRegistry`.
 - `getModuleNames(tagMap)` — returns a sorted `string[]` of distinct module_id values from the resolved tag map, ordered by each module's minimum tag_id. Used by `HmiTagSource` (producer) and `ModuleInfoTable` (widget) for consistent module index assignment.
 - `packedBit(words, bitIndex)` / `setPackedBit(words, bitIndex, value)` — LSB-first read/write of a single bit within a `number[]` word array (16 bits per word). Used for the `Module_Info.Watchdog` packed-bit array.
 - `ModuleStatus` / `ModuleStatusLabels` — const enum (`UNKNOWN=0`, `OK=1`, `WARNING=2`, `FAULT=3`, `STALLED=4`) and display-label map. Shared between producer and widget.
@@ -301,8 +301,9 @@ After `resolveRegistry` produces the flat tag list, `validateResolvedTags(resolv
 
 - **Trendable types:** `trends: true` is only valid when `data_type` is `f32`, `i16`, or `bool`. Setting `trends: true` on a `string` or array tag (`f32[]`, `i16[]`) is a validation error.
 - **Array setpoints:** `is_setpoint: true` is only valid on scalar types. Array tags (`f32[]`, `i16[]`) may not be setpoints.
+- **`tag_name` rules:** `TAG_NAME_EMPTY` (empty `tag_name`), `TAG_NAME_TOO_LONG` (>40 chars), `DUPLICATE_TAG_NAME` (case-insensitive duplicate within the entire resolved registry; one error per offending tag; empty names excluded). See §16.11 for full `tag_name` / `In_Tag_Name` specification.
 
-Both rules return errors (blocking). `validateResolvedTags` is the sole enforcement point for these constraints — `validateTemplate` does not check them because the relevant fields live on different template levels. The function is exported from `apps/tag-registry/shared/` and runs in both client (live validation panel, called after each `resolveRegistry`) and server (authoritative re-run on batch save).
+All rules return errors (blocking). `validateResolvedTags` is the sole enforcement point for these constraints — `validateTemplate` does not check them because the relevant fields live on different template levels. The function is exported from `apps/tag-registry/shared/` and runs in both client (live validation panel, called after each `resolveRegistry`) and server (authoritative re-run on batch save).
 
 ---
 
@@ -380,6 +381,7 @@ Append-only table. Rows are never updated or deleted.
 | format | VARCHAR(40) NULL | Display format string (e.g. `"#"`, `"#.##"`). Resolved via `resolveDisplayField`. `null` for non-numeric tags. Added by migration 013. |
 | eng_min | DOUBLE PRECISION NULL | Engineering range minimum. Resolved via `resolveDisplayField`. `null` for non-numeric tags. Added by migration 013. |
 | eng_max | DOUBLE PRECISION NULL | Engineering range maximum. Resolved via `resolveDisplayField`. `null` for non-numeric tags. Added by migration 013. |
+| tag_name | VARCHAR(40) NULL | Resolved tag name: dot-joined `asset_name`s of meta levels where `In_Tag_Name === true`, root→leaf. Uniqueness enforced in-app by `validateResolvedTags` — no DB UNIQUE constraint. Added by migration 015. |
 
 Constraints: composite (`tag_id`, `registry_rev`) unique. Indexes on `tag_id`, `registry_rev`, `data_type`, `retired`. GIN index on `meta`.
 
@@ -402,6 +404,8 @@ Constraints: composite (`tag_id`, `registry_rev`) unique. Indexes on `tag_id`, `
 
 The ValidationPanel is a shared component rendered below the asset tree on the Editor page and below the registry table on the Registry page. It always renders with a "Validation" section header. The message list is shown only when messages are present — when clean, only the header bar is visible.
 
+The panel is height-capped at `max-h-[50vh]`. The "Validation" header is `flex-shrink-0` (always visible). The message list is `overflow-y-auto` (scrollable). When the message count overflows the capped height, the list scrolls independently while the header remains pinned.
+
 Both errors and warnings block the Save operation.
 
 ### 15.2 Trigger
@@ -418,7 +422,7 @@ Both errors and warnings set `isValid` to `false`. The Save button is disabled w
 
 ### 15.5 Client-Side Checks
 
-`INVALID_ASSET_NAME`, `DUPLICATE_SIBLING_NAME`, `CIRCULAR_REFERENCE`, `INVALID_REFERENCE`, `TAG_PATH_TOO_LONG`, `SCHEMA_VALIDATION_ERROR`, `UNKNOWN_FIELD`, `PARENT_TYPE_MISSING`, `DUPLICATE_PARENT_TYPE`, `EMPTY_BRANCH` (warning — declared but not yet emitted).
+`INVALID_ASSET_NAME`, `DUPLICATE_SIBLING_NAME`, `CIRCULAR_REFERENCE`, `INVALID_REFERENCE`, `TAG_PATH_TOO_LONG`, `SCHEMA_VALIDATION_ERROR`, `UNKNOWN_FIELD`, `PARENT_TYPE_MISSING`, `DUPLICATE_PARENT_TYPE`, `TAG_NAME_EMPTY`, `TAG_NAME_TOO_LONG`, `DUPLICATE_TAG_NAME`, `EMPTY_BRANCH` (warning — declared but not yet emitted).
 
 ### 15.6 Registry Page Behaviour
 
@@ -442,7 +446,13 @@ The full resolved hierarchy is displayed as a collapsible tree built from the lo
 
 Each node's expanded/collapsed state is persisted via `useTreeExpandStore` (Zustand + `persist` middleware, storage key `caro.tag-registry.tree-expand`). On first visit (no stored state), the root node starts expanded and all children start collapsed. On subsequent visits, the store restores the previous expand/collapse state. Selecting a new root remounts the entire tree (`key={rootTemplateName}`), but the store retains per-node state so a previously visited root reopens at its last state.
 
-Node names are shown in orange bold (`text-orange-700 font-semibold`) when the node represents a changed or new child instance (detected by comparing `children[childIndex]` against `originalTemplateMap` baseline). Clean nodes use regular weight.
+Node names are shown in bold italic gray (`font-semibold italic text-gray-800`) when the node represents a changed or new child instance (detected by comparing `children[childIndex]` against `originalTemplateMap` baseline). Clean nodes use regular weight.
+
+#### 16.2.1 Validation Path-Severity Tinting
+
+Tree nodes in the System Tree whose subtree contains validation errors or warnings receive a colored left border and background tint. Errors: `border-l-4 border-red-500 bg-red-50`. Warnings: `border-l-4 border-yellow-400 bg-yellow-50`. Error severity beats warning. The selection state (blue border/bg, `border-l-4 border-blue-600 bg-blue-50`) takes visual priority over tinting.
+
+Tinting is computed in `EditorPage` as `pathSeverityMap` (a `Map<string, 'error'|'warning'>`) from `msg.ref.tag_path` prefixes: for each validation message, every dot-separated prefix of `tag_path` maps to the worst severity at that prefix. The map is passed via props: `EditorPage → AssetTree → TreeNode`. Each node looks up its `ownPath` in the map to determine its tint.
 
 Non-root nodes have a trash icon (always visible). Clicking it removes the child entry from the parent template's `children` array via `updateTemplate()`, entering the normal pending/Save flow.
 
@@ -460,13 +470,13 @@ Root nodes expose only the body zone (they have no parent to insert into). Tag n
 
 **Cross-parent reparenting is not supported.** Dropping a node onto a zone that belongs to a different parent is silently rejected — no visual indicator is shown and the tree is unchanged. This restriction is intentional: reparenting changes `tag_path` values, which retires existing `tag_id`s and creates new ones, breaking downstream references to those identifiers.
 
-### 16.3 Right Panel Layout
+### 16.3 Editor Page Layout
 
-The right panel of the Editor page is divided vertically into two areas: the Templates Tree (top) and the Fields Panel (bottom). The two areas share a single selection state governed by the mutual-exclusion model described in section 16.6.
+The editor uses a **3-column layout**: **System Tree | Properties (FieldsPanel) | Templates (TemplatesTree)**. All three columns are side-by-side peers with independent vertical scrolling (`overflow-y-auto`). Below all three columns is the **ValidationPanel**, rendered as a separate full-width bar (`flex-shrink-0`). The two areas share a single selection state governed by the mutual-exclusion model described in section 16.6.
 
 ### 16.4 Templates Tree
 
-Occupies the top portion of the right panel. Always visible. Displays all templates on disk grouped by `template_type` into collapsible folders. All folders are collapsed by default on load but expand/collapse state is preserved across save/discard re-renders within the session.
+The rightmost column of the editor. Always visible. Displays all templates on disk grouped by `template_type` into collapsible folders. The panel header label is **"Templates"**. All folders are collapsed by default on load but expand/collapse state is preserved across save/discard re-renders within the session.
 
 Clicking a folder header expands or collapses it. Clicking a template leaf node:
 1. Fetches the full reachable subgraph via `GET /api/v1/templates/root/:template_name` and injects it via `injectTemplateGraph` (if not already loaded).
@@ -474,7 +484,7 @@ Clicking a folder header expands or collapses it. Clicking a template leaf node:
 3. Highlights the leaf.
 4. Populates the Fields Panel with the template's name and default field values.
 
-Template leaves are shown in orange bold when their current state differs from the `originalTemplateMap` baseline (new template, or defaults changed). Clean templates use regular weight.
+Template leaves are shown in bold italic gray (`font-semibold italic text-gray-800`) when their current state differs from the `originalTemplateMap` baseline (new template, or defaults changed). Clean templates use regular weight.
 
 A **"New"** button in the panel header opens `NewTemplateModal` to create a new template. A **trash icon** on each leaf queues the template for deletion (pending/Save flow for saved templates; instant for new unsaved templates).
 
@@ -499,7 +509,7 @@ Occupies the bottom portion of the right panel. Displays the name and editable f
 - A `+` button in the panel header opens `AddFieldModal` to add a new field.
 - A trash icon on each field row deletes the field from `template.fields` via `updateTemplate()`.
 
-**Dirty field indicator:** `font-semibold text-orange-700` on the field name label. Override/dirty field input text also uses `text-orange-700`. Existing unchanged overrides use `text-blue-600`. Inherited clean defaults use `text-gray-700`.
+**Dirty field indicator:** `font-semibold italic text-gray-700` on the field name label and input. Existing unchanged overrides use `text-blue-600`. Inherited clean defaults use `text-gray-700`.
 
 **Blank-tick mechanism:** On any selection switch, the panel renders blank for one tick before repopulating, preventing stale data from showing while the new selection loads.
 
@@ -543,6 +553,35 @@ The RegistryPage fetches the current database registry via `GET /api/v1/registry
 ### 16.10 History Page
 
 A History nav tab shows the `registry_revisions` table with columns: rev, applied_by, applied_at (formatted `dd-MMM-yyyy HH:mm:ss`), comment. Rows are ordered most recent first (DESC by `registry_rev`). The page is read-only.
+
+### 16.11 `tag_name` and `In_Tag_Name`
+
+#### Resolution rule
+
+`resolveRegistry` computes a `tag_name` for each resolved tag: the dot-joined `asset_name` values of every meta level (root→leaf) where `In_Tag_Name === true`. Levels where `In_Tag_Name` is `false` or absent are skipped. The result is included as `tag_name: string` on `ResolvedTag`.
+
+Example: given a path `SYS.chan_A.setpoint` where `SYS` has `In_Tag_Name: false`, `chan_A` has `In_Tag_Name: true`, and `setpoint` has `In_Tag_Name: false`, the resolved `tag_name` is `'chan_A'`.
+
+#### `In_Tag_Name` field convention
+
+`In_Tag_Name` is a reserved Boolean field (field_type `Boolean`) seeded into all template JSON files:
+
+- `true` for `parameter` and `tag` template types.
+- `false` for `system`, `module`, `Group`, and custom types.
+
+`In_Tag_Name` is **reserved** — `AddFieldModal` blocks the user from adding a field with this name (the modal shows an error and stays open).
+
+#### RegistryTable column
+
+The RegistryTable includes a `tag_name` column (3rd column, index 2, between `tag_path` and `module`).
+
+#### Validation
+
+`validateResolvedTags` enforces three post-resolution `tag_name` rules (all severity `'error'`, all blocking):
+
+- **`TAG_NAME_EMPTY`** — `tag_name === ''` (no level in the path has `In_Tag_Name: true`).
+- **`TAG_NAME_TOO_LONG`** — `tag_name.length > MAX_TAG_NAME_LENGTH` (40 chars, from `shared/constants.ts`).
+- **`DUPLICATE_TAG_NAME`** — two or more resolved tags in the same registry share the same `tag_name` (case-insensitive comparison, entire-registry scope). One error is emitted per offending tag. Empty names are excluded from duplicate checking (they are already covered by `TAG_NAME_EMPTY`). Uniqueness is enforced in-app only — the `tag_registry` database column has **no UNIQUE constraint**.
 
 ---
 

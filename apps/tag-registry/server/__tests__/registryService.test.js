@@ -117,6 +117,7 @@ function makeIllegalTrendsMap() {
       data_type:   { field_type: 'TagType',  default: 'f32' },
       Trends:      { field_type: 'Boolean',  default: true  },
       is_setpoint: { field_type: 'Boolean',  default: false },
+      In_Tag_Name: { field_type: 'Boolean',  default: true  },
     },
     children: [],
   };
@@ -137,6 +138,7 @@ function makeIllegalSetpointMap() {
       data_type:   { field_type: 'TagType',  default: 'f32' },
       Trends:      { field_type: 'Boolean',  default: false },
       is_setpoint: { field_type: 'Boolean',  default: true  },
+      In_Tag_Name: { field_type: 'Boolean',  default: true  },
     },
     children: [],
   };
@@ -157,6 +159,7 @@ function makeValidMap() {
       data_type:   { field_type: 'TagType',  default: 'f32' },
       Trends:      { field_type: 'Boolean',  default: true  },
       is_setpoint: { field_type: 'Boolean',  default: false },
+      In_Tag_Name: { field_type: 'Boolean',  default: true  },
     },
     children: [],
   };
@@ -212,5 +215,104 @@ describe('applyRegistry — resolved-tag validation gate', () => {
     const result = await applyRegistry(templateMap, 'GOOD_SYS', 'valid commit');
     expect(applyRegistryRevision).toHaveBeenCalledTimes(1);
     expect(result.ok).toBe(true);
+  });
+});
+
+// ── applyRegistry — tag_name validation ──────────────────────────────────────
+
+describe('applyRegistry — tag_name validation', () => {
+  it('rejects before any DB write when a resolved tag_name is empty', async () => {
+    const tagTemplate = {
+      template_name: 'EmptyNameTag',
+      template_type: 'tag',
+      fields: {
+        data_type:   { field_type: 'TagType',  default: 'f32'  },
+        Trends:      { field_type: 'Boolean',  default: false  },
+        is_setpoint: { field_type: 'Boolean',  default: false  },
+        In_Tag_Name: { field_type: 'Boolean',  default: false  },
+      },
+      children: [],
+    };
+    const sysTemplate = {
+      template_name: 'EMPTY_SYS',
+      template_type: 'system',
+      fields: {},
+      children: [{ template_name: 'EmptyNameTag', asset_name: 'T1', fields: {} }],
+    };
+    const templateMap = new Map([['EMPTY_SYS', sysTemplate], ['EmptyNameTag', tagTemplate]]);
+    let caught;
+    try { await applyRegistry(templateMap, 'EMPTY_SYS', 'test'); } catch (e) { caught = e; }
+    expect(caught).toBeDefined();
+    expect(caught.code).toBe('SCHEMA_VALIDATION_ERROR');
+    expect(applyRegistryRevision).not.toHaveBeenCalled();
+    expect(caught.details.some(e => e.code === 'TAG_NAME_EMPTY')).toBe(true);
+  });
+
+  it('rejects before any DB write when a resolved tag_name exceeds 40 characters', async () => {
+    const longAsset = 'B'.repeat(41);
+    const tagTemplate = {
+      template_name: 'LongNameTag',
+      template_type: 'tag',
+      fields: {
+        data_type:   { field_type: 'TagType',  default: 'f32'  },
+        Trends:      { field_type: 'Boolean',  default: false  },
+        is_setpoint: { field_type: 'Boolean',  default: false  },
+        In_Tag_Name: { field_type: 'Boolean',  default: true   },
+      },
+      children: [],
+    };
+    const sysTemplate = {
+      template_name: 'LONG_SYS',
+      template_type: 'system',
+      fields: {},
+      children: [{ template_name: 'LongNameTag', asset_name: longAsset, fields: {} }],
+    };
+    const templateMap = new Map([['LONG_SYS', sysTemplate], ['LongNameTag', tagTemplate]]);
+    let caught;
+    try { await applyRegistry(templateMap, 'LONG_SYS', 'test'); } catch (e) { caught = e; }
+    expect(caught).toBeDefined();
+    expect(caught.code).toBe('SCHEMA_VALIDATION_ERROR');
+    expect(applyRegistryRevision).not.toHaveBeenCalled();
+    expect(caught.details.some(e => e.code === 'TAG_NAME_TOO_LONG')).toBe(true);
+  });
+
+  it('tag_name change is detected as a modification', async () => {
+    // DB has the tag with tag_name 'old_name'; template resolves to tag_name 'T1'
+    getActiveTags.mockResolvedValue([{
+      tag_id: 77, registry_rev: 1,
+      tag_path: 'CHG_SYS.T1',
+      data_type: 'f32', is_setpoint: false, trends: false, retired: false,
+      module: null, module_type: null, unit: null, format: null, eng_min: null, eng_max: null,
+      tag_name: 'old_name',
+      meta: null,
+    }]);
+    applyRegistryRevision.mockResolvedValue({ registry_rev: 2, added: 0, modified: 1, retired: 0 });
+
+    const tagTemplate = {
+      template_name: 'ChgTag',
+      template_type: 'tag',
+      fields: {
+        data_type:   { field_type: 'TagType',  default: 'f32'  },
+        Trends:      { field_type: 'Boolean',  default: false  },
+        is_setpoint: { field_type: 'Boolean',  default: false  },
+        In_Tag_Name: { field_type: 'Boolean',  default: true   },
+      },
+      children: [],
+    };
+    const sysTemplate = {
+      template_name: 'CHG_SYS',
+      template_type: 'system',
+      fields: {},
+      children: [{ template_name: 'ChgTag', asset_name: 'T1', fields: {} }],
+    };
+    const templateMap = new Map([['CHG_SYS', sysTemplate], ['ChgTag', tagTemplate]]);
+
+    const result = await applyRegistry(templateMap, 'CHG_SYS', 'tag_name update');
+    expect(result.ok).toBe(true);
+    expect(applyRegistryRevision).toHaveBeenCalledTimes(1);
+    const [, modified] = applyRegistryRevision.mock.calls[0];
+    expect(modified).toHaveLength(1);
+    expect(modified[0].tag_path).toBe('CHG_SYS.T1');
+    expect(modified[0].tag_name).toBe('T1');
   });
 });

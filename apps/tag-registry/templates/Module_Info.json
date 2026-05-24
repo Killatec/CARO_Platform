@@ -1,7 +1,12 @@
 {
   "template_name": "Module_Info",
   "template_type": "HMI",
-  "fields": {},
+  "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": false
+    }
+  },
   "children": [
     {
       "template_name": "numeric_mon",

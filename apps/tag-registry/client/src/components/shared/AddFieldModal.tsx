@@ -58,6 +58,10 @@ export function AddFieldModal({
       setError('Field name must not contain spaces, or start/end with a dot.');
       return;
     }
+    if (trimmed === 'In_Tag_Name') {
+      setError('In_Tag_Name is a reserved field and is managed automatically.');
+      return;
+    }
     if (existingFieldNames.includes(trimmed)) {
       setError(`Field "${trimmed}" already exists on this template.`);
       return;

@@ -20,6 +20,6 @@ export default defineConfig({
   plugins: [resolveJsToTs],
   test: {
     environment: 'node',
-    include: ['__tests__/**/*.test.js'],
+    include: ['__tests__/**/*.test.{js,ts}'],
   },
 });

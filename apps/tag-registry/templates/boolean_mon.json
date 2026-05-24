@@ -2,8 +2,21 @@
   "template_type": "tag",
   "template_name": "boolean_mon",
   "fields": {
-    "data_type": { "field_type": "TagType", "default": "bool" },
-    "is_setpoint": { "field_type": "Boolean", "default": false },
-    "Trends": { "field_type": "Boolean", "default": true }
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": true
+    },
+    "data_type": {
+      "field_type": "TagType",
+      "default": "bool"
+    },
+    "is_setpoint": {
+      "field_type": "Boolean",
+      "default": false
+    },
+    "Trends": {
+      "field_type": "Boolean",
+      "default": true
+    }
   }
 }

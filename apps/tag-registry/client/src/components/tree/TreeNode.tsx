@@ -33,6 +33,7 @@ interface TreeNodeProps {
   parentPath?: string | null;
   parentTemplateName?: string | null;
   childIndex?: number | null;
+  pathSeverityMap?: Map<string, 'error' | 'warning'>;
 }
 
 /**
@@ -40,7 +41,7 @@ interface TreeNodeProps {
  */
 export function TreeNode({
   node, ownPath, parentPath = null, parentTemplateName = null,
-  childIndex = null,
+  childIndex = null, pathSeverityMap,
 }: TreeNodeProps): React.ReactElement | null {
   const [dropZone, setDropZone] = useState<DropZone>('none');
   const stored       = useTreeExpandStore(s => s.expandedPaths[ownPath]);
@@ -206,10 +207,20 @@ export function TreeNode({
 
   // ── Derived styles ────────────────────────────────────────────────────────
 
+  const validationSeverity = pathSeverityMap?.get(ownPath);
+  const validationBg =
+    !isSelected && validationSeverity === 'error'   ? 'bg-red-50' :
+    !isSelected && validationSeverity === 'warning' ? 'bg-yellow-50' : '';
+  const validationBorder =
+    isSelected                              ? 'border-l-4 border-blue-600' :
+    validationSeverity === 'error'          ? 'border-l-4 border-red-500' :
+    validationSeverity === 'warning'        ? 'border-l-4 border-yellow-400' : '';
+
   const rowClass = [
     'relative flex items-center gap-2 px-3 py-2 cursor-pointer whitespace-nowrap',
     'hover:bg-gray-100',
-    isSelected  ? 'bg-blue-50 border-l-4 border-blue-600' : '',
+    isSelected ? 'bg-blue-50' : validationBg,
+    validationBorder,
     dropZone === 'body' ? 'bg-blue-50 border border-blue-300 border-dashed' : '',
   ].filter(Boolean).join(' ');
 
@@ -249,9 +260,9 @@ export function TreeNode({
         )}
         {!hasChildren && <span className="w-4" />}
 
-        <span className={`flex-1 text-sm ${
-          isDirty   ? 'font-semibold text-orange-700' :
-          isSelected ? 'font-normal text-blue-800'    :
+        <span className={`flex-1 mr-[100px] text-sm ${
+          isDirty   ? 'font-semibold italic text-gray-800' :
+          isSelected ? 'font-normal text-blue-800'  :
                        'font-normal text-gray-800'
         }`}>
           {displayName}
@@ -288,6 +299,7 @@ export function TreeNode({
               parentPath={ownPath}
               parentTemplateName={template_name}
               childIndex={idx}
+              pathSeverityMap={pathSeverityMap}
             />
           ))}
         </div>

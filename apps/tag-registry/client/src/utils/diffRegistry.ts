@@ -11,6 +11,7 @@ export interface ProposedTag {
   format?: string | null;
   eng_min?: number | null;
   eng_max?: number | null;
+  tag_name?: string | null;
   meta: unknown;
 }
 
@@ -77,6 +78,7 @@ function isModified(proposed: ProposedTag, dbTag: DbTag): boolean {
   if ((proposed.format  ?? null) !== (dbTag.format  ?? null)) return true;
   if ((proposed.eng_min ?? null) !== (dbTag.eng_min ?? null)) return true;
   if ((proposed.eng_max ?? null) !== (dbTag.eng_max ?? null)) return true;
+  if ((proposed.tag_name ?? null) !== (dbTag.tag_name ?? null)) return true;
   if (!deepEqual(proposed.meta, dbTag.meta)) return true;
   return false;
 }
@@ -93,6 +95,7 @@ function getChangedFields(proposed: ProposedTag, dbTag: DbTag): string[] {
   if ((proposed.format  ?? null) !== (dbTag.format  ?? null)) changed.push('format');
   if ((proposed.eng_min ?? null) !== (dbTag.eng_min ?? null)) changed.push('eng_min');
   if ((proposed.eng_max ?? null) !== (dbTag.eng_max ?? null)) changed.push('eng_max');
+  if ((proposed.tag_name ?? null) !== (dbTag.tag_name ?? null)) changed.push('tag_name');
   if (!deepEqual(proposed.meta, dbTag.meta)) changed.push('meta');
   return changed;
 }

@@ -5,7 +5,7 @@
 // validateResolvedTags) and verify the outcomes that would surface in the hook's
 // `messages` array, following the pattern of every other test in this suite.
 import { describe, it, expect } from 'vitest';
-import { resolveRegistry, validateResolvedTags } from '@caro/tag-registry-shared';
+import { resolveRegistry, validateResolvedTags, ERROR_CODES } from '@caro/tag-registry-shared';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -17,6 +17,7 @@ function makeTag(name, fieldOverrides = {}) {
       data_type:   { field_type: 'TagType',  default: 'f32'   },
       is_setpoint: { field_type: 'Boolean',  default: false   },
       Trends:      { field_type: 'Boolean',  default: false   },
+      In_Tag_Name: { field_type: 'Boolean',  default: true    },
       ...fieldOverrides,
     },
     children: [],
@@ -94,5 +95,37 @@ describe('useValidation — resolved-tag validation pass', () => {
         // swallowed — this is exactly what the hook does
       }
     }).not.toThrow();
+  });
+
+  it('tag with In_Tag_Name:false → resolved tag_name is empty → TAG_NAME_EMPTY error', () => {
+    // Override the default In_Tag_Name:true to false so no level contributes to tag_name.
+    const tagTemplate = makeTag('EmptyNameTag', {
+      In_Tag_Name: { field_type: 'Boolean', default: false },
+    });
+    const sysTemplate = makeSystem('EMPTY_SYS', [
+      { template_name: 'EmptyNameTag', asset_name: 'T1', fields: {} },
+    ]);
+    const templates = new Map([['EMPTY_SYS', sysTemplate], ['EmptyNameTag', tagTemplate]]);
+
+    const resolved = resolveRegistry(templates, 'EMPTY_SYS');
+    const result   = validateResolvedTags(resolved);
+
+    expect(result.valid).toBe(false);
+    expect(result.errors.some(e => e.code === ERROR_CODES.TAG_NAME_EMPTY)).toBe(true);
+  });
+
+  it('tag with 41-char asset name → resolved tag_name exceeds MAX_TAG_NAME_LENGTH → TAG_NAME_TOO_LONG error', () => {
+    // In_Tag_Name:true on tag; 41-char asset_name → tag_name is 41 chars > MAX (40).
+    const tagTemplate = makeTag('LongNameTag');
+    const sysTemplate = makeSystem('LONG_SYS', [
+      { template_name: 'LongNameTag', asset_name: 'X'.repeat(41), fields: {} },
+    ]);
+    const templates = new Map([['LONG_SYS', sysTemplate], ['LongNameTag', tagTemplate]]);
+
+    const resolved = resolveRegistry(templates, 'LONG_SYS');
+    const result   = validateResolvedTags(resolved);
+
+    expect(result.valid).toBe(false);
+    expect(result.errors.some(e => e.code === ERROR_CODES.TAG_NAME_TOO_LONG)).toBe(true);
   });
 });

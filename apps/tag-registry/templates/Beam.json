@@ -1,7 +1,12 @@
 {
   "template_name": "Beam",
   "template_type": "Beam",
-  "fields": {},
+  "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": false
+    }
+  },
   "children": [
     {
       "template_name": "Beam_Control",
@@ -11,7 +16,9 @@
     {
       "template_name": "RF_Control",
       "asset_name": "RF_control",
-      "fields": {}
+      "fields": {
+        "In_Tag_Name": false
+      }
     },
     {
       "template_name": "Power",

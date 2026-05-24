@@ -132,4 +132,75 @@ test.describe('Validation Panel', () => {
     await expect(po.validationPanel).not.toContainText('INVALID_REFERENCE');
     await expect(po.validationPanel).not.toContainText('CIRCULAR_REFERENCE');
   });
+
+  // ── Test 6 ─────────────────────────────────────────────────────────────────
+  // ValidationPanel has max-h-[50vh] + overflow-y-auto on the message list.
+  // 15 TAG_NAME_EMPTY errors (one per tag child with In_Tag_Name=false) generate
+  // enough content to overflow the capped panel at the Desktop Chrome 1280×720
+  // viewport (50vh = 360px, header ≈ 30px, leaving ≈ 330px for ~436px of messages).
+  test('ValidationPanel is height-capped at 50 vh and its message list scrolls', async ({ page }) => {
+    const ts = Date.now();
+    const tagName = `tag_val_hcap_${ts}`;
+    const sysName = `sys_val_hcap_${ts}`;
+    created.push(tagName, sysName);
+
+    // In_Tag_Name=false means no level contributes to tag_name → TAG_NAME_EMPTY
+    await createTagTemplate(tagName, 'f32', false, {
+      In_Tag_Name: { field_type: 'Boolean', default: false },
+    });
+
+    const children = Array.from({ length: 15 }, (_, i) => ({
+      template_name: tagName,
+      asset_name: `ch_${i}`,
+      fields: {},
+    }));
+    await createStructuralTemplate(sysName, 'system', children);
+
+    await po.selectRoot(sysName);
+    await expect(po.validationPanel).toContainText('TAG_NAME_EMPTY');
+
+    // Outer ValidationPanel div must not exceed 50 vh (2 px rounding buffer)
+    const vpBox = await po.validationPanel.boundingBox();
+    const viewportHeight = page.viewportSize().height;
+    expect(vpBox.height).toBeLessThanOrEqual(viewportHeight * 0.5 + 2);
+
+    // Message list must be scrollable when content overflows the capped height
+    const scrollable = po.validationPanel.locator('div.overflow-y-auto').first();
+    const isScrollable = await scrollable.evaluate(
+      el => el.scrollHeight > el.clientHeight
+    );
+    expect(isScrollable).toBe(true);
+  });
+
+  // ── Test 7 ─────────────────────────────────────────────────────────────────
+  // pathSeverityMap in EditorPage splits each error's tag_path by "." and maps
+  // every prefix to the worst severity. tag_path = rootName + "." + assetPath.
+  // The root node's ownPath = sysName, so it gets tinted when any child has
+  // an error — here, TAG_NAME_EMPTY from tags with In_Tag_Name=false.
+  test('system tree nodes on an error path get a red tint', async () => {
+    const ts = Date.now();
+    const tagName = `tag_val_tint_${ts}`;
+    const sysName = `sys_val_tint_${ts}`;
+    created.push(tagName, sysName);
+
+    await createTagTemplate(tagName, 'f32', false, {
+      In_Tag_Name: { field_type: 'Boolean', default: false },
+    });
+    await createStructuralTemplate(sysName, 'system', [
+      { template_name: tagName, asset_name: 'ch_0', fields: {} },
+      { template_name: tagName, asset_name: 'ch_1', fields: {} },
+    ]);
+
+    await po.selectRoot(sysName);
+    await expect(po.validationPanel).toContainText('TAG_NAME_EMPTY');
+
+    // Root row div carries bg-red-50 + border-red-500 when its ownPath
+    // appears as a prefix in any error's tag_path.
+    const rootNodeRow = po.systemTree
+      .locator('span.flex-1')
+      .filter({ hasText: sysName })
+      .first()
+      .locator('..');
+    await expect(rootNodeRow).toHaveClass(/red/);
+  });
 });

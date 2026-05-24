@@ -101,6 +101,7 @@ function isModified(proposed: NewTagInput, dbTag: ActiveTag): boolean {
   if ((proposed.format  ?? null) !== (dbTag.format  ?? null)) return true;
   if ((proposed.eng_min ?? null) !== (dbTag.eng_min ?? null)) return true;
   if ((proposed.eng_max ?? null) !== (dbTag.eng_max ?? null)) return true;
+  if ((proposed.tag_name ?? null) !== (dbTag.tag_name ?? null)) return true;
   if (!deepEqual(proposed.meta, dbTag.meta))                 return true;
   return false;
 }
