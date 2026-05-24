@@ -23,6 +23,9 @@ export const ERROR_CODES = {
   TAG_PATH_TOO_LONG: 'TAG_PATH_TOO_LONG',
   PARENT_TYPE_MISSING: 'PARENT_TYPE_MISSING',
   DUPLICATE_PARENT_TYPE: 'DUPLICATE_PARENT_TYPE',
+  TAG_NAME_TOO_LONG: 'TAG_NAME_TOO_LONG',
+  TAG_NAME_EMPTY: 'TAG_NAME_EMPTY',
+  DUPLICATE_TAG_NAME: 'DUPLICATE_TAG_NAME',
 
   // Warnings
   EMPTY_BRANCH: 'EMPTY_BRANCH',
@@ -34,6 +37,8 @@ export const ERROR_CODES = {
 
 export const MAX_TAG_PATH_LENGTH = 100;
 export const MAX_IDENTIFIER_LENGTH = 40;
+export const MAX_TAG_NAME_LENGTH = 40;
+export const IN_TAG_NAME_FIELD = 'In_Tag_Name';
 
 /**
  * Ancestor types that must appear at most once in a tag's ancestor chain.
