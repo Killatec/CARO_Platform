@@ -714,3 +714,39 @@ describe('Legend — bucket/fetch section', () => {
     expect(screen.getByText(/^Last Fetch:/).textContent).toBe('Last Fetch: —');
   });
 });
+
+// ── Signals header row ────────────────────────────────────────────────────────
+
+describe('Legend — Signals header row', () => {
+  it('renders "Signals" label', () => {
+    renderLegend([1]);
+    expect(screen.getByText('Signals')).toBeTruthy();
+  });
+
+  it('renders gear icon button with configure-signals title', () => {
+    renderLegend([1]);
+    expect(screen.getByTitle('Configure signals')).toBeTruthy();
+  });
+
+  it('gear button click invokes onSettingsClick', () => {
+    const onSettingsClick = vi.fn();
+    render(
+      <MockHmiProvider tagDefs={TAG_DEFS}>
+        <Legend
+          tagIds={[1]}
+          data={makeDataV7()}
+          tagMap={new Map([[1, TAG_DEFS[1]!]])}
+          selectedTagId={1}
+          bucketSMs={null}
+          lastFetchMs={null}
+          showLastWhenIdle={false}
+          onSelect={vi.fn()}
+          onRemove={vi.fn()}
+          onSettingsClick={onSettingsClick}
+        />
+      </MockHmiProvider>,
+    );
+    fireEvent.click(screen.getByTitle('Configure signals'));
+    expect(onSettingsClick).toHaveBeenCalledTimes(1);
+  });
+});

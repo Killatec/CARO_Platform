@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, useMemo, useRef } from 'react';
 import type { CSSProperties } from 'react';
+import { useTagMap } from '@caro/hmi-context';
 import { useTrendMode, trendModeReducer, isLive } from './useTrendMode.js';
 import type { TrendModeAction } from './useTrendMode.js';
 import { useTrendData } from './useTrendData.js';
@@ -8,6 +9,7 @@ import type { UseLiveSubscriptionResult } from './useLiveSubscription.js';
 import { mergeTrendData } from './mergeTrendData.js';
 import { useZoomState } from './useZoomState.js';
 import { TrendChart } from './TrendChart.js';
+import { TagPickerModal } from './TagPickerModal.js';
 import { SpanIndicator } from './SpanIndicator.js';
 import { SpanPresets } from './SpanPresets.js';
 import { EndPicker } from './EndPicker.js';
@@ -21,7 +23,7 @@ const BUCKET_COUNT = TREND_VIEWER_DEFAULTS.bucketCount;
 export interface TrendChartContainerProps {
   /**
    * Initial tag ID list. Container owns the list and handles removes via the
-   * Legend. Tag additions wired in the tag picker drawer.
+   * Legend. Tag additions go through TagPickerModal (Step 12).
    */
   tagIds: number[];
   siteTimezone?: string;
@@ -80,8 +82,10 @@ export function TrendChartContainer({
     [modeViewport.start, modeViewport.end],
   );
 
-  // ── Tag list (container owns; removes come from Legend via TrendChart) ────
+  // ── Tag list (container owns; removes come from Legend, adds from TagPickerModal) ──
   const [tagIds, setTagIds] = useState<number[]>(initialTagIds);
+  const tagMap = useTagMap();
+  const [isPickerOpen, setIsPickerOpen] = useState(false);
 
   // ── Zoom-level state ──────────────────────────────────────────────────────
   const { currentBucketSMs, zoomAnchorSpan, handleDragZoom: _handleDragZoom, handleZoomLevelSwitch: _handleZoomLevelSwitch } = useZoomState({
@@ -376,27 +380,37 @@ export function TrendChartContainer({
   }
 
   return (
-    <TrendChart
-      data={effectiveChartData}
-      tagIds={tagIds}
-      siteTimezone={siteTimezone}
-      height={height}
-      xRange={xRange}
-      onTagRemove={handleTagRemove}
-      zoomAnchorSpan={zoomAnchorSpan}
-      onZoomLevelSwitch={handleZoomLevelSwitch}
-      swapCounter={swapCounter}
-      activeTileCount={activeTileCount}
-      onDragZoom={handleDragZoom}
-      footer={footerJsx}
-      bucketSMs={bucketSMsIndicator}
-      lastFetchMs={lastFetchMs}
-      showLastWhenIdle={isLive(modeState.mode)}
-      onXRangeChange={handleXRangeChange}
-      onXPan={handleXPan}
-      lastIntent={modeState.lastIntent}
-      rangeExceeded={uxRangeExceeded}
-      rangeTooNarrow={uxRangeTooNarrow}
-    />
+    <>
+      <TrendChart
+        data={effectiveChartData}
+        tagIds={tagIds}
+        siteTimezone={siteTimezone}
+        height={height}
+        xRange={xRange}
+        onTagRemove={handleTagRemove}
+        zoomAnchorSpan={zoomAnchorSpan}
+        onZoomLevelSwitch={handleZoomLevelSwitch}
+        swapCounter={swapCounter}
+        activeTileCount={activeTileCount}
+        onDragZoom={handleDragZoom}
+        footer={footerJsx}
+        bucketSMs={bucketSMsIndicator}
+        lastFetchMs={lastFetchMs}
+        showLastWhenIdle={isLive(modeState.mode)}
+        onXRangeChange={handleXRangeChange}
+        onXPan={handleXPan}
+        lastIntent={modeState.lastIntent}
+        rangeExceeded={uxRangeExceeded}
+        rangeTooNarrow={uxRangeTooNarrow}
+        onSettingsClick={() => setIsPickerOpen(true)}
+      />
+      <TagPickerModal
+        isOpen={isPickerOpen}
+        onClose={() => setIsPickerOpen(false)}
+        onCommit={setTagIds}
+        currentTagIds={tagIds}
+        tagMap={tagMap}
+      />
+    </>
   );
 }

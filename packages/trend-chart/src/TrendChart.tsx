@@ -60,6 +60,8 @@ export interface TrendChartProps {
   bucketSMs?: bigint | null;
   /** Wall-clock ms of the most recent fetch batch forwarded to Legend's BucketFetchIndicator. */
   lastFetchMs?: number | null;
+  /** Forwarded to Legend's Signals header gear icon. */
+  onSettingsClick?: () => void;
 }
 
 const WRAPPER: CSSProperties = {
@@ -106,6 +108,7 @@ export function TrendChart({
   rangeTooNarrow = false,
   bucketSMs = null,
   lastFetchMs = null,
+  onSettingsClick,
 }: TrendChartProps) {
   const tagMap = useTagMap();
 
@@ -523,10 +526,11 @@ export function TrendChart({
         showLastWhenIdle={showLastWhenIdle}
         onSelect={setSelectedTagId}
         onRemove={tagId => onTagRemove?.(tagId)}
+        onSettingsClick={onSettingsClick}
       />
     ) : null
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  ), [tagIds, data, tagMap, effectiveSelectedId, cursorState?.tsMs, siteTimezone, bucketSMs, lastFetchMs, onTagRemove, showLastWhenIdle]);
+  ), [tagIds, data, tagMap, effectiveSelectedId, cursorState?.tsMs, siteTimezone, bucketSMs, lastFetchMs, onTagRemove, showLastWhenIdle, onSettingsClick]);
 
   return (
     <div style={WRAPPER}>

@@ -43,3 +43,7 @@ export { EndPicker } from './EndPicker.js';
 export type { EndPickerProps } from './EndPicker.js';
 export { mergeTrendData } from './mergeTrendData.js';
 export { formatSpanMs } from './render/formatSpanMs.js';
+export { buildTagForest } from './buildTagForest.js';
+export type { TagForestNode } from './buildTagForest.js';
+export { TagPickerModal } from './TagPickerModal.js';
+export type { TagPickerModalProps } from './TagPickerModal.js';

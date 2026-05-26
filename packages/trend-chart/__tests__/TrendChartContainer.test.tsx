@@ -50,6 +50,7 @@ let capturedOnXRangeChange: ((min: bigint, max: bigint) => void) | undefined;
 let capturedOnXPan: ((min: bigint, max: bigint) => void) | undefined;
 let capturedOnDragZoom: ((startMs: bigint, endMs: bigint) => void) | undefined;
 let capturedData: { startTime: bigint; endTime: bigint; n?: number; series?: Map<unknown, unknown> } | undefined;
+let capturedOnSettingsClick: (() => void) | undefined;
 
 vi.mock('../src/TrendChart.js', () => ({
   TrendChart: (props: {
@@ -60,6 +61,7 @@ vi.mock('../src/TrendChart.js', () => ({
     onXRangeChange?: (min: bigint, max: bigint) => void;
     onXPan?: (min: bigint, max: bigint) => void;
     onDragZoom?: (startMs: bigint, endMs: bigint) => void;
+    onSettingsClick?: () => void;
     showLastWhenIdle?: boolean;
     rangeExceeded?: boolean;
     rangeTooNarrow?: boolean;
@@ -68,6 +70,7 @@ vi.mock('../src/TrendChart.js', () => ({
     capturedOnXPan = props.onXPan;
     capturedOnDragZoom = props.onDragZoom;
     capturedData = props.data;
+    capturedOnSettingsClick = props.onSettingsClick;
     return (
       <div>
         {props.tagIds.map(id => (
@@ -150,6 +153,7 @@ describe('TrendChartContainer', () => {
     capturedOnXPan = undefined;
     capturedOnDragZoom = undefined;
     capturedData = undefined;
+    capturedOnSettingsClick = undefined;
     liveHoisted.setTail(null);
     liveHoisted.setLatestSampleTs(null);
     mockUseTrendData.mockReturnValue(makeResult([1, 2]));
@@ -1094,6 +1098,37 @@ describe('TrendChartContainer', () => {
       });
     });
 
+  });
+
+  // ── Tag picker modal ────────────────────────────────────────────────────────
+
+  describe('tag picker modal', () => {
+    it('onSettingsClick opens picker modal', () => {
+      renderContainer([1, 2]);
+      act(() => { capturedOnSettingsClick?.(); });
+      expect(screen.getByText('Cancel')).toBeTruthy();
+      expect(screen.getByText('OK')).toBeTruthy();
+    });
+
+    it('Cancel closes the picker without changing tagIds', () => {
+      renderContainer([1, 2]);
+      act(() => { capturedOnSettingsClick?.(); });
+      fireEvent.click(screen.getByText('Cancel'));
+      expect(screen.queryByText('Cancel')).toBeNull();
+      expect(screen.getAllByTitle('Remove trace').length).toBe(2);
+    });
+
+    it('OK with one tag unstaged commits reduced list and closes modal', () => {
+      renderContainer([1, 2]);
+      act(() => { capturedOnSettingsClick?.(); });
+      // Unstage tag 1 from the staged pane (label = "Tag-1" since tag_name is null).
+      fireEvent.click(screen.getByTitle('Remove Tag-1'));
+      fireEvent.click(screen.getByText('OK'));
+      // Modal closed.
+      expect(screen.queryByText('Cancel')).toBeNull();
+      // Container committed [2] → TrendChart re-rendered with tagIds=[2].
+      expect(screen.getAllByTitle('Remove trace').length).toBe(1);
+    });
   });
 });
 
