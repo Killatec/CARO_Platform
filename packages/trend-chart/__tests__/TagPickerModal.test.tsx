@@ -263,4 +263,25 @@ describe('TagPickerModal', () => {
     expect(screen.queryByRole('button', { name: /cancel/i })).not.toBeNull();
     expect(screen.queryByRole('button', { name: /ok/i })).not.toBeNull();
   });
+
+  it('picker outer wrapper has width:880 and Trending list renders full tag_name without truncation', () => {
+    // Representative paths (~25 chars) and names (~21 chars) matching real-world depth.
+    const repMap = new Map<number, TagDef>([
+      [10, makeTag(10, 'PS1.HV_Switch.Current.Mon', true, 'HV_Switch.Current.Mon')],
+      [11, makeTag(11, 'PS1.HV_Switch.Voltage.Mon', true, 'HV_Switch.Voltage.Mon')],
+    ]);
+    renderPicker({ tagMap: repMap, currentTagIds: [10, 11] });
+
+    // Outer wrapper is the direct parent of the search input; carries the explicit inline width.
+    const wrapper = screen.getByPlaceholderText('Search tags…').parentElement!;
+    expect(wrapper.style.width).toBe('880px');
+
+    // Full tag_name text is in the DOM (no DOM-level truncation).
+    expect(screen.getByText('HV_Switch.Current.Mon')).toBeTruthy();
+    expect(screen.getByText('HV_Switch.Voltage.Mon')).toBeTruthy();
+
+    // Footer still reachable.
+    expect(screen.queryByRole('button', { name: /cancel/i })).not.toBeNull();
+    expect(screen.queryByRole('button', { name: /ok/i })).not.toBeNull();
+  });
 });

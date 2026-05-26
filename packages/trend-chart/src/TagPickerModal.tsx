@@ -62,6 +62,8 @@ function nodeMatchesSearch(node: TagForestNode, search: string): boolean {
 const OUTER_WRAPPER: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
+  width: 880,
+  maxWidth: '100%',
   maxHeight: 'calc(90vh - 8rem)',
 };
 
@@ -74,19 +76,21 @@ const PANE_ROW: CSSProperties = {
 };
 
 const LEFT_PANE: CSSProperties = {
-  flex: '6 6 0',
+  flex: 1,
+  minWidth: 480,
   overflowY: 'auto',
   border: '1px solid #e5e7eb',
   borderRadius: 4,
-  padding: '4px 0',
+  padding: 8,
 };
 
 const RIGHT_PANE: CSSProperties = {
-  flex: '4 4 0',
+  flex: '0 0 280px',
+  minWidth: 280,
   overflowY: 'auto',
   border: '1px solid #e5e7eb',
   borderRadius: 4,
-  padding: '4px 0',
+  padding: 8,
 };
 
 const SEARCH_BOX: CSSProperties = {
@@ -365,7 +369,7 @@ export function TagPickerModal({
   }, [onCommit, onClose, stagedIds]);
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Signals" widthClass="w-[960px] max-w-[95vw]" bodyClassName="px-6 py-4 overflow-hidden">
+    <Modal isOpen={isOpen} onClose={onClose} title="Signals" widthClass="max-w-4xl" bodyClassName="px-6 py-4 overflow-hidden">
       <div style={OUTER_WRAPPER}>
       <input
         type="text"
@@ -399,7 +403,7 @@ export function TagPickerModal({
             return (
               <div key={tagId} style={RIGHT_ROW}>
                 <span style={{ ...SWATCH, background: color }} />
-                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <span style={{ flex: 1, whiteSpace: 'nowrap' }}>
                   {label}
                 </span>
                 <button
