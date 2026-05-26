@@ -1,5 +1,5 @@
 # CARO_HMI Trend Viewer — Subsystem Handoff
-**Updated:** 2026-05-21 | **Phase A Steps 1–11 + unified-tile refactor complete** | **Next:** Step 12 (Tag picker)
+**Updated:** 2026-05-26 | **Phase A Steps 1–11 + unified-tile refactor + unified-viewport arc complete** | **Next:** Step 12 (Tag picker)
 
 ---
 
@@ -21,11 +21,13 @@ Phase A Steps 1–11 are complete. Steps 1–6 delivered the server-side trends 
 | 10 | Mode state machine + time-range UI: live-trailing/live-fixed/fixed transitions, 8-preset strip, End picker (End-only), Live button, pan/zoom interactions | ✅ Done |
 | 11 | Live tail: dedicated trend WS channel, `useLiveSubscription` hook (ring buffer + bucket accumulator + raw buffer; `commitAndDrain` returns void), unified `mergeTrendData` (live-wins-on-coverage, no `isTailing`), eviction-on-live-entry cache freshness (Gap B fix), server-side future-bucket nulling in `getTrendTile`, no-clamp wheel-zoom + `gatedFetchTile` over-range gating + inline "Range too wide" message in `CursorDisplay`, `dispatchModeAction` cleanup wrapper | ✅ Done |
 
-**Test coverage (2026-05-17):** 586 passing in `@caro/trend-chart`, 67 in `@caro/hmi-context`, 156 in `@caro/db`, 289 in the HMI server, 33 in the HMI client.
+**Test coverage (2026-05-26):** 698 passing in `@caro/trend-chart`, 67 in `@caro/hmi-context`, 156 in `@caro/db`, 289 in the HMI server, 33 in the HMI client.
 
 **Audit remediation pass (2026-05-15 → 2026-05-17):** all items from the May 2026 trend-viewer audit landed across Phases 1–5. Notable architectural change: **M1 metadata-as-return-value** — `getTrendTile()` now returns `Promise<{ tile, meta }>` (see spec §4.1 / §14.7); the `__test_lastUsedSources` module singleton is gone, with per-segment source/timing/rowCount now flowing through `meta.segments[]`. Operational hardening: F5 per-tag outbox cap (spec §4.4), TG-7 `commitAndDrain` bug fix (§10 gotcha below), TG-1 plan-pruning regression test (§10 gotcha below). All other items were refactors, test additions, or comment cleanup with no observable behavior change.
 
 **Unified-tile refactor (2026-05-21).** The Step 8 / Step 11 fetch architecture — a separate live-spine path and history-tile path — was replaced by a single tile pipeline (`runTileFetch`) governed by the **terminal-cache rule**: a tile enters the LRU only once it is terminal, and the live-edge tile is held uncached in `activeTilesRef`. This closed handoff Issues E, F, and G by construction and removed `liveSpineFetch.ts`, `historyTileFetch.ts`, `seedFromSpineFetch`, `getBufferSnapshot`, `evictAll`, `refetchHistory`, the spine generation counter, and `commitAndDrain` (now `drainBuffers`). §5 and §8 describe the as-built unified architecture; spec §10.6 is the design reference. A follow-up fix (audit H4) keeps `drainBuffers` from clearing the ring.
+
+**Unified-viewport + storm-fix arc (2026-05-24).** `dataViewport` eliminated from `useZoomState`; `useTrendData` is now driven by `modeViewport` + an explicit `bucketSMs` — fetch coverage follows the display viewport directly, closing the blank-tile-on-zoom-out regression. `tilesForViewport` now takes an explicit `tileSpanMs` (= `currentBucketSMs × bucketCount`) and emits a variable 2–4 tile count (left-anchor strategy) covering the full viewport; `ensureCovered`, `checkAndExtendXCoverage`, `panThresholdCheck`, and `getActiveRange` were removed. `MAX_VISIBLE_TILES = 16` cap makes tile storms structurally impossible. `useZoomState` derives the non-zoom resolution at render time (`derivedBucketSMs = modeViewportSpan / buckets`), eliminating the one-render transient that fired ≥1000 tile requests when clicking a wide preset after a narrow zoom. `mergeAggregate` gained a `liveStartIndex >= 0` guard preserving cached data when `live.startMs < cached.startTime`. Test count: 586 → 694.
 
 ---
 
@@ -39,7 +41,9 @@ packages/trend-chart/
     api.ts                        # fetchTile() — typed REST fetch; TileApiResponse discriminated union
 
     # ── Core primitives (no React) ─────────────────────────────────────────────
-    level.ts                      # alignedTilesInRange, tilesForViewport (filters startTime<0n),
+    level.ts                      # alignedTilesInRange, tilesForViewport (explicit tileSpanMs,
+                                  # left-anchor grid, variable 2–4 visible tiles, startTime<0n
+                                  # filter, MAX_VISIBLE_TILES=16 defense-in-depth cap),
                                   # TREND_VIEWER_DEFAULTS, TS_BUCKET_ORIGIN_MS,
                                   # MAX_BUCKET_S (mirror of @caro/db), MAX_VIEWPORT_SPAN_MS,
                                   # floorDiv, ceilDiv
@@ -50,14 +54,15 @@ packages/trend-chart/
 
     # ── Axis interaction helpers (pure, no React) ─────────────────────────────
     axisInteractions.ts           # pruneRemovedTagOverrides, isInYAxisHitZone, panYScale,
-                                  # zoomYScale, panThresholdCheck, isInXAxisHitZone,
-                                  # panXScale, zoomXScale, checkAndExtendXCoverage
+                                  # zoomYScale, isInXAxisHitZone, panXScale, zoomXScale
+                                  # (panThresholdCheck and checkAndExtendXCoverage removed
+                                  # in unified-tile refactor)
 
     # ── useTrendData sub-modules (F15, 2026-05-14) ───────────────────────────
     tileActiveSet.ts              # ActiveTileEntry / CachedEntry / HookState types;
                                   # assembleData, storeTileResult, storeNullTile,
                                   # synthesizeNullTile, makeActiveTileEntry[FromCache],
-                                  # computeResponseTailTs, pruneAndAdd, chunkArray
+                                  # computeCommittedThroughTs, pruneAndAdd, chunkArray
     gatedFetchTile.ts             # buildGatedFetchTile factory —
                                   # CLIENT_OVER_RANGE / CLIENT_UNDER_RANGE / CLIENT_PRE_EPOCH
                                   # sentinel logic; GatedFetchFn type alias
@@ -70,8 +75,8 @@ packages/trend-chart/
                                   # useEffect (calls runTileFetch), the commit callback,
                                   # the 2s live heartbeat; re-exports pruneAndAdd.
                                   # returns { data, isLoading, error, swapCounter,
-                                  #           activeTileCount, lastFetchMs, responseTailTs,
-                                  #           activeTilesRef }
+                                  #           activeTileCount, lastFetchMs, committedThroughTs,
+                                  #           activeTilesRef, invalidateNonTerminalTiles }
     useTrendMode.ts               # live/fixed three-state mode machine; exports reducer for unit
                                   # testing; tick action dispatched by TrendChartContainer on
                                   # TREND_DELTA receipt
@@ -84,9 +89,11 @@ packages/trend-chart/
                                   # coverage rule — live wins on its range (null included);
                                   # aggregate clips to liveEndIndex, raw drops ts>=minLiveTs;
                                   # no isTailing parameter
-    useZoomState.ts               # zoom level state (currentBucketSMs, zoomAnchorSpan,
-                                  # dataViewport); exports computeDragZoomViewport (pure);
-                                  # reset effect re-syncs to modeViewport, skipped on lastIntent='zoom'
+    useZoomState.ts               # zoom level state (currentBucketSMs, zoomAnchorSpan);
+                                  # render-time derivation for non-zoom intents
+                                  # (derivedBucketSMs = modeViewportSpan / buckets);
+                                  # sticky gestureBucketSMs ONLY while lastIntent='zoom';
+                                  # exports computeDragZoomViewport (pure)
 
     # ── Components ────────────────────────────────────────────────────────────
     TrendChart.tsx                # uPlot canvas wrapper; manages rebuild lifecycle,
@@ -133,7 +140,7 @@ packages/trend-chart/
       mergeTrendData.test.ts      # Step 11: unified coverage rule, aggregate clip at
                                   # liveEndIndex, raw live-wins overlap, bucketSMs mismatch
                                   # passthrough
-      axisInteractions.test.ts    # all 9 helper functions
+      axisInteractions.test.ts    # all 7 helper functions
       TrendChartContainer.test.tsx # container behavior: presets, Live, End picker, tag remove,
                                   # loading hints; computeDragZoomViewport pure tests
       trendChart.test.tsx         # TrendChart render, Y-scale defaults, legend display
@@ -190,7 +197,7 @@ type ModeState =
 
 **`latestSampleTs === null` fallback.** When `latestSampleTs` is unavailable (the window before the first `TREND_DELTA` of the session), `panApplied` and `endPickerCommitted` use `state.modeViewport.end` as the reference. Preserves gesture semantics before the first live sample arrives.
 
-**Auto-promote `lastIntent` synthesis.** Auto-promote (`live-fixed` tick where `nowMs >= state.to`) sets `lastIntent = 'live'`, not the prior value — this triggers `useZoomState`'s reset effect so `currentBucketSMs`, `zoomAnchorSpan`, and `dataViewport` re-derive from the post-snap clean span. Spec §9.3 documents this as contract behavior.
+**Auto-promote `lastIntent` synthesis.** Auto-promote (`live-fixed` tick where `nowMs >= state.to`) sets `lastIntent = 'live'`, not the prior value — this ensures `useZoomState` re-derives `currentBucketSMs` and `zoomAnchorSpan` from the post-snap clean span (`isZooming` becomes `false`; `derivedBucketSMs` re-computes from the new `modeViewportSpan`). Spec §9.3 documents this as contract behavior.
 
 `modeToViewport(state)` derives `Viewport { start: bigint; end: bigint }`:
 - `live-trailing`: `{ start: nowMs - sizeMs, end: nowMs }`
@@ -202,35 +209,36 @@ type ModeState =
 
 ## 4. Zoom State (`useZoomState.ts`)
 
-`useZoomState` owns three pieces of state:
+`useZoomState` exposes two derived values and two handlers:
 
-| State | Type | Role |
+| Value | Type | Role |
 |---|---|---|
-| `currentBucketSMs` | `bigint` | Current bucket size in ms — drives `computeDragZoomViewport` |
+| `currentBucketSMs` | `bigint` | Current bucket size in ms — drives tile resolution |
 | `zoomAnchorSpan` | `bigint` | Full viewport span at the current zoom level — drives uPlot autoscale |
-| `dataViewport` | `Viewport` | The aligned viewport passed to `useTrendData` |
 
-A `useEffect` keyed on `modeViewport.start/end` resets all three whenever `modeViewport` changes, except when `lastIntent === 'zoom'` — wheel-zoom gestures own `dataViewport` directly, so the reset must not clobber the accumulated zoom anchor. Preset, Live, End-picker, and pan all go through the reset, so each starts from a clean zoom level.
+**Render-time derivation (storm fix).** For non-zoom intents, `currentBucketSMs` is derived at render time as `derivedBucketSMs = modeViewportSpan / (visibleTilesPerWindow × bucketCount)`. This eliminates the one-render lag where a wide `modeViewport` was paired with the previous narrow `bucketSMs`, which caused `tilesForViewport` to emit hundreds of tiles at the old tiny resolution. A single `gestureBucketSMs` state is held sticky **only** while `lastIntent === 'zoom'` — continuous wheel-zoom must not re-derive from a growing viewport, as that would change tile IDs mid-gesture. A sync effect `[derivedBucketSMs, isZooming]` keeps `gestureBucketSMs` in sync with the derived value while not zooming (correct baseline for the next gesture), but does NOT fire when `handleZoomLevelSwitch` fires alone (neither dep changes until `zoomApplied` sets `lastIntent = 'zoom'`).
 
-`handleDragZoom(selStart, selEnd)` and `handleZoomLevelSwitch('in'|'out', cursorMs)` update all three atomically. `computeDragZoomViewport` is exported for direct testing.
+`handleDragZoom(selStart, selEnd)` and `handleZoomLevelSwitch('in'|'out')` update `gestureBucketSMs` only; `handleZoomLevelSwitch` uses a functional updater with `[]` deps (stable callback, no stale capture). `computeDragZoomViewport` is exported for direct testing.
 
 ---
 
 ## 5. Data Fetch (`useTrendData.ts`)
 
-`useTrendData({ viewport, tagIds, isLive, getLatestSampleTs })` drives **every** tile fetch through one pipeline — there is no live-spine vs. history split. The hook is a thin shell: it allocates state and refs, runs a single fetch `useEffect`, and returns the assembled result. Orchestration lives in `runTileFetch.ts`; the pure tile/cache helpers in `tileActiveSet.ts`.
+`useTrendData({ viewport, tagIds, isLive, bucketSMs })` drives **every** tile fetch through one pipeline — there is no live-spine vs. history split. The hook is a thin shell: it allocates state and refs, runs a single fetch `useEffect`, and returns the assembled result. Orchestration lives in `runTileFetch.ts`; the pure tile/cache helpers in `tileActiveSet.ts`.
 
-**One fetch effect.** A single `useEffect` keyed on `(tagIdsKey, dataViewport.start/end, bucketCount, …, isLive, heartbeat, commit)` calls `runTileFetch`. It is the only writer of `activeTilesRef` and the only caller of the fetch path. In history mode the effect short-circuits when the viewport is out of range (`isViewportOverRange` / `isViewportUnderRange`); in live mode the range guard is skipped — live tiles may legitimately extend past now.
+**One fetch effect.** A single `useEffect` keyed on `(tagIdsKey, viewportStart, viewportEnd, bucketCount, tileSpanMs, …, isLive, heartbeat, commit)` calls `runTileFetch`. It is the only writer of `activeTilesRef` and the only caller of the fetch path. In history mode the effect short-circuits when the viewport is out of range (`isViewportOverRange` / `isViewportUnderRange`); in live mode the range guard is skipped — live tiles may legitimately extend past now.
 
 **`runTileFetch` (per run).** Computes the required tile set via `tilesForViewport` (live mode passes `overfetchRightCount: 0`); resolves each tile to an `ActiveTileEntry` — existing active entry with data > LRU cache hit > placeholder; bumps `tagGenerationRef` only on a `tagIds` change; selects the tiles that `needsFetch` reports stale and that are not already in `inFlightTilesRef`; early-returns on a pure no-op (same tiles, same tags, nothing to fetch); otherwise publishes the new `activeTilesRef` and calls `commit()`; then fires the fetches.
 
-**Terminal-cache rule.** On resolve: a **terminal** response (`responseTailTs >= tile.endTime`) is written to the LRU (`storeTileResult`) and the entry is marked terminal (`data: null`). A **non-terminal** response (live-edge tile) keeps its assembled data on the entry (`entry.data`) and is never cached. A failed fetch stores a synthetic null tile (`storeNullTile`, `responseTailTs = tile.endTime`) so the freshness predicate stops retrying (§4.3).
+**Terminal-cache rule.** On resolve: a **terminal** response (`committedThroughTs >= tile.endTime`) is written to the LRU (`storeTileResult`) and the entry is marked terminal (`data: null`). A **non-terminal** response (live-edge tile) keeps its assembled data on the entry (`entry.data`) and is never cached. A failed fetch stores a synthetic null tile (`storeNullTile`, `committedThroughTs = tile.endTime`) so the freshness predicate stops retrying (§4.3).
 
-**`needsFetch` freshness predicate.** A tile needs a fetch when: no LRU entry covers it; or its active entry has not resolved (`responseTailTs === null`); or it has rolled `REFETCH_LAG_MS` into the past (refetch once more for a terminal, cacheable copy); or — in live mode — its `responseTailTs` trails the latest WS sample by more than `2 × sizeMs`; or — in history mode — its `responseTailTs` is short of the viewport end. `needsFetch` is exported for direct unit testing.
+**`needsFetch` freshness predicate.** A tile needs a fetch when: no LRU entry covers it; or its active entry has not resolved (`committedThroughTs === null`); or it has rolled `REFETCH_LAG_MS` into the past (refetch once more for a terminal, cacheable copy); or — in history mode — its `committedThroughTs` is short of the viewport end. In live mode the predicate returns `false` — the WS tail handles the live-edge tile in steady state, `invalidateNonTerminalTiles` handles Fixed→Live transitions, and `REFETCH_LAG_MS` handles tiles that have rolled into the past. `needsFetch` is exported for direct unit testing.
 
-**Run-independent resolve flow.** `inFlightTilesRef` is the cross-run dedup (added before a fetch, deleted on settle, `has`-checked before re-firing). Resolve handlers do not capture the run: a terminal resolve writes the LRU and patches `activeTilesRef` unconditionally; a non-terminal resolve patches in place only if `tagGenerationRef` still matches and the tile is still in the active set. `commit` re-assembles `data` from the active set (`assembleData`), preserves the previous `data` as a bridge render while visible tiles are still pending, and updates `responseTailTs`, `swapCounter`, `activeTileCount`, and `lastFetchMs`.
+**Run-independent resolve flow.** `inFlightTilesRef` is the cross-run dedup (added before a fetch, deleted on settle, `has`-checked before re-firing). Resolve handlers do not capture the run: a terminal resolve writes the LRU and patches `activeTilesRef` unconditionally; a non-terminal resolve patches in place only if `tagGenerationRef` still matches and the tile is still in the active set. `commit` re-assembles `data` from the active set (`assembleData`), preserves the previous `data` as a bridge render while visible tiles are still pending, and updates `committedThroughTs`, `swapCounter`, `activeTileCount`, and `lastFetchMs`.
 
-**Live-mode heartbeat.** While `isLive`, a 2 s `setInterval` bumps a `heartbeat` state value that sits in the effect dep array, so the freshness predicate is re-evaluated even when the viewport is pinned (`live-fixed`). This is what keeps the live-edge tile refetching with no viewport change to trigger the effect.
+**Live-mode heartbeat.** While `isLive`, a 2 s `setInterval` bumps a `heartbeat` state value that sits in the effect dep array, so the freshness predicate is re-evaluated even when the viewport is pinned (`live-fixed`). This keeps `REFETCH_LAG_MS`-based refetches firing in live mode even without a viewport change.
+
+**`invalidateNonTerminalTiles` — Fixed→Live transition.** On a `!isLive → isLive` mode transition, `dispatchModeAction` calls `trendData.invalidateNonTerminalTiles()` before dispatching the action. This resets `committedThroughTs` to `null` on every non-terminal active entry, so `needsFetch`'s "entry not resolved" branch fires immediately on the next heartbeat or viewport change — the preserved tiles from Fixed mode are re-fetched with a fresh `committedThroughTs` from the server. Terminal entries are left untouched (they are LRU-cached and correct by construction). This is symmetric to the `drainBuffers()` call on Live→Fixed.
 
 **Key behaviors:**
 
@@ -239,9 +247,10 @@ A `useEffect` keyed on `modeViewport.start/end` resets all three whenever `modeV
 - **`swapCounter`**: incremented on every `commit`; `TrendChart` uses it to trigger a full uPlot rebuild when the tile set / bucket size changes.
 - **`activeTileCount`**: count of tiles in the active set — used by `SpanBucketIndicator` and tests.
 - **`bucketSMs` integer invariant**: `assembleData` throws if the assembled `bucketSMs` is non-integer — a regression guard at the assembly boundary, before any downstream `BigInt()` conversion.
-- **`responseTailTs`**: max `responseTailTs` across the active set (`computeResponseTailTs`), returned from the hook. `TrendChartContainer` passes `responseTailTs - 1000` to `useLiveSubscription` as the ring trim threshold.
+- **`committedThroughTs`**: max `committedThroughTs` across the active set (`computeCommittedThroughTs`), returned from the hook. `TrendChartContainer` uses it directly as the ring trim threshold — it is the real data edge (no additional fudge offset needed).
+- **`invalidateNonTerminalTiles`**: stable callback returned from the hook; called by `dispatchModeAction` on `!isLive → isLive` to force re-fetch of preserved non-terminal tiles.
 
-**Merge in `TrendChartContainer`.** `mergedData = useMemo(() => mergeTrendData(data, liveSub.tail, { seamResponseTailTs }), [data, liveSub.tail, swapCounter])` — a single path for both modes. There is no live/history split and no `getBufferSnapshot`.
+**Merge in `TrendChartContainer`.** `mergedData = useMemo(() => mergeTrendData(data, liveSub.tail, { seamCommittedThroughTs }), [data, liveSub.tail, swapCounter])` — a single path for both modes. There is no live/history split and no `getBufferSnapshot`. `seamCommittedThroughTs` is derived from `getSeamCommittedThroughTs(trendData.activeTilesRef)` — the `committedThroughTs` of the rightmost active tile.
 
 **Raw-vs-bucketed dispatch (Phase 6 unified rule, see `Docs/trend_dispatch_unified_rule_proposal.md`).** The server's shape decision is unaffected by the unified-tile refactor:
 
@@ -276,13 +285,18 @@ A separate imperative effect (keyed on `xRange`) calls `u.setScale('x', ...)` wi
 
 ```
 useTrendMode()         →  modeState, modeViewport, dispatch
-useZoomState(...)      →  zoomAnchorSpan, dataViewport,
+useZoomState(...)      →  currentBucketSMs, zoomAnchorSpan,
                           handleDragZoom, handleZoomLevelSwitch
 useTrendData(...)      →  data, isLoading, swapCounter, activeTileCount,
-                          lastFetchMs, responseTailTs, activeTilesRef
+                          lastFetchMs, committedThroughTs, activeTilesRef,
+                          invalidateNonTerminalTiles
 ```
 
-`dispatchModeAction` wraps `dispatch` for all mode transitions. It computes `next = trendModeReducer(prev, action)` and, when the transition leaves live mode (`isLive(prev) && !isLive(next)`), calls `liveSubRef.current.drainBuffers()` before dispatching. That is its only side effect — there is no `syncDataViewport`, no `evictAll`, no `refetchHistory`, and no `isFreshLiveLanding` branch. `dataViewport` is owned by `useZoomState` (its reset effect follows `modeViewport`); the unified tile pipeline plus the terminal-cache rule make cache eviction unnecessary.
+`dispatchModeAction` wraps `dispatch` for all mode transitions. It computes `next = trendModeReducer(prev, action)` and applies two conditional side effects before dispatching:
+- **Live → fixed** (`isLive(prev) && !isLive(next)`): calls `liveSubRef.current.drainBuffers()` to clear the accumulator, raw buffers, and session high-water mark.
+- **Fixed → live** (`!isLive(prev) && isLive(next)`): calls `trendData.invalidateNonTerminalTiles()` to reset non-terminal active entries so they are re-fetched with a fresh watermark.
+
+There is no `syncDataViewport`, no `evictAll`, no `refetchHistory`, and no `isFreshLiveLanding` branch.
 
 `liveEdgeBehindWindow` is derived per-render as `latestSampleTs !== null && latestSampleTs < modeState.from` using `liveSubRef.current.getLatestSampleTs()` and passed to `EndPicker` as a prop for the orange button state.
 
@@ -318,11 +332,11 @@ tailMode effect (re-runs on isLive / tagIdsKey / bucketSMs / tailMode change):
     (filtered to ≥ trimThreshold) — so an excursion through fixed and back
     does not lose recent tail history
 
-ring-trim effect (on trimThreshold change; trimThreshold = responseTailTs − 1000):
+ring-trim effect (on trimThreshold change; trimThreshold = committedThroughTs):
   → prunes ring entries older than trimThreshold
 
 TrendChartContainer render:
-  mergedData = useMemo(() => mergeTrendData(data, liveSub.tail, { seamResponseTailTs }), …)
+  mergedData = useMemo(() => mergeTrendData(data, liveSub.tail, { seamCommittedThroughTs }), …)
 
 onDataReceived(maxModuleTs):  if isLive → dispatch({ type: 'tick', nowMs })
 
@@ -356,6 +370,12 @@ Divergences from the spec that remain current. Entries absorbed into the spec du
 
 30. **Symmetric window-vs-live-edge rule supersedes proposal D6 / D7.** The reducer classifies `panApplied`, `zoomApplied`, and `endPickerCommitted` uniformly from any starting state using a single `classifyByWindow(latestSampleTs, action.to)` helper: `to > latestSampleTs` → `live-fixed`; `to <= latestSampleTs` → `fixed`. This departs from the original D6 (endPicker-from-fixed stays `fixed` regardless of picked End) and D7 (zoom always → `fixed`): zoom from `live-*` still → `fixed` per the table (zoom is still exploratory), but the classification is now handled by the same helper branch. `endPickerCommitted` from `fixed` with a future End now enters `live-fixed`. Documented in spec §9.3 and §12.2 as the as-built contract.
 
+31. **`invalidateNonTerminalTiles` on Fixed→Live.** `dispatchModeAction` calls `trendData.invalidateNonTerminalTiles()` on `!isLive(prev) && isLive(next)` transitions (symmetric to `drainBuffers` on Live→Fixed). Resets `committedThroughTs` to `null` on non-terminal active entries; `needsFetch`'s "entry not resolved" branch immediately re-fetches them with a fresh watermark. Terminal LRU entries are untouched. Without this, tiles preserved from Fixed mode carry a stale `committedThroughTs` and never re-fetch in live mode.
+
+32. **`mergeTrendData` `totalN` cap prevents white-gap at the live-edge tile seam.** During the ~1-bucket window before the WS accumulator closes its first bucket in a new tile's range, the live-edge tile has non-null buckets from a prior fetch but the accumulator's coverage starts at 0. Without capping, `totalN = liveEndIndex + 1` extended past the cached tile's actual data, emitting null future-coverage buckets that rendered as a white gap. Fix: when `liveStartIndex < 0 && seamBucketIndex >= 0 && liveEndIndex <= seamBucketIndex`, cap `totalN = seamBucketIndex`. Implemented in `mergeTrendData.ts`.
+
+33. **`querySegment` absent-tag bounded-prev fallback.** Tags whose `time_bucket_gapfill` output has zero in-window rows (COV tags in windows narrower than the mandatory 60 s snapshot interval) receive a dedicated bounded-prev query (`DISTINCT ON (tag_id) … WHERE timeCol < startTime AND timeCol >= startTime − 5 min`) and are filled flat at the prior value. Only tags with no prior history in the 5-minute window remain `null × n`. The spec's §5.5 `prev` subquery only seeds the LOCF carry-forward within the gapfill range; this fallback handles the degenerate case where the gapfill emits nothing to carry forward. Implemented in `packages/db/timescale/trends.ts`; 2 integration tests added.
+
 ### Historical decisions
 
 Design alternatives that were explicitly considered and rejected. Recorded here so future readers understand why the current approach was chosen.
@@ -364,7 +384,7 @@ Design alternatives that were explicitly considered and rejected. Recorded here 
 
 21. **Open-tile model rejected** — an early design had cached tiles mutated in place as live data accumulated. Rejected in favor of tail-extension: cached tiles are immutable; `useLiveSubscription` owns a separate accumulator; `mergeTrendData` concatenates at render. Cache freshness is now structural via the terminal-cache rule — see spec §10.6 / §10.8.
 
-22. **`responseTailTs`-based raw buffer trim dropped for 2×Span** — original plan trimmed raw buffers to `moduleTs >= responseTailTs - 1000` (same threshold as the ring). Dropped: advancing `trimThreshold` as tiles loaded pushed `minLiveTs` forward in `mergeRaw`, letting LOCF gapfill leak through the cached-drop filter. Raw buffers trimmed to `latestTs - 2×viewportSpanMs` in the WS callback instead; cleared on live exit via `drainBuffers`.
+22. **`committedThroughTs`-based raw buffer trim dropped for 2×Span** — original plan trimmed raw buffers to `moduleTs >= committedThroughTs` (same threshold as the ring). Dropped: advancing `trimThreshold` as tiles loaded pushed `minLiveTs` forward in `mergeRaw`, letting LOCF gapfill leak through the cached-drop filter. Raw buffers trimmed to `latestTs - 2×viewportSpanMs` in the WS callback instead; cleared on live exit via `drainBuffers`.
 
 ---
 
@@ -406,7 +426,7 @@ Hard-won lessons from the min/max upgrade and perf engineering work.
 
 **Multi-VM Hyper-V contention.** When TimescaleDB runs in Docker on Windows, `docker-desktop` and any user WSL distros are separate Hyper-V VMs that compete for CPU/memory/network scheduling (visible as `Vmmem` in Task Manager). Doesn't break anything but adds noise to perf measurements — close idle WSL instances before running gate tests.
 
-**`rawBuffersRef` must never be trimmed on `trimThreshold` advance.** The `trimThreshold` (derived from `responseTailTs - 1000`) advances as new tiles load. If `rawBuffersRef` were trimmed alongside the ring, `minLiveTs` in `mergeRaw` would advance, causing LOCF gapfill from newly-fetched after-prefetch tiles to survive the cached-drop filter and render as a flatline gap at each tile-boundary crossing. Trim only the ring; raw buffers are cleaned via 2×viewportSpanMs in the WS callback and cleared entirely on live exit via `drainBuffers`.
+**`rawBuffersRef` must never be trimmed on `trimThreshold` advance.** The `trimThreshold` (derived directly from `committedThroughTs`) advances as new tiles load. If `rawBuffersRef` were trimmed alongside the ring, `minLiveTs` in `mergeRaw` would advance, causing LOCF gapfill from newly-fetched after-prefetch tiles to survive the cached-drop filter and render as a flatline gap at each tile-boundary crossing. Trim only the ring; raw buffers are cleaned via 2×viewportSpanMs in the WS callback and cleared entirely on live exit via `drainBuffers`.
 
 **`TREND_DELTA` boolean values arrive as `true`/`false`.** The TimescaleDB writer coerces booleans to DOUBLE PRECISION (1.0/0.0), but the WS trend path delivers the raw LKV value which may be a boolean. `toNumericValue` in `useLiveSubscription` applies `true → 1`, `false → 0`. Without this coercion, boolean trend tags render as null gaps in the live tail even when data is arriving correctly.
 
@@ -428,18 +448,15 @@ Hard-won lessons from the min/max upgrade and perf engineering work.
 
 Observations from production behavior. Not divergences from spec — document here rather than in delta files.
 
-**A. modeState.nowMs advances at trend-channel flush rate (~4 Hz) instead of 1 Hz.** Each `TREND_DELTA` frame triggers `handleDataReceived` → `dispatch(tick)` → `modeViewport` change → `useZoomState` reset effect → `dataViewport` change → `useTrendData` main effect. `runTileFetch`'s no-op guard prevents redundant fetches, but the React render chain still runs at the WS flush rate. The root cause appears to be something downstream of `useLiveSubscription`'s WS flush dispatching a tick on every frame. Worth a separate investigation; the renders are wasted work but not currently causing visible regressions.
+**A. modeState.nowMs advances at trend-channel flush rate (~4 Hz) instead of 1 Hz.** Each `TREND_DELTA` frame triggers `handleDataReceived` → `dispatch(tick)` → `modeViewport` change → `useTrendData` main effect. `runTileFetch`'s no-op guard prevents redundant fetches, but the React render chain still runs at the WS flush rate. The root cause appears to be something downstream of `useLiveSubscription`'s WS flush dispatching a tick on every frame. Worth a separate investigation; the renders are wasted work but not currently causing visible regressions.
 
 **B. Data gaps near right edge after live→fixed transition.**
 
-*Gap A (closed, 2026-05-16).* Originally described as a CAG-lag null band at the right edge of the newly-fixed viewport after live→fixed transition. Closed by future-bucket nulling (spec §6.5): buckets whose `bucketStartMs > responseTailTs` are set to `(null, null, null)` server-side at request entry, so the post-transition right edge shows the chart line trailing off naturally at `responseTailTs` — visually identical to the live-tail's trailing edge. The residual writer-lag gap (`TIMESCALE_DB_TICK_MS = 500 ms` + ~1 s FIFO trim tolerance) sits in `[responseTailTs - 1.5 s, responseTailTs]` and is filled by `time_bucket_gapfill + locf` for bucketed presets. Every bucketed preset has `bucketSMs ≥ 300 ms` (5m and larger), making the lag sub-bucket or sub-perceptual; the 1m raw-COV preset uses no LOCF and is unaffected. The ring-survives-transition follow-up architecture proposed in earlier revisions of this section is no longer needed — watermark-aware fall-through (spec §4.3) combined with future-bucket nulling jointly handle the right-edge case.
+*Gap A (closed, 2026-05-16).* Originally described as a CAG-lag null band at the right edge of the newly-fixed viewport after live→fixed transition. Closed by future-bucket nulling (spec §6.5): buckets whose `bucketStartMs > committedThroughTs` are set to `(null, null, null)` server-side at request entry, so the post-transition right edge shows the chart line trailing off naturally at `committedThroughTs` — visually identical to the live-tail's trailing edge. The residual writer-lag gap (`TIMESCALE_DB_TICK_MS = 500 ms` + ~1 s FIFO trim tolerance) sits in `[committedThroughTs - 1.5 s, committedThroughTs]` and is filled by `time_bucket_gapfill + locf` for bucketed presets. Every bucketed preset has `bucketSMs ≥ 300 ms` (5m and larger), making the lag sub-bucket or sub-perceptual; the 1m raw-COV preset uses no LOCF and is unaffected. The ring-survives-transition follow-up architecture proposed in earlier revisions of this section is no longer needed — watermark-aware fall-through (spec §4.3) combined with future-bucket nulling jointly handle the right-edge case.
 
 *Gap B (cross-session frozen cache nulls) — closed.* CAG-lag nulls could once be written to the tile cache and frozen there indefinitely; users toggling between live and fixed saw stale nulls accumulate across sessions. Now closed structurally by the **terminal-cache rule** (spec §10.8): a non-terminal tile — the only kind that can carry CAG-lag nulls — never enters the LRU. (The interim fix was eviction-on-live-entry via `evictAll`; the terminal-cache rule supersedes it.)
 
-**C. ~~`pruneAndAdd` may overwrite real data with flat-line data during drag-zoom-then-pan.~~**
-Closed (2026-05-14). Root cause: `ensureCovered` derived `tileSpanMs` from the current viewport rather than the active set's actual tile widths, producing misaligned candidates during the in-flight window of zoom commits. Fixed by anchoring `tileSpanMs` to `active[0]!.endTime - active[0]!.startTime` in `useTrendData.ts` `ensureCovered` (commit 873e2cb). Follow-up b599003 restored `panThresholdCheck` symmetry — both `ensureCovered` and `panThresholdCheck` now use the active set's tile width (via `getActiveRange().tileSpanMs`), eliminating multi-candidate fan-out when wheel-zoom diverges from `dataViewport`. Manual verification: drag-zoom-then-pan, wheel-zoom-then-pan, pan-prefetch at 50%, live→fixed transitions, and over-range suppression all pass with no flat-line artifacts.
-
-**D. Synthetic-on-flush uses HMI server `Date.now()` for `moduleTs` (mixed clock domains).** The synthetic-on-flush mechanism (spec §4.4) exists to propagate LOCF (last-observation-carried-forward) values from the server's LKV to the client's bucket accumulator at `TREND_FLUSH_HZ` cadence. For flatline tags, the LKV is constant by definition — the value at any flush moment equals the value at any other flush moment in the flatline window — so the **synthetic's exact `moduleTs` is not critical**, only that it advances the client's bucket boundaries. Real samples in the same `TREND_DELTA` frame carry the device's `moduleTs` (from MQTT ingest); synthetics carry `Date.now()`. At well-NTP-synced installations the drift is <100 ms — bucket boundary placement for synthetics may shift by that amount relative to real events, but the *value* placed in those buckets is identical regardless of which side of the boundary the synthetic lands. The 1-second `responseTailTs - 1000ms` trim margin (spec §6.2) absorbs typical drift comfortably. Not a fix-target; documented so future readers understand the design intent.
+**D. Synthetic-on-flush uses HMI server `Date.now()` for `moduleTs` (mixed clock domains).** The synthetic-on-flush mechanism (spec §4.4) exists to propagate LOCF (last-observation-carried-forward) values from the server's LKV to the client's bucket accumulator at `TREND_FLUSH_HZ` cadence. For flatline tags, the LKV is constant by definition — the value at any flush moment equals the value at any other flush moment in the flatline window — so the **synthetic's exact `moduleTs` is not critical**, only that it advances the client's bucket boundaries. Real samples in the same `TREND_DELTA` frame carry the device's `moduleTs` (from MQTT ingest); synthetics carry `Date.now()`. At well-NTP-synced installations the drift is <100 ms — bucket boundary placement for synthetics may shift by that amount relative to real events, but the *value* placed in those buckets is identical regardless of which side of the boundary the synthetic lands. The `committedThroughTs` trim threshold (spec §6.2) absorbs typical drift comfortably — the watermark only advances on confirmed DB commits, so it naturally reflects the real data edge. Not a fix-target; documented so future readers understand the design intent.
 
 **E, F, G — closed by the unified-tile refactor (2026-05-21).** Issues E (left-edge blank in Live after zoom-out), F (~1–3 bucket gap at the spine/tail seam), and G (`live-fixed` not updating until a forced refetch) were all architectural consequences of the parallel live-spine vs. history-tile fetch paths. The unified-tile refactor — the Phase B unification — removed those paths and closed all three by construction: there is one tile pipeline, the live-edge tile is part of the active set and kept fresh by the freshness predicate, and the spine/tail seam no longer exists (the live tail is merged onto the active tile data by `mergeTrendData`, §8). A residual raw-mode seam *coverage* gap on a fast `live-trailing → fixed → live-trailing` round-trip turned out to be a separate ring-clearing defect, fixed under audit finding H4 (see `hmi_trend_viewer_deltas.md`).
 

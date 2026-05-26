@@ -17,8 +17,8 @@ type TileSource = TileApiResponse['source'];
 
 export interface CachedEntry {
   source: TileSource;
-  /** Server Date.now() from the response that populated this entry. */
-  responseTailTs?: number;
+  /** DbPipeline commit watermark (ms since epoch) from the response that populated this entry. */
+  committedThroughTs?: number;
   // Aggregate fields
   bucketSMs?: number;
   n?: number;
@@ -51,7 +51,7 @@ export function storeTileResult(
   res: TileApiResponse,
   cache: TileCache<CachedEntry>,
 ): void {
-  const responseTailTs = res.responseTailTs;
+  const committedThroughTs = res.committedThroughTs;
 
   if (res.source === 'raw') {
     for (const s of res.series) {
@@ -63,7 +63,7 @@ export function storeTileResult(
       });
       cache.set(key, {
         source: 'raw',
-        responseTailTs,
+        committedThroughTs,
         ts: s.ts.map(t => BigInt(t)),
         valueRaw: s.value,
         ...(s.prev ? { prev: { ts: BigInt(s.prev.ts), value: s.prev.value } } : {}),
@@ -78,13 +78,13 @@ export function storeTileResult(
         bucketCount: tile.bucketCount,
       });
       cache.set(key, {
-        source:      res.source,
-        responseTailTs,
-        bucketSMs:   res.bucketSMs,
-        n:           res.n,
-        value:       s.value,
-        min:         s.min,
-        max:         s.max,
+        source:            res.source,
+        committedThroughTs,
+        bucketSMs:         res.bucketSMs,
+        n:                 res.n,
+        value:             s.value,
+        min:               s.min,
+        max:               s.max,
       });
     }
   }
@@ -266,7 +266,7 @@ export function assembleData(
 export function makeActiveTileEntry(tile: Tile, res: TileApiResponse): ActiveTileEntry {
   return {
     tile,
-    responseTailTs: res.responseTailTs,
+    committedThroughTs: res.committedThroughTs,
     shape: res.source === 'raw' ? 'raw' : 'aggregate',
     data: null,
   };
@@ -277,7 +277,7 @@ export function makeActiveTileEntry(tile: Tile, res: TileApiResponse): ActiveTil
 export function makeActiveTileEntryFromCache(tile: Tile, cached: CachedEntry): ActiveTileEntry {
   return {
     tile,
-    responseTailTs: cached.responseTailTs ?? null,
+    committedThroughTs: cached.committedThroughTs ?? null,
     shape: cached.source === 'raw' ? 'raw' : 'aggregate',
     data: null,
   };
@@ -287,7 +287,7 @@ export function makeActiveTileEntryFromCache(tile: Tile, cached: CachedEntry): A
  * Synthesizes a null TrendData object for a failed tile refetch (§4.3).
  * All value/min/max buckets are null (aggregate) or empty arrays (raw).
  * Caller is responsible for storing this in the LRU and updating the entry's
- * responseTailTs = Number(tile.endTime).
+ * committedThroughTs = Number(tile.endTime).
  */
 export function synthesizeNullTile(
   tile: Tile,
@@ -331,7 +331,7 @@ export function synthesizeNullTile(
 /**
  * Stores a synthesized null tile into the LRU cache so the terminal-cache rule
  * is satisfied and the refetch trigger predicate becomes false (§4.3).
- * responseTailTs is set to Number(tile.endTime) so responseTailTs >= endTime.
+ * committedThroughTs is set to Number(tile.endTime) so committedThroughTs >= endTime.
  */
 export function storeNullTile(
   tile: Tile,
@@ -339,7 +339,7 @@ export function storeNullTile(
   tagIds: number[],
   cache: TileCache<CachedEntry>,
 ): void {
-  const responseTailTs = Number(tile.endTime);
+  const committedThroughTs = Number(tile.endTime);
   const n = tile.bucketCount;
   if (shape === 'aggregate') {
     const bucketSMs = n > 0 ? Number(tile.endTime - tile.startTime) / n : 0;
@@ -347,29 +347,29 @@ export function storeNullTile(
     for (const tagId of tagIds) {
       cache.set(
         makeTileCacheKey({ tagId, startTime: tile.startTime, endTime: tile.endTime, bucketCount: tile.bucketCount }),
-        { source: 'mixed', responseTailTs, bucketSMs, n, value: nullArr(), min: nullArr(), max: nullArr() },
+        { source: 'mixed', committedThroughTs, bucketSMs, n, value: nullArr(), min: nullArr(), max: nullArr() },
       );
     }
   } else {
     for (const tagId of tagIds) {
       cache.set(
         makeTileCacheKey({ tagId, startTime: tile.startTime, endTime: tile.endTime, bucketCount: tile.bucketCount }),
-        { source: 'raw', responseTailTs, ts: [], valueRaw: [] },
+        { source: 'raw', committedThroughTs, ts: [], valueRaw: [] },
       );
     }
   }
 }
 
 /**
- * Derives the maximum responseTailTs across active-tile entries.
- * Reads responseTailTs directly from each entry — no cache lookup.
- * Returns null if all entries have null responseTailTs (no fetches resolved yet).
+ * Derives the maximum committedThroughTs across active-tile entries.
+ * Reads committedThroughTs directly from each entry — no cache lookup.
+ * Returns null if all entries have null committedThroughTs (no fetches resolved yet).
  */
-export function computeResponseTailTs(entries: ActiveTileEntry[]): number | null {
+export function computeCommittedThroughTs(entries: ActiveTileEntry[]): number | null {
   let max: number | null = null;
   for (const entry of entries) {
-    if (entry.responseTailTs !== null) {
-      if (max === null || entry.responseTailTs > max) max = entry.responseTailTs;
+    if (entry.committedThroughTs !== null) {
+      if (max === null || entry.committedThroughTs > max) max = entry.committedThroughTs;
     }
   }
   return max;

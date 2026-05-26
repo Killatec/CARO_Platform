@@ -36,11 +36,11 @@ const FOOTER: CSSProperties = {
   padding: '8px 0 0 0',
 };
 
-/** Returns responseTailTs of the rightmost active tile — used as the merge seam point (§5.2). */
-function getSeamResponseTailTs(activeTilesRef: { readonly current: ActiveTileEntry[] }): number | null {
+/** Returns committedThroughTs of the rightmost active tile — used as the merge seam point (§5.2). */
+function getSeamCommittedThroughTs(activeTilesRef: { readonly current: ActiveTileEntry[] }): number | null {
   const active = activeTilesRef.current;
   if (active.length === 0) return null;
-  return active[active.length - 1]!.responseTailTs;
+  return active[active.length - 1]!.committedThroughTs;
 }
 
 const FOOTER_LEFT: CSSProperties = {
@@ -71,12 +71,6 @@ export function TrendChartContainer({
   const { state: modeState, viewport: modeViewport, dispatch } = useTrendMode();
 
   // ── modeViewport-derived out-of-range booleans ────────────────────────────
-  // Drive render decisions (placeholderData, CursorDisplay message, TrendChart
-  // setScale bypass) from modeViewport, which updates on every wheel/pan tick
-  // via the RAF-coalesced zoomApplied/panApplied actions.
-  // useTrendData's internal rangeExceeded/rangeTooNarrow flags are keyed on
-  // dataViewport (which doesn't update on every wheel tick because useZoomState
-  // skips the reset on lastIntent='zoom') and are retained for fetch suppression.
   const uxRangeTooNarrow = useMemo(
     () => modeViewport.end - modeViewport.start < MIN_VIEWPORT_SPAN_MS,
     [modeViewport.start, modeViewport.end],
@@ -93,7 +87,7 @@ export function TrendChartContainer({
   const [cursorTsMs, setCursorTsMs] = useState<number | null>(null);
 
   // ── Zoom-level state ──────────────────────────────────────────────────────
-  const { zoomAnchorSpan, dataViewport, handleDragZoom: _handleDragZoom, handleZoomLevelSwitch: _handleZoomLevelSwitch } = useZoomState({
+  const { currentBucketSMs, zoomAnchorSpan, handleDragZoom: _handleDragZoom, handleZoomLevelSwitch: _handleZoomLevelSwitch } = useZoomState({
     modeViewport,
     visibleTilesPerWindow: VISIBLE_TILES_PER_WINDOW,
     bucketCount: BUCKET_COUNT,
@@ -107,8 +101,15 @@ export function TrendChartContainer({
   // the latest HWM timestamp without creating a dependency cycle.
   const getLatestSampleTs = useCallback(() => liveSubRef.current?.getLatestSampleTs() ?? null, []);
 
-  // ── Data fetch (driven by explicit dataViewport) ──────────────────────────
-  const trendData = useTrendData({ viewport: dataViewport, tagIds, isLive: isLive(modeState.mode), getLatestSampleTs });
+  // ── Data fetch (driven by modeViewport + currentBucketSMs) ───────────────
+  // modeViewport is the single source of truth for both display and fetch.
+  // currentBucketSMs fixes the resolution so tiles don't shift during continuous zoom.
+  const trendData = useTrendData({
+    viewport: modeViewport,
+    bucketSMs: currentBucketSMs,
+    tagIds,
+    isLive: isLive(modeState.mode),
+  });
   const { data, isLoading, swapCounter, activeTileCount, lastFetchMs } = trendData;
 
   // ── Stable ref for synchronous access from callbacks ─────────────────────
@@ -127,9 +128,8 @@ export function TrendChartContainer({
   const bucketSMs: bigint | null =
     data?.type === 'aggregate' ? BigInt(data.bucketSMs) : null;
 
-  // Active-set-aware trim threshold (§4.2): max responseTailTs − 1000 ms absorbs writer lag.
-  const trimThreshold: number | null =
-    trendData.responseTailTs != null ? trendData.responseTailTs - 1000 : null;
+  // Active-set-aware trim threshold (§4.2): committedThroughTs is the real data edge.
+  const trimThreshold: number | null = trendData.committedThroughTs ?? null;
 
   const seedFromCachedTile = useMemo(() => {
     if (data?.type !== 'aggregate') return null;
@@ -178,7 +178,7 @@ export function TrendChartContainer({
   // seamResponseTailTs aligns the seam-bucket min/max combination.
   const mergedData = useMemo(
     () => mergeTrendData(data, liveSub.tail, {
-      seamResponseTailTs: getSeamResponseTailTs(trendData.activeTilesRef),
+      seamCommittedThroughTs: getSeamCommittedThroughTs(trendData.activeTilesRef),
     }),
     [data, liveSub.tail, swapCounter], // eslint-disable-line react-hooks/exhaustive-deps
   );
@@ -193,16 +193,19 @@ export function TrendChartContainer({
   const bucketSMsIndicator = data?.type === 'aggregate' ? BigInt(data.bucketSMs) : null;
 
   // ── dispatchModeAction: drain on Live→fixed, then dispatch ──────────────
-  // dataViewport is owned by useZoomState: reset effect for non-zoom intents,
-  // zoom handlers for wheel-zoom. No syncDataViewport needed here (§4.5 v1.5).
   const dispatchModeAction = useCallback((action: TrendModeAction) => {
     const prev = modeStateRef.current;
     const next = trendModeReducer(prev, action);
     if (isLive(prev.mode) && !isLive(next.mode)) {
       liveSubRef.current?.drainBuffers();
+    } else if (!isLive(prev.mode) && isLive(next.mode)) {
+      // Refresh any non-terminal tile preserved from the prior (Fixed) mode
+      // — its committedThroughTs is stale and would otherwise produce a
+      // visible gap at the live edge until needsFetch line 143 fired.
+      trendData.invalidateNonTerminalTiles();
     }
     dispatch(action);
-  }, [dispatch]);
+  }, [dispatch, trendData.invalidateNonTerminalTiles]);
 
   // ── Callbacks ─────────────────────────────────────────────────────────────
 
@@ -283,10 +286,8 @@ export function TrendChartContainer({
     [dispatchModeAction],
   );
 
-  // Dispatch zoomApplied with the raw selection bounds: modeViewport reflects
-  // the user's intended range, while dataViewport (set by _handleDragZoom below)
-  // tracks the snapped tile-aligned range. The two are intentionally distinct —
-  // EndPicker shows the intended end, fetches use the snapped range.
+  // _handleDragZoom sets the gesture resolution (gestureBucketSMs) for the zoomed view.
+  // dispatchModeAction updates modeViewport to the raw selection bounds.
   const handleDragZoom = useCallback(
     (selectionStartMs: bigint, selectionEndMs: bigint) => {
       _handleDragZoom(selectionStartMs, selectionEndMs);
@@ -301,13 +302,13 @@ export function TrendChartContainer({
     [_handleDragZoom, dispatchModeAction],
   );
 
-  // Wrap zoom-level switch: update data-fetch state (bucketSMs, dataViewport, zoomAnchorSpan).
+  // Wrap zoom-level switch: update resolution state (currentBucketSMs, zoomAnchorSpan).
   // zoomApplied is NOT dispatched here — onXRangeChange fires on every X-scale mutation
   // (including level-switch ticks) and handleXRangeChange dispatches it via RAF, covering
   // all cases (sub-threshold, zoom-out, level-switch) through a single path.
   const handleZoomLevelSwitch = useCallback(
-    (direction: 'in' | 'out', cursorTimeMs: bigint) => {
-      _handleZoomLevelSwitch(direction, cursorTimeMs);
+    (direction: 'in' | 'out') => {
+      _handleZoomLevelSwitch(direction);
     },
     [_handleZoomLevelSwitch],
   );

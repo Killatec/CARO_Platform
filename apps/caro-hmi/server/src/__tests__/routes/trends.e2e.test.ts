@@ -4,7 +4,8 @@ import request from 'supertest';
 import express from 'express';
 import type { ErrorRequestHandler } from 'express';
 import { errorHandler } from '@caro/server';
-import trendsRouter from '../../routes/trends.js';
+import { createTrendsRouter } from '../../routes/trends.js';
+import { DbPipeline } from '../../db-pipeline.js';
 import {
   writeTagSamples,
   timescalePool,
@@ -76,7 +77,7 @@ async function refreshTestCagg(
 
 function buildApp() {
   const app = express();
-  app.use('/api/v1/trends', trendsRouter);
+  app.use('/api/v1/trends', createTrendsRouter(new DbPipeline()));
   app.use(errorHandler as ErrorRequestHandler);
   return app;
 }

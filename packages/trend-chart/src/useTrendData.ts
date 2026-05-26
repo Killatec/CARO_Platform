@@ -3,7 +3,7 @@ import type { MutableRefObject } from 'react';
 import { TREND_VIEWER_DEFAULTS, MIN_VIEWPORT_SPAN_MS, MAX_VIEWPORT_SPAN_MS } from './level.js';
 import { TileCache } from './tileCache.js';
 import type { ActiveTileEntry, Viewport } from './types.js';
-import { estimateCachedEntrySize, assembleData, computeResponseTailTs } from './tileActiveSet.js';
+import { estimateCachedEntrySize, assembleData, computeCommittedThroughTs } from './tileActiveSet.js';
 import type { CachedEntry, HookState } from './tileActiveSet.js';
 import { buildGatedFetchTile } from './gatedFetchTile.js';
 import { runTileFetch } from './runTileFetch.js';
@@ -18,21 +18,34 @@ export interface UseTrendDataOptions {
   tagIds: number[];
   /** When true, uses tile-aligned live path (overfetchRightCount=0, terminal-cache rule). */
   isLive?: boolean;
+  /**
+   * Current resolution (ms per bucket). Passed explicitly so fetch coverage tracks
+   * modeViewport directly instead of a frozen cursor-centered dataViewport.
+   * Defaults to deriving from viewport span when omitted (legacy / test path).
+   */
+  bucketSMs?: bigint;
   bucketCount?: number;
   visibleTilesPerWindow?: number;
   overfetchPerSide?: number;
   cacheCapacityBytes?: number;
-  /** Returns the latest sample timestamp from the live subscription; null before first TREND_DELTA. */
-  getLatestSampleTs?: () => bigint | null;
 }
 
 export interface UseTrendDataResult extends HookState {
   swapCounter: number;
   activeTileCount: number;
   lastFetchMs: number | null;
-  responseTailTs: number | null;
+  committedThroughTs: number | null;
   /** Stable ref to the active tile set. */
   activeTilesRef: MutableRefObject<ActiveTileEntry[]>;
+  /**
+   * Reset committedThroughTs to null for every NON-TERMINAL active entry so
+   * the next runTileFetch sees them as unresolved (needsFetch line 140 → true)
+   * and re-fetches them with a fresh watermark. Terminal entries are left
+   * untouched. Called by TrendChartContainer on `!isLive → isLive` mode
+   * transitions to refresh tiles preserved from the prior Fixed mode with a
+   * stale committedThroughTs.
+   */
+  invalidateNonTerminalTiles: () => void;
 }
 
 function isViewportOverRange(viewport: Viewport): boolean {
@@ -48,12 +61,18 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     viewport,
     tagIds,
     isLive = false,
+    bucketSMs: bucketSMsProp,
     bucketCount = TREND_VIEWER_DEFAULTS.bucketCount,
     visibleTilesPerWindow = TREND_VIEWER_DEFAULTS.visibleTilesPerWindow,
     overfetchPerSide = TREND_VIEWER_DEFAULTS.overfetchPerSide,
     cacheCapacityBytes = DEFAULT_CACHE_CAPACITY,
-    getLatestSampleTs,
   } = opts;
+
+  // Derive tileSpanMs from explicit bucketSMs when provided; otherwise fall back to
+  // viewport-derived resolution (legacy path used by tests that don't pass bucketSMs).
+  const tileSpanMs = bucketSMsProp !== undefined
+    ? bucketSMsProp * BigInt(bucketCount)
+    : (viewport.end - viewport.start) / BigInt(visibleTilesPerWindow);
 
   const cache = useMemo(
     () =>
@@ -72,7 +91,7 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
   const [swapCounter, setSwapCounter] = useState(0);
   const [activeTileCount, setActiveTileCount] = useState<number>(0);
   const [lastFetchMs, setLastFetchMs] = useState<number | null>(null);
-  const [responseTailTs, setResponseTailTs] = useState<number | null>(null);
+  const [committedThroughTs, setCommittedThroughTs] = useState<number | null>(null);
 
   // Live-mode heartbeat: re-evaluates the freshness predicate every 2 s while in live mode
   // so the fetch effect fires even when the viewport is pinned (live-fixed).
@@ -95,10 +114,6 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
   // Ref-tracked isLive so the effect can read the current value without being in dep array.
   const isLiveRef = useRef<boolean>(isLive);
   isLiveRef.current = isLive;
-
-  // Ref-tracked getLatestSampleTs so the effect always uses the latest version.
-  const getLatestSampleTsRef = useRef(getLatestSampleTs);
-  getLatestSampleTsRef.current = getLatestSampleTs;
 
   // Mount/unmount guard — prevents commit from touching state after unmount.
   useEffect(() => {
@@ -125,12 +140,12 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
     if (!mountedRef.current) return;
     const current = activeTilesRef.current;
     setActiveTileCount(current.length);
-    setResponseTailTs(computeResponseTailTs(current));
+    setCommittedThroughTs(computeCommittedThroughTs(current));
 
     const visibleKeys = visibleKeysRef.current;
     const allVisibleReady = current.every(e => {
       const key = `${e.tile.startTime}:${e.tile.endTime}`;
-      return !visibleKeys.has(key) || e.responseTailTs !== null;
+      return !visibleKeys.has(key) || e.committedThroughTs !== null;
     });
 
     if (allVisibleReady) {
@@ -168,28 +183,42 @@ export function useTrendData(opts: UseTrendDataOptions): UseTrendDataResult {
       if (isViewportUnderRange(currentViewport)) return;
     }
 
-    const latestSampleTs = getLatestSampleTsRef.current?.() ?? null;
-
     runTileFetch({
-      tagIds, bucketCount, visibleTilesPerWindow, overfetchPerSide,
+      tagIds, bucketCount, tileSpanMs, overfetchPerSide,
       viewport: currentViewport, isLive: isLiveRef.current,
       cache, activeTilesRef, inFlightTilesRef,
       tagGenerationRef, tagIdsRef, visibleKeysRef,
       setHookResult,
       gatedFetchTile,
-      latestSampleTs,
       nowMs: BigInt(Date.now()),
       commit,
       firstFetchFiredAtRef,
     });
-  }, [tagIdsKey, viewportStart, viewportEnd, bucketCount, visibleTilesPerWindow, overfetchPerSide, cache, isLive, heartbeat, commit]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [tagIdsKey, viewportStart, viewportEnd, bucketCount, tileSpanMs, overfetchPerSide, cache, isLive, heartbeat, commit]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const invalidateNonTerminalTiles = useCallback((): void => {
+    const current = activeTilesRef.current;
+    let mutated = false;
+    const next = current.map(entry => {
+      if (
+        entry.committedThroughTs !== null &&
+        entry.committedThroughTs < Number(entry.tile.endTime)
+      ) {
+        mutated = true;
+        return { ...entry, committedThroughTs: null };
+      }
+      return entry;
+    });
+    if (mutated) activeTilesRef.current = next;
+  }, []);
 
   return {
     ...hookResult,
     swapCounter,
     activeTileCount,
     lastFetchMs,
-    responseTailTs,
+    committedThroughTs,
     activeTilesRef,
+    invalidateNonTerminalTiles,
   };
 }

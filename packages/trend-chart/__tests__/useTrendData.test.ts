@@ -21,14 +21,14 @@ const defaultViewport: Viewport = { start: 0n, end: ONE_HOUR };
 
 const DEFAULT_RESPONSE_TAIL_TS = 1_700_000_000_000; // fixed sentinel for test assertions
 
-function makeAggResponse(tagIds: number[], opts: { n?: number; bucketSMs?: number; source?: TileApiResponse['source']; responseTailTs?: number } = {}): TileApiResponse {
-  const { n = 500, bucketSMs = 3_600, source = '1min_cagg', responseTailTs = DEFAULT_RESPONSE_TAIL_TS } = opts;
+function makeAggResponse(tagIds: number[], opts: { n?: number; bucketSMs?: number; source?: TileApiResponse['source']; committedThroughTs?: number } = {}): TileApiResponse {
+  const { n = 500, bucketSMs = 3_600, source = '1min_cagg', committedThroughTs = DEFAULT_RESPONSE_TAIL_TS } = opts;
   if (source === 'raw') throw new Error('use makeRawResponse for raw source');
   return {
     source: source as '1min_cagg',
     startTime: 0,
     endTime: Number(ONE_HOUR),
-    responseTailTs,
+    committedThroughTs,
     bucketSMs,
     n,
     series: tagIds.map(id => ({
@@ -40,12 +40,12 @@ function makeAggResponse(tagIds: number[], opts: { n?: number; bucketSMs?: numbe
   };
 }
 
-function makeRawResponse(tagIds: number[], responseTailTs = DEFAULT_RESPONSE_TAIL_TS): TileApiResponse {
+function makeRawResponse(tagIds: number[], committedThroughTs = DEFAULT_RESPONSE_TAIL_TS): TileApiResponse {
   return {
     source: 'raw',
     startTime: 0,
     endTime: Number(ONE_HOUR),
-    responseTailTs,
+    committedThroughTs,
     series: tagIds.map(id => ({ tagId: id, ts: [100, 200, 300], value: [1.0, 2.0, null] })),
   };
 }
@@ -62,7 +62,7 @@ function makeTile(startMs: bigint, endMs: bigint, bucketCount = 500): Tile {
 }
 
 function makeEntry(startMs: bigint, endMs: bigint, bucketCount = 500): ActiveTileEntry {
-  return { tile: makeTile(startMs, endMs, bucketCount), responseTailTs: null, shape: null, data: null };
+  return { tile: makeTile(startMs, endMs, bucketCount), committedThroughTs: null, shape: null, data: null };
 }
 
 // ─── pruneAndAdd ─────────────────────────────────────────────────────────────
@@ -492,7 +492,7 @@ describe('useTrendData', () => {
       source: 'raw',
       startTime: 0,
       endTime: Number(ONE_HOUR),
-      responseTailTs: DEFAULT_RESPONSE_TAIL_TS,
+      committedThroughTs: DEFAULT_RESPONSE_TAIL_TS,
       series: [{ tagId: 1, ts: [100, 200, 300], value: [1.0, 2.0, null], prev: { ts: -60_000, value: 0.5 } }],
     };
     mockFetchTile.mockResolvedValue(rawWithPrev);
@@ -553,7 +553,7 @@ describe('useTrendData', () => {
         source: '1min_cagg' as const,
         startTime: Number(p.startTime),
         endTime: Number(p.endTime),
-        responseTailTs: DEFAULT_RESPONSE_TAIL_TS,
+        committedThroughTs: DEFAULT_RESPONSE_TAIL_TS,
         bucketSMs: 360,
         n: 500,
         series: p.tagIds.map(id => ({
@@ -631,7 +631,7 @@ describe('useTrendData', () => {
         source,
         startTime: Number(p.startTime),
         endTime: Number(p.endTime),
-        responseTailTs: DEFAULT_RESPONSE_TAIL_TS,
+        committedThroughTs: DEFAULT_RESPONSE_TAIL_TS,
         bucketSMs: 3_600,
         n: 500,
         series: p.tagIds.map(id => ({
@@ -796,9 +796,9 @@ describe('useTrendData — lastFetchMs', () => {
   });
 });
 
-// ── responseTailTs ────────────────────────────────────────────────────────────
+// ── committedThroughTs ────────────────────────────────────────────────────────────
 
-describe('useTrendData — responseTailTs', () => {
+describe('useTrendData — committedThroughTs', () => {
   it('null before any fetch resolves', () => {
     mockFetchTile.mockImplementation(() => new Promise(() => {})); // never resolves
 
@@ -806,12 +806,12 @@ describe('useTrendData — responseTailTs', () => {
       useTrendData({ viewport: defaultViewport, tagIds: [1] }),
     );
 
-    expect(result.current.responseTailTs).toBeNull();
+    expect(result.current.committedThroughTs).toBeNull();
   });
 
-  it('equals the response responseTailTs after a successful fetch', async () => {
+  it('equals the response committedThroughTs after a successful fetch', async () => {
     const TAIL_TS = 1_712_617_200_000;
-    mockFetchTile.mockResolvedValue(makeAggResponse([1], { responseTailTs: TAIL_TS }));
+    mockFetchTile.mockResolvedValue(makeAggResponse([1], { committedThroughTs: TAIL_TS }));
 
     const { result } = renderHook(() =>
       useTrendData({ viewport: defaultViewport, tagIds: [1] }),
@@ -819,17 +819,17 @@ describe('useTrendData — responseTailTs', () => {
 
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
-    expect(result.current.responseTailTs).toBe(TAIL_TS);
+    expect(result.current.committedThroughTs).toBe(TAIL_TS);
   });
 
-  it('is the MAX responseTailTs across active tiles when tiles have different values', async () => {
+  it('is the MAX committedThroughTs across active tiles when tiles have different values', async () => {
     const OLDER_TS = 1_000_000_000_000;
     const NEWER_TS = 2_000_000_000_000;
 
     mockFetchTile.mockImplementation(async (params) => {
       const p = params as Parameters<typeof fetchTile>[0];
       const ts = p.startTime === 0n ? OLDER_TS : NEWER_TS;
-      return makeAggResponse(p.tagIds, { responseTailTs: ts });
+      return makeAggResponse(p.tagIds, { committedThroughTs: ts });
     });
 
     const { result } = renderHook(() =>
@@ -838,12 +838,12 @@ describe('useTrendData — responseTailTs', () => {
 
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
-    expect(result.current.responseTailTs).toBe(NEWER_TS);
+    expect(result.current.committedThroughTs).toBe(NEWER_TS);
   });
 
-  it('LRU eviction of non-active (prefetch) tiles does NOT change responseTailTs', async () => {
+  it('LRU eviction of non-active (prefetch) tiles does NOT change committedThroughTs', async () => {
     const TAIL_TS = 1_712_617_200_000;
-    mockFetchTile.mockResolvedValue(makeAggResponse([1], { responseTailTs: TAIL_TS }));
+    mockFetchTile.mockResolvedValue(makeAggResponse([1], { committedThroughTs: TAIL_TS }));
 
     // estimateCachedEntrySize for 500-bucket entry ≈ (500+500+500)*8 + 100 = 12100 bytes.
     // Capacity 30000 holds the 2 active visible tiles but LRU-evicts prefetch tiles.
@@ -853,8 +853,91 @@ describe('useTrendData — responseTailTs', () => {
 
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
-    // responseTailTs reflects only active tiles; LRU-evicted prefetch tiles don't affect it.
-    expect(result.current.responseTailTs).toBe(TAIL_TS);
+    // committedThroughTs reflects only active tiles; LRU-evicted prefetch tiles don't affect it.
+    expect(result.current.committedThroughTs).toBe(TAIL_TS);
+  });
+});
+
+// ── invalidateNonTerminalTiles ─────────────────────────────────────────────────
+
+describe('useTrendData — invalidateNonTerminalTiles', () => {
+  it('nulls committedThroughTs on non-terminal entries; leaves terminal entries unchanged', async () => {
+    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
+
+    const { result } = renderHook(() =>
+      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
+    );
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    // Seed activeTilesRef directly with one terminal and one non-terminal entry.
+    // Terminal: committedThroughTs >= tile.endTime.
+    // Non-terminal: committedThroughTs < tile.endTime (e.g. partial commit).
+    const TILE_END = Number(ONE_HOUR);
+    const terminalEntry: ActiveTileEntry = {
+      tile: makeTile(0n, ONE_HOUR),
+      committedThroughTs: TILE_END,       // terminal: committed >= end
+      shape: 'aggregate',
+      data: null,
+    };
+    const nonTerminalEntry: ActiveTileEntry = {
+      tile: makeTile(ONE_HOUR, ONE_HOUR * 2n),
+      committedThroughTs: TILE_END - 1,   // non-terminal: committed < end
+      shape: 'aggregate',
+      data: null,
+    };
+
+    act(() => {
+      result.current.activeTilesRef.current = [terminalEntry, nonTerminalEntry];
+    });
+
+    // Call invalidateNonTerminalTiles.
+    act(() => {
+      result.current.invalidateNonTerminalTiles();
+    });
+
+    const after = result.current.activeTilesRef.current;
+
+    // Terminal entry: unchanged (same object identity and committedThroughTs).
+    expect(after[0]).toBe(terminalEntry);
+    expect(after[0]!.committedThroughTs).toBe(TILE_END);
+
+    // Non-terminal entry: committedThroughTs reset to null; new object (not mutated in place).
+    expect(after[1]).not.toBe(nonTerminalEntry);
+    expect(after[1]!.committedThroughTs).toBeNull();
+    // Other fields preserved.
+    expect(after[1]!.tile).toBe(nonTerminalEntry.tile);
+    expect(after[1]!.shape).toBe('aggregate');
+  });
+
+  it('no-op when all active entries are already terminal', async () => {
+    mockFetchTile.mockResolvedValue(makeAggResponse([1]));
+
+    const { result } = renderHook(() =>
+      useTrendData({ viewport: defaultViewport, tagIds: [1] }),
+    );
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    const TILE_END = Number(ONE_HOUR);
+    const terminalEntry: ActiveTileEntry = {
+      tile: makeTile(0n, ONE_HOUR),
+      committedThroughTs: TILE_END,
+      shape: 'aggregate',
+      data: null,
+    };
+
+    act(() => {
+      result.current.activeTilesRef.current = [terminalEntry];
+    });
+
+    act(() => {
+      result.current.invalidateNonTerminalTiles();
+    });
+
+    // Array reference unchanged when nothing was mutated.
+    expect(result.current.activeTilesRef.current[0]).toBe(terminalEntry);
+    expect(result.current.activeTilesRef.current[0]!.committedThroughTs).toBe(TILE_END);
   });
 });
 

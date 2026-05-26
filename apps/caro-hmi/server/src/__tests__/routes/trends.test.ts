@@ -5,7 +5,8 @@ import express from 'express';
 import compression from 'compression';
 import type { ErrorRequestHandler } from 'express';
 import { errorHandler } from '@caro/server';
-import trendsRouter from '../../routes/trends.js';
+import { createTrendsRouter } from '../../routes/trends.js';
+import { DbPipeline } from '../../db-pipeline.js';
 import { getTrendTile, getTrendExtent, MAX_BUCKET_S, deriveBucketSMs, writeTagSamples, timescalePool } from '@caro/db';
 import type { RawTrendTile, AggregateTrendTile, TileMeta } from '@caro/db';
 
@@ -36,9 +37,9 @@ const mockExtent = vi.mocked(getTrendExtent);
 
 const HAVE_TIMESCALE = !!process.env.TIMESCALE_HOST;
 
-function buildApp() {
+function buildApp(dbPipeline?: DbPipeline) {
   const app = express();
-  app.use('/api/v1/trends', trendsRouter);
+  app.use('/api/v1/trends', createTrendsRouter(dbPipeline ?? new DbPipeline()));
   app.use(errorHandler as ErrorRequestHandler);
   return app;
 }
@@ -49,7 +50,7 @@ function buildGzipApp() {
   // test is deterministic and doesn't depend on payload size hitting the default
   // 1024-byte threshold.
   app.use('/api/v1/trends', compression({ threshold: 0 }));
-  app.use('/api/v1/trends', trendsRouter);
+  app.use('/api/v1/trends', createTrendsRouter(new DbPipeline()));
   app.use(errorHandler as ErrorRequestHandler);
   return app;
 }
@@ -61,7 +62,7 @@ const RAW_TILE: RawTrendTile = {
   source: 'raw',
   startTime: 3_600_000n,
   endTime:   3_840_000n,
-  responseTailTs: 9_000_000,
+  committedThroughTs: 9_000_000,
   series: [{ tagId: 1, ts: [3_601_000n, 3_602_000n], value: [1.5, 2.0], prev: { ts: 3_540_000n, value: 0.5 } }],
 };
 
@@ -69,7 +70,7 @@ const RAW_TILE_NO_PREV: RawTrendTile = {
   source: 'raw',
   startTime: 3_600_000n,
   endTime:   3_840_000n,
-  responseTailTs: 9_000_000,
+  committedThroughTs: 9_000_000,
   series: [{ tagId: 1, ts: [3_601_000n, 3_602_000n], value: [1.5, 2.0] }],
 };
 
@@ -79,7 +80,7 @@ const AGG_TILE: AggregateTrendTile = {
   endTime:   10_800_000n,
   bucketSMs: 14_400,
   n:         250,
-  responseTailTs: 9_000_000,
+  committedThroughTs: 9_000_000,
   series: [{
     tagId: 1,
     value: new Array(250).fill(1.0),
@@ -372,49 +373,49 @@ describe('GET /api/v1/trends/tile — unit (mocked)', () => {
 
   // ── JSON round-trip (BigInt guard) ──────────────────────────────────────────
 
-  it('responseTailTs present on raw response — is a number close to Date.now()', async () => {
+  it('committedThroughTs present on raw response — is a number close to Date.now()', async () => {
     mockGet.mockImplementationOnce(async (_t, _s, _e, _bc, nowMs) => ({
-      tile: { ...RAW_TILE, responseTailTs: nowMs ?? Date.now() }, meta: FAKE_META,
+      tile: { ...RAW_TILE, committedThroughTs: nowMs ?? Date.now() }, meta: FAKE_META,
     }));
     const before = Date.now();
     const res = await request(app)
       .get('/api/v1/trends/tile?tag_ids=1&start_time=3600000&end_time=3840000&bucket_count=250');
     const after = Date.now();
     expect(res.status).toBe(200);
-    expect(typeof res.body.data.responseTailTs).toBe('number');
-    expect(res.body.data.responseTailTs).toBeGreaterThanOrEqual(before);
-    expect(res.body.data.responseTailTs).toBeLessThanOrEqual(after);
+    expect(typeof res.body.data.committedThroughTs).toBe('number');
+    expect(res.body.data.committedThroughTs).toBeGreaterThanOrEqual(before);
+    expect(res.body.data.committedThroughTs).toBeLessThanOrEqual(after);
   });
 
-  it('responseTailTs present on aggregate response — is a number close to Date.now()', async () => {
+  it('committedThroughTs present on aggregate response — is a number close to Date.now()', async () => {
     mockGet.mockImplementationOnce(async (_t, _s, _e, _bc, nowMs) => ({
-      tile: { ...AGG_TILE, responseTailTs: nowMs ?? Date.now() }, meta: FAKE_META,
+      tile: { ...AGG_TILE, committedThroughTs: nowMs ?? Date.now() }, meta: FAKE_META,
     }));
     const before = Date.now();
     const res = await request(app)
       .get('/api/v1/trends/tile?tag_ids=1&start_time=7200000&end_time=10800000&bucket_count=250');
     const after = Date.now();
     expect(res.status).toBe(200);
-    expect(typeof res.body.data.responseTailTs).toBe('number');
-    expect(res.body.data.responseTailTs).toBeGreaterThanOrEqual(before);
-    expect(res.body.data.responseTailTs).toBeLessThanOrEqual(after);
+    expect(typeof res.body.data.committedThroughTs).toBe('number');
+    expect(res.body.data.committedThroughTs).toBeGreaterThanOrEqual(before);
+    expect(res.body.data.committedThroughTs).toBeLessThanOrEqual(after);
   });
 
-  it('responseTailTs is captured before getTrendTile resolves (pre-SQL timestamp)', async () => {
+  it('committedThroughTs is captured before getTrendTile resolves (pre-SQL timestamp)', async () => {
     let capturedInsideMock = 0;
     mockGet.mockImplementationOnce(async (_t, _s, _e, _bc, nowMs) => {
       // Record when getTrendTile body executes — nowMs was captured before this
       capturedInsideMock = Date.now();
       await new Promise(r => setTimeout(r, 80));
-      return { tile: { ...RAW_TILE, responseTailTs: nowMs ?? Date.now() }, meta: FAKE_META };
+      return { tile: { ...RAW_TILE, committedThroughTs: nowMs ?? Date.now() }, meta: FAKE_META };
     });
     const before = Date.now();
     const res = await request(app)
       .get('/api/v1/trends/tile?tag_ids=1&start_time=3600000&end_time=3840000&bucket_count=250');
     expect(res.status).toBe(200);
-    // nowMs (= responseTailTs) was captured at route entry, before getTrendTile was called
-    expect(res.body.data.responseTailTs).toBeLessThanOrEqual(capturedInsideMock);
-    expect(res.body.data.responseTailTs).toBeGreaterThanOrEqual(before);
+    // nowMs (= committedThroughTs) was captured at route entry, before getTrendTile was called
+    expect(res.body.data.committedThroughTs).toBeLessThanOrEqual(capturedInsideMock);
+    expect(res.body.data.committedThroughTs).toBeGreaterThanOrEqual(before);
   });
 
   it('response body is JSON-serialisable (bigints converted to numbers by serializeTile)', async () => {
@@ -524,7 +525,7 @@ describe.skipIf(!HAVE_TIMESCALE)('GET /api/v1/trends/tile — integration (live 
 
   it('raw tile end-to-end: writes 3 samples, GET returns envelope + data', async () => {
     const app = express();
-    app.use('/api/v1/trends', trendsRouter);
+    app.use('/api/v1/trends', createTrendsRouter(new DbPipeline()));
     app.use(errorHandler as ErrorRequestHandler);
 
     await writeTagSamples([

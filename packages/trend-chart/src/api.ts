@@ -12,8 +12,8 @@ export type TileApiResponse =
       source: 'raw';
       startTime: number;
       endTime: number;
-      /** Server Date.now() captured before SQL; client uses (responseTailTs - 1000) as ring trim threshold. */
-      responseTailTs: number;
+      /** DbPipeline commit watermark (ms since epoch). Client uses this as the live-ring trim threshold and terminal-cache signal. */
+      committedThroughTs: number;
       series: Array<{
         tagId: number;
         ts: number[];
@@ -26,8 +26,8 @@ export type TileApiResponse =
       source: '1s_cagg' | '10s_cagg' | '1min_cagg' | '10min_cagg' | 'tag_samples' | 'mixed';
       startTime: number;
       endTime: number;
-      /** Server Date.now() captured before SQL; client uses (responseTailTs - 1000) as ring trim threshold. */
-      responseTailTs: number;
+      /** DbPipeline commit watermark (ms since epoch). Client uses this as the live-ring trim threshold and terminal-cache signal. */
+      committedThroughTs: number;
       bucketSMs: number;
       n: number;
       series: Array<{

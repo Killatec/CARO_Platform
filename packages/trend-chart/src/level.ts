@@ -92,9 +92,9 @@ export const MAX_VIEWPORT_SPAN_MS =
 export const MIN_VIEWPORT_SPAN_MS = 1000n;
 
 /**
- * Lag in ms between a tile's endTime and the sessionHighWaterMark before a
- * refetch is triggered. Matches the ring trim threshold (responseTailTs − 1000)
- * from spec §6.2 so both thresholds absorb the same writer-lag window.
+ * Lag in ms between a tile's endTime and nowMs before a refetch is triggered.
+ * Provides a short settling window before a tile that has rolled into the past
+ * gets a terminal re-fetch.
  */
 export const REFETCH_LAG_MS = 1000;
 
@@ -146,49 +146,41 @@ export function alignedTilesInRange(opts: {
 }
 
 /**
- * Trend viewer composite: 2 visible tiles + prefetch tiles per side.
+ * Defense-in-depth cap on the number of visible tiles tilesForViewport may emit.
+ * Legitimate renders produce 2–4 tiles; a mismatch between a wide viewport and a
+ * stale tiny tileSpanMs can produce hundreds or thousands. This cap makes a tile
+ * storm structurally impossible regardless of how the caller assembles its arguments.
+ */
+const MAX_VISIBLE_TILES = 16;
+
+/**
+ * Trend viewer tile set: all grid-aligned tiles covering [viewport.start, viewport.end)
+ * at the given resolution, plus prefetch tiles on each side.
  *
- * tileSpanMs = floor((viewport.end − viewport.start) / visibleTilesPerWindow)
- * bucketSMs  = tileSpanMs / bucketCount  (exact for standard preset spans)
+ * The caller passes an explicit `tileSpanMs` (= currentBucketSMs × bucketCount) rather
+ * than having it derived from the viewport span. This decouples the display viewport from
+ * the resolution, eliminating the blank-tile bug that arose when modeViewport grew past
+ * the coverage computed from a frozen cursor-centered dataViewport.
  *
- * Alignment strategy: right-anchor on the tile grid.
- *   lastVisibleEnd    = first tileSpanMs boundary AT OR AFTER viewport.end
- *   firstVisibleStart = lastVisibleEnd − visibleTilesPerWindow × tileSpanMs
+ * Alignment strategy: left-anchor on the tile grid from TS_BUCKET_ORIGIN_MS.
+ *   firstVisibleStart = largest multiple of tileSpanMs from origin ≤ viewport.start
+ *   lastVisibleEnd    = firstVisibleStart + k×tileSpanMs where k is the smallest integer
+ *                       such that lastVisibleEnd ≥ viewport.end
  *
- * This ensures:
- *   • lastVisibleEnd ≥ viewport.end — the live edge is always covered.
- *   • lastVisibleEnd − viewport.end < tileSpanMs — tiles are stable across all
- *     viewport.end advances that stay within the same tile boundary window,
- *     eliminating cache thrashing in live tailing mode.
- *   • Every tile boundary is a multiple of tileSpanMs from TS_BUCKET_ORIGIN_MS.
- *     Since tileSpanMs = bucketSMs × bucketCount, every tile boundary is also a
- *     multiple of bucketSMs, so time_bucket_gapfill returns exactly bucketCount
- *     rows per tile request.
+ * This emits a VARIABLE visible tile count (typically 2–4) that covers the ENTIRE
+ * viewport on both edges regardless of cursor position or zoom direction.
  *
- * Trade-off vs the prior bucket-grid right-anchor: the rightmost cached tile may
- * contain up to tileSpanMs of future-coverage gapfill/LOCF past viewport.end.
- * In live mode this extra data is overridden by the live tail extension before
- * rendering. In fixed mode the chart X-axis clips to viewport.end so the extra
- * data is fetched but not displayed.
+ * Every tile boundary is a multiple of tileSpanMs from TS_BUCKET_ORIGIN_MS.
+ * Since tileSpanMs = bucketSMs × bucketCount, every boundary is also bucket-aligned
+ * — gapfill returns exactly bucketCount rows per tile request.
  *
- * The left edge (firstVisibleStart) may sit up to one tileSpanMs after
- * viewport.start — the visible region shifts forward slightly. At standard
- * presets this is at most one tile-span and invisible if the chart clips to
- * viewport.start.
- *
- * Prefetch tiles after the visible window may extend past now in tailing mode.
- * The server returns null/locf for the future-coverage region; the live tail
- * extension overrides those gapfilled buckets as samples accumulate, so no
- * special client-side handling is needed at the chart edge.
- *
- * Note: bigint floor division is used for tileSpanMs. For typical viewport
- * spans (minutes to weeks) the span divides cleanly by visibleTilesPerWindow.
- * For non-divisible spans the visible region is 1 ms short — invisible.
+ * Prefetch tiles may extend past now in tailing mode; the server returns null/locf
+ * for future-coverage, overridden by the live tail extension as samples accumulate.
  */
 export function tilesForViewport(opts: {
   viewport: Viewport;
+  tileSpanMs: bigint;
   bucketCount?: number;
-  visibleTilesPerWindow?: number;
   overfetchPerSide?: number;
   /** Overrides left-side prefetch count. Defaults to overfetchPerSide if not provided. */
   overfetchLeftCount?: number;
@@ -196,18 +188,14 @@ export function tilesForViewport(opts: {
   overfetchRightCount?: number;
   /**
    * When provided, prefetch tiles whose startTime is more than one tileSpanMs
-   * past nowMs are dropped. Allows one tile of look-ahead in tailing mode so
-   * the after-prefetch tile (startTime = lastVisibleEnd, up to tileSpanMs past
-   * nowMs under tile-grid alignment) is included. Without this allowance,
-   * ensureCovered would fetch the after-tile every halfTileMs threshold crossing
-   * only for performSwap to evict it on the next viewport tick — constant churn.
+   * past nowMs are dropped. Allows one tile of look-ahead in tailing mode.
    */
   nowMs?: bigint;
 }): { visible: Tile[]; prefetch: Tile[] } {
   const {
     viewport,
+    tileSpanMs,
     bucketCount = TREND_VIEWER_DEFAULTS.bucketCount,
-    visibleTilesPerWindow = TREND_VIEWER_DEFAULTS.visibleTilesPerWindow,
     overfetchPerSide = TREND_VIEWER_DEFAULTS.overfetchPerSide,
     overfetchLeftCount,
     overfetchRightCount,
@@ -217,31 +205,32 @@ export function tilesForViewport(opts: {
   const leftCount  = overfetchLeftCount  ?? overfetchPerSide;
   const rightCount = overfetchRightCount ?? overfetchPerSide;
 
+  if (tileSpanMs <= 0n) return { visible: [], prefetch: [] };
+
   const viewportSpan = viewport.end - viewport.start;
   if (viewportSpan <= 0n) return { visible: [], prefetch: [] };
 
-  // Bigint floor division — exact for all reasonable viewport spans.
-  const tileSpanMs = viewportSpan / BigInt(visibleTilesPerWindow);
-  if (tileSpanMs === 0n) return { visible: [], prefetch: [] };
+  // Left-anchor on the tile grid: first visible tile starts at the largest tileSpanMs
+  // multiple from TS_BUCKET_ORIGIN_MS that is ≤ viewport.start.
+  const firstVisibleStart = TS_BUCKET_ORIGIN_MS +
+    floorDiv(viewport.start - TS_BUCKET_ORIGIN_MS, tileSpanMs) * tileSpanMs;
 
-  // bucketSMs is exact for all standard preset spans (7d/2/500 = 604800ms etc.).
-  const bucketSMs = tileSpanMs / BigInt(bucketCount);
-  // Defensive: tileSpanMs > 0 but < bucketCount causes bigint division to yield 0n,
-  // which would crash ceilDiv (division by zero). Sub-millisecond viewports are nonsensical.
-  if (bucketSMs === 0n) return { visible: [], prefetch: [] };
+  // Defense-in-depth: cap before allocating to make tile storms structurally impossible.
+  const estimatedCount = Number(ceilDiv(viewport.end - firstVisibleStart, tileSpanMs));
+  if (estimatedCount > MAX_VISIBLE_TILES) {
+    console.warn(
+      `tilesForViewport: would emit ${estimatedCount} visible tiles (cap ${MAX_VISIBLE_TILES}). ` +
+      `viewport span ${viewport.end - viewport.start}ms, tileSpanMs ${tileSpanMs}ms. Returning empty.`,
+    );
+    return { visible: [], prefetch: [] };
+  }
 
-  // Right-anchor on the tile grid: last visible end is the first tile boundary
-  // at or after viewport.end. Since tileSpanMs = bucketSMs × bucketCount, tile
-  // boundaries are also bucket-aligned — gapfill invariant is preserved. Tiles
-  // are stable across viewport.end advances that stay within the same tile window.
-  const lastVisibleEnd = TS_BUCKET_ORIGIN_MS +
-    ceilDiv(viewport.end - TS_BUCKET_ORIGIN_MS, tileSpanMs) * tileSpanMs;
-  const firstVisibleStart = lastVisibleEnd - BigInt(visibleTilesPerWindow) * tileSpanMs;
-
+  // Collect all tiles whose coverage overlaps [viewport.start, viewport.end).
   const visible: Tile[] = [];
-  for (let k = 0; k < visibleTilesPerWindow; k++) {
-    const start = firstVisibleStart + BigInt(k) * tileSpanMs;
-    visible.push({ startTime: start, endTime: start + tileSpanMs, bucketCount });
+  let cursor = firstVisibleStart;
+  while (cursor < viewport.end) {
+    visible.push({ startTime: cursor, endTime: cursor + tileSpanMs, bucketCount });
+    cursor += tileSpanMs;
   }
 
   const prefetch: Tile[] = [];
@@ -250,7 +239,8 @@ export function tilesForViewport(opts: {
     const start = firstVisibleStart - BigInt(i) * tileSpanMs;
     prefetch.push({ startTime: start, endTime: start + tileSpanMs, bucketCount });
   }
-  // Tiles after the visible window.
+  // Tiles after the visible window (last visible ends at cursor).
+  const lastVisibleEnd = cursor;
   for (let i = 0; i < rightCount; i++) {
     const start = lastVisibleEnd + BigInt(i) * tileSpanMs;
     prefetch.push({ startTime: start, endTime: start + tileSpanMs, bucketCount });
@@ -258,9 +248,7 @@ export function tilesForViewport(opts: {
 
   const futurePrunedPrefetch =
     nowMs === undefined ? prefetch : prefetch.filter(t => t.startTime < nowMs + tileSpanMs);
-  // Pre-epoch tiles (startTime < 0n) are geometrically invalid: TS_BUCKET_ORIGIN_MS alignment
-  // can push the left-prefetch neighbor before Unix epoch when the viewport is epoch-adjacent.
-  // Filter both visible and prefetch so no tile with startTime < 0n reaches the server.
+  // Pre-epoch tiles are geometrically invalid: filter both sets.
   const filteredPrefetch = futurePrunedPrefetch.filter(t => t.startTime >= 0n);
   const filteredVisible   = visible.filter(t => t.startTime >= 0n);
 

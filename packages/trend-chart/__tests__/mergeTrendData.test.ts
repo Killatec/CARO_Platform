@@ -339,6 +339,156 @@ describe('mergeTrendData — outside live coverage: cached wins', () => {
   });
 });
 
+describe('mergeTrendData — negative liveStartIndex (live starts before cached window)', () => {
+  it('liveStartIndex=0: boundary — live at cached.startTime uses existing clip path', () => {
+    // cached: n=5, startTime=0n; live: startMs=0n → liveStartIndex=0, 2 buckets
+    // liveEndIndex=2; effectiveCachedN=min(5,2)=2; totalN=2
+    // All live data, cached[2..4] clipped (existing behavior — no regression)
+    const cached = makeAgg(5, new Map([[1, [10, 20, 30, 40, 50]]]));
+    const tail   = makeAggTail(0n, new Map([[1, [99, 88]]]));
+
+    const result = mergeTrendData(cached, tail) as AggregateSeriesData;
+    expect(result.n).toBe(2);
+    const s = result.series.get(1)!;
+    expect(s.value).toEqual([99, 88]);
+  });
+
+  it('liveStartIndex=-1: live one bucket before cached — no cached data lost', () => {
+    // cached: n=5, startTime=1000n; live: startMs=0n → liveStartIndex=-1, 3 buckets
+    //   live[0] → output index -1 (dropped)
+    //   live[1] → output index  0 (wins)
+    //   live[2] → output index  1 (wins)
+    // liveEndIndex=2; fix: effectiveCachedN=5, totalN=max(5,2)=5
+    // Expected output: [live[1], live[2], cached[2], cached[3], cached[4]]
+    const cached = makeAgg(5, new Map([[1, [10, 20, 30, 40, 50]]]), 1000n);
+    const tail   = makeAggTail(0n, new Map([[1, [777, 99, 88]]])); // live[0] dropped
+
+    const result = mergeTrendData(cached, tail) as AggregateSeriesData;
+    expect(result.n).toBe(5);
+    expect(result.endTime).toBe(1000n + 5n * BigInt(BUCKET_SMS));
+    const s = result.series.get(1)!;
+    // live[1]=99 at output 0, live[2]=88 at output 1, cached[2..4] preserved
+    expect(s.value[0]).toBe(99);
+    expect(s.value[1]).toBe(88);
+    expect(s.value[2]).toBe(30);
+    expect(s.value[3]).toBe(40);
+    expect(s.value[4]).toBe(50);
+    // min/max from live where live covers, cached elsewhere
+    expect(s.min[0]).toBeCloseTo(98.9);
+    expect(s.max[0]).toBeCloseTo(99.1);
+    expect(s.min[2]).toBeCloseTo(29.5); // from makeAgg fixture (v - 0.5)
+    expect(s.max[2]).toBeCloseTo(30.5);
+  });
+
+  it('liveStartIndex=-3: live several buckets before cached — historical data preserved', () => {
+    // cached: n=6, startTime=3000n; live: startMs=0n → liveStartIndex=-3, 5 buckets
+    //   live[0..2] → output indices -3,-2,-1 (dropped)
+    //   live[3]    → output index  0 (wins)
+    //   live[4]    → output index  1 (wins)
+    // liveEndIndex=2; fix: effectiveCachedN=6, totalN=max(6,2)=6
+    // Expected output: [live[3], live[4], cached[2], cached[3], cached[4], cached[5]]
+    const cached = makeAgg(6, new Map([[1, [1, 2, 3, 4, 5, 6]]]), 3000n);
+    const tail   = makeAggTail(0n, new Map([[1, [70, 71, 72, 99, 88]]]));
+
+    const result = mergeTrendData(cached, tail) as AggregateSeriesData;
+    expect(result.n).toBe(6);
+    expect(result.endTime).toBe(3000n + 6n * BigInt(BUCKET_SMS));
+    const s = result.series.get(1)!;
+    expect(s.value[0]).toBe(99);   // live[3] wins
+    expect(s.value[1]).toBe(88);   // live[4] wins
+    expect(s.value[2]).toBe(3);    // cached[2] preserved
+    expect(s.value[3]).toBe(4);    // cached[3] preserved
+    expect(s.value[4]).toBe(5);    // cached[4] preserved
+    expect(s.value[5]).toBe(6);    // cached[5] preserved
+  });
+});
+
+describe('mergeTrendData — live-edge tile null-gap regression (liveStartIndex < 0, liveEndIndex <= seamBucketIndex)', () => {
+  // Regression: after the unified-viewport upgrade, left-anchor tile geometry can produce
+  // a new live-edge tile T3 whose first bucket is null (server future-fill) while the WS
+  // accumulator hasn't yet closed a bucket in T3's range. With liveStartIndex < 0 (the
+  // accumulator started long before cached.startTime) and liveEndIndex = seamBucketIndex
+  // (live just reaches T3's seam), the output was including T3's null future-coverage
+  // buckets — rendering as a white gap at the viewport's right edge.
+  //
+  // Fix: when liveStartIndex < 0 AND liveEndIndex <= seamBucketIndex, totalN = liveEndIndex
+  // (excludes the null tile data), so the chart line trails off cleanly instead.
+
+  it('liveEndIndex exactly at seamBucketIndex: output caps at liveEndIndex, no null tile data', () => {
+    // Simulate: 3-tile assembled cached (left-prefetch + T1 + T2_live-edge), 6 buckets total.
+    // T2_live-edge starts at bucket 4; server filled bucket 4 only (index 4 = seam).
+    // cached[4] = null (server's first live-edge bucket is null — no samples yet).
+    // Live accumulator started before cached.startTime: liveStartIndex = -2, 6 buckets
+    //   → liveEndIndex = -2 + 6 = 4 = seamBucketIndex.
+    // Expected: output caps at 4, T2's null at [4,5] excluded, no white gap.
+    const cachedVals = [10, 20, 30, 40, null, null]; // T2 buckets [4,5] are null (future)
+    const cached = makeAgg(6, new Map([[1, cachedVals]]), 2000n); // startTime=2000n
+    const tail   = makeAggTail(0n, new Map([[1, [1, 2, 3, 4, 5, 6]]])); // startMs=0n → liveStartIndex=-2
+
+    // seamCommittedThroughTs corresponds to cached.startTime + 4 * BUCKET_SMS = 2000 + 4000 = 6000
+    const result = mergeTrendData(cached, tail, { seamCommittedThroughTs: 6000 }) as AggregateSeriesData;
+
+    // totalN = liveEndIndex = 4 (capped, not max(6,4)=6)
+    expect(result.n).toBe(4);
+    expect(result.endTime).toBe(2000n + 4n * BigInt(BUCKET_SMS));
+    const s = result.series.get(1)!;
+    expect(s.value.length).toBe(4);
+    // Indices 0-3: live wins (liveStartIndex=-2, li=i+2; live[2..5] cover output[0..3])
+    expect(s.value[0]).toBe(3); // live[2]
+    expect(s.value[1]).toBe(4); // live[3]
+    expect(s.value[2]).toBe(5); // live[4]
+    expect(s.value[3]).toBe(6); // live[5]
+    // Null tile data at output[4] and output[5] must NOT appear.
+  });
+
+  it('liveEndIndex below seamBucketIndex: output caps at liveEndIndex', () => {
+    // Same as above but live has only 5 closed buckets → liveEndIndex=3 < seamBucketIndex=4.
+    const cachedVals = [10, 20, 30, 40, null, null];
+    const cached = makeAgg(6, new Map([[1, cachedVals]]), 2000n);
+    const tail   = makeAggTail(0n, new Map([[1, [1, 2, 3, 4, 5]]])); // 5 buckets → liveEndIndex=3
+
+    const result = mergeTrendData(cached, tail, { seamCommittedThroughTs: 6000 }) as AggregateSeriesData;
+
+    expect(result.n).toBe(3);
+    const s = result.series.get(1)!;
+    expect(s.value.length).toBe(3);
+    // No null from live-edge tile
+    expect(s.value.every(v => v !== null)).toBe(true);
+  });
+
+  it('liveEndIndex above seamBucketIndex: no cap, live covers seam normally', () => {
+    // Live has 8 buckets → liveEndIndex=6 > seamBucketIndex=4. Normal behavior.
+    const cachedVals = [10, 20, 30, 40, null, null];
+    const cached = makeAgg(6, new Map([[1, cachedVals]]), 2000n);
+    const tail   = makeAggTail(0n, new Map([[1, [1, 2, 3, 4, 5, 6, 7, 8]]])); // 8 → liveEndIndex=6
+
+    const result = mergeTrendData(cached, tail, { seamCommittedThroughTs: 6000 }) as AggregateSeriesData;
+
+    // condition (liveEndIndex <= seamBucketIndex) is false → totalN = max(6, 6) = 6
+    expect(result.n).toBe(6);
+    const s = result.series.get(1)!;
+    // Seam bucket (index 4): inLive → uses live[6] = 7
+    expect(s.value[4]).toBe(7); // live[i+2=6] wins at seam
+    expect(s.value[5]).toBe(8); // live[7] wins
+  });
+
+  it('liveStartIndex >= 0: no cap applied (regression guard is inactive)', () => {
+    // liveStartIndex=3, liveEndIndex=5, seamBucketIndex=4. Guard inactive (liveStartIndex>=0).
+    // Original clip path: effectiveCachedN=min(6,5)=5, totalN=5.
+    const cachedVals = [10, 20, 30, 40, null, null];
+    const cached = makeAgg(6, new Map([[1, cachedVals]]), 0n);
+    const tail   = makeAggTail(BigInt(3 * BUCKET_SMS), new Map([[1, [99, 88]]]));
+
+    const result = mergeTrendData(cached, tail, { seamCommittedThroughTs: 4 * BUCKET_SMS }) as AggregateSeriesData;
+
+    // effectiveCachedN = min(6, max(0,5)) = 5, totalN = max(5,5) = 5 (old path)
+    expect(result.n).toBe(5);
+    const s = result.series.get(1)!;
+    expect(s.value[3]).toBe(99); // live[0]
+    expect(s.value[4]).toBe(88); // live[1] at seam (inLive, not seam-combine since live covers it)
+  });
+});
+
 describe('mergeTrendData — cross-bucketSMs (bucketSMs mismatch)', () => {
   it('returns cached unchanged when live.bucketSMs !== cached.bucketSMs', () => {
     const cached = makeAgg(3, new Map([[1, [1, 2, 3]]]));
@@ -348,14 +498,14 @@ describe('mergeTrendData — cross-bucketSMs (bucketSMs mismatch)', () => {
   });
 });
 
-describe('mergeTrendData — seamResponseTailTs=null is a no-op (smell #1)', () => {
-  it('null seamResponseTailTs produces identical output to omitting opts', () => {
-    // getSeamResponseTailTs returns null when all active-tile responseTailTs are null.
+describe('mergeTrendData — seamCommittedThroughTs=null is a no-op (smell #1)', () => {
+  it('null seamCommittedThroughTs produces identical output to omitting opts', () => {
+    // getSeamCommittedThroughTs returns null when all active-tile committedThroughTs are null.
     // mergeTrendData must treat null the same as the no-opts path (seamBucketIndex=-1).
     const cached = makeAgg(5, new Map([[1, [1, 2, 3, 4, 5]]]));
     const tail = makeAggTail(3000n, new Map([[1, [99]]]));
 
-    const withNull = mergeTrendData(cached, tail, { seamResponseTailTs: null }) as AggregateSeriesData;
+    const withNull = mergeTrendData(cached, tail, { seamCommittedThroughTs: null }) as AggregateSeriesData;
     const withOmit = mergeTrendData(cached, tail) as AggregateSeriesData;
 
     expect(withNull.n).toBe(withOmit.n);
@@ -366,11 +516,11 @@ describe('mergeTrendData — seamResponseTailTs=null is a no-op (smell #1)', () 
     expect(sNull.max).toEqual(sOmit.max);
   });
 
-  it('null seamResponseTailTs with multiple tags — live min/max wins at every bucket', () => {
+  it('null seamCommittedThroughTs with multiple tags — live min/max wins at every bucket', () => {
     const cached = makeAgg(3, new Map([[1, [10, 20, 30]], [2, [100, 200, 300]]]));
     const tail = makeAggTail(0n, new Map([[1, [1, 2, 3]], [2, [10, 20, 30]]]));
 
-    const withNull = mergeTrendData(cached, tail, { seamResponseTailTs: null }) as AggregateSeriesData;
+    const withNull = mergeTrendData(cached, tail, { seamCommittedThroughTs: null }) as AggregateSeriesData;
     const withOmit = mergeTrendData(cached, tail) as AggregateSeriesData;
 
     for (const tagId of [1, 2]) {

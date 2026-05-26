@@ -34,13 +34,13 @@ function makeCache(): TileCache<CachedEntry> {
   return new TileCache<CachedEntry>({ capacityBytes: 50 * 1024 * 1024, estimateSize: estimateCachedEntrySize });
 }
 
-/** Terminal response: responseTailTs >= tile.endTime → entry goes to LRU. */
+/** Terminal response: committedThroughTs >= tile.endTime → entry goes to LRU. */
 function makeTerminalResponse(tile: Tile, tagId = 1): TileApiResponse {
   return {
     source: '1min_cagg',
     startTime: Number(tile.startTime),
     endTime: Number(tile.endTime),
-    responseTailTs: Number(tile.endTime) + 1000,
+    committedThroughTs: Number(tile.endTime) + 1000,
     bucketSMs: 3600,
     n: 500,
     series: [{
@@ -52,13 +52,13 @@ function makeTerminalResponse(tile: Tile, tagId = 1): TileApiResponse {
   };
 }
 
-/** Non-terminal response: responseTailTs < tile.endTime → entry held in entry.data. */
+/** Non-terminal response: committedThroughTs < tile.endTime → entry held in entry.data. */
 function makeNonTerminalResponse(tile: Tile, tagId = 1): TileApiResponse {
   return {
     source: '1min_cagg',
     startTime: Number(tile.startTime),
     endTime: Number(tile.endTime),
-    responseTailTs: Number(tile.endTime) - 5000,
+    committedThroughTs: Number(tile.endTime) - 5000,
     bucketSMs: 3600,
     n: 500,
     series: [{
@@ -82,22 +82,22 @@ function makeAggData(tile: Tile): AggregateSeriesData {
 function makeNonTerminalEntry(tile: Tile): ActiveTileEntry {
   return {
     tile,
-    responseTailTs: Number(tile.endTime) - 5000,
+    committedThroughTs: Number(tile.endTime) - 5000,
     shape: 'aggregate',
     data: makeAggData(tile),
   };
 }
 
 /** Builds a terminal entry (data=null; data lives in cache). */
-function makeTerminalEntry(tile: Tile, responseTailTs: number): ActiveTileEntry {
-  return { tile, responseTailTs, shape: 'aggregate', data: null };
+function makeTerminalEntry(tile: Tile, committedThroughTs: number): ActiveTileEntry {
+  return { tile, committedThroughTs, shape: 'aggregate', data: null };
 }
 
 /** Seeds the cache with a terminal entry for the given tile/tagId. */
-function seedCache(cache: TileCache<CachedEntry>, tile: Tile, tagId: number, responseTailTs: number): void {
+function seedCache(cache: TileCache<CachedEntry>, tile: Tile, tagId: number, committedThroughTs: number): void {
   cache.set(
     makeTileCacheKey({ tagId, startTime: tile.startTime, endTime: tile.endTime, bucketCount: tile.bucketCount }),
-    { source: '1min_cagg', responseTailTs, bucketSMs: 3600, n: 500, value: [1.0], min: [0.9], max: [1.1] },
+    { source: '1min_cagg', committedThroughTs, bucketSMs: 3600, n: 500, value: [1.0], min: [0.9], max: [1.1] },
   );
 }
 
@@ -110,7 +110,7 @@ function makeArgs(
   return {
     tagIds,
     bucketCount: 500,
-    visibleTilesPerWindow: 2,
+    tileSpanMs: 500_000n,
     overfetchPerSide: 0,
     viewport: { start: 0n, end: 1_000_000n },
     isLive: true,
@@ -122,7 +122,6 @@ function makeArgs(
     visibleKeysRef: { current: new Set<string>() } as MutableRefObject<Set<string>>,
     setHookResult: vi.fn() as Dispatch<SetStateAction<HookState>>,
     gatedFetchTile: vi.fn(),
-    latestSampleTs: null,
     nowMs: FAR_FUTURE_MS,
     commit: vi.fn(),
     firstFetchFiredAtRef: { current: null } as MutableRefObject<number | null>,
@@ -143,86 +142,59 @@ async function flushAsync(): Promise<void> {
 // ── §5.2 freshness predicate unit tests (all 8 branches) ─────────────────────
 
 describe('needsFetch — §5.2 freshness predicate', () => {
-  const sizeMs = 1_000_000n;
   const viewportEnd = TILE_A.endTime;
 
   it('branch 1: all tags in LRU cache → false', () => {
     const cache = makeCache();
     seedCache(cache, TILE_A, 1, Number(TILE_A.endTime) + 1000);
-    expect(needsFetch(TILE_A, [1], cache, [], false, null, FAR_FUTURE_MS, sizeMs, viewportEnd)).toBe(false);
+    expect(needsFetch(TILE_A, [1], cache, [], false, FAR_FUTURE_MS, viewportEnd)).toBe(false);
   });
 
   it('branch 2: no active entry for tile → true', () => {
     const cache = makeCache();
-    expect(needsFetch(TILE_A, [1], cache, [], false, null, FAR_FUTURE_MS, sizeMs, viewportEnd)).toBe(true);
+    expect(needsFetch(TILE_A, [1], cache, [], false, FAR_FUTURE_MS, viewportEnd)).toBe(true);
   });
 
-  it('branch 3: active entry has responseTailTs=null → true', () => {
+  it('branch 3: active entry has committedThroughTs=null → true', () => {
     const cache = makeCache();
-    const entry: ActiveTileEntry = { tile: TILE_A, responseTailTs: null, shape: null, data: null };
-    expect(needsFetch(TILE_A, [1], cache, [entry], false, null, FAR_FUTURE_MS, sizeMs, viewportEnd)).toBe(true);
+    const entry: ActiveTileEntry = { tile: TILE_A, committedThroughTs: null, shape: null, data: null };
+    expect(needsFetch(TILE_A, [1], cache, [entry], false, FAR_FUTURE_MS, viewportEnd)).toBe(true);
   });
 
   it('branch 4: tile.endTime <= nowMs - REFETCH_LAG_MS → true (rolled out)', () => {
     const cache = makeCache();
-    const entry: ActiveTileEntry = { tile: TILE_A, responseTailTs: Number(TILE_A.endTime) + 100, shape: 'aggregate', data: null };
+    const entry: ActiveTileEntry = { tile: TILE_A, committedThroughTs: Number(TILE_A.endTime) + 100, shape: 'aggregate', data: null };
     // nowMs is exactly REFETCH_LAG_MS past tile.endTime
     const nowMs = TILE_A.endTime + BigInt(REFETCH_LAG_MS);
-    expect(needsFetch(TILE_A, [1], cache, [entry], false, null, nowMs, sizeMs, viewportEnd)).toBe(true);
+    expect(needsFetch(TILE_A, [1], cache, [entry], false, nowMs, viewportEnd)).toBe(true);
   });
 
-  it('branch 5: live mode, latestSampleTs=null → false (no storm before first TREND_DELTA)', () => {
+  it('live mode → false (WS tail handles steady state; invalidateNonTerminalTiles handles Fixed→Live)', () => {
     const cache = makeCache();
     const entry = makeNonTerminalEntry(TILE_A);
-    expect(needsFetch(TILE_A, [1], cache, [entry], true, null, FAR_FUTURE_MS, sizeMs, viewportEnd)).toBe(false);
+    expect(needsFetch(TILE_A, [1], cache, [entry], true, FAR_FUTURE_MS, viewportEnd)).toBe(false);
   });
 
-  it('branch 6: live mode, responseTailTs < required → true (stale live-edge)', () => {
-    const cache = makeCache();
-    const latestSampleTs = 10_000_000n;
-    const requiredTailTs = Number(latestSampleTs - 2n * sizeMs); // 8_000_000
-    const entry: ActiveTileEntry = {
-      tile: TILE_A,
-      responseTailTs: requiredTailTs - 1,
-      shape: 'aggregate',
-      data: makeAggData(TILE_A),
-    };
-    expect(needsFetch(TILE_A, [1], cache, [entry], true, latestSampleTs, FAR_FUTURE_MS, sizeMs, viewportEnd)).toBe(true);
-  });
-
-  it('branch 7: live mode, responseTailTs >= required → false (fresh live-edge)', () => {
-    const cache = makeCache();
-    const latestSampleTs = 10_000_000n;
-    const requiredTailTs = Number(latestSampleTs - 2n * sizeMs); // 8_000_000
-    const entry: ActiveTileEntry = {
-      tile: TILE_A,
-      responseTailTs: requiredTailTs,
-      shape: 'aggregate',
-      data: makeAggData(TILE_A),
-    };
-    expect(needsFetch(TILE_A, [1], cache, [entry], true, latestSampleTs, FAR_FUTURE_MS, sizeMs, viewportEnd)).toBe(false);
-  });
-
-  it('branch 8: fixed mode, responseTailTs < viewport.end → true (stale historical)', () => {
+  it('fixed mode, committedThroughTs < viewport.end → true (stale historical)', () => {
     const cache = makeCache();
     const entry: ActiveTileEntry = {
       tile: TILE_A,
-      responseTailTs: Number(viewportEnd) - 1,
+      committedThroughTs: Number(viewportEnd) - 1,
       shape: 'aggregate',
       data: null,
     };
-    expect(needsFetch(TILE_A, [1], cache, [entry], false, null, FAR_FUTURE_MS, sizeMs, viewportEnd)).toBe(true);
+    expect(needsFetch(TILE_A, [1], cache, [entry], false, FAR_FUTURE_MS, viewportEnd)).toBe(true);
   });
 
-  it('fixed mode, responseTailTs >= viewport.end → false (fresh historical)', () => {
+  it('fixed mode, committedThroughTs >= viewport.end → false (fresh historical)', () => {
     const cache = makeCache();
     const entry: ActiveTileEntry = {
       tile: TILE_A,
-      responseTailTs: Number(viewportEnd),
+      committedThroughTs: Number(viewportEnd),
       shape: 'aggregate',
       data: null,
     };
-    expect(needsFetch(TILE_A, [1], cache, [entry], false, null, FAR_FUTURE_MS, sizeMs, viewportEnd)).toBe(false);
+    expect(needsFetch(TILE_A, [1], cache, [entry], false, FAR_FUTURE_MS, viewportEnd)).toBe(false);
   });
 
   it('multi-tag: any tag missing from LRU proceeds to entry check', () => {
@@ -230,14 +202,14 @@ describe('needsFetch — §5.2 freshness predicate', () => {
     // tagId 1 is cached; tagId 2 is not
     seedCache(cache, TILE_A, 1, Number(TILE_A.endTime) + 1000);
     // No active entry → entry absent → true
-    expect(needsFetch(TILE_A, [1, 2], cache, [], false, null, FAR_FUTURE_MS, sizeMs, viewportEnd)).toBe(true);
+    expect(needsFetch(TILE_A, [1, 2], cache, [], false, FAR_FUTURE_MS, viewportEnd)).toBe(true);
   });
 });
 
 // ── runTileFetch: STORM GUARD regression tests ────────────────────────────────
 
 describe('STORM GUARD: live mode — no spurious re-fetches', () => {
-  it('same tile + non-terminal entry + latestSampleTs=null → pure no-op (no fetch, no commit)', () => {
+  it('same tile + non-terminal entry → pure no-op (no fetch, no commit)', () => {
     const cache = makeCache();
     const entry = makeNonTerminalEntry(TILE_A);
     const gatedFetchTile = vi.fn();
@@ -247,7 +219,6 @@ describe('STORM GUARD: live mode — no spurious re-fetches', () => {
     runTileFetch(makeArgs(cache, {
       gatedFetchTile, commit, activeTilesRef,
       isLive: true,
-      latestSampleTs: null,
       nowMs: FAR_FUTURE_MS,
     }));
 
@@ -257,15 +228,12 @@ describe('STORM GUARD: live mode — no spurious re-fetches', () => {
     expect(activeTilesRef.current[0]).toBe(entry);
   });
 
-  it('same tile + fresh responseTailTs (latestSampleTs just ahead) → no fetch, no commit', () => {
+  it('same tile + any committedThroughTs in live mode → no fetch (isLive branch returns false)', () => {
     const cache = makeCache();
     const viewport = { start: 0n, end: 1_000_000n };
-    // latestSampleTs - 2*sizeMs = 1_500_000 - 2_000_000 = -500_000 → requiredTailTs < 0
-    // Any responseTailTs >= 0 is fresh → no fetch
-    const latestSampleTs = 1_500_000n;
     const entry: ActiveTileEntry = {
       tile: TILE_A,
-      responseTailTs: Number(TILE_A.endTime) - 5000, // 995_000 >= -500_000 → fresh
+      committedThroughTs: Number(TILE_A.endTime) - 5000,
       shape: 'aggregate',
       data: makeAggData(TILE_A),
     };
@@ -275,35 +243,11 @@ describe('STORM GUARD: live mode — no spurious re-fetches', () => {
 
     runTileFetch(makeArgs(cache, {
       gatedFetchTile, commit, activeTilesRef,
-      isLive: true, viewport, latestSampleTs, nowMs: FAR_FUTURE_MS,
+      isLive: true, viewport, nowMs: FAR_FUTURE_MS,
     }));
 
     expect(gatedFetchTile).not.toHaveBeenCalled();
     expect(commit).not.toHaveBeenCalled();
-  });
-
-  it('same tile + stale responseTailTs (latestSampleTs advanced) → fetch fires', async () => {
-    const cache = makeCache();
-    const viewport = { start: 0n, end: 1_000_000n };
-    const sizeMs = 1_000_000n;
-    const latestSampleTs = 10_000_000n;
-    const requiredTailTs = Number(latestSampleTs - 2n * sizeMs); // 8_000_000
-    const entry: ActiveTileEntry = {
-      tile: TILE_A,
-      responseTailTs: requiredTailTs - 1, // just stale
-      shape: 'aggregate',
-      data: makeAggData(TILE_A),
-    };
-    const gatedFetchTile = vi.fn().mockResolvedValue(makeNonTerminalResponse(TILE_A));
-    const activeTilesRef: MutableRefObject<ActiveTileEntry[]> = { current: [entry] };
-
-    runTileFetch(makeArgs(cache, {
-      gatedFetchTile, activeTilesRef,
-      isLive: true, viewport, latestSampleTs, nowMs: FAR_FUTURE_MS,
-    }));
-    await flushAsync();
-
-    expect(gatedFetchTile).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -331,7 +275,7 @@ describe('runTileFetch: viewport boundary and cache cases', () => {
 
     runTileFetch(makeArgs(cache, {
       gatedFetchTile, commit, activeTilesRef,
-      isLive: true, latestSampleTs: null, nowMs: FAR_FUTURE_MS,
+      isLive: true, nowMs: FAR_FUTURE_MS,
     }));
     await flushAsync();
 
@@ -356,39 +300,13 @@ describe('runTileFetch: viewport boundary and cache cases', () => {
       gatedFetchTile, commit, activeTilesRef,
       isLive: false,
       viewport: { start: TILE_B.startTime, end: TILE_B.endTime },
-      latestSampleTs: null, nowMs: FAR_FUTURE_MS,
+      nowMs: FAR_FUTURE_MS,
     }));
     await flushAsync();
 
     // No network fetch, but commit fires to update activeTilesRef.
     expect(gatedFetchTile).not.toHaveBeenCalled();
     expect(commit).toHaveBeenCalled();
-  });
-
-  it('fixed→live mode: non-terminal entry stale (latestSampleTs advanced) → re-fetch', async () => {
-    const cache = makeCache();
-    const viewport = { start: 0n, end: 1_000_000n };
-    const latestSampleTs = 10_000_000n;
-    const sizeMs = 1_000_000n;
-    const requiredTailTs = Number(latestSampleTs - 2n * sizeMs); // 8_000_000
-    const entry: ActiveTileEntry = {
-      tile: TILE_A,
-      responseTailTs: requiredTailTs - 1,
-      shape: 'aggregate',
-      data: makeAggData(TILE_A),
-    };
-    const gatedFetchTile = vi.fn().mockResolvedValue(makeTerminalResponse(TILE_A));
-    const activeTilesRef: MutableRefObject<ActiveTileEntry[]> = { current: [entry] };
-
-    runTileFetch(makeArgs(cache, {
-      gatedFetchTile, activeTilesRef,
-      isLive: true, viewport, latestSampleTs, nowMs: FAR_FUTURE_MS,
-    }));
-    await flushAsync();
-
-    expect(gatedFetchTile).toHaveBeenCalledTimes(1);
-    // After terminal response: entry.data = null (cached)
-    expect(activeTilesRef.current[0]?.data).toBeNull();
   });
 });
 
@@ -403,7 +321,7 @@ describe('FIX 4: terminal tiles retained in LRU after roll-out', () => {
     // Run 1: TILE_A is visible. Genuine miss → terminal response → cached.
     levelHoisted.tilesForViewport.mockReturnValue({ visible: [TILE_A], prefetch: [] });
     const gatedFetchTile = vi.fn().mockResolvedValue(makeTerminalResponse(TILE_A));
-    runTileFetch(makeArgs(cache, { gatedFetchTile, activeTilesRef, inFlightTilesRef, latestSampleTs: null }));
+    runTileFetch(makeArgs(cache, { gatedFetchTile, activeTilesRef, inFlightTilesRef }));
     await flushAsync();
 
     const keyA = makeTileCacheKey({ tagId: 1, startTime: TILE_A.startTime, endTime: TILE_A.endTime, bucketCount: TILE_A.bucketCount });
@@ -414,7 +332,6 @@ describe('FIX 4: terminal tiles retained in LRU after roll-out', () => {
     gatedFetchTile.mockResolvedValue(makeTerminalResponse(TILE_B));
     runTileFetch(makeArgs(cache, {
       gatedFetchTile, activeTilesRef, inFlightTilesRef,
-      latestSampleTs: null,
     }));
     await flushAsync();
 
@@ -431,7 +348,7 @@ describe('FIX 4: terminal tiles retained in LRU after roll-out', () => {
     // Run 1: fetch TILE_A → terminal, cached.
     levelHoisted.tilesForViewport.mockReturnValue({ visible: [TILE_A], prefetch: [] });
     gatedFetchTile.mockResolvedValue(makeTerminalResponse(TILE_A));
-    runTileFetch(makeArgs(cache, { gatedFetchTile, activeTilesRef, inFlightTilesRef, latestSampleTs: null }));
+    runTileFetch(makeArgs(cache, { gatedFetchTile, activeTilesRef, inFlightTilesRef }));
     await flushAsync();
     const callsAfterRun1 = gatedFetchTile.mock.calls.length;
 
@@ -440,7 +357,6 @@ describe('FIX 4: terminal tiles retained in LRU after roll-out', () => {
     gatedFetchTile.mockResolvedValue(makeTerminalResponse(TILE_B));
     runTileFetch(makeArgs(cache, {
       gatedFetchTile, activeTilesRef, inFlightTilesRef,
-      latestSampleTs: null,
     }));
     await flushAsync();
 
@@ -448,7 +364,6 @@ describe('FIX 4: terminal tiles retained in LRU after roll-out', () => {
     levelHoisted.tilesForViewport.mockReturnValue({ visible: [TILE_A], prefetch: [] });
     runTileFetch(makeArgs(cache, {
       gatedFetchTile, activeTilesRef, inFlightTilesRef,
-      latestSampleTs: null,
     }));
     await flushAsync();
 
@@ -474,7 +389,7 @@ describe('§5.6 DUPLICATE-FETCH REGRESSION: inFlightTilesRef dedup across runs',
 
     const sharedArgs = makeArgs(cache, {
       gatedFetchTile, inFlightTilesRef, tagGenerationRef, tagIdsRef, visibleKeysRef,
-      activeTilesRef, commit, latestSampleTs: null,
+      activeTilesRef, commit,
     });
 
     // 3 synchronous runs — only the first should fire gatedFetchTile.
@@ -491,16 +406,15 @@ describe('§5.6 DUPLICATE-FETCH REGRESSION: inFlightTilesRef dedup across runs',
     expect(commit).toHaveBeenCalled();
   });
 
-  it('in-flight key cleared on terminal resolve — next run can re-fetch if predicate fires', async () => {
+  it('in-flight key cleared on resolve — next run re-fetches if predicate fires (committedThroughTs=null)', async () => {
     const cache = makeCache();
-    const latestSampleTs = 10_000_000n;
+    // Use fixed mode + committedThroughTs=null to trigger branch 2 (entry.committedThroughTs === null → true).
     const viewport = { start: 0n, end: 1_000_000n };
-    const requiredTailTs = Number(latestSampleTs - 2n * 1_000_000n); // 8_000_000
-    const staleEntry: ActiveTileEntry = {
+    const nullEntry: ActiveTileEntry = {
       tile: TILE_A,
-      responseTailTs: requiredTailTs - 1,
-      shape: 'aggregate',
-      data: makeAggData(TILE_A),
+      committedThroughTs: null,
+      shape: null,
+      data: null,
     };
 
     let resolveFirst: (v: TileApiResponse) => void = () => {};
@@ -509,12 +423,12 @@ describe('§5.6 DUPLICATE-FETCH REGRESSION: inFlightTilesRef dedup across runs',
       .mockResolvedValue(makeNonTerminalResponse(TILE_A));
 
     const inFlightTilesRef: MutableRefObject<Set<string>> = { current: new Set() };
-    const activeTilesRef: MutableRefObject<ActiveTileEntry[]> = { current: [staleEntry] };
+    const activeTilesRef: MutableRefObject<ActiveTileEntry[]> = { current: [nullEntry] };
 
-    // Run 1: stale tile → fire fetch (pending).
+    // Run 1: committedThroughTs=null → fire fetch (pending).
     runTileFetch(makeArgs(cache, {
       gatedFetchTile, inFlightTilesRef, activeTilesRef,
-      isLive: true, viewport, latestSampleTs, nowMs: FAR_FUTURE_MS,
+      isLive: false, viewport, nowMs: FAR_FUTURE_MS,
     }));
     expect(gatedFetchTile).toHaveBeenCalledTimes(1);
     expect(inFlightTilesRef.current.size).toBe(1);
@@ -522,19 +436,19 @@ describe('§5.6 DUPLICATE-FETCH REGRESSION: inFlightTilesRef dedup across runs',
     // Run 2 before resolve — same tile still in flight → no new fetch.
     runTileFetch(makeArgs(cache, {
       gatedFetchTile, inFlightTilesRef, activeTilesRef,
-      isLive: true, viewport, latestSampleTs, nowMs: FAR_FUTURE_MS,
+      isLive: false, viewport, nowMs: FAR_FUTURE_MS,
     }));
     expect(gatedFetchTile).toHaveBeenCalledTimes(1);
 
-    // Settle run 1's fetch (non-terminal, still stale).
+    // Settle run 1's fetch (non-terminal — committedThroughTs still < viewportEnd).
     resolveFirst(makeNonTerminalResponse(TILE_A));
     await flushAsync();
 
-    // Key deleted from inFlight. Tile still stale → run 3 can re-fetch.
+    // Key deleted from inFlight. Entry.committedThroughTs < viewportEnd → run 3 can re-fetch.
     expect(inFlightTilesRef.current.size).toBe(0);
     runTileFetch(makeArgs(cache, {
       gatedFetchTile, inFlightTilesRef, activeTilesRef,
-      isLive: true, viewport, latestSampleTs, nowMs: FAR_FUTURE_MS,
+      isLive: false, viewport, nowMs: FAR_FUTURE_MS,
     }));
     expect(gatedFetchTile).toHaveBeenCalledTimes(2);
   });
@@ -558,7 +472,7 @@ describe('§5.6 run-independent resolve: result applied regardless of later runs
 
     const sharedArgs = makeArgs(cache, {
       gatedFetchTile, inFlightTilesRef, tagGenerationRef, tagIdsRef, visibleKeysRef,
-      activeTilesRef, commit, latestSampleTs: null,
+      activeTilesRef, commit,
     });
 
     // Run 1 fires the fetch; runs 2 and 3 are no-ops (in-flight guard).
@@ -574,19 +488,19 @@ describe('§5.6 run-independent resolve: result applied regardless of later runs
 
     expect((commit as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(commitCallsBefore);
     // Terminal: data=null (entry reads from LRU); LRU has the tile.
-    expect(activeTilesRef.current[0]?.responseTailTs).toBeGreaterThan(0);
+    expect(activeTilesRef.current[0]?.committedThroughTs).toBeGreaterThan(0);
     expect(activeTilesRef.current[0]?.data).toBeNull();
   });
 
   it('non-terminal resolve patches entry.data in place', async () => {
     const cache = makeCache();
-    const staleEntry: ActiveTileEntry = {
+    // Use fixed mode + stale committedThroughTs (< viewport.end) to trigger the predicate.
+    const nullEntry: ActiveTileEntry = {
       tile: TILE_A,
-      responseTailTs: Number(TILE_A.endTime) - 5000,
-      shape: 'aggregate',
-      data: makeAggData(TILE_A),
+      committedThroughTs: null,
+      shape: null,
+      data: null,
     };
-    const latestSampleTs = 10_000_000n;
     const viewport = { start: 0n, end: 1_000_000n };
 
     let resolveA: (v: TileApiResponse) => void = () => {};
@@ -594,12 +508,12 @@ describe('§5.6 run-independent resolve: result applied regardless of later runs
       () => new Promise<TileApiResponse>(r => { resolveA = r; }),
     );
     const inFlightTilesRef: MutableRefObject<Set<string>> = { current: new Set() };
-    const activeTilesRef: MutableRefObject<ActiveTileEntry[]> = { current: [staleEntry] };
+    const activeTilesRef: MutableRefObject<ActiveTileEntry[]> = { current: [nullEntry] };
     const commit = vi.fn();
 
     runTileFetch(makeArgs(cache, {
       gatedFetchTile, inFlightTilesRef, activeTilesRef, commit,
-      isLive: true, viewport, latestSampleTs, nowMs: FAR_FUTURE_MS,
+      isLive: false, viewport, nowMs: FAR_FUTURE_MS,
     }));
 
     // Resolve non-terminal.
@@ -617,13 +531,13 @@ describe('§5.6 run-independent resolve: result applied regardless of later runs
 describe('§5.6 tag generation: non-terminal resolves respect tagGenerationRef', () => {
   it('non-terminal result dropped when tagGenerationRef advanced before resolve', async () => {
     const cache = makeCache();
-    const staleEntry: ActiveTileEntry = {
+    // Use fixed mode + committedThroughTs=null so the predicate fires.
+    const nullEntry: ActiveTileEntry = {
       tile: TILE_A,
-      responseTailTs: Number(TILE_A.endTime) - 5000,
-      shape: 'aggregate',
-      data: makeAggData(TILE_A),
+      committedThroughTs: null,
+      shape: null,
+      data: null,
     };
-    const latestSampleTs = 10_000_000n;
     const viewport = { start: 0n, end: 1_000_000n };
 
     let resolveA: (v: TileApiResponse) => void = () => {};
@@ -634,7 +548,7 @@ describe('§5.6 tag generation: non-terminal resolves respect tagGenerationRef',
     const tagGenerationRef: MutableRefObject<number> = { current: 0 };
     const tagIdsRef: MutableRefObject<number[]> = { current: [1] };
     const visibleKeysRef: MutableRefObject<Set<string>> = { current: new Set() };
-    const activeTilesRef: MutableRefObject<ActiveTileEntry[]> = { current: [staleEntry] };
+    const activeTilesRef: MutableRefObject<ActiveTileEntry[]> = { current: [nullEntry] };
     const commit = vi.fn();
 
     // Run 1: fires a non-terminal fetch with gen=0.
@@ -642,7 +556,7 @@ describe('§5.6 tag generation: non-terminal resolves respect tagGenerationRef',
       tagIds: [1],
       gatedFetchTile, inFlightTilesRef, tagGenerationRef, tagIdsRef,
       visibleKeysRef, activeTilesRef, commit,
-      isLive: true, viewport, latestSampleTs, nowMs: FAR_FUTURE_MS,
+      isLive: false, viewport, nowMs: FAR_FUTURE_MS,
     }));
 
     // Tag change before resolve → bump generation.
@@ -662,13 +576,13 @@ describe('§5.6 tag generation: non-terminal resolves respect tagGenerationRef',
 
   it('terminal result writes LRU even when tagGenerationRef advanced', async () => {
     const cache = makeCache();
-    const staleEntry: ActiveTileEntry = {
+    // Use fixed mode + committedThroughTs=null so the predicate fires.
+    const nullEntry: ActiveTileEntry = {
       tile: TILE_A,
-      responseTailTs: Number(TILE_A.endTime) - 5000,
-      shape: 'aggregate',
-      data: makeAggData(TILE_A),
+      committedThroughTs: null,
+      shape: null,
+      data: null,
     };
-    const latestSampleTs = 10_000_000n;
     const viewport = { start: 0n, end: 1_000_000n };
 
     const gatedFetchTile = vi.fn().mockResolvedValue(makeTerminalResponse(TILE_A));
@@ -676,13 +590,13 @@ describe('§5.6 tag generation: non-terminal resolves respect tagGenerationRef',
     const tagGenerationRef: MutableRefObject<number> = { current: 0 };
     const tagIdsRef: MutableRefObject<number[]> = { current: [1] };
     const visibleKeysRef: MutableRefObject<Set<string>> = { current: new Set() };
-    const activeTilesRef: MutableRefObject<ActiveTileEntry[]> = { current: [staleEntry] };
+    const activeTilesRef: MutableRefObject<ActiveTileEntry[]> = { current: [nullEntry] };
 
     runTileFetch(makeArgs(cache, {
       tagIds: [1],
       gatedFetchTile, inFlightTilesRef, tagGenerationRef, tagIdsRef,
       visibleKeysRef, activeTilesRef,
-      isLive: true, viewport, latestSampleTs, nowMs: FAR_FUTURE_MS,
+      isLive: false, viewport, nowMs: FAR_FUTURE_MS,
     }));
 
     // Tag change before resolve.
@@ -699,15 +613,88 @@ describe('§5.6 tag generation: non-terminal resolves respect tagGenerationRef',
 // ── §5.6 VIEWPORT MOVE BEFORE RESOLVE ────────────────────────────────────────
 
 describe('§5.6 viewport move before resolve: stale result dropped for non-terminal', () => {
+  it('regression: committedThroughTs < tile.endTime → non-terminal, NOT cached', async () => {
+    const cache = makeCache();
+    // Fixed mode: committedThroughTs=null triggers the predicate (branch 2).
+    const nullEntry: ActiveTileEntry = {
+      tile: TILE_A,
+      committedThroughTs: null,
+      shape: null,
+      data: null,
+    };
+    const viewport = { start: 0n, end: 1_000_000n };
+
+    let resolveA: (v: TileApiResponse) => void = () => {};
+    const gatedFetchTile = vi.fn().mockImplementation(
+      () => new Promise<TileApiResponse>(r => { resolveA = r; }),
+    );
+    const activeTilesRef: MutableRefObject<ActiveTileEntry[]> = { current: [nullEntry] };
+    const commit = vi.fn();
+
+    runTileFetch(makeArgs(cache, {
+      gatedFetchTile, activeTilesRef, commit,
+      isLive: false, viewport, nowMs: FAR_FUTURE_MS,
+    }));
+
+    // Response where committedThroughTs is 500 ms BEFORE tile.endTime — NOT terminal.
+    resolveA({
+      source: '1min_cagg',
+      startTime: Number(TILE_A.startTime),
+      endTime: Number(TILE_A.endTime),
+      committedThroughTs: Number(TILE_A.endTime) - 500,
+      bucketSMs: 3600,
+      n: 500,
+      series: [{ tagId: 1, value: [1.0], min: [0.9], max: [1.1] }],
+    });
+    await flushAsync();
+
+    const key = makeTileCacheKey({ tagId: 1, startTime: TILE_A.startTime, endTime: TILE_A.endTime, bucketCount: TILE_A.bucketCount });
+    expect(cache.has(key)).toBe(false); // must NOT be in LRU
+    expect(activeTilesRef.current[0]?.data).not.toBeNull(); // data held in entry
+  });
+
+  it('regression: committedThroughTs >= tile.endTime → terminal, goes to LRU', async () => {
+    const cache = makeCache();
+    const viewport = { start: 0n, end: 1_000_000n };
+
+    let resolveA: (v: TileApiResponse) => void = () => {};
+    const gatedFetchTile = vi.fn().mockImplementation(
+      () => new Promise<TileApiResponse>(r => { resolveA = r; }),
+    );
+    const activeTilesRef: MutableRefObject<ActiveTileEntry[]> = { current: [] };
+    const commit = vi.fn();
+
+    runTileFetch(makeArgs(cache, {
+      gatedFetchTile, activeTilesRef, commit,
+      isLive: false, viewport, nowMs: FAR_FUTURE_MS,
+    }));
+
+    // Response where committedThroughTs exactly equals tile.endTime — terminal.
+    resolveA({
+      source: '1min_cagg',
+      startTime: Number(TILE_A.startTime),
+      endTime: Number(TILE_A.endTime),
+      committedThroughTs: Number(TILE_A.endTime), // exactly at endTime → terminal
+      bucketSMs: 3600,
+      n: 500,
+      series: [{ tagId: 1, value: [1.0], min: [0.9], max: [1.1] }],
+    });
+    await flushAsync();
+
+    const key = makeTileCacheKey({ tagId: 1, startTime: TILE_A.startTime, endTime: TILE_A.endTime, bucketCount: TILE_A.bucketCount });
+    expect(cache.has(key)).toBe(true); // must be in LRU
+    expect(activeTilesRef.current[0]?.data).toBeNull(); // data in LRU, not entry
+  });
+
   it('non-terminal resolve for off-screen tile skipped without error', async () => {
     const cache = makeCache();
-    const staleEntry: ActiveTileEntry = {
+    // Fixed mode + committedThroughTs=null triggers the predicate for TILE_A.
+    const nullEntry: ActiveTileEntry = {
       tile: TILE_A,
-      responseTailTs: Number(TILE_A.endTime) - 5000,
-      shape: 'aggregate',
-      data: makeAggData(TILE_A),
+      committedThroughTs: null,
+      shape: null,
+      data: null,
     };
-    const latestSampleTs = 10_000_000n;
     const viewport = { start: 0n, end: 1_000_000n };
 
     let resolveA: (v: TileApiResponse) => void = () => {};
@@ -720,14 +707,14 @@ describe('§5.6 viewport move before resolve: stale result dropped for non-termi
     const tagGenerationRef: MutableRefObject<number> = { current: 0 };
     const tagIdsRef: MutableRefObject<number[]> = { current: [1] };
     const visibleKeysRef: MutableRefObject<Set<string>> = { current: new Set() };
-    const activeTilesRef: MutableRefObject<ActiveTileEntry[]> = { current: [staleEntry] };
+    const activeTilesRef: MutableRefObject<ActiveTileEntry[]> = { current: [nullEntry] };
     const commit = vi.fn();
 
     // Run 1: fire fetch for TILE_A.
     runTileFetch(makeArgs(cache, {
       tagIds: [1], gatedFetchTile, inFlightTilesRef, tagGenerationRef, tagIdsRef,
       visibleKeysRef, activeTilesRef, commit,
-      isLive: true, viewport, latestSampleTs, nowMs: FAR_FUTURE_MS,
+      isLive: false, viewport, nowMs: FAR_FUTURE_MS,
     }));
 
     // Viewport changes to TILE_B — activeTilesRef now has TILE_B's placeholder.
@@ -735,7 +722,7 @@ describe('§5.6 viewport move before resolve: stale result dropped for non-termi
     runTileFetch(makeArgs(cache, {
       tagIds: [1], gatedFetchTile, inFlightTilesRef, tagGenerationRef, tagIdsRef,
       visibleKeysRef, activeTilesRef, commit,
-      isLive: true, viewport, latestSampleTs, nowMs: FAR_FUTURE_MS,
+      isLive: false, viewport, nowMs: FAR_FUTURE_MS,
     }));
 
     const commitCallsBeforeResolve = (commit as ReturnType<typeof vi.fn>).mock.calls.length;

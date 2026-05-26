@@ -125,8 +125,9 @@ function makeResult(tagIds: number[], opts: Partial<UseTrendDataResult> = {}): U
     swapCounter: 0,
     activeTileCount: 0,
     lastFetchMs: null,
-    responseTailTs: null,
+    committedThroughTs: null,
     activeTilesRef: { current: [] },
+    invalidateNonTerminalTiles: vi.fn(),
     ...opts,
   };
 }
@@ -947,15 +948,18 @@ describe('TrendChartContainer', () => {
       expect(synced).toBe(true);
     });
 
-    // ── FIX 3: zoom isolation — zoomApplied does not push to useTrendData ────
+    // ── Zoom isolation — modeViewport tracks zoom; bucketSMs stays constant within level ───
 
-    it('FIX 3: within-mode zoomApplied (fixed→fixed) does not push zoomed viewport to useTrendData', () => {
+    it('within-mode zoomApplied (fixed→fixed): modeViewport flows to useTrendData, bucketSMs unchanged', () => {
       renderContainer([1]);
       const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
       fireEvent.change(input, { target: { value: '2020-06-01T12:00:00' } });
-      const callsBefore = mockUseTrendData.mock.calls.length;
 
-      // zoomApplied sets lastIntent='zoom' → reset effect skips → dataViewport unchanged.
+      // Capture bucketSMs before the zoom (currentBucketSMs is stable within a level).
+      const callsBefore = mockUseTrendData.mock.calls.length;
+      const bucketSmsBefore = mockUseTrendData.mock.calls[callsBefore - 1]?.[0]?.bucketSMs;
+
+      // zoomApplied within same level: modeViewport changes, but no level switch fires.
       const zoomEnd = 1_578_000_000_000n; // 2020-01-03
       const zoomStart = zoomEnd - 2_700_000n;
       act(() => {
@@ -964,8 +968,14 @@ describe('TrendChartContainer', () => {
       });
 
       const newCalls = mockUseTrendData.mock.calls.slice(callsBefore);
-      const contaminated = newCalls.some(([opts]) => opts.viewport.end === zoomEnd);
-      expect(contaminated).toBe(false);
+      // modeViewport IS passed through — useTrendData sees the zoomed viewport.
+      const viewportUpdated = newCalls.some(([opts]) => opts.viewport.end === zoomEnd);
+      expect(viewportUpdated).toBe(true);
+      // bucketSMs must NOT change within a level (no zoom-level switch triggered).
+      const anyBucketSMsChange = newCalls.some(([opts]) =>
+        opts.bucketSMs !== undefined && opts.bucketSMs !== bucketSmsBefore,
+      );
+      expect(anyBucketSMsChange).toBe(false);
     });
 
     it('FIX 3: mode-crossing panApplied (live-trailing→fixed) triggers reset effect; useTrendData sees new viewport', () => {
@@ -985,6 +995,39 @@ describe('TrendChartContainer', () => {
       const newCalls = mockUseTrendData.mock.calls.slice(callsBefore);
       const synced = newCalls.some(([opts]) => opts.viewport.end === fixedEnd);
       expect(synced).toBe(true);
+    });
+
+    // ── Storm regression ────────────────────────────────────────────────────────
+    //
+    // Before the render-time derivation fix, a wide preset click after a zoomed-in
+    // state produced one render where modeViewport = wide AND currentBucketSMs = old
+    // narrow value. tilesForViewport(wide, tinyTileSpanMs) emitted hundreds of tiles and
+    // runTileFetch fired them all. The fix: derive currentBucketSMs at render time for
+    // non-zoom intents so it is always consistent with modeViewport in the same render.
+
+    it('storm regression: preset after zoom-in never passes stale tiny bucketSMs to useTrendData', () => {
+      renderContainer([1]);
+
+      // Enter a tight resolution via 1m preset.
+      fireEvent.click(screen.getByText('1m'));
+      const tinyBucketSMs = mockUseTrendData.mock.calls.at(-1)![0]?.bucketSMs;
+      // tinyBucketSMs = 60_000n / (2 * 500) = 60n
+
+      const callsBefore = mockUseTrendData.mock.calls.length;
+
+      // Jump to 24h preset — should immediately use wide resolution, never the stale tiny value.
+      fireEvent.click(screen.getByText('24h'));
+
+      const newCalls = mockUseTrendData.mock.calls.slice(callsBefore);
+
+      // useTrendData must never be called with the stale 1m bucket size.
+      const hasStale = newCalls.some(([opts]) => opts.bucketSMs === tinyBucketSMs);
+      expect(hasStale).toBe(false);
+
+      // At least one call must use a bucketSMs consistent with the 24h span.
+      const expected24hBucketSMs = 24n * 3_600_000n / 1000n; // 86_400n
+      const hasCorrect = newCalls.some(([opts]) => opts.bucketSMs === expected24hBucketSMs);
+      expect(hasCorrect).toBe(true);
     });
 
     it('FIX 3: presetClicked (non-zoom intent) triggers reset effect; useTrendData sees new span', () => {

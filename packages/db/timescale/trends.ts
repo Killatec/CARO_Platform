@@ -23,10 +23,10 @@ export interface RawTrendTile {
   source: 'raw';
   startTime: bigint;
   endTime: bigint;
-  /** Server Date.now() at request entry. Clients use (responseTailTs - 1000ms)
-   *  as the live-ring trim threshold. Same value drives the future-bucket-nulling
-   *  cutoff inside getTrendTile (spec §6.5). */
-  responseTailTs: number;
+  /** DbPipeline commit watermark (ms since epoch) passed from the route layer.
+   *  Clients use this as the live-ring trim threshold and the terminal-cache signal.
+   *  Same value drives the future-bucket-nulling cutoff inside getTrendTile (spec §6.5). */
+  committedThroughTs: number;
   series: RawTrendSeries[];
 }
 
@@ -49,10 +49,10 @@ export interface AggregateTrendTile {
   endTime: bigint;
   bucketSMs: number;
   n: number;
-  /** Server Date.now() at request entry. Clients use (responseTailTs - 1000ms)
-   *  as the live-ring trim threshold. Same value drives the future-bucket-nulling
-   *  cutoff inside getTrendTile (spec §6.5). */
-  responseTailTs: number;
+  /** DbPipeline commit watermark (ms since epoch) passed from the route layer.
+   *  Clients use this as the live-ring trim threshold and the terminal-cache signal.
+   *  Same value drives the future-bucket-nulling cutoff inside getTrendTile (spec §6.5). */
+  committedThroughTs: number;
   series: AggregateTrendSeries[];
 }
 
@@ -317,7 +317,7 @@ async function queryRaw(
   tagIds: number[],
   startTime: bigint,
   endTime: bigint,
-): Promise<Omit<RawTrendTile, 'responseTailTs'>> {
+): Promise<Omit<RawTrendTile, 'committedThroughTs'>> {
   const t0 = LOG_TILE_QUERIES ? performance.now() : 0;
 
   // Single query: in-window samples + bounded-prev (one per tag, [startTime-5min, startTime))
@@ -594,18 +594,39 @@ async function querySegment(
     servedEnd     = firstMs + n * bucketSMs;
   }
 
-  // Tags completely absent from this segment get null×n to fill the grid.
-  // Tags with rows must match n exactly (gapfill invariant; check value length — all
-  // three arrays are built in lockstep so one check suffices).
+  // Tags completely absent from gapfill output (zero in-window rows) get LOCF-flat fill
+  // from the most-recent sample in [startTime−5min, startTime). COV tags in narrow windows
+  // (shorter than the mandatory 60s snapshot interval) hit this path regularly.
+  const absentTagIds = tagIds.filter(id => valuesByTag.get(id)!.value.length === 0);
+  if (absentTagIds.length > 0) {
+    const timeCol  = source === 'tag_samples' ? 'ts'    : 'bucket';
+    const valueCol = source === 'tag_samples' ? 'value' : 'last';
+    const prevRows = await timescaleQuery<{ tag_id: number; v: number | null }>(
+      `SELECT DISTINCT ON (tag_id) tag_id, ${valueCol} AS v
+       FROM ${source}
+       WHERE tag_id = ANY($1::int[])
+         AND ${timeCol} <  to_timestamp($2::bigint / 1000.0)
+         AND ${timeCol} >= to_timestamp($2::bigint / 1000.0) - INTERVAL '5 minutes'
+       ORDER BY tag_id, ${timeCol} DESC`,
+      [absentTagIds, startTime],
+    );
+    const prevByTag = new Map<number, number | null>();
+    for (const r of prevRows) prevByTag.set(r.tag_id, r.v);
+
+    for (const id of absentTagIds) {
+      const seed = prevByTag.get(id) ?? null;
+      valuesByTag.set(id, {
+        value: new Array<number | null>(n).fill(seed),
+        min:   new Array<number | null>(n).fill(seed),
+        max:   new Array<number | null>(n).fill(seed),
+      });
+    }
+  }
+
+  // Gapfill invariant: every tag's grid must now be exactly n long.
   for (const id of tagIds) {
     const arrs = valuesByTag.get(id)!;
-    if (arrs.value.length === 0) {
-      valuesByTag.set(id, {
-        value: new Array<number | null>(n).fill(null),
-        min:   new Array<number | null>(n).fill(null),
-        max:   new Array<number | null>(n).fill(null),
-      });
-    } else if (arrs.value.length !== n) {
+    if (arrs.value.length !== n) {
       throw new Error(
         `querySegment: tag ${id} yielded ${arrs.value.length} buckets but grid is ${n}` +
         ` — gapfill output is inconsistent (source=${source}, bucketSMs=${bucketSMs})`,
@@ -796,7 +817,7 @@ export async function getTrendTile(
     throw codeError('bucketCount must be an integer in 1..2500', 'INVALID_BUCKET_COUNT');
   }
 
-  const responseTailTs = nowMs ?? Date.now();
+  const committedThroughTs = nowMs ?? Date.now();
 
   // ── Shape dispatch — Step 1: raw vs bucketed by window size (unified rule §4.1) ─
   // Raw COV skips bucketSMs derivation entirely — bucketS is unused for this path.
@@ -828,7 +849,7 @@ export async function getTrendTile(
         ` db_elapsed_ms=${meta.totalDbElapsedMs.toFixed(1)}`,
       );
     }
-    return { tile: { ...rawTile, responseTailTs }, meta };
+    return { tile: { ...rawTile, committedThroughTs }, meta };
   }
 
   // ── Step 2: bucketed — derive and validate bucketSMs ────────────────────────
@@ -894,7 +915,7 @@ export async function getTrendTile(
     ? 'mixed'
     : sourceDisplayName(dispatchSource);
 
-  nullFutureBuckets(series, servedStartTime, bucketSMs, BigInt(responseTailTs));
+  nullFutureBuckets(series, servedStartTime, bucketSMs, BigInt(committedThroughTs));
 
   const tile: AggregateTrendTile = {
     source,
@@ -902,7 +923,7 @@ export async function getTrendTile(
     endTime:   servedEndTime,
     bucketSMs,
     n:         totalN,
-    responseTailTs,
+    committedThroughTs,
     series,
   };
 

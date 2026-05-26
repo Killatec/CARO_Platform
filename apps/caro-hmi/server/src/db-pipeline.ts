@@ -41,6 +41,10 @@ export class DbPipeline {
   private _lastFlushMs = 0;
   private _historianHealthy = true;
   private _inFlight = false;
+  /** Monotonic commit watermark (ms since epoch). Advances to the tick's start time after each
+   *  successful commit, and also on every empty tick (no data to flush → still complete through now).
+   *  Never advances on commit failure — tiles remain non-terminal until the next successful write. */
+  private _committedThroughMs = 0;
 
   // ── Tick-evaluated metrics ────────────────────────────────────────────────
   private rowsWrittenAtLastTickEvaluation = 0;
@@ -108,11 +112,17 @@ export class DbPipeline {
   flushOnce(): Promise<void> {
     if (this._inFlight) return Promise.resolve();
 
+    // Wall-clock at tick start — used as the watermark value after a successful commit
+    // or on an empty tick. Captured here so both paths stamp the same moment.
+    const tickStartMs = Date.now();
+
     // Pre-peek snapshot: how many entries faced this tick.
     // Taken BEFORE any splice so it reflects arrival backlog, not post-drain residual.
     this._queueDepthAtTick = this.queue.length;
 
     if (this.queue.length === 0) {
+      // Empty tick: no data pending, so everything received up to now is committed.
+      this._committedThroughMs = Math.max(this._committedThroughMs, tickStartMs);
       this.evaluateTrendingMetrics();
       return Promise.resolve();
     }
@@ -128,6 +138,8 @@ export class DbPipeline {
         this._rowsWrittenTotal += batch.reduce((sum, e) => sum + e.tags.length, 0);
         this._lastFlushMs = performance.now() - startedAt;
         this._historianHealthy = true;
+        // Advance watermark: everything received as of this tick's start is now in the DB.
+        this._committedThroughMs = Math.max(this._committedThroughMs, tickStartMs);
       })
       .catch((err: unknown) => {
         this._errorCountTotal = Math.min(this._errorCountTotal + 1, 9999);
@@ -185,4 +197,7 @@ export class DbPipeline {
   get lastFlushMs(): number { return this._lastFlushMs; }
   get historianHealthy(): boolean { return this._historianHealthy; }
   get inFlight(): boolean { return this._inFlight; }
+  /** Monotonic operational watermark (ms since epoch). 0 until the first flush tick resolves.
+   *  Advances on each successful commit or empty tick; stalls when the DB write path fails. */
+  get committedThroughMs(): number { return this._committedThroughMs; }
 }

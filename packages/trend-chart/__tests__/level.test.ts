@@ -66,44 +66,44 @@ describe('tilesForViewport', () => {
   // left-prefetch at -1_800_000n (pre-epoch), which the filter correctly removes.
   const BASE = TS_BUCKET_ORIGIN_MS;
   const viewport: Viewport = { start: BASE, end: BASE + oneHourMs };
+  // Default tileSpanMs for the standard 1h-preset, visibleTilesPerWindow=2 geometry.
+  const DEFAULT_TILE_SPAN = oneHourMs / 2n; // 1_800_000n
 
   it('default config: 2 visible + 2 prefetch tiles (1 each side)', () => {
-    const { visible, prefetch } = tilesForViewport({ viewport });
+    const { visible, prefetch } = tilesForViewport({ viewport, tileSpanMs: DEFAULT_TILE_SPAN });
     expect(visible).toHaveLength(TREND_VIEWER_DEFAULTS.visibleTilesPerWindow);  // 2
     expect(prefetch).toHaveLength(TREND_VIEWER_DEFAULTS.overfetchPerSide * 2); // 2
   });
 
   it('visible tiles span the tile-grid-aligned viewport', () => {
-    const { visible } = tilesForViewport({ viewport });
-    const tileSpan = oneHourMs / BigInt(TREND_VIEWER_DEFAULTS.visibleTilesPerWindow); // 1800000n
+    const { visible } = tilesForViewport({ viewport, tileSpanMs: DEFAULT_TILE_SPAN });
     // BASE (TS_BUCKET_ORIGIN_MS) is the tile-grid origin; firstVisibleStart lands exactly at BASE.
     expect(visible[0]!.startTime).toBe(BASE);
-    expect(visible[0]!.endTime).toBe(BASE + tileSpan);
-    expect(visible[1]!.startTime).toBe(BASE + tileSpan);
-    expect(visible[1]!.endTime).toBe(BASE + tileSpan * 2n);
+    expect(visible[0]!.endTime).toBe(BASE + DEFAULT_TILE_SPAN);
+    expect(visible[1]!.startTime).toBe(BASE + DEFAULT_TILE_SPAN);
+    expect(visible[1]!.endTime).toBe(BASE + DEFAULT_TILE_SPAN * 2n);
   });
 
   it('prefetch[0] is exactly one tile before visible[0]', () => {
-    const { visible, prefetch } = tilesForViewport({ viewport });
-    const tileSpan = oneHourMs / BigInt(TREND_VIEWER_DEFAULTS.visibleTilesPerWindow);
+    const { visible, prefetch } = tilesForViewport({ viewport, tileSpanMs: DEFAULT_TILE_SPAN });
     expect(prefetch[0]!.endTime).toBe(visible[0]!.startTime);
-    expect(prefetch[0]!.startTime).toBe(visible[0]!.startTime - tileSpan);
+    expect(prefetch[0]!.startTime).toBe(visible[0]!.startTime - DEFAULT_TILE_SPAN);
   });
 
   it('prefetch[1] is exactly one tile after the last visible tile', () => {
-    const { visible, prefetch } = tilesForViewport({ viewport });
+    const { visible, prefetch } = tilesForViewport({ viewport, tileSpanMs: DEFAULT_TILE_SPAN });
     const lastVisible = visible[visible.length - 1]!;
     expect(prefetch[prefetch.length - 1]!.startTime).toBe(lastVisible.endTime);
   });
 
   it('overfetchPerSide=2 produces 4 prefetch tiles (2 each side)', () => {
-    const { visible, prefetch } = tilesForViewport({ viewport, overfetchPerSide: 2 });
+    const { visible, prefetch } = tilesForViewport({ viewport, tileSpanMs: DEFAULT_TILE_SPAN, overfetchPerSide: 2 });
     expect(visible).toHaveLength(2);
     expect(prefetch).toHaveLength(4);
   });
 
   it('overfetchLeftCount=1, overfetchRightCount=0 → 1 prefetch tile to the left', () => {
-    const { visible, prefetch } = tilesForViewport({ viewport, overfetchLeftCount: 1, overfetchRightCount: 0 });
+    const { visible, prefetch } = tilesForViewport({ viewport, tileSpanMs: DEFAULT_TILE_SPAN, overfetchLeftCount: 1, overfetchRightCount: 0 });
     expect(visible).toHaveLength(2);
     expect(prefetch).toHaveLength(1);
     // The single prefetch tile must be to the left of the visible window.
@@ -111,7 +111,7 @@ describe('tilesForViewport', () => {
   });
 
   it('overfetchLeftCount=0, overfetchRightCount=1 → 1 prefetch tile to the right', () => {
-    const { visible, prefetch } = tilesForViewport({ viewport, overfetchLeftCount: 0, overfetchRightCount: 1 });
+    const { visible, prefetch } = tilesForViewport({ viewport, tileSpanMs: DEFAULT_TILE_SPAN, overfetchLeftCount: 0, overfetchRightCount: 1 });
     expect(visible).toHaveLength(2);
     expect(prefetch).toHaveLength(1);
     // The single prefetch tile must be to the right of the visible window.
@@ -119,14 +119,14 @@ describe('tilesForViewport', () => {
   });
 
   it('overfetchLeftCount and overfetchRightCount both omitted → falls back to overfetchPerSide', () => {
-    const { prefetch: defaultPrefetch } = tilesForViewport({ viewport });
-    const { prefetch: explicitPrefetch } = tilesForViewport({ viewport, overfetchPerSide: 1 });
+    const { prefetch: defaultPrefetch } = tilesForViewport({ viewport, tileSpanMs: DEFAULT_TILE_SPAN });
+    const { prefetch: explicitPrefetch } = tilesForViewport({ viewport, tileSpanMs: DEFAULT_TILE_SPAN, overfetchPerSide: 1 });
     expect(defaultPrefetch).toHaveLength(explicitPrefetch.length);
     expect(defaultPrefetch).toEqual(explicitPrefetch);
   });
 
   it('all returned Tile.startTime and endTime are bigint', () => {
-    const { visible, prefetch } = tilesForViewport({ viewport });
+    const { visible, prefetch } = tilesForViewport({ viewport, tileSpanMs: DEFAULT_TILE_SPAN });
     for (const t of [...visible, ...prefetch]) {
       expect(typeof t.startTime).toBe('bigint');
       expect(typeof t.endTime).toBe('bigint');
@@ -134,49 +134,50 @@ describe('tilesForViewport', () => {
   });
 
   it('default bucketCount is 500 on all tiles', () => {
-    const { visible, prefetch } = tilesForViewport({ viewport });
+    const { visible, prefetch } = tilesForViewport({ viewport, tileSpanMs: DEFAULT_TILE_SPAN });
     for (const t of [...visible, ...prefetch]) {
       expect(t.bucketCount).toBe(500);
     }
   });
 
-  it('right-anchor: mid-viewport-end snaps to next tile boundary within one tileSpanMs', () => {
-    // Place viewport.end 1ms past a tile boundary (relative to TS_BUCKET_ORIGIN_MS).
-    // tileSpanMs = 3_600_000n / 2n = 1_800_000n.
-    // vp.end = TS_BUCKET_ORIGIN_MS + 5×tileSpanMs + 1ms → lastVisibleEnd = TS_BUCKET_ORIGIN_MS + 6×tileSpanMs; gap = 1_799_999n.
-    // firstVisibleStart = TS_BUCKET_ORIGIN_MS + 4×tileSpanMs; slip from vp.start = 1_799_999n.
-    const spanMs = 3_600_000n;
-    const tileSpanMs = spanMs / BigInt(TREND_VIEWER_DEFAULTS.visibleTilesPerWindow); // 1_800_000n
-    const vpEnd = TS_BUCKET_ORIGIN_MS + 5n * tileSpanMs + 1n;
-    const vp: Viewport = { start: vpEnd - spanMs, end: vpEnd };
-    const { visible } = tilesForViewport({ viewport: vp });
+  it('left-anchor: viewport start snaps to previous tile boundary; right edge covers viewport end', () => {
+    // Left-anchor behavior: firstVisibleStart = largest tile-grid multiple ≤ viewport.start.
+    // Place viewport.start 1ms past a tile boundary.
+    // firstVisibleStart snaps back to that boundary (1ms before viewport.start).
+    // The right edge (lastVisibleEnd) must cover viewport.end; gap is sub-tile.
+    const tileSpanMs = 1_800_000n;
+    const vpStart = TS_BUCKET_ORIGIN_MS + 3n * tileSpanMs + 1n;
+    const vpEnd   = vpStart + 3_600_000n; // 2 tiles + 1ms
+    const vp: Viewport = { start: vpStart, end: vpEnd };
+    const { visible } = tilesForViewport({ viewport: vp, tileSpanMs });
     const lastVisibleEnd = visible[visible.length - 1]!.endTime;
-    // Right edge: covers viewport.end; gap is sub-tile.
+    // Right edge covers viewport.end; gap is sub-tile.
     expect(lastVisibleEnd >= vp.end).toBe(true);
     expect(lastVisibleEnd - vp.end < tileSpanMs).toBe(true);
-    // Left edge: at or after viewport.start; slip is sub-tile.
-    expect(visible[0]!.startTime >= vp.start).toBe(true);
-    expect(visible[0]!.startTime - vp.start < tileSpanMs).toBe(true);
+    // Left edge is at or BEFORE viewport.start; gap is sub-tile.
+    expect(visible[0]!.startTime <= vp.start).toBe(true);
+    expect(vp.start - visible[0]!.startTime < tileSpanMs).toBe(true);
+    // Variable tile count ≥ 2 (covers full viewport on both sides).
+    expect(visible.length).toBeGreaterThanOrEqual(2);
   });
 
   it('epoch-aligned: 24h viewport', () => {
     const oneDayMs = 86_400_000n;
     const vp: Viewport = { start: oneDayMs, end: oneDayMs * 2n };
-    const { visible } = tilesForViewport({ viewport: vp });
     const tileSpan = oneDayMs / 2n;
+    const { visible } = tilesForViewport({ viewport: vp, tileSpanMs: tileSpan });
     expect(visible[0]!.startTime).toBe(oneDayMs);
     expect(visible[0]!.endTime).toBe(oneDayMs + tileSpan);
   });
 
   it('epoch-aligned: 7d viewport at a realistic 2026 timestamp', () => {
     // 2026-04-27T00:00:00Z — known trigger of the 7d/14d 502 bug.
-    // With tile-grid right-anchor: lastVisibleEnd is the first tile boundary ≥ viewport.end;
-    // gap < tileSpanMs. Tile boundaries are multiples of bucketSMs from TS_BUCKET_ORIGIN_MS.
+    // Tile boundaries are multiples of bucketSMs from TS_BUCKET_ORIGIN_MS.
     const sevenDaysMs = 7n * 86_400_000n;
     const vp: Viewport = { start: 1_777_507_200_000n, end: 1_777_507_200_000n + sevenDaysMs };
     const tileSpan = sevenDaysMs / 2n;  // 302_400_000n
     const bucketSMs = tileSpan / 500n;  // 604_800n
-    const { visible } = tilesForViewport({ viewport: vp });
+    const { visible } = tilesForViewport({ viewport: vp, tileSpanMs: tileSpan });
     // Right edge covers viewport.end; gap is sub-tile.
     const lastVisibleEnd = visible[visible.length - 1]!.endTime;
     expect(lastVisibleEnd >= vp.end).toBe(true);
@@ -189,27 +190,26 @@ describe('tilesForViewport', () => {
   });
 
   it('returns empty arrays for zero-span viewport', () => {
-    const { visible, prefetch } = tilesForViewport({ viewport: { start: 0n, end: 0n } });
+    const { visible, prefetch } = tilesForViewport({ viewport: { start: 0n, end: 0n }, tileSpanMs: DEFAULT_TILE_SPAN });
     expect(visible).toHaveLength(0);
     expect(prefetch).toHaveLength(0);
   });
 
-  it('returns empty arrays when bucketSMs rounds to 0n (viewport span < bucketCount)', () => {
-    // span=400ms → tileSpanMs=200n → bucketSMs=200n/500n=0n → was crashing ceilDiv
-    const { visible, prefetch } = tilesForViewport({ viewport: { start: 0n, end: 400n } });
+  it('returns empty arrays when tileSpanMs is zero', () => {
+    // Guard: tileSpanMs <= 0n → return empty immediately.
+    const { visible, prefetch } = tilesForViewport({ viewport, tileSpanMs: 0n });
     expect(visible).toHaveLength(0);
     expect(prefetch).toHaveLength(0);
   });
 
-  it('returns empty arrays at exact bucketCount boundary (span === bucketCount ms → bucketSMs=1n)', () => {
-    // span=500ms → tileSpanMs=250n → bucketSMs=250n/500n=0n — still sub-millisecond
-    const { visible, prefetch } = tilesForViewport({ viewport: { start: 0n, end: 500n } });
+  it('returns empty arrays when tileSpanMs is negative', () => {
+    const { visible, prefetch } = tilesForViewport({ viewport, tileSpanMs: -1n });
     expect(visible).toHaveLength(0);
     expect(prefetch).toHaveLength(0);
   });
 
   it('nowMs omitted: prefetch contains both before and after tiles (existing behaviour)', () => {
-    const { prefetch } = tilesForViewport({ viewport });
+    const { prefetch } = tilesForViewport({ viewport, tileSpanMs: DEFAULT_TILE_SPAN });
     expect(prefetch).toHaveLength(2); // 1 before + 1 after
   });
 
@@ -217,7 +217,7 @@ describe('tilesForViewport', () => {
     // viewport ends at BASE + oneHourMs; after-prefetch startTime = BASE + oneHourMs.
     // Filter: startTime < nowMs + tileSpanMs → BASE+ONE_HOUR < BASE+ONE_HOUR+HALF_HOUR → kept.
     // Both before and after prefetch tiles are included.
-    const { prefetch } = tilesForViewport({ viewport, nowMs: BASE + oneHourMs });
+    const { prefetch } = tilesForViewport({ viewport, tileSpanMs: DEFAULT_TILE_SPAN, nowMs: BASE + oneHourMs });
     expect(prefetch).toHaveLength(2);
   });
 
@@ -225,11 +225,10 @@ describe('tilesForViewport', () => {
     // after-prefetch startTime = BASE + oneHourMs; tileSpanMs = 1_800_000n.
     // Set nowMs = BASE + halfTileMs so nowMs + tileSpanMs = BASE + oneHourMs.
     // Filter: BASE+oneHourMs < BASE+oneHourMs → false → after-tile dropped.
-    const halfTileMs = oneHourMs / BigInt(TREND_VIEWER_DEFAULTS.visibleTilesPerWindow); // 1_800_000n
-    const { prefetch } = tilesForViewport({ viewport, nowMs: BASE + halfTileMs });
+    const { prefetch } = tilesForViewport({ viewport, tileSpanMs: DEFAULT_TILE_SPAN, nowMs: BASE + DEFAULT_TILE_SPAN });
     expect(prefetch).toHaveLength(1);
     // Only the before-tile remains.
-    const { visible } = tilesForViewport({ viewport });
+    const { visible } = tilesForViewport({ viewport, tileSpanMs: DEFAULT_TILE_SPAN });
     expect(prefetch[0]!.endTime).toBe(visible[0]!.startTime);
   });
 
@@ -237,31 +236,27 @@ describe('tilesForViewport', () => {
     // Viewport is entirely in the past relative to farFutureNow; both prefetch tiles kept.
     const pastViewport: Viewport = { start: BASE, end: BASE + oneHourMs };
     const farFutureNow = BASE + oneHourMs * 1_000_000n;
-    const { prefetch } = tilesForViewport({ viewport: pastViewport, nowMs: farFutureNow });
+    const { prefetch } = tilesForViewport({ viewport: pastViewport, tileSpanMs: DEFAULT_TILE_SPAN, nowMs: farFutureNow });
     expect(prefetch).toHaveLength(2);
   });
 
   it('regression — tailing mode: after-prefetch included when startTime equals nowMs', () => {
-    // Under tile-grid alignment, the after-prefetch startTime = lastVisibleEnd which may
-    // equal nowMs exactly (viewport.end on tile boundary). The new filter keeps it so
-    // performSwap does not evict what ensureCovered just fetched on the next tick.
-    const tileSpanMs = oneHourMs / BigInt(TREND_VIEWER_DEFAULTS.visibleTilesPerWindow);
-    // Tile-grid-aligned viewport: lastVisibleEnd = BASE + oneHourMs; after-prefetch startTime = BASE + oneHourMs.
-    const { prefetch } = tilesForViewport({ viewport, nowMs: BASE + oneHourMs });
+    // The after-prefetch startTime = lastVisibleEnd which may equal nowMs exactly
+    // (viewport.end on tile boundary). The filter keeps it for tailing look-ahead.
+    const { prefetch } = tilesForViewport({ viewport, tileSpanMs: DEFAULT_TILE_SPAN, nowMs: BASE + oneHourMs });
     const afterTile = prefetch.find(t => t.startTime >= BASE + oneHourMs);
     expect(afterTile).toBeDefined();
     expect(afterTile!.startTime).toBe(BASE + oneHourMs);
-    expect(afterTile!.endTime).toBe(BASE + oneHourMs + tileSpanMs);
+    expect(afterTile!.endTime).toBe(BASE + oneHourMs + DEFAULT_TILE_SPAN);
   });
 
   it('epoch-adjacent viewport: left-prefetch tile is filtered when it would be pre-epoch', () => {
-    // Diagnostic values: with dataViewport.start=1n at the MAX_BUCKET_S span boundary,
-    // TS_BUCKET_ORIGIN_MS alignment pushes the left-prefetch tile to ~-4.6 billion ms.
-    // After the fix, tilesForViewport must not return any tile with startTime < 0n.
+    // TS_BUCKET_ORIGIN_MS alignment can push the left-prefetch tile before Unix epoch
+    // when the viewport is epoch-adjacent. Filter ensures startTime < 0n is dropped.
     const { bucketCount, visibleTilesPerWindow } = TREND_VIEWER_DEFAULTS;
     const tileSpanMs = BigInt(MAX_BUCKET_S) * BigInt(bucketCount) * 1000n;
     const epochAdjacentViewport: Viewport = { start: 1n, end: tileSpanMs * BigInt(visibleTilesPerWindow) + 1n };
-    const { visible, prefetch } = tilesForViewport({ viewport: epochAdjacentViewport });
+    const { visible, prefetch } = tilesForViewport({ viewport: epochAdjacentViewport, tileSpanMs });
     // Visible tiles must all have non-negative startTime.
     for (const t of visible) {
       expect(t.startTime >= 0n).toBe(true);
@@ -293,7 +288,7 @@ describe('tilesForViewport', () => {
     const tileSpan = sevenDaysMs / 2n; // 302_400_000n
     const bucketSMs = tileSpan / 500n; // 604_800n
 
-    const { visible, prefetch } = tilesForViewport({ viewport: vp });
+    const { visible, prefetch } = tilesForViewport({ viewport: vp, tileSpanMs: tileSpan });
 
     for (const tile of [...visible, ...prefetch]) {
       // Both edges must be multiples of bucketSMs from TS_BUCKET_ORIGIN_MS.
@@ -315,7 +310,7 @@ describe('tilesForViewport', () => {
     const tileSpan = fourteenDaysMs / 2n; // 604_800_000n
     const bucketSMs = tileSpan / 500n;    // 1_209_600n
 
-    const { visible, prefetch } = tilesForViewport({ viewport: vp });
+    const { visible, prefetch } = tilesForViewport({ viewport: vp, tileSpanMs: tileSpan });
 
     for (const tile of [...visible, ...prefetch]) {
       expect((tile.startTime - TS_BUCKET_ORIGIN_MS) % bucketSMs).toBe(0n);
@@ -328,9 +323,7 @@ describe('tilesForViewport', () => {
     expect(lastVisibleEnd - vp.end < tileSpan).toBe(true);
   });
 
-  it('15m/1h/4h/24h presets: bucket-aligned + live-edge covered (unaffected by tile-grid right-anchor)', () => {
-    // For these spans viewport.end falls exactly on a tile boundary at this origin
-    // (the 10,957-day offset divides evenly), so lastVisibleEnd === viewport.end and gap = 0.
+  it('15m/1h/4h/24h presets: bucket-aligned + live-edge covered', () => {
     const cases: [string, bigint][] = [
       ['15m', 15n * 60_000n],
       ['1h',  3_600_000n],
@@ -342,77 +335,138 @@ describe('tilesForViewport', () => {
       const vp: Viewport = { start: now, end: now + spanMs };
       const tileSpan = spanMs / 2n;
       const bucketSMs = tileSpan / 500n;
-      const { visible } = tilesForViewport({ viewport: vp });
+      const { visible } = tilesForViewport({ viewport: vp, tileSpanMs: tileSpan });
       const lastVisibleEnd = visible[visible.length - 1]!.endTime;
-      // Right edge covers viewport.end; gap is zero for these exact-divisor presets.
       expect(lastVisibleEnd >= vp.end).toBe(true);
       expect(lastVisibleEnd - vp.end < tileSpan).toBe(true);
       for (const tile of visible) {
         expect((tile.startTime - TS_BUCKET_ORIGIN_MS) % bucketSMs).toBe(0n);
         expect((tile.endTime   - TS_BUCKET_ORIGIN_MS) % bucketSMs).toBe(0n);
       }
-      void label; // suppress unused-variable lint
+      void label;
     }
   });
 
-  it('tile-grid stability: viewport.end within same tile boundary window returns identical tiles', () => {
-    // Tiles must be stable across viewport.end advances that stay within the same tile
-    // boundary window — this is the property that eliminates cache thrashing in live mode.
-    const spanMs = 3_600_000n; // 1h preset
-    const tileSpanMs = spanMs / BigInt(TREND_VIEWER_DEFAULTS.visibleTilesPerWindow); // 1_800_000n
-    // Place base.end 1ms past a tile boundary so lastVisibleEnd = next tile boundary.
-    const baseEnd = TS_BUCKET_ORIGIN_MS + 5n * tileSpanMs + 1n;
-    const base: Viewport = { start: baseEnd - spanMs, end: baseEnd };
-    // Advance by (tileSpanMs - 2): advanced.end is still in the same tile window.
+  it('tile-grid stability: viewport.start within same tile cell returns identical tiles', () => {
+    // Left-anchor stability: as long as viewport.start stays in the same tile-grid cell
+    // and viewport.end stays in the same tile-grid cell, the tile set is unchanged.
+    // This eliminates cache thrashing during continuous zoom-out.
+    const tileSpanMs = 1_800_000n;
+    // Place base: start 1ms into tile cell [3*ts, 4*ts), end spanning into tile cell [5*ts, 6*ts).
+    const baseStart = TS_BUCKET_ORIGIN_MS + 3n * tileSpanMs + 1n;
+    const baseEnd   = baseStart + 3_600_000n; // 2 tile spans + 1ms
+    const base: Viewport = { start: baseStart, end: baseEnd };
+    // Advance start by (tileSpanMs - 2ms): still in the same tile cell [3*ts, 4*ts).
     const delta = tileSpanMs - 2n;
-    const advanced: Viewport = { start: baseEnd - spanMs + delta, end: baseEnd + delta };
+    const advanced: Viewport = { start: baseStart + delta, end: baseEnd + delta };
 
-    const { visible: baseVis, prefetch: basePre } = tilesForViewport({ viewport: base });
-    const { visible: advVis, prefetch: advPre } = tilesForViewport({ viewport: advanced });
+    const { visible: baseVis, prefetch: basePre } = tilesForViewport({ viewport: base, tileSpanMs });
+    const { visible: advVis, prefetch: advPre } = tilesForViewport({ viewport: advanced, tileSpanMs });
 
     expect(advVis).toEqual(baseVis);
     expect(advPre).toEqual(basePre);
   });
 
-  it('tilesForViewport — Live-mode call shape (overfetchRightCount=0)', () => {
+  it('tilesForViewport — Live-mode call shape (overfetchRightCount=0, variable visible count)', () => {
     // Viewport deliberately misaligned with TS_BUCKET_ORIGIN_MS: start is 12_345n past
-    // the origin, end is 72_345n past. At the 1m preset (span=60_000n, tileSpanMs=30_000n):
-    //   lastVisibleEnd    = ORIGIN + ceilDiv(72_345n, 30_000n) * 30_000n = ORIGIN + 90_000n
-    //   firstVisibleStart = ORIGIN + 30_000n
-    //   prefetch[0]       = [ORIGIN, ORIGIN+30_000n)  (left-only; overfetchRightCount=0)
-    const span = 60_000n;
+    // the origin, end is 72_345n past. With tileSpanMs=30_000n (left-anchor):
+    //   firstVisibleStart = ORIGIN + floor(12_345n / 30_000n) * 30_000n = ORIGIN
+    //   visible tiles: [ORIGIN, +30k), [ORIGIN+30k, +60k), [ORIGIN+60k, +90k) — 3 tiles covering
+    //   the full viewport [ORIGIN+12_345n, ORIGIN+72_345n).
     const vpStart = TS_BUCKET_ORIGIN_MS + 12_345n;
-    const vpEnd   = vpStart + span;
-    const viewport: Viewport = { start: vpStart, end: vpEnd };
-    const tileSpanMs = span / 2n; // 30_000n
+    const vpEnd   = TS_BUCKET_ORIGIN_MS + 72_345n;
+    const vp: Viewport = { start: vpStart, end: vpEnd };
+    const tileSpanMs = 30_000n;
 
-    // Live-mode call shape per unified tile architecture proposal §4.8.
     const { visible, prefetch } = tilesForViewport({
-      viewport,
-      visibleTilesPerWindow: 2,
+      viewport: vp,
+      tileSpanMs,
       bucketCount: 500,
       overfetchLeftCount: 1,
       overfetchRightCount: 0,
     });
 
-    // (a/c) exactly 2 visible tiles
-    expect(visible).toHaveLength(2);
+    // (a) variable visible count covering ENTIRE viewport (left AND right edges covered).
+    expect(visible[0]!.startTime).toBeLessThanOrEqual(vpStart);
+    expect(visible[visible.length - 1]!.endTime).toBeGreaterThanOrEqual(vpEnd);
+    expect(visible.length).toBeGreaterThanOrEqual(2);
 
-    // (b/d) exactly 1 prefetch tile, immediately left of visible[0]
+    // (b) exactly 1 prefetch tile, immediately left of visible[0]
     expect(prefetch).toHaveLength(1);
     expect(prefetch[0]!.endTime).toBe(visible[0]!.startTime);
 
-    // (e) no prefetch tile to the right of visible[1]
-    const rightPrefetch = prefetch.filter(t => t.startTime >= visible[1]!.endTime);
+    // (c) no prefetch tile to the right
+    const rightPrefetch = prefetch.filter(t => t.startTime >= visible[visible.length - 1]!.endTime);
     expect(rightPrefetch).toHaveLength(0);
 
-    // (f) tile-grid alignment: every startTime is a multiple of tileSpanMs from TS_BUCKET_ORIGIN_MS
+    // (d) tile-grid alignment: every startTime is a multiple of tileSpanMs from TS_BUCKET_ORIGIN_MS
     for (const tile of [...visible, ...prefetch]) {
       expect((tile.startTime - TS_BUCKET_ORIGIN_MS) % tileSpanMs).toBe(0n);
     }
 
-    // (g) rightmost visible tile covers viewport's right edge (may extend past it)
-    expect(visible[1]!.endTime >= vpEnd).toBe(true);
+    // (e) no gaps between consecutive visible tiles
+    for (let i = 0; i < visible.length - 1; i++) {
+      expect(visible[i]!.endTime).toBe(visible[i + 1]!.startTime);
+    }
+  });
+
+  // ── Regression: blank-tile bug (two-viewport problem) ─────────────────────
+  //
+  // Root cause: when fetch used a frozen cursor-centered dataViewport while display
+  // used a growing modeViewport, tiles on the side opposite the cursor went unfetched.
+  // Fix: pass explicit tileSpanMs so coverage follows modeViewport directly.
+
+  it('regression: off-center viewport covers BOTH edges with variable visible count', () => {
+    // Reproduces the blank-tile bug: any viewport must have visible tiles covering
+    // the ENTIRE range [viewport.start, viewport.end), regardless of cursor position.
+    const tileSpanMs = 30_000n;
+    const vpStart = TS_BUCKET_ORIGIN_MS + 12_345n;
+    const vpEnd   = TS_BUCKET_ORIGIN_MS + 72_345n;
+    const vp: Viewport = { start: vpStart, end: vpEnd };
+
+    const { visible } = tilesForViewport({ viewport: vp, tileSpanMs });
+
+    expect(visible[0]!.startTime).toBeLessThanOrEqual(vpStart);
+    expect(visible[visible.length - 1]!.endTime).toBeGreaterThanOrEqual(vpEnd);
+    expect(visible.length).toBeGreaterThanOrEqual(2);
+    expect(visible.length).toBeLessThanOrEqual(4);
+    // Contiguous tiles — no gaps.
+    for (let i = 0; i < visible.length - 1; i++) {
+      expect(visible[i]!.endTime).toBe(visible[i + 1]!.startTime);
+    }
+  });
+
+  it('regression: modeViewport growing off-center within a level stays covered on both edges', () => {
+    // Simulates continuous wheel-zoom-out: modeViewport grows while tileSpanMs (= currentBucketSMs
+    // × bucketCount) stays fixed. The tile set must always cover BOTH edges of the viewport.
+    const tileSpanMs = 30_000n;
+    const base: Viewport = { start: TS_BUCKET_ORIGIN_MS + 12_345n, end: TS_BUCKET_ORIGIN_MS + 42_345n };
+
+    for (let extraRight = 0n; extraRight <= tileSpanMs * 2n; extraRight += 3_000n) {
+      const vp: Viewport = { start: base.start, end: base.end + extraRight };
+      const { visible } = tilesForViewport({ viewport: vp, tileSpanMs });
+      expect(visible[0]!.startTime).toBeLessThanOrEqual(vp.start);
+      expect(visible[visible.length - 1]!.endTime).toBeGreaterThanOrEqual(vp.end);
+    }
+  });
+
+  // ── MAX_VISIBLE_TILES cap (defense-in-depth against tile storms) ──────────
+
+  it('cap: wide viewport with tiny tileSpanMs returns empty arrays', () => {
+    // Simulates the tile storm scenario: 24h viewport at 30s tile resolution → 2880 tiles.
+    // tilesForViewport must cap and return empty rather than emitting the storm.
+    const wideViewport: Viewport = { start: BASE, end: BASE + 86_400_000n }; // 24 h
+    const tinyTileSpanMs = 30_000n; // 30 s → 24h/30s = 2880 tiles
+    const { visible, prefetch } = tilesForViewport({ viewport: wideViewport, tileSpanMs: tinyTileSpanMs });
+    expect(visible).toHaveLength(0);
+    expect(prefetch).toHaveLength(0);
+  });
+
+  it('cap: normal 2–4-tile cases are unaffected', () => {
+    // A standard 1h viewport at half-hour tile resolution produces 2 visible tiles — well below cap.
+    const { visible } = tilesForViewport({ viewport, tileSpanMs: DEFAULT_TILE_SPAN });
+    expect(visible.length).toBeGreaterThan(0);
+    expect(visible.length).toBeLessThanOrEqual(4);
   });
 });
 
@@ -425,12 +479,16 @@ describe('deriveBucketSMs', () => {
     expect(deriveBucketSMs({ viewport })).toBe(3600);
   });
 
-  it('matches tileSpanMs / bucketCount derived inside tilesForViewport', () => {
+  it('tileSpanMs = deriveBucketSMs × bucketCount (fundamental invariant)', () => {
     const viewport: Viewport = { start: 0n, end: 3_600_000n };
-    const { visible } = tilesForViewport({ viewport });
-    const tileSpanMs = Number(visible[0]!.endTime - visible[0]!.startTime);
-    const expectedBucketSMs = tileSpanMs / TREND_VIEWER_DEFAULTS.bucketCount;
-    expect(deriveBucketSMs({ viewport })).toBeCloseTo(expectedBucketSMs, 6);
+    const bucketSMs = deriveBucketSMs({ viewport }); // 3600ms (3_600_000 / (2*500))
+    const expectedTileSpanMs = bucketSMs * TREND_VIEWER_DEFAULTS.bucketCount; // 1_800_000
+    // Confirm tilesForViewport emits the expected tile span when given this tileSpanMs.
+    const { visible } = tilesForViewport({
+      viewport,
+      tileSpanMs: BigInt(Math.round(expectedTileSpanMs)),
+    });
+    expect(Number(visible[0]!.endTime - visible[0]!.startTime)).toBe(expectedTileSpanMs);
   });
 
   it('returns smaller bucketSMs for a larger bucketCount', () => {

@@ -4,11 +4,10 @@ import { TS_BUCKET_ORIGIN_MS, floorDiv } from './level.js';
 
 /**
  * Per-tag bounded buffer for samples arriving during the fetch-in-flight
- * window. Trimmed by `responseTailTs - 1000ms` on every tile response,
- * so effective contents are samples newer than the most recent tile's
- * request entry time. Capacity bounds the pathological case of an
- * unusually slow fetch (cold CAG query, network blip) at ~5 s of live
- * history at 4 Hz.
+ * window. Trimmed to `committedThroughTs` on every tile response — the
+ * DbPipeline commit watermark, which is the real data edge. Capacity bounds
+ * the pathological case of an unusually slow fetch (cold CAG query, network
+ * blip) at ~5 s of live history at 4 Hz.
  */
 export const TREND_RING_CAPACITY = 20;
 

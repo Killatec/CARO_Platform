@@ -441,6 +441,20 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: 1s CAG branch (b
     expect(tile.series[0].max.every(m => m === null)).toBe(true);
   });
 
+  it('absent tag with prior sample in pre-window: all buckets filled flat via LOCF (1s_cagg)', async () => {
+    // Write ONLY a pre-window sample (60s before START, within the 5-min bounded-prev window).
+    // No in-window samples → gapfill emits nothing → absent-tag LOCF path fires.
+    // Expected: all n buckets filled with 77.7 (pre-window value).
+    const priorTs = START - 60_000n; // 60s before window, within bounded-prev window
+    await writeTestSamples([{ ts: priorTs, tagId: 2014, value: 77.7 }]);
+    await refreshTestCagg(VIEW);
+    const tile = (await getTrendTile([2014], START, END, COUNT)).tile as AggregateTrendTile;
+    expect(tile.series[0].value).toHaveLength(tile.n);
+    expect(tile.series[0].value.every(v => v === 77.7)).toBe(true);
+    expect(tile.series[0].min.every(m => m === 77.7)).toBe(true);
+    expect(tile.series[0].max.every(m => m === 77.7)).toBe(true);
+  });
+
   it('startTime and endTime are returned as bigint', async () => {
     await writeTestSamples([{ ts: START + 1_000n, tagId: 2008, value: 1.0 }]);
     await refreshTestCagg(VIEW);
@@ -1495,6 +1509,19 @@ describe.skipIf(!HAVE_TIMESCALE)('getTrendTile — integration: raw-source bucke
     expect(tile.series[0].value.every(v => v === null)).toBe(true);
     expect(tile.series[0].min.every(m => m === null)).toBe(true);
     expect(tile.series[0].max.every(m => m === null)).toBe(true);
+  });
+
+  it('absent tag with prior sample in pre-window: all buckets filled flat via LOCF (tag_samples)', async () => {
+    // Write ONLY a pre-window sample (60s before START, within the 5-min bounded-prev window).
+    // No in-window samples → gapfill emits nothing → absent-tag LOCF path fires.
+    // tag_samples source: bounded-prev queries tag_samples directly.
+    const priorTs = START - 60_000n; // 60s before window, within bounded-prev window
+    await writeTestSamples([{ ts: priorTs, tagId: 10008, value: 33.3 }]);
+    const tile = (await getTrendTile([10008], START, END, COUNT)).tile as AggregateTrendTile;
+    expect(tile.series[0].value).toHaveLength(tile.n);
+    expect(tile.series[0].value.every(v => v === 33.3)).toBe(true);
+    expect(tile.series[0].min.every(m => m === 33.3)).toBe(true);
+    expect(tile.series[0].max.every(m => m === 33.3)).toBe(true);
   });
 });
 

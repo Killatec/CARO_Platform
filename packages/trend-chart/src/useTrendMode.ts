@@ -159,7 +159,9 @@ export interface UseTrendModeResult {
   dispatch: Dispatch<TrendModeAction>;
 }
 
-/** Stateful hook: owns mode reducer + 1 Hz tick. */
+/** Stateful hook: owns the mode reducer. The 'tick' action is dispatched
+ *  externally by TrendChartContainer.handleDataReceived from the WS frame's
+ *  max moduleTs — there is no internal interval. */
 export function useTrendMode(): UseTrendModeResult {
   const [state, dispatch] = useReducer(trendModeReducer, undefined, () => ({
     mode: 'live-trailing' as const,

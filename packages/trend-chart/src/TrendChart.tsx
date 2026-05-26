@@ -29,8 +29,8 @@ export interface TrendChartProps {
   onTagRemove?: (tagId: number) => void;
   /** Visible span (ms) at which the current zoom level was last set. Used by the wheel handler to detect 1.5× threshold crossings. */
   zoomAnchorSpan?: bigint;
-  /** Called when continuous wheel-zoom crosses the 1.5× threshold. Container responds by switching bucket size and dataViewport. */
-  onZoomLevelSwitch?: (direction: 'in' | 'out', cursorTimeMs: bigint) => void;
+  /** Called when continuous wheel-zoom crosses the 1.5× threshold. Container responds by switching bucket size. */
+  onZoomLevelSwitch?: (direction: 'in' | 'out') => void;
   /** Incremented by useTrendData each time performSwap completes. Triggers a single post-swap coverage check. */
   swapCounter?: number;
   /** Current active-tile count from useTrendData. Used in the setData log. */
@@ -424,9 +424,7 @@ export function TrendChart({
         if (anchorSpan && switchCb) {
           const transition = computeZoomLevelTransition(newSpanMs, anchorSpan);
           if (transition) {
-            const cursorXSec = xScale.min + (cursorXPx / u.over.clientWidth) * newSpanSec;
-            const cursorTimeMs = BigInt(Math.round(cursorXSec * 1000));
-            switchCb(transition, cursorTimeMs);
+            switchCb(transition);
           }
         }
       }

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { Viewport } from './types.js';
 import type { LastIntent } from './useTrendMode.js';
-import { clampLowerBound } from './bigintMath.js';
 
 /** Pure snap-and-center math for drag-zoom. Exported for testing. */
 export function computeDragZoomViewport(
@@ -37,15 +36,15 @@ export interface UseZoomStateOpts {
   modeViewport: Viewport;
   visibleTilesPerWindow: number;
   bucketCount: number;
-  /** Prevents the reset effect from clobbering zoom anchor/dataViewport on sub-threshold wheel ticks. */
+  /** Prevents the reset effect from clobbering zoom anchor on sub-threshold wheel ticks. */
   lastIntent: LastIntent;
 }
 
 export interface UseZoomStateResult {
+  currentBucketSMs: bigint;
   zoomAnchorSpan: bigint;
-  dataViewport: Viewport;
   handleDragZoom: (selectionStartMs: bigint, selectionEndMs: bigint) => void;
-  handleZoomLevelSwitch: (direction: 'in' | 'out', cursorTimeMs: bigint) => void;
+  handleZoomLevelSwitch: (direction: 'in' | 'out') => void;
 }
 
 export function useZoomState({
@@ -54,24 +53,37 @@ export function useZoomState({
   bucketCount,
   lastIntent,
 }: UseZoomStateOpts): UseZoomStateResult {
-  const [currentBucketSMs, setCurrentBucketSMs] = useState<bigint>(
-    () => (modeViewport.end - modeViewport.start) / BigInt(visibleTilesPerWindow * bucketCount),
-  );
-  const [zoomAnchorSpan, setZoomAnchorSpan] = useState<bigint>(
-    () => modeViewport.end - modeViewport.start,
-  );
-  const [dataViewport, setDataViewport] = useState<Viewport>(modeViewport);
+  const buckets = BigInt(visibleTilesPerWindow * bucketCount);
+  const modeViewportSpan = modeViewport.end - modeViewport.start;
 
-  // Reset zoom level when modeViewport changes (preset click, custom commit, Live tick, pan).
-  // Skipped only when lastIntent === 'zoom': wheel-zoom gestures own dataViewport directly.
+  // Pure render-time derivation: always consistent with modeViewport in the same render.
+  // Eliminates the one-render lag that fired a tile storm on large preset jumps (a wide
+  // modeViewport paired with the previous narrow gestureBucketSMs for one render).
+  const derivedBucketSMs = modeViewportSpan / buckets;
+
+  // Sticky resolution consumed ONLY during a wheel-zoom gesture (lastIntent === 'zoom').
+  // Initialized from derivedBucketSMs so the first gesture starts from the correct baseline.
+  const [gestureBucketSMs, setGestureBucketSMs] = useState<bigint>(derivedBucketSMs);
+
+  const isZooming = lastIntent === 'zoom';
+
+  // When zooming: use the sticky gesture resolution so continuous wheel-zoom does not
+  // re-derive a new (larger) resolution from the growing modeViewport on each tick.
+  // When not zooming: use derivedBucketSMs — always fresh in the same render as the intent.
+  const currentBucketSMs = isZooming ? gestureBucketSMs : derivedBucketSMs;
+  const zoomAnchorSpan   = isZooming ? gestureBucketSMs * buckets : modeViewportSpan;
+
+  // Keep gestureBucketSMs in sync with derivedBucketSMs while not zooming, so the next
+  // gesture starts from the correct baseline. The lag is harmless: while not zooming,
+  // currentBucketSMs reads derivedBucketSMs directly, not gestureBucketSMs.
+  //
+  // Critically, this effect's deps are [derivedBucketSMs, isZooming]. When
+  // handleZoomLevelSwitch fires (still with the old lastIntent), neither dep changes —
+  // so the effect is NOT re-run and does not reset the newly written gestureBucketSMs.
   useEffect(() => {
-    if (lastIntent === 'zoom') return;
-    const span = modeViewport.end - modeViewport.start;
-    const bucketSMs = span / BigInt(visibleTilesPerWindow * bucketCount);
-    setCurrentBucketSMs(bucketSMs);
-    setZoomAnchorSpan(span);
-    setDataViewport({ start: modeViewport.start, end: modeViewport.end });
-  }, [modeViewport.start, modeViewport.end, visibleTilesPerWindow, bucketCount, lastIntent]);
+    if (isZooming) return;
+    setGestureBucketSMs(derivedBucketSMs);
+  }, [derivedBucketSMs, isZooming]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleDragZoom = useCallback(
     (selectionStartMs: bigint, selectionEndMs: bigint) => {
@@ -80,28 +92,21 @@ export function useZoomState({
         visibleTilesPerWindow, bucketCount,
       );
       if (!result) return;
-      const { newBucketSMs, newStart, newEnd } = result;
-      const newSpan = newEnd - newStart;
-      setCurrentBucketSMs(newBucketSMs);
-      setZoomAnchorSpan(newSpan);
-      setDataViewport({ start: newStart, end: newEnd });
+      setGestureBucketSMs(result.newBucketSMs);
     },
     [currentBucketSMs, visibleTilesPerWindow, bucketCount],
   );
 
+  // Stable callback ([] deps) — uses functional update so it never captures stale state.
   const handleZoomLevelSwitch = useCallback(
-    (direction: 'in' | 'out', cursorTimeMs: bigint) => {
-      const newBucketSMs = direction === 'out' ? currentBucketSMs * 2n : currentBucketSMs / 2n;
-      if (newBucketSMs <= 0n) return;
-      const newSpan = newBucketSMs * BigInt(visibleTilesPerWindow * bucketCount);
-      const unsaturatedStart = cursorTimeMs - newSpan / 2n;
-      const { from: newStart, to: newEnd } = clampLowerBound(unsaturatedStart, unsaturatedStart + newSpan);
-      setCurrentBucketSMs(newBucketSMs);
-      setZoomAnchorSpan(newSpan);
-      setDataViewport({ start: newStart, end: newEnd });
+    (direction: 'in' | 'out') => {
+      setGestureBucketSMs(prev => {
+        const next = direction === 'out' ? prev * 2n : prev / 2n;
+        return next <= 0n ? prev : next;
+      });
     },
-    [currentBucketSMs, visibleTilesPerWindow, bucketCount],
+    [],
   );
 
-  return { zoomAnchorSpan, dataViewport, handleDragZoom, handleZoomLevelSwitch };
+  return { currentBucketSMs, zoomAnchorSpan, handleDragZoom, handleZoomLevelSwitch };
 }

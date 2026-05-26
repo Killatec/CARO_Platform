@@ -478,3 +478,90 @@ describe('DbPipeline — queueDepth (tick-held)', () => {
     }
   });
 });
+
+// ── committedThroughMs watermark ──────────────────────────────────────────────
+
+describe('DbPipeline — committedThroughMs watermark', () => {
+  it('is 0 before the first flush tick', () => {
+    const p = new DbPipeline(makeWriter());
+    expect(p.committedThroughMs).toBe(0);
+  });
+
+  it('advances on an empty-queue tick (nothing to flush → complete through now)', async () => {
+    vi.useFakeTimers();
+    try {
+      const p = new DbPipeline(makeWriter());
+      const before = Date.now();
+      vi.advanceTimersByTime(10);
+      await p.flushOnce(); // queue empty
+      expect(p.committedThroughMs).toBeGreaterThanOrEqual(before);
+      expect(p.committedThroughMs).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('advances to approximately tickStartMs on successful commit', async () => {
+    const writer = makeWriter();
+    const p = new DbPipeline(writer);
+    p.enqueue(makeEntry(1, [1]));
+    const before = Date.now();
+    await p.flushOnce();
+    const after = Date.now();
+    expect(p.committedThroughMs).toBeGreaterThanOrEqual(before);
+    expect(p.committedThroughMs).toBeLessThanOrEqual(after);
+  });
+
+  it('does NOT advance on writer failure', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const p = new DbPipeline(makeFailWriter());
+      p.enqueue(makeEntry(1, [1]));
+      expect(p.committedThroughMs).toBe(0);
+      await p.flushOnce();
+      expect(p.committedThroughMs).toBe(0); // stalled — writer failed
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it('resumes advancing after failure recovers', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    let shouldFail = true;
+    const writer: DbWriter = {
+      write: vi.fn<[DbWriteEntry[]], Promise<void>>().mockImplementation(() =>
+        shouldFail ? Promise.reject(new Error('fail')) : Promise.resolve(),
+      ),
+      name: 'conditional',
+    };
+    const p = new DbPipeline(writer);
+    p.enqueue(makeEntry(1, [1]));
+
+    await p.flushOnce(); // fails
+    expect(p.committedThroughMs).toBe(0);
+
+    shouldFail = false;
+    await p.flushOnce(); // succeeds
+    expect(p.committedThroughMs).toBeGreaterThan(0);
+
+    errSpy.mockRestore();
+  });
+
+  it('is monotonically non-decreasing across successive successful ticks', async () => {
+    const writer = makeWriter();
+    const p = new DbPipeline(writer);
+    const samples: number[] = [];
+
+    for (let i = 0; i < 5; i++) {
+      p.enqueue(makeEntry(i, [i]));
+      await p.flushOnce();
+      samples.push(p.committedThroughMs);
+    }
+    await p.flushOnce(); // empty tick
+    samples.push(p.committedThroughMs);
+
+    for (let i = 1; i < samples.length; i++) {
+      expect(samples[i]).toBeGreaterThanOrEqual(samples[i - 1]!);
+    }
+  });
+});

@@ -25,7 +25,7 @@ beforeEach(() => {
     source: '1min_cagg',
     startTime: 0,
     endTime: 3_600_000,
-    responseTailTs: 9_000_000,
+    committedThroughTs: 9_000_000,
     bucketSMs: 3600,
     n: LIVE_SPINE_BUCKET_COUNT,
     series: [],

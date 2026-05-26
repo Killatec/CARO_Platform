@@ -147,7 +147,7 @@ async function start(): Promise<void> {
   resetBus.register('module-reset', () => cmdController.sendResetAll());
 
   // 6. Express app + HTTP server
-  const app = createApp(tagMap, cmdController, resetBus, trendableTagIds);
+  const app = createApp(tagMap, cmdController, resetBus, trendableTagIds, dbPipeline);
   const httpServer = http.createServer(app);
 
   // 7. WS server

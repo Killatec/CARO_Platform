@@ -8,7 +8,7 @@ import { isClientFetchSentinel } from './gatedFetchTile.js';
 import {
   chunkArray,
   assembleData,
-  computeResponseTailTs,
+  computeCommittedThroughTs,
   storeTileResult,
   storeNullTile,
   makeActiveTileEntryFromCache,
@@ -18,7 +18,7 @@ import type { CachedEntry, HookState } from './tileActiveSet.js';
 export interface TileFetchArgs {
   tagIds: number[];
   bucketCount: number;
-  visibleTilesPerWindow: number;
+  tileSpanMs: bigint;
   overfetchPerSide: number;
   viewport: Viewport;
   /** true when called from the Live path (overfetchRightCount=0, terminal-cache rule). */
@@ -34,8 +34,6 @@ export interface TileFetchArgs {
   visibleKeysRef: MutableRefObject<Set<string>>;
   setHookResult: Dispatch<SetStateAction<HookState>>;
   gatedFetchTile: GatedFetchFn;
-  /** Latest sample timestamp from the live subscription; null before the first TREND_DELTA. */
-  latestSampleTs: bigint | null;
   /** Current wall-clock time in ms (BigInt). Passed in so tests can inject deterministic values. */
   nowMs: bigint;
   /** Stable commit callback from useTrendData — re-renders after each resolve. */
@@ -123,9 +121,7 @@ export function needsFetch(
   cache: TileCache<CachedEntry>,
   activeTiles: ActiveTileEntry[],
   isLive: boolean,
-  latestSampleTs: bigint | null,
   nowMs: bigint,
-  sizeMs: bigint,
   viewportEnd: bigint,
 ): boolean {
   const allCached = tagIds.every(tagId =>
@@ -137,19 +133,18 @@ export function needsFetch(
     e => e.tile.startTime === tile.startTime && e.tile.endTime === tile.endTime,
   );
   if (!entry) return true;
-  if (entry.responseTailTs === null) return true;
+  if (entry.committedThroughTs === null) return true;
 
   // Tile has rolled comfortably into the past → re-fetch to get a terminal (cached) copy.
   if (Number(tile.endTime) <= Number(nowMs) - REFETCH_LAG_MS) return true;
 
-  if (isLive) {
-    // No TREND_DELTA received yet → hold off to avoid a storm before first data.
-    if (latestSampleTs === null) return false;
-    return entry.responseTailTs < Number(latestSampleTs - 2n * sizeMs);
-  }
+  // Live: line 143 handles tiles that have rolled into the past; the WS tail
+  // handles the live-edge tile in steady state; invalidateNonTerminalTiles
+  // handles Fixed→Live transitions. No other mid-flight live re-fetch.
+  if (isLive) return false;
 
   // Fixed/historical: data is fresh if it reaches the viewport end.
-  return entry.responseTailTs < Number(viewportEnd);
+  return entry.committedThroughTs < Number(viewportEnd);
 }
 
 /**
@@ -168,19 +163,19 @@ export function needsFetch(
  */
 export function runTileFetch(args: TileFetchArgs): void {
   const {
-    tagIds, bucketCount, visibleTilesPerWindow, overfetchPerSide, viewport,
+    tagIds, bucketCount, tileSpanMs, overfetchPerSide, viewport,
     isLive, cache,
     activeTilesRef, inFlightTilesRef, tagGenerationRef, tagIdsRef, visibleKeysRef,
     setHookResult,
     gatedFetchTile,
-    latestSampleTs, nowMs, commit, firstFetchFiredAtRef,
+    nowMs, commit, firstFetchFiredAtRef,
   } = args;
 
   // Step 1: compute required tile set.
   const { visible, prefetch } = tilesForViewport({
     viewport,
+    tileSpanMs,
     bucketCount,
-    visibleTilesPerWindow,
     overfetchPerSide,
     overfetchRightCount: isLive ? 0 : undefined,
     nowMs,
@@ -196,8 +191,6 @@ export function runTileFetch(args: TileFetchArgs): void {
     (a, b) => Number(a.startTime - b.startTime),
   );
   visibleKeysRef.current = new Set(visible.map(t => `${t.startTime}:${t.endTime}`));
-
-  const sizeMs = viewport.end - viewport.start;
 
   // Step 3: tag-change detection — bump tagGenerationRef only on change.
   const prevTagIds = tagIdsRef.current;
@@ -217,7 +210,7 @@ export function runTileFetch(args: TileFetchArgs): void {
     const active = activeTilesRef.current.find(
       e => e.tile.startTime === tile.startTime && e.tile.endTime === tile.endTime,
     );
-    if (active && active.responseTailTs !== null) return active;
+    if (active && active.committedThroughTs !== null) return active;
     // LRU cache hit → terminal-mirror (new object, triggers no-op to fail for new tiles).
     for (const tagId of tagIds) {
       const e = cache.get(makeTileCacheKey({
@@ -228,7 +221,7 @@ export function runTileFetch(args: TileFetchArgs): void {
     // Existing placeholder — preserve identity.
     if (active) return active;
     // New placeholder.
-    return { tile, responseTailTs: null, shape: null, data: null };
+    return { tile, committedThroughTs: null, shape: null, data: null };
   };
 
   const nextActive = newSorted.map(resolveEntry);
@@ -236,7 +229,7 @@ export function runTileFetch(args: TileFetchArgs): void {
   // Step 5: tiles that need a fetch and are not already in flight.
   const activeTilesSnapshot = activeTilesRef.current;
   const predicate = (tile: Tile) =>
-    needsFetch(tile, tagIds, cache, activeTilesSnapshot, isLive, latestSampleTs, nowMs, sizeMs, viewport.end);
+    needsFetch(tile, tagIds, cache, activeTilesSnapshot, isLive, nowMs, viewport.end);
 
   const toFetch = newSorted.filter(tile => {
     if (!predicate(tile)) return false;
@@ -283,8 +276,11 @@ export function runTileFetch(args: TileFetchArgs): void {
       .then(responses => {
         inFlightTilesRef.current.delete(key);
 
-        const maxTailTs = responses.reduce((m, r) => Math.max(m, r.responseTailTs), 0);
-        const isTerminal = maxTailTs >= Number(tile.endTime);
+        // Safety: no groups fetched → can't determine terminal status, skip.
+        if (responses.length === 0) return;
+        // Min: tile is complete only when every group's response confirms it.
+        const minCommittedTs = responses.reduce((m, r) => Math.min(m, r.committedThroughTs), responses[0]!.committedThroughTs);
+        const isTerminal = minCommittedTs >= Number(tile.endTime);
 
         if (isTerminal) {
           // Terminal resolves write LRU unconditionally — durable regardless of which run fired.
@@ -296,7 +292,7 @@ export function runTileFetch(args: TileFetchArgs): void {
             const firstRes = responses[0];
             const shape: 'raw' | 'aggregate' = firstRes?.source === 'raw' ? 'raw' : 'aggregate';
             const newEntries = [...activeTilesRef.current];
-            newEntries[idx] = { tile, responseTailTs: maxTailTs, shape, data: null };
+            newEntries[idx] = { tile, committedThroughTs: minCommittedTs, shape, data: null };
             activeTilesRef.current = newEntries;
             commit();
           }
@@ -311,7 +307,7 @@ export function runTileFetch(args: TileFetchArgs): void {
           const firstRes = responses[0];
           const shape: 'raw' | 'aggregate' = firstRes?.source === 'raw' ? 'raw' : 'aggregate';
           const newEntries = [...activeTilesRef.current];
-          newEntries[idx] = { tile, responseTailTs: maxTailTs, shape, data };
+          newEntries[idx] = { tile, committedThroughTs: minCommittedTs, shape, data };
           activeTilesRef.current = newEntries;
           commit();
         }
@@ -346,11 +342,11 @@ export function runTileFetch(args: TileFetchArgs): void {
         if (existingEntry.shape !== null) {
           storeNullTile(tile, existingEntry.shape, tagIds, cache);
         }
-        // Mark as settled (responseTailTs set) so allVisibleReady can advance.
+        // Mark as settled (committedThroughTs set) so allVisibleReady can advance.
         const newEntries = [...activeTilesRef.current];
         newEntries[idx] = {
           tile,
-          responseTailTs: Number(tile.endTime),
+          committedThroughTs: Number(tile.endTime),
           shape: existingEntry.shape,
           data: null,
         };

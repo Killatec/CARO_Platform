@@ -3,6 +3,7 @@ import { asyncWrap } from '@caro/server';
 import type { CaroError } from '@caro/server';
 import { getTrendTile, getTrendExtent } from '@caro/db';
 import type { TrendTile } from '@caro/db';
+import type { DbPipeline } from '../db-pipeline.js';
 
 // HTTP status for known @caro/db error codes; anything else → 500.
 const DB_CODE_STATUS: Record<string, number> = {
@@ -27,6 +28,7 @@ function parseIntStrict(raw: string, code: string, message: string): number {
   return n;
 }
 
+export function createTrendsRouter(dbPipeline: DbPipeline): Router {
 const router = Router();
 
 // Converts bigint fields to Number before JSON serialisation.
@@ -35,10 +37,10 @@ const router = Router();
 function serializeTile(tile: TrendTile): unknown {
   if (tile.source === 'raw') {
     return {
-      source:         tile.source,
-      startTime:      Number(tile.startTime),
-      endTime:        Number(tile.endTime),
-      responseTailTs: tile.responseTailTs,
+      source:             tile.source,
+      startTime:          Number(tile.startTime),
+      endTime:            Number(tile.endTime),
+      committedThroughTs: tile.committedThroughTs,
       series: tile.series.map(s => ({
         tagId:  s.tagId,
         ts:     s.ts.map(t => Number(t)),
@@ -48,12 +50,12 @@ function serializeTile(tile: TrendTile): unknown {
     };
   }
   return {
-    source:         tile.source,
-    startTime:      Number(tile.startTime),
-    endTime:        Number(tile.endTime),
-    bucketSMs:      tile.bucketSMs,
-    n:              tile.n,
-    responseTailTs: tile.responseTailTs,
+    source:             tile.source,
+    startTime:          Number(tile.startTime),
+    endTime:            Number(tile.endTime),
+    bucketSMs:          tile.bucketSMs,
+    n:                  tile.n,
+    committedThroughTs: tile.committedThroughTs,
     series: tile.series.map(s => ({
       tagId: s.tagId,
       value: s.value,
@@ -64,9 +66,10 @@ function serializeTile(tile: TrendTile): unknown {
 }
 
 router.get('/tile', asyncWrap(async (req, res) => {
-  // Captured at request entry — passed as nowMs to getTrendTile which uses it as
-  // both the future-bucket-nulling cutoff and the responseTailTs field on the tile (§6.2).
-  const nowMs = Date.now();
+  // Use DbPipeline's commit watermark as nowMs — tells getTrendTile how far raw tag_samples
+  // is actually committed. Falls back to Date.now() only on startup before first flush tick.
+  const nowMs = dbPipeline.committedThroughMs || Date.now();
+
 
   const q = req.query as Record<string, string | undefined>;
 
@@ -139,4 +142,5 @@ router.get('/extent', asyncWrap(async (_req, res) => {
   });
 }));
 
-export default router;
+return router;
+}
