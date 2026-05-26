@@ -29,6 +29,7 @@ export async function loadTagMap(rows?: ActiveTag[]): Promise<TagMapResult> {
       tag_name:    row.tag_name,
       data_type:   row.data_type as TagDef['data_type'],
       is_setpoint: row.is_setpoint,
+      trendable:   row.trends ?? false,
       module_id:   moduleId,
       module_type: row.module_type ?? 'MQTT',
       eng_min:     row.eng_min,

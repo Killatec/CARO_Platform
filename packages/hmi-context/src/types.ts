@@ -10,6 +10,7 @@ export interface TagDef {
   tag_name: string | null;
   data_type: string;
   is_setpoint: boolean;
+  trendable: boolean;
   module_id: string;
   module_type: string;
   eng_min: number | null;

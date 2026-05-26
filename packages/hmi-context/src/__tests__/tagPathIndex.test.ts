@@ -9,6 +9,7 @@ function makeTag(id: number, path: string): TagDef {
     tag_name: null,
     data_type: 'f32',
     is_setpoint: false,
+    trendable: true,
     module_id: 'M',
     module_type: 'MQTT',
     eng_min: null,

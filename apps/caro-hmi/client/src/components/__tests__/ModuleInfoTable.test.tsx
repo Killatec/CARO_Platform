@@ -12,6 +12,7 @@ function makeTagDef(overrides: Partial<TagDef> & { tag_id: number; tag_path: str
   return {
     data_type: 'f32',
     is_setpoint: false,
+    trendable: false,
     module_id: 'HMI',
     module_type: 'HMI',
     eng_min: null,

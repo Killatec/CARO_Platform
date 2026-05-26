@@ -4,7 +4,7 @@ import type { TagDef } from '@caro/hmi-context';
 
 function makeTag(overrides: Partial<TagDef>): TagDef {
   return {
-    tag_id: 1, tag_path: 'X.Y', tag_name: null, data_type: 'float', is_setpoint: false,
+    tag_id: 1, tag_path: 'X.Y', tag_name: null, data_type: 'float', is_setpoint: false, trendable: true,
     module_id: 'M', module_type: 'MQTT', eng_min: null, eng_max: null,
     unit: null, format: null, meta: [],
     ...overrides,

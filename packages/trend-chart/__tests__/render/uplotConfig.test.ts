@@ -15,7 +15,7 @@ function makeTagMap(defs: Array<Partial<TagDef> & { tag_id: number }>): Map<numb
   return new Map(defs.map(d => [
     d.tag_id,
     {
-      tag_path: `CARO.Tag_${d.tag_id}`, tag_name: null, data_type: 'float', is_setpoint: false,
+      tag_path: `CARO.Tag_${d.tag_id}`, tag_name: null, data_type: 'float', is_setpoint: false, trendable: true,
       module_id: 'M', module_type: 'MQTT', eng_min: null, eng_max: null, unit: null, format: null, meta: [],
       ...d,
     } satisfies TagDef,

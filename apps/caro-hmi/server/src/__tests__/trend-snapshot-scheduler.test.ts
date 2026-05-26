@@ -23,6 +23,7 @@ function makeTagDef(tag_id: number, module_id: string): TagDef {
     tag_name:    null,
     data_type:   'f32',
     is_setpoint: false,
+    trendable:   true,
     module_id,
     module_type: 'MQTT',
     eng_min:     null,

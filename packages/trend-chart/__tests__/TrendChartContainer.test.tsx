@@ -91,11 +91,11 @@ const mockUseTrendData = vi.mocked(useTrendData);
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
 const TAG_DEFS: Record<number, TagDef> = {
-  1: { tag_id: 1, tag_path: 'A.B.Temp', tag_name: null, data_type: 'float', is_setpoint: false,
+  1: { tag_id: 1, tag_path: 'A.B.Temp', tag_name: null, data_type: 'float', is_setpoint: false, trendable: true,
        module_id: 'M', module_type: 'MQTT', eng_min: 0, eng_max: 100, unit: '°C', format: null, meta: [] },
-  2: { tag_id: 2, tag_path: 'A.B.Power', tag_name: null, data_type: 'float', is_setpoint: false,
+  2: { tag_id: 2, tag_path: 'A.B.Power', tag_name: null, data_type: 'float', is_setpoint: false, trendable: true,
        module_id: 'M', module_type: 'MQTT', eng_min: null, eng_max: null, unit: 'kW', format: null, meta: [] },
-  3: { tag_id: 3, tag_path: 'A.B.Valve', tag_name: null, data_type: 'bool', is_setpoint: false,
+  3: { tag_id: 3, tag_path: 'A.B.Valve', tag_name: null, data_type: 'bool', is_setpoint: false, trendable: false,
        module_id: 'M', module_type: 'MQTT', eng_min: null, eng_max: null, unit: null, format: null, meta: [] },
 };
 

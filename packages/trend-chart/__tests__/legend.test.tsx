@@ -6,9 +6,9 @@ import { Legend, charsForTag } from '../src/Legend.js';
 import type { AggregateSeriesData, RawSeriesData } from '../src/types.js';
 
 const TAG_DEFS: Record<number, TagDef> = {
-  1: { tag_id: 1, tag_path: 'A.B.Temp', tag_name: 'Temperature', data_type: 'float', is_setpoint: false,
+  1: { tag_id: 1, tag_path: 'A.B.Temp', tag_name: 'Temperature', data_type: 'float', is_setpoint: false, trendable: true,
        module_id: 'M', module_type: 'MQTT', eng_min: 0, eng_max: 100, unit: '°C', format: null, meta: [] },
-  2: { tag_id: 2, tag_path: 'A.B.Power', tag_name: 'Power Reading', data_type: 'float', is_setpoint: false,
+  2: { tag_id: 2, tag_path: 'A.B.Power', tag_name: 'Power Reading', data_type: 'float', is_setpoint: false, trendable: true,
        module_id: 'M', module_type: 'MQTT', eng_min: null, eng_max: null, unit: 'kW', format: null, meta: [] },
 };
 
@@ -574,7 +574,7 @@ describe('Legend — units column', () => {
   it('unit cell is empty when tag unit is null', () => {
     const tagMap = new Map<number, TagDef>([[99, {
       tag_id: 99, tag_path: 'A.B.C', tag_name: 'NoUnit', data_type: 'float',
-      is_setpoint: false, module_id: 'M', module_type: 'MQTT',
+      is_setpoint: false, trendable: true, module_id: 'M', module_type: 'MQTT',
       eng_min: null, eng_max: null, unit: null, format: null, meta: [],
     }]]);
     render(
@@ -632,7 +632,7 @@ describe('Legend — label source', () => {
   it('falls back to Tag-<id> when tag_name is null', () => {
     const tagMap = new Map<number, TagDef>([[99, {
       tag_id: 99, tag_path: 'A.B.C', tag_name: null, data_type: 'float',
-      is_setpoint: false, module_id: 'M', module_type: 'MQTT',
+      is_setpoint: false, trendable: true, module_id: 'M', module_type: 'MQTT',
       eng_min: null, eng_max: null, unit: null, format: null, meta: [],
     }]]);
     render(
