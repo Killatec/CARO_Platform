@@ -91,12 +91,12 @@ const mockUseTrendData = vi.mocked(useTrendData);
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
 const TAG_DEFS: Record<number, TagDef> = {
-  1: { tag_id: 1, tag_path: 'A.B.Temp', data_type: 'float', is_setpoint: false,
-       module_id: 'M', module_type: 'MQTT', eng_min: 0, eng_max: 100, unit: '°C', meta: [] },
-  2: { tag_id: 2, tag_path: 'A.B.Power', data_type: 'float', is_setpoint: false,
-       module_id: 'M', module_type: 'MQTT', eng_min: null, eng_max: null, unit: 'kW', meta: [] },
-  3: { tag_id: 3, tag_path: 'A.B.Valve', data_type: 'bool', is_setpoint: false,
-       module_id: 'M', module_type: 'MQTT', eng_min: null, eng_max: null, unit: null, meta: [] },
+  1: { tag_id: 1, tag_path: 'A.B.Temp', tag_name: null, data_type: 'float', is_setpoint: false,
+       module_id: 'M', module_type: 'MQTT', eng_min: 0, eng_max: 100, unit: '°C', format: null, meta: [] },
+  2: { tag_id: 2, tag_path: 'A.B.Power', tag_name: null, data_type: 'float', is_setpoint: false,
+       module_id: 'M', module_type: 'MQTT', eng_min: null, eng_max: null, unit: 'kW', format: null, meta: [] },
+  3: { tag_id: 3, tag_path: 'A.B.Valve', tag_name: null, data_type: 'bool', is_setpoint: false,
+       module_id: 'M', module_type: 'MQTT', eng_min: null, eng_max: null, unit: null, format: null, meta: [] },
 };
 
 function makeAggData(tagIds: number[] = [1, 2]) {
@@ -380,14 +380,13 @@ describe('TrendChartContainer', () => {
     expect(screen.getByText('Go Live')).toBeTruthy();
   });
 
-  it('SpanBucketIndicator renders span and bucket size in the footer', () => {
+  it('SpanIndicator renders span in the footer', () => {
     renderContainer();
-    // Default sizeMs = 1h; bucketSMs = 3600ms = 3.6 s
+    // Default sizeMs = 1h
     expect(screen.getByText('Span: 1 h')).toBeTruthy();
-    expect(screen.getByText('Bucket Size: 3.6 s')).toBeTruthy();
   });
 
-  it('after preset click, SpanBucketIndicator span line updates to match the new span', () => {
+  it('after preset click, SpanIndicator span line updates to match the new span', () => {
     renderContainer();
     fireEvent.click(screen.getByText('4h'));
     expect(screen.getByText('Span: 4 h')).toBeTruthy();
@@ -406,14 +405,6 @@ describe('TrendChartContainer', () => {
     const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
     fireEvent.change(input, { target: { value: '2020-01-02T00:00:00' } });
     expect(screen.getByTestId('idle-mode').textContent).toBe('fixed');
-  });
-
-  it('cursor row renders above the footer (preset buttons row)', () => {
-    renderContainer();
-    const cursorEl = screen.getByText(/^Cursor:/, { selector: 'span' });
-    const firstPreset = screen.getByText('1m');
-    // DOCUMENT_POSITION_FOLLOWING (4) means firstPreset comes after cursorEl in DOM.
-    expect(cursorEl.compareDocumentPosition(firstPreset) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('endPickerCommitted preserves preset highlight when sizeMs is unchanged', () => {
@@ -447,7 +438,7 @@ describe('TrendChartContainer', () => {
     expect(screen.getByText('1h').style.background).not.toBe('rgb(37, 99, 235)');
     // Mode flips to fixed → Live button shows "Go Live".
     expect(screen.getByText('Go Live')).toBeTruthy();
-    // SpanBucketIndicator reflects the new 45-min span.
+    // SpanIndicator reflects the new 45-min span.
     expect(screen.getByText('Span: 45 min')).toBeTruthy();
   });
 

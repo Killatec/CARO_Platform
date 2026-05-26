@@ -42,28 +42,48 @@ describe('formatBucketS', () => {
 // ── formatValue ───────────────────────────────────────────────────────────────
 
 describe('formatValue', () => {
-  it('returns "—" for null', () => {
-    expect(formatValue(null, '°C', false)).toBe('—');
+  it('returns "—" for null value', () => {
+    expect(formatValue(null, null, false)).toBe('—');
   });
 
-  it('formats numeric with unit', () => {
-    expect(formatValue(78.3, '°C', false)).toBe('78.3 °C');
+  it('formats numeric without format → toPrecision(4)', () => {
+    expect(formatValue(78.3, null, false)).toBe('78.3');
   });
 
-  it('formats numeric without unit', () => {
+  it('formats numeric with null format → toPrecision(4)', () => {
     expect(formatValue(42.0, null, false)).toBe('42');
   });
 
-  it('formats boolean 1 as "1" (no unit)', () => {
-    expect(formatValue(1, '°C', true)).toBe('1');
+  it('formats boolean 1 as "1" (format ignored)', () => {
+    expect(formatValue(1, null, true)).toBe('1');
   });
 
   it('formats boolean 0 as "0"', () => {
     expect(formatValue(0, null, true)).toBe('0');
   });
 
-  it('uses 4 significant figures', () => {
+  it('uses 4 significant figures when format is undefined', () => {
     expect(formatValue(3.14159, undefined, false)).toBe('3.142');
+  });
+
+  it('"%.2f" format applies toFixed(2)', () => {
+    expect(formatValue(78.3, '%.2f', false)).toBe('78.30');
+  });
+
+  it('"%.0f" format applies toFixed(0)', () => {
+    expect(formatValue(78.7, '%.0f', false)).toBe('79');
+  });
+
+  it('null value with format still returns "—"', () => {
+    expect(formatValue(null, '%.2f', false)).toBe('—');
+  });
+
+  it('boolean ignores format string', () => {
+    expect(formatValue(1, '%.2f', true)).toBe('1');
+  });
+
+  it('unsupported format pattern falls back to toPrecision(4)', () => {
+    expect(formatValue(78.3, '#.##', false)).toBe('78.3');
   });
 });
 

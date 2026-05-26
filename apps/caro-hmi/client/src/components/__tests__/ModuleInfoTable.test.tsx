@@ -16,7 +16,9 @@ function makeTagDef(overrides: Partial<TagDef> & { tag_id: number; tag_path: str
     module_type: 'HMI',
     eng_min: null,
     eng_max: null,
+    tag_name: null,
     unit: null,
+    format: null,
     meta: [],
     ...overrides,
   };

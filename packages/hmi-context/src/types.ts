@@ -7,6 +7,7 @@ export type { TagPathIndex };
 export interface TagDef {
   tag_id: number;
   tag_path: string;
+  tag_name: string | null;
   data_type: string;
   is_setpoint: boolean;
   module_id: string;
@@ -14,6 +15,7 @@ export interface TagDef {
   eng_min: number | null;
   eng_max: number | null;
   unit: string | null;
+  format: string | null;
   meta: MetaLevel[];
 }
 

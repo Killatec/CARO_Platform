@@ -32,14 +32,14 @@ vi.mock('uplot/dist/uPlot.min.css', () => ({}));
 // ── Fixture helpers ───────────────────────────────────────────────────────────
 
 const TAG_DEFS: Record<number, TagDef> = {
-  1: { tag_id: 1, tag_path: 'A.B.Temp', data_type: 'float', is_setpoint: false,
-       module_id: 'M', module_type: 'MQTT', eng_min: 0, eng_max: 100, unit: '°C', meta: [] },
-  2: { tag_id: 2, tag_path: 'A.B.Power', data_type: 'float', is_setpoint: false,
-       module_id: 'M', module_type: 'MQTT', eng_min: null, eng_max: null, unit: 'kW', meta: [] },
-  3: { tag_id: 3, tag_path: 'A.B.Valve', data_type: 'bool', is_setpoint: false,
-       module_id: 'M', module_type: 'MQTT', eng_min: null, eng_max: null, unit: null, meta: [] },
-  4: { tag_id: 4, tag_path: 'A.B.Pressure', data_type: 'float', is_setpoint: false,
-       module_id: 'M', module_type: 'MQTT', eng_min: 0, eng_max: 50, unit: 'bar', meta: [] },
+  1: { tag_id: 1, tag_path: 'A.B.Temp', tag_name: 'Temp', data_type: 'float', is_setpoint: false,
+       module_id: 'M', module_type: 'MQTT', eng_min: 0, eng_max: 100, unit: '°C', format: null, meta: [] },
+  2: { tag_id: 2, tag_path: 'A.B.Power', tag_name: 'Power', data_type: 'float', is_setpoint: false,
+       module_id: 'M', module_type: 'MQTT', eng_min: null, eng_max: null, unit: 'kW', format: null, meta: [] },
+  3: { tag_id: 3, tag_path: 'A.B.Valve', tag_name: 'Valve', data_type: 'bool', is_setpoint: false,
+       module_id: 'M', module_type: 'MQTT', eng_min: null, eng_max: null, unit: null, format: null, meta: [] },
+  4: { tag_id: 4, tag_path: 'A.B.Pressure', tag_name: 'Pressure', data_type: 'float', is_setpoint: false,
+       module_id: 'M', module_type: 'MQTT', eng_min: 0, eng_max: 50, unit: 'bar', format: null, meta: [] },
 };
 
 // v0.7-style aggregate data (no min/max) — triggers v0.7 legend fallback.

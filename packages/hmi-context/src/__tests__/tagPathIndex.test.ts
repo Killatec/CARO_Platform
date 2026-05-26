@@ -6,6 +6,7 @@ function makeTag(id: number, path: string): TagDef {
   return {
     tag_id: id,
     tag_path: path,
+    tag_name: null,
     data_type: 'f32',
     is_setpoint: false,
     module_id: 'M',
@@ -13,6 +14,7 @@ function makeTag(id: number, path: string): TagDef {
     eng_min: null,
     eng_max: null,
     unit: null,
+    format: null,
     meta: [],
   };
 }

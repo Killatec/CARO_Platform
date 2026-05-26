@@ -31,22 +31,13 @@ export function compileFormat(format: string): NumberFormatter {
 
 /**
  * Resolves a NumberFormatter for a tag. Called once at widget mount.
- * Walks tag.meta root-to-leaf; first 'format' field wins.
- * - string format field → compileFormat()
- * - number format field → compileFormat("#." + "#".repeat(n))
- * - no format field found → compileFormat("#.##") (2 decimal default)
+ * Uses the registry-resolved format field from TagDef — never walks meta.
+ * Default: "#.##" (2 decimal places).
  */
 export function resolveFormat(tag: TagDef): NumberFormatter {
-  for (const level of tag.meta) {
-    const fmt = level.fields['format'];
-    if (typeof fmt === 'string') {
-      return compileFormat(fmt);
-    }
-    if (typeof fmt === 'number') {
-      const pattern = fmt === 0 ? '#' : '#.' + '#'.repeat(fmt);
-      return compileFormat(pattern);
-    }
-  }
+  // Use resolved registry field — never walk meta for these.
+  // See apps/tag-registry/shared/resolveRegistry.ts.
+  if (tag.format) return compileFormat(tag.format);
   return compileFormat('#.##');
 }
 

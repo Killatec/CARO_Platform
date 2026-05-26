@@ -21,7 +21,7 @@ Phase A Steps 1–11 are complete. Steps 1–6 delivered the server-side trends 
 | 10 | Mode state machine + time-range UI: live-trailing/live-fixed/fixed transitions, 8-preset strip, End picker (End-only), Live button, pan/zoom interactions | ✅ Done |
 | 11 | Live tail: dedicated trend WS channel, `useLiveSubscription` hook (ring buffer + bucket accumulator + raw buffer; `commitAndDrain` returns void), unified `mergeTrendData` (live-wins-on-coverage, no `isTailing`), eviction-on-live-entry cache freshness (Gap B fix), server-side future-bucket nulling in `getTrendTile`, no-clamp wheel-zoom + `gatedFetchTile` over-range gating + inline "Range too wide" message in `CursorDisplay`, `dispatchModeAction` cleanup wrapper | ✅ Done |
 
-**Test coverage (2026-05-26):** 698 passing in `@caro/trend-chart`, 67 in `@caro/hmi-context`, 156 in `@caro/db`, 289 in the HMI server, 33 in the HMI client.
+**Test coverage (2026-05-26):** 730 passing in `@caro/trend-chart`, 67 in `@caro/hmi-context`, 156 in `@caro/db`, 289 in the HMI server, 33 in the HMI client.
 
 **Audit remediation pass (2026-05-15 → 2026-05-17):** all items from the May 2026 trend-viewer audit landed across Phases 1–5. Notable architectural change: **M1 metadata-as-return-value** — `getTrendTile()` now returns `Promise<{ tile, meta }>` (see spec §4.1 / §14.7); the `__test_lastUsedSources` module singleton is gone, with per-segment source/timing/rowCount now flowing through `meta.segments[]`. Operational hardening: F5 per-tag outbox cap (spec §4.4), TG-7 `commitAndDrain` bug fix (§10 gotcha below), TG-1 plan-pruning regression test (§10 gotcha below). All other items were refactors, test additions, or comment cleanup with no observable behavior change.
 
@@ -98,27 +98,53 @@ packages/trend-chart/
     # ── Components ────────────────────────────────────────────────────────────
     TrendChart.tsx                # uPlot canvas wrapper; manages rebuild lifecycle,
                                   # X-scale preservation across rebuilds, per-trace Y-scale
-                                  # overrides, wheel/drag handlers, cursor state
+                                  # overrides, wheel/drag handlers, cursor state;
+                                  # accepts bucketSMs/lastFetchMs props and forwards to Legend
     TrendChartContainer.tsx       # stateful wiring layer: useTrendMode + useZoomState +
-                                  # useTrendData + TrendChart + footer row components
-    SpanBucketIndicator.tsx       # footer: viewport span + bucket size display
+                                  # useTrendData + TrendChart + footer row components;
+                                  # passes bucketSMs/lastFetchMs to TrendChart (no cursorTsMs
+                                  # state — cursor row lives in Legend)
+    SpanBucketIndicator.tsx       # kept for backward-compat export; superseded by the
+                                  # SpanIndicator + BucketFetchIndicator split below
+    SpanIndicator.tsx             # footer: viewport span only (e.g. "Span: 4 h")
+    BucketFetchIndicator.tsx      # legend strip (below tag table): bucket size + last fetch;
+                                  # null-displayed ("—") until first fetch
     SpanPresets.tsx               # footer: 8-preset strip (1m/5m/15m/1h/4h/24h/7d/14d);
                                   # highlight: lastIntent!==null && lastIntent!=='zoom' && sizeMs match
                                   # (any size-preserving intent stays highlighted; zoom excluded)
     EndPicker.tsx                 # footer: End datetime picker button + Live/Go Live button
-    Legend.tsx                    # vertical column (right side, 180px); per-trace rows with
-                                  # color swatch, value (showLastWhenIdle rule), remove button
-    CursorDisplay.tsx             # cursor-time display in the legend area;
-                                  # rangeExceededMessage prop renders "Range too wide. Zoom in
-                                  # or pick a smaller preset." inline on the right side;
+    Legend.tsx                    # right-side strip; top-to-bottom:
+                                  #   (1) Cursor row — "Cursor: HH:MM:SS" or "Cursor: --";
+                                  #       formatDateTime from @caro/ui; siteTimezone prop
+                                  #   (2) Value header — "Value: Max @ Cursor" / "Value: Last
+                                  #       Sample" / "Value: N/A" / "Value: @ Cursor"
+                                  #   (3) 5-column <table>: swatch(18px) | label(auto) |
+                                  #       value(computed px, right-aligned) | unit(auto) |
+                                  #       remove(20px); valueColPx = useMemo([tagIds, tagMap])
+                                  #       via charsForTag(); label = tag_name with Tag-<id>
+                                  #       fallback; value via formatValue(v, tag.format, isBool)
+                                  #       (%.Nf support); unit = tag.unit; selected row has
+                                  #       outline: colored, outlineOffset: -1 (draws inside
+                                  #       border to survive overflow:auto clip)
+                                  #   (4) BucketFetchIndicator (12px gap above) — bucket size
+                                  #       + last fetch; bucketSMs/lastFetchMs props
+                                  # All four label groups use unified style: 12px, #374151,
+                                  # monospace, lineHeight 16px
+    CursorDisplay.tsx             # range-message-only bar above the footer preset row;
+                                  # renders "Range too wide…" or "Range too narrow…" in red
+                                  # when the viewport span is out of bounds; otherwise empty;
                                   # lineHeight:16px pinned so toggling does not reflow
 
     render/
-      uplotConfig.ts              # builds uPlot Options; onCursorChange callback (idx, tsMs)
+      uplotConfig.ts              # builds uPlot Options; onCursorChange callback (idx, tsMs);
+                                  # Y_AXIS_SIZE_PX=60 (fixed axis width, prevents left-edge
+                                  # jitter on trace selection); Y_AXIS_LABEL_SIZE_PX=16
+                                  # (label area always reserved; label=' ' when unit absent)
       yScales.ts                  # per-trace Y-scale defaults (eng_min/max, autoscale, bool)
       bandsFromTrendData.ts       # maps TrendData → uPlot always-band arrays (xs, mins, maxs)
       formatBucketS.ts            # bucket size → human-readable (e.g. "3.8 min buckets")
-      formatValue.ts              # tag value → display string
+      formatValue.ts              # formatValue(value, format, isBoolean) → display string;
+                                  # format is the tag_registry %.Nf pattern or null (→ "%.4f")
       formatTickLabel.ts          # X-axis tick label formatting
       formatSpanMs.ts             # viewport span → human-readable (e.g. "1 h")
       formatFetchMs.ts            # last-fetch duration → human-readable
@@ -144,11 +170,14 @@ packages/trend-chart/
       TrendChartContainer.test.tsx # container behavior: presets, Live, End picker, tag remove,
                                   # loading hints; computeDragZoomViewport pure tests
       trendChart.test.tsx         # TrendChart render, Y-scale defaults, legend display
-      legend.test.tsx             # Legend component unit tests
-      SpanBucketIndicator.test.tsx # span + bucket size display
+      legend.test.tsx             # Legend component unit tests (cursor row, value header,
+                                  # table, BucketFetchIndicator integration)
+      SpanBucketIndicator.test.tsx # legacy: span + bucket size display (SpanBucketIndicator)
+      SpanIndicator.test.tsx      # SpanIndicator: span formatting
+      BucketFetchIndicator.test.tsx # BucketFetchIndicator: bucket + fetch display
       SpanPresets.test.tsx        # preset highlight rule, mode-aware behavior
       EndPicker.test.tsx          # End picker interaction, snap-back on invalid input
-      CursorDisplay.test.tsx      # cursor-time display
+      CursorDisplay.test.tsx      # range-message-only: over-range / under-range message
       render/formatters.test.ts   # formatBucketS, formatValue, formatSpanMs
       render/uplotConfig.test.ts
       render/yScales.test.ts      # Y-scale defaults
@@ -301,10 +330,11 @@ There is no `syncDataViewport`, no `evictAll`, no `refetchHistory`, and no `isFr
 `liveEdgeBehindWindow` is derived per-render as `latestSampleTs !== null && latestSampleTs < modeState.from` using `liveSubRef.current.getLatestSampleTs()` and passed to `EndPicker` as a prop for the orange button state.
 
 It also renders:
-- `TrendChart` (with `onXRangeChange` → `handleXRangeChange` RAF-coalesced → `zoomApplied`; `onXPan` → `handleXPan` RAF-coalesced → `panApplied`)
-- Footer row: `SpanBucketIndicator` | `SpanPresets` | `EndPicker + Live button`
+- `TrendChart` (with `onXRangeChange` → `handleXRangeChange` RAF-coalesced → `zoomApplied`; `onXPan` → `handleXPan` RAF-coalesced → `panApplied`); receives `bucketSMs` and `lastFetchMs` props, which it forwards to `Legend`
+- `CursorDisplay` (range-message bar — rendered above the footer, below the chart canvas)
+- Footer row: `SpanPresets` | `SpanIndicator` | `EndPicker + Live button`
 
-It owns `tagIds` state (initialized from `initialTagIds` prop; removes come from `Legend` via `TrendChart.onTagRemove`). It derives `xRange` from `modeViewport` via `useMemo`. It passes `showLastWhenIdle={isLive(modeState.mode)}` to `TrendChart` (forwarded to `Legend`).
+It owns `tagIds` state (initialized from `initialTagIds` prop; removes come from `Legend` via `TrendChart.onTagRemove`). It derives `xRange` from `modeViewport` via `useMemo`. It passes `showLastWhenIdle={isLive(modeState.mode)}`, `bucketSMs={bucketSMsIndicator}`, and `lastFetchMs={lastFetchMs}` to `TrendChart` (all forwarded to `Legend`). There is no `cursorTsMs` state in the container — the cursor row is owned entirely by `Legend`.
 
 Props: `tagIds: number[]`, `siteTimezone?: string`, `height?: number` (default 420). Width is measured via `ResizeObserver` inside `TrendChart`.
 
@@ -441,6 +471,8 @@ Hard-won lessons from the min/max upgrade and perf engineering work.
 **EXPLAIN with parameter bindings uses the generic plan (statistics-based pruning), not constraint exclusion.** Related to the above: `EXPLAIN (FORMAT JSON) $sql` with `[params]` goes through the Extended Protocol → prepared statement → generic plan after the 5th execution. Generic plans use row-count statistics for chunk pruning, which silently prunes empty chunks regardless of whether the bounded-prev's `INTERVAL '5 minutes'` filter is present. To verify constraint-based exclusion (what production sees), substitute literal values into the SQL before EXPLAIN. Spec §5.5 has the production-side prepared-statement warning; this is the test-side corollary. Surfaced during TG-1 implementation.
 
 **Legend cursor values resolve by timestamp, not by uPlot's data index.** uPlot's `cursor.idx` is the *nearest* data point; in raw mode it indexes the sorted-union grid `bandsFromTrendData` builds (every tag's timestamps + `prev` seeds), not any single tag's `value` array — so a per-tag `series.value[cursorIdx]` is wrong, and even resolving against the nearest union point snaps across step/bucket boundaries to a value the drawn line does not have at the cursor. `Legend.tsx`'s `getLegendDisplayText` instead resolves from the cursor's X-axis timestamp (`cursorTsMs`, from `posToVal`): raw uses LOCF seeded by `prev`; aggregate uses `floor((cursorTsMs − startTime) / bucketSMs)`. The raw upper bound is the **union extent** — the max timestamp across all traces, including `prev` seeds — because `bandsFromTrendData` forward-fills every trace out to that edge; bounding by a trace's own last sample wrongly blanks quiet setpoints and `prev`-only flat traces. See spec §8.5.
+
+**Legend selected-row outline uses `outline-offset: -1px`, not `0`.** With `outline-offset: 0`, the outline draws 1 px outside the row's outer edge — which is at the same x-position as the table's right border. The two collide visually; combined with the STRIP's `overflowY: 'auto'` (which per CSS spec implicitly computes `overflow-x: auto` and clips the extra pixel), the colored outline's right edge disappears. Pulling the outline 1 px inside the row (`outline-offset: -1px`) draws it over the row's own `border-bottom` (selected row's bottom becomes colored — desirable) and stays clear of both the table border and the STRIP's horizontal clip. All four edges of the selected row remain visible.
 
 ---
 

@@ -1,25 +1,19 @@
 import type { CSSProperties } from 'react';
-import { formatDateTime } from '@caro/ui';
 
+/** Renders the range message bar (footer row above presets).
+ *  Keeps a fixed line-height so the chart canvas does not reflow when the message
+ *  appears or disappears. Historical name: was also responsible for cursor time display
+ *  before the cursor row moved into the Legend strip. */
 export interface CursorDisplayProps {
-  cursorTsMs: number | null;
-  siteTimezone?: string;
-  /** When set, rendered on the right side of the cursor row (e.g. "Range too wide…" or "Range too narrow…"). */
+  /** When set, rendered as a prominent red warning (e.g. "Range too wide…"). */
   rangeMessage?: string | null;
 }
 
 const ROW: CSSProperties = {
-  display: 'flex',
-  alignItems: 'baseline',
-  justifyContent: 'space-between',
   padding: '0 0 4px 0',
   fontSize: 12,
   fontFamily: 'monospace',
-  lineHeight: '16px', // fixed: right-side message must not grow the row
-};
-
-const CURSOR_TEXT: CSSProperties = {
-  color: '#374151',
+  lineHeight: '16px', // fixed: prevents layout reflow when message toggles
 };
 
 const RANGE_MSG: CSSProperties = {
@@ -27,12 +21,9 @@ const RANGE_MSG: CSSProperties = {
   fontWeight: 700,
 };
 
-export function CursorDisplay({ cursorTsMs, siteTimezone, rangeMessage }: CursorDisplayProps) {
+export function CursorDisplay({ rangeMessage }: CursorDisplayProps) {
   return (
     <div style={ROW}>
-      <span style={CURSOR_TEXT}>
-        Cursor: {cursorTsMs == null ? '--' : formatDateTime(cursorTsMs, { timezone: siteTimezone })}
-      </span>
       {rangeMessage && <span style={RANGE_MSG}>{rangeMessage}</span>}
     </div>
   );

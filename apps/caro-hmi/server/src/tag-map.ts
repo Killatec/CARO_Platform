@@ -12,18 +12,6 @@ function getModuleId(meta: MetaLevel[]): string {
   return meta.find(m => m.type === 'module')?.name ?? 'unknown';
 }
 
-/**
- * Walk meta from root (meta[0]) to leaf (meta[last]).
- * First level that contains the field wins. Returns null if not found.
- */
-function getMetaField<T>(meta: MetaLevel[], key: string): T | null {
-  for (const level of meta) {
-    const val = level.fields[key];
-    if (val !== undefined && val !== null) return val as T;
-  }
-  return null;
-}
-
 export async function loadTagMap(rows?: ActiveTag[]): Promise<TagMapResult> {
   if (!rows) rows = await getActiveTags();
 
@@ -38,13 +26,15 @@ export async function loadTagMap(rows?: ActiveTag[]): Promise<TagMapResult> {
     const tagDef: TagDef = {
       tag_id:      row.tag_id,
       tag_path:    row.tag_path,
+      tag_name:    row.tag_name,
       data_type:   row.data_type as TagDef['data_type'],
       is_setpoint: row.is_setpoint,
       module_id:   moduleId,
       module_type: row.module_type ?? 'MQTT',
-      eng_min:     getMetaField<number>(meta, 'eng_min'),
-      eng_max:     getMetaField<number>(meta, 'eng_max'),
-      unit:        getMetaField<string>(meta, 'unit'),
+      eng_min:     row.eng_min,
+      eng_max:     row.eng_max,
+      unit:        row.unit,
+      format:      row.format,
       meta,
     };
 

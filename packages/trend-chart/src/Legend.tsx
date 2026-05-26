@@ -1,8 +1,11 @@
+import { useMemo } from 'react';
 import type { CSSProperties } from 'react';
 import type { TagDef } from '@caro/hmi-context';
+import { formatDateTime } from '@caro/ui';
 import type { TrendData } from './types.js';
 import { colorAssign } from './colorAssign.js';
 import { formatValue } from './render/formatValue.js';
+import { BucketFetchIndicator } from './BucketFetchIndicator.js';
 
 export interface LegendProps {
   tagIds: number[];
@@ -11,28 +14,47 @@ export interface LegendProps {
   selectedTagId: number;
   /** Cursor X position in milliseconds from uPlot posToVal; null/absent means no cursor. */
   cursorTsMs?: number | null;
+  /** IANA timezone for cursor timestamp formatting (e.g. "America/Chicago"). */
+  siteTimezone?: string;
+  /** Bucket width in ms; null in raw mode or before first fetch. */
+  bucketSMs: bigint | null;
+  /** Wall-clock ms of the most recent viewport-change batch; null until first batch. */
+  lastFetchMs: number | null;
   /** When true (tailing), idle state shows the last bucket value. When false (fixed), idle state shows '--'. */
   showLastWhenIdle: boolean;
   onSelect: (tagId: number) => void;
   onRemove: (tagId: number) => void;
 }
 
+const SWATCH_COL_PX = 18;
+const REMOVE_COL_PX = 20;
+const FONT_WIDTH_PX = 7.2;
+const CELL_PAD_PX   = 8;
+const MIN_CHARS = 4;
+const MAX_INT_DIGITS = 8;
+
 const STRIP: CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 8,
   paddingLeft: 8,
-  width: 180,
   overflowY: 'auto',
   flexShrink: 0,
 };
 
-const HEADER_STYLE: CSSProperties = {
-  fontSize: 11,
-  color: '#6b7280',
+const LABEL_STYLE: CSSProperties = {
+  fontSize: 12,
+  color: '#374151',
   fontFamily: 'monospace',
-  paddingLeft: 4,
-  paddingBottom: 2,
+  lineHeight: '16px',
+};
+
+const CURSOR_ROW: CSSProperties = { ...LABEL_STYLE, paddingLeft: 4, paddingBottom: 2 };
+const HEADER_STYLE: CSSProperties = { ...LABEL_STYLE, paddingLeft: 4, paddingBottom: 2 };
+const BUCKET_SECTION: CSSProperties = { marginTop: 12 };
+
+const TABLE_STYLE: CSSProperties = {
+  marginTop: 12,
+  borderCollapse: 'collapse',
+  tableLayout: 'auto',
+  border: '1px solid #e5e7eb',
 };
 
 /**
@@ -54,6 +76,24 @@ export function deriveLegendContext(
   if (hasCursor) return { headerText: 'Value: @ Cursor' };
   if (showLastWhenIdle) return { headerText: 'Value: Last Sample' };
   return { headerText: 'Value: N/A' };
+}
+
+/**
+ * Computes the character count needed for the value column based on
+ * eng_min, eng_max, format, and data_type — not from live data values.
+ */
+export function charsForTag(tag: TagDef | undefined): number {
+  if (!tag) return MIN_CHARS;
+  if (tag.data_type === 'bool') return 1;
+  const engMax = Math.abs(tag.eng_max ?? 9999);
+  const engMin = Math.abs(tag.eng_min ?? 9999);
+  const maxAbs = Math.max(engMax, engMin, 1);
+  const intDigits = Math.min(MAX_INT_DIGITS, Math.floor(Math.log10(maxAbs)) + 1);
+  const m = tag.format ? /%[.](\d+)f/.exec(tag.format) : null;
+  const decimals = m ? parseInt(m[1]!, 10) : 4;
+  const sign = (tag.eng_min ?? 0) < 0 ? 1 : 0;
+  const dot = decimals > 0 ? 1 : 0;
+  return sign + intDigits + dot + decimals;
 }
 
 /**
@@ -98,7 +138,7 @@ function getLegendDisplayText(
         ? bucketIdx
         : showLastWhenIdle ? vals.length - 1 : -1;
       if (idx < 0) return '—';
-      return formatValue(vals[idx] ?? null, tag?.unit, isBoolean);
+      return formatValue(vals[idx] ?? null, tag?.format, isBoolean);
     }
 
     // v0.8: show max only — spread is already conveyed by the visible band height.
@@ -108,7 +148,7 @@ function getLegendDisplayText(
       ? bucketIdx
       : showLastWhenIdle ? maxArr.length - 1 : -1;
     if (idx < 0) return '—';
-    return formatValue(maxArr[idx] ?? null, tag?.unit, isBoolean);
+    return formatValue(maxArr[idx] ?? null, tag?.format, isBoolean);
   }
 
   // Raw path: LOCF at cursorTsMs.
@@ -143,115 +183,139 @@ function getLegendDisplayText(
       seeded = true;
     }
     if (!seeded) return '—';
-    return formatValue(lastVal, tag?.unit, isBoolean);
+    return formatValue(lastVal, tag?.format, isBoolean);
   }
 
   if (!s.value.length) return '—';
   return showLastWhenIdle
-    ? formatValue(s.value[s.value.length - 1] ?? null, tag?.unit, isBoolean)
+    ? formatValue(s.value[s.value.length - 1] ?? null, tag?.format, isBoolean)
     : '—';
 }
 
-interface EntryProps {
-  tagId: number;
-  tag: TagDef | undefined;
-  isSelected: boolean;
-  displayText: string;
-  onSelect: () => void;
-  onRemove: () => void;
-}
-
-function LegendEntry({ tagId, tag, isSelected, displayText, onSelect, onRemove }: EntryProps) {
-  const color = colorAssign(tagId);
-  const tagName = tag?.tag_path.split('.').pop() ?? String(tagId);
-
-  const entry: CSSProperties = {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 6,
-    padding: '4px 8px',
-    borderRadius: 4,
-    cursor: 'pointer',
-    border: isSelected ? `1px solid ${color}` : '1px solid #e5e7eb',
-    background: isSelected ? '#f9fafb' : '#fff',
-    userSelect: 'none',
-  };
-
-  const swatch: CSSProperties = {
-    width: 10,
-    height: 10,
-    borderRadius: 2,
-    background: color,
-    flexShrink: 0,
-    border: isSelected ? `2px solid ${color}` : 'none',
-    boxSizing: 'border-box',
-  };
-
-  const nameStyle: CSSProperties = {
-    fontSize: 12,
-    fontWeight: isSelected ? 700 : 400,
-    color: '#111827',
-    maxWidth: 120,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-    fontFamily: 'monospace',
-  };
-
-  const valueStyle: CSSProperties = {
-    fontSize: 12,
-    color: '#374151',
-    fontFamily: 'monospace',
-    marginLeft: 4,
-    flexGrow: 1,
-  };
-
-  const removeBtn: CSSProperties = {
-    background: 'none',
-    border: 'none',
-    cursor: 'pointer',
-    color: '#9ca3af',
-    padding: '0 2px',
-    fontSize: 14,
-    lineHeight: 1,
-    flexShrink: 0,
-  };
-
-  return (
-    <div style={entry} onClick={onSelect} title={tag?.tag_path ?? String(tagId)}>
-      <div style={swatch} />
-      <span style={nameStyle}>{tagName}</span>
-      <span style={valueStyle}>{displayText}</span>
-      <button
-        style={removeBtn}
-        onClick={e => { e.stopPropagation(); onRemove(); }}
-        title="Remove trace"
-      >
-        ×
-      </button>
-    </div>
-  );
-}
-
-export function Legend({ tagIds, data, tagMap, selectedTagId, cursorTsMs, showLastWhenIdle, onSelect, onRemove }: LegendProps) {
+export function Legend({ tagIds, data, tagMap, selectedTagId, cursorTsMs, siteTimezone, bucketSMs, lastFetchMs, showLastWhenIdle, onSelect, onRemove }: LegendProps) {
   const { headerText } = deriveLegendContext(data.type, cursorTsMs, showLastWhenIdle);
+
+  const valueColPx = useMemo(() => {
+    const maxChars = tagIds.reduce((max, id) => {
+      const c = charsForTag(tagMap.get(id));
+      return c > max ? c : max;
+    }, MIN_CHARS);
+    return Math.ceil(maxChars * FONT_WIDTH_PX) + CELL_PAD_PX * 2;
+  }, [tagIds, tagMap]);
+
   return (
     <div style={STRIP}>
+      <div style={CURSOR_ROW}>
+        Cursor: {cursorTsMs == null ? '--' : formatDateTime(cursorTsMs, { timezone: siteTimezone })}
+      </div>
       <div style={HEADER_STYLE}>{headerText}</div>
-      {tagIds.map(tagId => {
-        const tag = tagMap.get(tagId);
-        return (
-          <LegendEntry
-            key={tagId}
-            tagId={tagId}
-            tag={tag}
-            isSelected={tagId === selectedTagId}
-            displayText={getLegendDisplayText(data, tag, tagId, cursorTsMs, showLastWhenIdle)}
-            onSelect={() => onSelect(tagId)}
-            onRemove={() => onRemove(tagId)}
-          />
-        );
-      })}
+      <table style={TABLE_STYLE}>
+        <colgroup>
+          <col style={{ width: SWATCH_COL_PX }} />
+          <col />
+          <col style={{ width: valueColPx }} />
+          <col />
+          <col style={{ width: REMOVE_COL_PX }} />
+        </colgroup>
+        <tbody>
+          {tagIds.map(tagId => {
+            const tag = tagMap.get(tagId);
+            const tagName = tag?.tag_name ?? `Tag-${tagId}`;
+            const color = colorAssign(tagId);
+            const isSelected = tagId === selectedTagId;
+            const displayText = getLegendDisplayText(data, tag, tagId, cursorTsMs, showLastWhenIdle);
+
+            const rowStyle: CSSProperties = {
+              cursor: 'pointer',
+              background: isSelected ? '#f9fafb' : '#fff',
+              borderBottom: '1px solid #e5e7eb',
+              ...(isSelected && { outline: `1px solid ${color}`, outlineOffset: -1 }),
+              userSelect: 'none',
+            };
+
+            const cellBase: CSSProperties = {
+              padding: `4px ${CELL_PAD_PX}px`,
+              fontSize: 12,
+              fontFamily: 'monospace',
+              whiteSpace: 'nowrap',
+            };
+
+            const swatchStyle: CSSProperties = {
+              display: 'inline-block',
+              width: 10,
+              height: 10,
+              borderRadius: 2,
+              background: color,
+              border: isSelected ? `2px solid ${color}` : 'none',
+              boxSizing: 'border-box',
+              verticalAlign: 'middle',
+            };
+
+            const nameStyle: CSSProperties = {
+              ...cellBase,
+              fontWeight: isSelected ? 700 : 400,
+              color: '#111827',
+            };
+
+            const valueStyle: CSSProperties = {
+              ...cellBase,
+              color: '#374151',
+              textAlign: 'right',
+              width: valueColPx,
+            };
+
+            const unitStyle: CSSProperties = {
+              ...cellBase,
+              color: '#6b7280',
+              paddingLeft: 4,
+            };
+
+            const removeCellStyle: CSSProperties = {
+              padding: '0 2px',
+              width: REMOVE_COL_PX,
+              textAlign: 'center',
+            };
+
+            const removeBtn: CSSProperties = {
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              color: '#9ca3af',
+              padding: '0 2px',
+              fontSize: 14,
+              lineHeight: 1,
+            };
+
+            return (
+              <tr
+                key={tagId}
+                style={rowStyle}
+                onClick={() => onSelect(tagId)}
+                title={tag?.tag_path ?? String(tagId)}
+              >
+                <td style={{ ...cellBase, padding: `4px ${CELL_PAD_PX}px` }}>
+                  <div style={swatchStyle} />
+                </td>
+                <td style={nameStyle}>{tagName}</td>
+                <td style={valueStyle}>{displayText}</td>
+                <td style={unitStyle}>{tag?.unit ?? ''}</td>
+                <td style={removeCellStyle}>
+                  <button
+                    style={removeBtn}
+                    onClick={e => { e.stopPropagation(); onRemove(tagId); }}
+                    title="Remove trace"
+                  >
+                    ×
+                  </button>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <div style={BUCKET_SECTION}>
+        <BucketFetchIndicator bucketSMs={bucketSMs} lastFetchMs={lastFetchMs} />
+      </div>
     </div>
   );
 }

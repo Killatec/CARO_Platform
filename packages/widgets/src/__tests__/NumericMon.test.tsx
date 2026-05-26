@@ -17,7 +17,7 @@ function wrapper(
 }
 
 describe('NumericMon', () => {
-  it('displays formatted value with correct decimal places (format: 3 at root level → 3 decimals)', () => {
+  it('displays formatted value with correct decimal places (tag.format: "#.###" → 3 decimals)', () => {
     const { container } = render(
       wrapper(
         { 1001: mockNumericTag },

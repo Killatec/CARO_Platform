@@ -25,6 +25,13 @@ export interface BuildUplotConfigOpts {
   userScaleRef?: MutableRefObject<{ min: number; max: number } | null>;
 }
 
+/** Fixed Y-axis area width (px). Prevents plot-left-edge jitter on trace selection changes.
+ *  Sized to fit ~7 monospace chars of tick label + a single-line vertical unit label + tick marks. */
+const Y_AXIS_SIZE_PX = 60;
+/** Fixed Y-axis label area width (px). Reserved regardless of whether the selected trace has a
+ *  unit, so the plot's left edge stays put on selection changes. */
+const Y_AXIS_LABEL_SIZE_PX = 16;
+
 /** Parse a hex color like '#4e79a7' into rgba(r,g,b,alpha). */
 function hexToRgba(hex: string, alpha: number): string {
   const r = parseInt(hex.slice(1, 3), 16);
@@ -94,8 +101,10 @@ export function buildUplotConfig(opts: BuildUplotConfigOpts): uPlot.Options {
     },
     {
       scale: `y_${selectedTagId}`,
-      label: selectedUnit || undefined,
+      label: selectedUnit || ' ',          // always non-empty: reserves label area
+      labelSize: Y_AXIS_LABEL_SIZE_PX,     // fixed label area width
       stroke: selectedColor,
+      size: Y_AXIS_SIZE_PX,
       grid: { show: true },
       ticks: { show: true },
     },

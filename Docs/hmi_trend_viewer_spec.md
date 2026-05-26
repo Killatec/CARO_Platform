@@ -586,6 +586,8 @@ Not a dependency of `@caro/widgets`. Trend chart is an HMI-level component, not 
 
 One chart, up to 20 overlaid traces. Single visible Y axis on the left of the plot area, whose scale, units, and color correspond to the **selected trace**. Each trace nonetheless has its own internal Y-scale so that all 20 traces are visible simultaneously without being crushed into a single shared Y range.
 
+The Y-axis occupies a fixed 60 px wide area (`Y_AXIS_SIZE_PX` constant in `uplotConfig.ts`). Its label area is reserved at a fixed 16 px (`Y_AXIS_LABEL_SIZE_PX`) regardless of whether the selected trace carries a unit. When the selected trace is unitless (Boolean, or a tag with no unit string), the axis label is set to a space character `' '` so uPlot still allocates the area without displaying text. This prevents the plot-left-edge from shifting on trace selection.
+
 ### 8.1.1 Default Y-Scale per Trace
 
 When a tag is first added to the chart, its Y-scale initializes as follows:
@@ -606,7 +608,7 @@ Rationale: industrial trend viewers (Rockwell, Ignition, Wonderware) typically i
 
 ### 8.1.3 Units on the Y Axis and Legend
 
-The Y axis label shows the units of the selected trace, sourced from the Tag Registry's `unit` field (e.g., `°C`, `bar`, `%`). Boolean traces display no unit (blank Y-axis label). The legend shows each trace's current value with its unit appended (`78.3 °C`, `1` for booleans). If a tag's `unit` field is null or empty, the axis and legend show the bare number.
+The Y axis label shows the units of the selected trace, sourced from the Tag Registry's `unit` field (e.g., `°C`, `bar`, `%`). Boolean traces display no unit (blank Y-axis label). The legend value column shows the bare numeric (e.g. `78.3`); units appear in a dedicated adjacent column (`°C`). Boolean values render as `1` or `0` with no unit column text. If a tag's `unit` field is null or empty, the unit column is blank.
 
 ### 8.2 Trace Colors
 
@@ -624,11 +626,16 @@ Stepped interpolation between samples (not linear). A recorded value of `2.0` at
 
 ### 8.4 Legend
 
-Vertical column on the **right side** of the chart (180 px wide, scrollable). Each entry shows:
+Vertical column on the **right side** of the chart. Rendered as a `<table>` with five columns: color swatch (fixed 18 px), label (auto), value (fixed px computed from `charsForTag`), unit (auto), remove (fixed 20 px). The `valueColPx` is computed once via `useMemo([tagIds, tagMap])` so live data updates never reflow the column.
 
-- Color swatch (2px square matching trace color)
-- Tag name (truncated with tooltip on hover)
-- Current value — see idle-value rule below
+`charsForTag(tag)` derives the character budget for the value column: `sign + intDigits + dot + decimals`, where `intDigits = min(8, floor(log10(max(|eng_max|, |eng_min|, 1))) + 1)` and `decimals` comes from the `format` field's `%.Nf` pattern (default 4). Boolean tags always return 1.
+
+Each row shows:
+
+- Color swatch (10×10 px, colored border when selected)
+- Trace label: `tag_registry.tag_name` when set; `Tag-<id>` when NULL. Full `tag_path` available on hover via `title` attribute.
+- Numeric value (right-aligned, fixed-width column) — see idle-value rule below
+- Unit string (`tag_registry.unit`, blank when null) — separate column
 - Remove (×) button
 
 Click on a legend entry selects that trace. Selected trace is highlighted (e.g., bold text, colored swatch border), Y axis adopts its color and scale, and non-selected traces dim slightly.
@@ -637,9 +644,11 @@ Click on a legend entry selects that trace. Selected trace is highlighted (e.g.,
 
 ### 8.5 Cursor Time in Legend
 
-The `Legend` strip contains a `Cursor:` field at its left edge (rendered by `CursorDisplay.tsx`). When the cursor is over the plot area, the field displays the cursor's X-axis position timestamp — taken via `posToVal`, not snapped to the nearest sample or bucket, so it reads correctly inside data gaps — rendered in the **fixed site timezone** (sourced from the `siteTimezone` prop, ultimately from `HMI_SITE_TIMEZONE` env var). When the cursor is outside the plot area the field shows `Cursor: --`. The `CursorDisplay` component also renders an inline "Range too wide. Zoom in or pick a smaller preset." message on the right side of the row when the viewport is in over-range state (see §6.3 Out-of-range UX).
+The `Legend` strip's first row is a `Cursor:` field rendered directly by `Legend.tsx`. When the cursor is over the plot area, the field displays the cursor's X-axis position timestamp — taken via `posToVal`, not snapped to the nearest sample or bucket, so it reads correctly inside data gaps — rendered in the **fixed site timezone** (sourced from `Legend`'s `siteTimezone` prop, ultimately from `HMI_SITE_TIMEZONE` env var). When the cursor is outside the plot area the field shows `Cursor: --`.
 
 Format: full date + time via the `formatDateTime` helper in `@caro/ui` (e.g. `01-May-2026 14:30:42`). Timestamps describe the plant — a remote engineer VPNed in from another region sees the same wall-clock values an on-site operator sees. Falls back to browser-local time when `siteTimezone` is absent.
+
+`CursorDisplay.tsx` is a separate narrow component rendered **above** the footer preset row. It renders only the over-range / under-range message when the viewport span is out of bounds (see §6.3 Out-of-range UX); it is otherwise invisible. Its row height is pinned (`lineHeight: 16px`) so toggling the message does not reflow the footer.
 
 The Legend's per-tag rows display each trace's value at the cursor when the cursor is over the plot, and fall back to the idle-value rule (§8.4) when it is not. The per-tag value is resolved from the cursor's X-axis **timestamp** (`cursorTsMs`, derived via `posToVal`) — never from uPlot's nearest-data-point index. Indexing by nearest point snaps across step transitions and bucket boundaries, displaying a value the rendered line does not have at the cursor. Resolution differs by mode:
 
@@ -650,7 +659,13 @@ A separate floating cursor overlay is a Phase B UX decision.
 
 ### 8.6 Span, Bucket, and Fetch Indicator
 
-`SpanBucketIndicator` shows three values in the footer alongside `SpanPresets` and `EndPicker`: the current viewport span (e.g. `Span: 4 h`), the current `bucketSMs` in human-readable form (e.g. `Bucket Size: 3.8 min`), and the wall-clock duration of the most recent viewport-change batch (e.g. `Last Fetch: 234 ms`). The Last Fetch line is null-displayed (`—`) until the first fetch completes. Low real estate cost, high diagnostic value for correlation with band render quality.
+The span/bucket/fetch information is split across two locations:
+
+**Footer (below chart, alongside presets).** `SpanIndicator` shows the current viewport span (e.g. `Span: 4 h`). It lives in the footer left cluster between `SpanPresets` and `EndPicker`.
+
+**Legend strip (below the tag table).** `BucketFetchIndicator` shows the current `bucketSMs` in human-readable form (e.g. `Bucket Size: 3.8 min`) and the wall-clock duration of the most recent viewport-change batch (e.g. `Last Fetch: 234 ms`). The Last Fetch line is null-displayed (`—`) until the first fetch completes. Both values are passed to `Legend` as `bucketSMs` and `lastFetchMs` props (routed through `TrendChart`). Low real estate cost, high diagnostic value for correlation with band render quality.
+
+`SpanBucketIndicator` remains exported from `@caro/trend-chart` for backward compatibility but is no longer used in the active footer.
 
 ### 8.7 Always-Band Render Architecture
 

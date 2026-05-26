@@ -15,6 +15,7 @@ function makeTagDef(tag_id: number, module_id: string, module_type: string): Tag
   return {
     tag_id,
     tag_path:    `${module_id}.tag${tag_id}`,
+    tag_name:    null,
     data_type:   'f32',
     is_setpoint: true,
     module_id,
@@ -22,6 +23,7 @@ function makeTagDef(tag_id: number, module_id: string, module_type: string): Tag
     eng_min:     null,
     eng_max:     null,
     unit:        null,
+    format:      null,
     meta:        [],
   };
 }

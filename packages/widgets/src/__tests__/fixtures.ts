@@ -3,6 +3,7 @@ import type { TagDef } from '@caro/hmi-context';
 export const mockNumericTag: TagDef = {
   tag_id: 1001,
   tag_path: 'Plant1.Module.RF_Fwd.monitor',
+  tag_name: null,
   data_type: 'f32',
   is_setpoint: false,
   module_id: 'Module',
@@ -10,8 +11,9 @@ export const mockNumericTag: TagDef = {
   eng_min: 0,
   eng_max: 5000,
   unit: 'W',
+  format: '#.###',
   meta: [
-    { type: 'system', name: 'Plant1', fields: { format: 3 } },
+    { type: 'system', name: 'Plant1', fields: {} },
     { type: 'module', name: 'Module', fields: {} },
     { type: 'parameter', name: 'RF_Fwd', fields: {} },
     { type: 'tag', name: 'monitor', fields: {} },
@@ -21,6 +23,7 @@ export const mockNumericTag: TagDef = {
 export const mockSetpointTag: TagDef = {
   tag_id: 1003,
   tag_path: 'Plant1.Module.RF_Fwd.setpoint',
+  tag_name: null,
   data_type: 'f32',
   is_setpoint: true,
   module_id: 'Module',
@@ -28,8 +31,9 @@ export const mockSetpointTag: TagDef = {
   eng_min: 0,
   eng_max: 100,
   unit: 'W',
+  format: '#.#',
   meta: [
-    { type: 'system', name: 'Plant1', fields: { format: 1 } },
+    { type: 'system', name: 'Plant1', fields: {} },
     { type: 'module', name: 'Module', fields: {} },
     { type: 'parameter', name: 'RF_Fwd', fields: {} },
     { type: 'tag', name: 'setpoint', fields: {} },
@@ -39,6 +43,7 @@ export const mockSetpointTag: TagDef = {
 export const mockBoolTag: TagDef = {
   tag_id: 1004,
   tag_path: 'Plant1.Module.RF_Fwd.interlock_status',
+  tag_name: null,
   data_type: 'bool',
   is_setpoint: false,
   module_id: 'Module',
@@ -46,6 +51,7 @@ export const mockBoolTag: TagDef = {
   eng_min: null,
   eng_max: null,
   unit: null,
+  format: null,
   meta: [
     { type: 'system', name: 'Plant1', fields: {} },
     { type: 'module', name: 'Module', fields: {} },
@@ -57,6 +63,7 @@ export const mockBoolTag: TagDef = {
 export const mockBoolSetTag: TagDef = {
   tag_id: 1005,
   tag_path: 'Plant1.Module.RF_Fwd.interlock_enable',
+  tag_name: null,
   data_type: 'bool',
   is_setpoint: true,
   module_id: 'Module',
@@ -64,6 +71,7 @@ export const mockBoolSetTag: TagDef = {
   eng_min: null,
   eng_max: null,
   unit: null,
+  format: null,
   meta: [
     { type: 'system', name: 'Plant1', fields: {} },
     { type: 'module', name: 'Module', fields: {} },
@@ -89,6 +97,7 @@ function prfTag(
   return {
     tag_id: id,
     tag_path: `CARO_1.RF1.PRF.${child}`,
+    tag_name: null,
     data_type: dataType,
     is_setpoint: isSetpoint,
     module_id: 'RF1',
@@ -96,6 +105,7 @@ function prfTag(
     eng_min: dataType === 'f32' ? -10 : null,
     eng_max: dataType === 'f32' ? 50  : null,
     unit: dataType === 'f32' ? 'dBm' : null,
+    format: null,
     meta: [...PRF_META, { type: 'tag', name: child, fields: {} }],
   };
 }
@@ -140,6 +150,7 @@ export const prfTagValues: Record<number, import('@caro/hmi-context').LiveValue>
 export const mockNumericTagRev: TagDef = {
   tag_id: 1002,
   tag_path: 'Plant1.Module.RF_Rev.monitor',
+  tag_name: null,
   data_type: 'f32',
   is_setpoint: false,
   module_id: 'Module',
@@ -147,8 +158,9 @@ export const mockNumericTagRev: TagDef = {
   eng_min: 0,
   eng_max: 5000,
   unit: 'W',
+  format: '#.###',
   meta: [
-    { type: 'system', name: 'Plant1', fields: { format: 3 } },
+    { type: 'system', name: 'Plant1', fields: {} },
     { type: 'module', name: 'Module', fields: {} },
     { type: 'parameter', name: 'RF_Rev', fields: {} },
     { type: 'tag', name: 'monitor', fields: {} },

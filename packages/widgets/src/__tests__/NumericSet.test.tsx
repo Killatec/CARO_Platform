@@ -25,7 +25,7 @@ describe('NumericSet', () => {
   it('displays confirmed live value in idle state', () => {
     renderWidget(tagDefs, tagValues, { assetPath: 'RF_Fwd.setpoint' });
     const input = screen.getByTestId('numeric-set-input') as HTMLInputElement;
-    // format: 1 decimal → 42.5
+    // tag.format: '#.#' → 1 decimal → 42.5
     expect(input.value).toContain('42.5');
   });
 

@@ -33,6 +33,7 @@ function makeActiveTag(
     format:      null,
     eng_min:     null,
     eng_max:     null,
+    tag_name:    null,
     retired:     false,
     meta:        {},
     ...overrides,
@@ -43,6 +44,7 @@ function makeTagDef(tag_id: number, module_id = 'HMI'): TagDef {
   return {
     tag_id,
     tag_path:    `CARO_1.${module_id}.tag${tag_id}`,
+    tag_name:    null,
     data_type:   'i16',
     is_setpoint: false,
     module_id,
@@ -50,6 +52,7 @@ function makeTagDef(tag_id: number, module_id = 'HMI'): TagDef {
     eng_min:     null,
     eng_max:     null,
     unit:        null,
+    format:      null,
     meta:        [],
   };
 }

@@ -56,6 +56,10 @@ export interface TrendChartProps {
    *  rangeExceeded; keeps xScale aligned with modeViewport during continuous wheel-zoom in
    *  the under-range (< 1 second) state. */
   rangeTooNarrow?: boolean;
+  /** Bucket width in ms forwarded to Legend's BucketFetchIndicator. */
+  bucketSMs?: bigint | null;
+  /** Wall-clock ms of the most recent fetch batch forwarded to Legend's BucketFetchIndicator. */
+  lastFetchMs?: number | null;
 }
 
 const WRAPPER: CSSProperties = {
@@ -100,6 +104,8 @@ export function TrendChart({
   lastIntent,
   rangeExceeded = false,
   rangeTooNarrow = false,
+  bucketSMs = null,
+  lastFetchMs = null,
 }: TrendChartProps) {
   const tagMap = useTagMap();
 
@@ -511,13 +517,16 @@ export function TrendChart({
         tagMap={tagMap}
         selectedTagId={effectiveSelectedId}
         cursorTsMs={cursorState?.tsMs}
+        siteTimezone={siteTimezone}
+        bucketSMs={bucketSMs}
+        lastFetchMs={lastFetchMs}
         showLastWhenIdle={showLastWhenIdle}
         onSelect={setSelectedTagId}
         onRemove={tagId => onTagRemove?.(tagId)}
       />
     ) : null
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  ), [tagIds, data, tagMap, effectiveSelectedId, cursorState?.tsMs, onTagRemove, showLastWhenIdle]);
+  ), [tagIds, data, tagMap, effectiveSelectedId, cursorState?.tsMs, siteTimezone, bucketSMs, lastFetchMs, onTagRemove, showLastWhenIdle]);
 
   return (
     <div style={WRAPPER}>

@@ -8,6 +8,7 @@ function makeTag(metaFields: Record<string, unknown>[]): TagDef {
   return {
     tag_id:      1,
     tag_path:    'X.Y',
+    tag_name:    null,
     data_type:   'f32',
     is_setpoint: false,
     module_id:   'X',
@@ -15,6 +16,7 @@ function makeTag(metaFields: Record<string, unknown>[]): TagDef {
     eng_min:     null,
     eng_max:     null,
     unit:        null,
+    format:      null,
     meta: metaFields.map((fields, i) => ({
       type:   i === 0 ? 'system' : 'tag',
       name:   String(i),
@@ -74,23 +76,26 @@ describe('compileFormat', () => {
 // ── resolveFormat ─────────────────────────────────────────────────────────────
 
 describe('resolveFormat', () => {
-  it('string format in meta → uses compileFormat with that string', () => {
-    const tag = makeTag([{ format: '#.###' }]);
+  it('tag.format = "#.###" → uses that format', () => {
+    const tag = { ...makeTag([{}]), format: '#.###' };
     expect(resolveFormat(tag)(42.5)).toBe('42.500');
   });
 
-  it('number format in meta (backward compat) → treats as decimal count', () => {
-    const tag = makeTag([{ format: 3 }]);
-    expect(resolveFormat(tag)(42.5)).toBe('42.500');
-  });
-
-  it('no format field → defaults to "#.##"', () => {
+  it('tag.format = null → defaults to "#.##"', () => {
     const tag = makeTag([{}]);
     expect(resolveFormat(tag)(42.567)).toBe('42.57');
   });
 
-  it('root-level format wins over leaf-level', () => {
-    const tag = makeTag([{ format: '#.#' }, { format: '#.####' }]);
-    expect(resolveFormat(tag)(42.567)).toBe('42.6');
+  it('regression: tag.format = null with string format in meta → meta ignored, defaults to "#.##"', () => {
+    // resolveFormat must NOT walk meta — tag.format is the registry-resolved value.
+    const tag = makeTag([{ format: '#.#' }]); // meta carries '#.#'; tag.format stays null
+    expect(resolveFormat(tag)(42.567)).toBe('42.57');
+  });
+
+  it('regression: tag.format = null with numeric format in meta → meta ignored, defaults to "#.##"', () => {
+    // resolveRegistry stores numeric meta formats as null (typeof check gates string-only).
+    // resolveFormat must not apply the old numeric backward-compat path.
+    const tag = makeTag([{ format: 3 }]); // meta carries numeric 3; tag.format stays null
+    expect(resolveFormat(tag)(42.5)).toBe('42.50');
   });
 });

@@ -8,6 +8,7 @@ import type { TagDef } from '../types.js';
 const rfFwdSetpoint: TagDef = {
   tag_id: 1001,
   tag_path: 'Plant1.Module.RF_Fwd.setpoint',
+  tag_name: null,
   data_type: 'f32',
   is_setpoint: true,
   module_id: 'Module',
@@ -15,6 +16,7 @@ const rfFwdSetpoint: TagDef = {
   eng_min: 0,
   eng_max: 5000,
   unit: 'W',
+  format: null,
   meta: [
     { type: 'system', name: 'Plant1', fields: {} },
     { type: 'module', name: 'Module', fields: {} },
@@ -26,6 +28,7 @@ const rfFwdSetpoint: TagDef = {
 const rfFwdMonitor: TagDef = {
   tag_id: 1002,
   tag_path: 'Plant1.Module.RF_Fwd.monitor',
+  tag_name: null,
   data_type: 'f32',
   is_setpoint: false,
   module_id: 'Module',
@@ -33,6 +36,7 @@ const rfFwdMonitor: TagDef = {
   eng_min: 0,
   eng_max: 5000,
   unit: 'W',
+  format: null,
   meta: [
     { type: 'system', name: 'Plant1', fields: {} },
     { type: 'module', name: 'Module', fields: {} },
@@ -44,6 +48,7 @@ const rfFwdMonitor: TagDef = {
 const rfRevSetpoint: TagDef = {
   tag_id: 1003,
   tag_path: 'Plant1.Module.RF_Rev.setpoint',
+  tag_name: null,
   data_type: 'f32',
   is_setpoint: true,
   module_id: 'Module',
@@ -51,6 +56,7 @@ const rfRevSetpoint: TagDef = {
   eng_min: 0,
   eng_max: 5000,
   unit: 'W',
+  format: null,
   meta: [
     { type: 'system', name: 'Plant1', fields: {} },
     { type: 'module', name: 'Module', fields: {} },
@@ -62,6 +68,7 @@ const rfRevSetpoint: TagDef = {
 const rfRevMonitor: TagDef = {
   tag_id: 1004,
   tag_path: 'Plant1.Module.RF_Rev.monitor',
+  tag_name: null,
   data_type: 'f32',
   is_setpoint: false,
   module_id: 'Module',
@@ -69,6 +76,7 @@ const rfRevMonitor: TagDef = {
   eng_min: 0,
   eng_max: 5000,
   unit: 'W',
+  format: null,
   meta: [
     { type: 'system', name: 'Plant1', fields: {} },
     { type: 'module', name: 'Module', fields: {} },

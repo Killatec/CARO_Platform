@@ -15,8 +15,8 @@ function makeTagMap(defs: Array<Partial<TagDef> & { tag_id: number }>): Map<numb
   return new Map(defs.map(d => [
     d.tag_id,
     {
-      tag_path: `CARO.Tag_${d.tag_id}`, data_type: 'float', is_setpoint: false,
-      module_id: 'M', module_type: 'MQTT', eng_min: null, eng_max: null, unit: null, meta: [],
+      tag_path: `CARO.Tag_${d.tag_id}`, tag_name: null, data_type: 'float', is_setpoint: false,
+      module_id: 'M', module_type: 'MQTT', eng_min: null, eng_max: null, unit: null, format: null, meta: [],
       ...d,
     } satisfies TagDef,
   ]));
@@ -195,6 +195,26 @@ describe('buildUplotConfig', () => {
       expect(lower.stroke).toBe(upper.stroke);
       expect(lower.stroke).not.toBe('transparent');
     }
+  });
+
+  it('Y-axis has fixed size to prevent plot-left-edge jitter', () => {
+    const config = buildUplotConfig(baseOpts);
+    expect(config.axes![1]!.size).toBe(60);
+  });
+
+  it('Y-axis reserves label space for unitless traces (label=" ", labelSize=16)', () => {
+    // tag 2 has no unit — label must be a single space, not undefined, so uPlot
+    // always reserves the label area and the plot left edge stays fixed.
+    const config = buildUplotConfig({ ...baseOpts, selectedTagId: 2 });
+    expect(config.axes![1]!.label).toBe(' ');
+    expect(config.axes![1]!.labelSize).toBe(16);
+  });
+
+  it('Y-axis renders unit label when present (label="°C", labelSize=16)', () => {
+    // tag 1 has unit: '°C' — label should be the unit string, labelSize still fixed.
+    const config = buildUplotConfig({ ...baseOpts, selectedTagId: 1 });
+    expect(config.axes![1]!.label).toBe('°C');
+    expect(config.axes![1]!.labelSize).toBe(16);
   });
 
   it('lower (min) series does NOT have width: 0 — uPlot skips _paths for zero-width series, breaking band fill', () => {

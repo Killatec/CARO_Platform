@@ -8,7 +8,7 @@ import type { UseLiveSubscriptionResult } from './useLiveSubscription.js';
 import { mergeTrendData } from './mergeTrendData.js';
 import { useZoomState } from './useZoomState.js';
 import { TrendChart } from './TrendChart.js';
-import { SpanBucketIndicator } from './SpanBucketIndicator.js';
+import { SpanIndicator } from './SpanIndicator.js';
 import { SpanPresets } from './SpanPresets.js';
 import { EndPicker } from './EndPicker.js';
 import { CursorDisplay } from './CursorDisplay.js';
@@ -82,9 +82,6 @@ export function TrendChartContainer({
 
   // ── Tag list (container owns; removes come from Legend via TrendChart) ────
   const [tagIds, setTagIds] = useState<number[]>(initialTagIds);
-
-  // ── Cursor time (lifted from TrendChart for CursorDisplay) ────────────────
-  const [cursorTsMs, setCursorTsMs] = useState<number | null>(null);
 
   // ── Zoom-level state ──────────────────────────────────────────────────────
   const { currentBucketSMs, zoomAnchorSpan, handleDragZoom: _handleDragZoom, handleZoomLevelSwitch: _handleZoomLevelSwitch } = useZoomState({
@@ -321,15 +318,11 @@ export function TrendChartContainer({
 
   const footerJsx = (
     <>
-      <CursorDisplay
-        cursorTsMs={cursorTsMs}
-        siteTimezone={siteTimezone}
-        rangeMessage={rangeMessage}
-      />
+      <CursorDisplay rangeMessage={rangeMessage} />
       <div style={FOOTER}>
         <div style={FOOTER_LEFT}>
           <SpanPresets state={modeState} onPreset={handlePreset} />
-          <SpanBucketIndicator spanMs={viewportSpanMs} bucketSMs={bucketSMsIndicator} lastFetchMs={lastFetchMs} />
+          <SpanIndicator spanMs={viewportSpanMs} />
         </div>
         <div style={FOOTER_RIGHT}>
           <EndPicker
@@ -396,7 +389,8 @@ export function TrendChartContainer({
       activeTileCount={activeTileCount}
       onDragZoom={handleDragZoom}
       footer={footerJsx}
-      onCursorTsChange={setCursorTsMs}
+      bucketSMs={bucketSMsIndicator}
+      lastFetchMs={lastFetchMs}
       showLastWhenIdle={isLive(modeState.mode)}
       onXRangeChange={handleXRangeChange}
       onXPan={handleXPan}
