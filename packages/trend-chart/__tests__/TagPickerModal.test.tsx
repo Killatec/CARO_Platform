@@ -204,4 +204,63 @@ describe('TagPickerModal', () => {
     expect(onCommit).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalled();
   });
+
+  // ── Filter auto-expand ──────────────────────────────────────────────────────
+
+  it('typing into search auto-expands branches with matching descendants', () => {
+    renderPicker();
+    // All branches collapsed initially.
+    expect(screen.queryByText('Mod1')).toBeNull();
+
+    fireEvent.change(screen.getByPlaceholderText('Search tags…'), { target: { value: 'temp' } });
+
+    // Plant and Mod1 should be auto-expanded; Temperature leaf visible.
+    expect(screen.getByText('Mod1')).toBeTruthy();
+    expect(screen.getByTitle('Plant.Mod1.Temp')).toBeTruthy();
+  });
+
+  it('user can collapse an auto-expanded branch while the filter is active', () => {
+    renderPicker();
+    fireEvent.change(screen.getByPlaceholderText('Search tags…'), { target: { value: 'temp' } });
+
+    // Mod1 was auto-expanded. User clicks to collapse it.
+    fireEvent.click(screen.getByText('Mod1'));
+
+    // Temp leaf no longer visible (Mod1 is collapsed under the active filter).
+    expect(screen.queryByTitle('Plant.Mod1.Temp')).toBeNull();
+  });
+
+  it('subsequent filter change expands newly matching branches but not user-collapsed ones', () => {
+    renderPicker();
+    const searchInput = screen.getByPlaceholderText('Search tags…');
+
+    // Filter 1: "temp" → Plant and Mod1 auto-expanded.
+    fireEvent.change(searchInput, { target: { value: 'temp' } });
+    expect(screen.getByText('Mod1')).toBeTruthy();
+
+    // User collapses Mod1.
+    fireEvent.click(screen.getByText('Mod1'));
+
+    // Filter 2: "status" → Mod2 auto-expanded. Mod1 not re-expanded (Status is under Mod2).
+    fireEvent.change(searchInput, { target: { value: 'status' } });
+
+    // Clear search to make all nodes visible; expansion is now driven purely by expandedKeys.
+    fireEvent.change(searchInput, { target: { value: '' } });
+
+    // Plant.Mod2 was newly auto-expanded → Status leaf visible.
+    expect(screen.getByTitle('Plant.Mod2.Status')).toBeTruthy();
+    // Plant.Mod1 was never re-expanded → Temperature leaf not visible.
+    expect(screen.queryByTitle('Plant.Mod1.Temp')).toBeNull();
+  });
+
+  it('Cancel and OK buttons remain visible even with a large tag tree', () => {
+    // Large tagMap that would overflow a scrolling body — footer must stay in view.
+    const bigMap = new Map<number, TagDef>();
+    for (let i = 1; i <= 40; i++) {
+      bigMap.set(i, makeTag(i, `Root.Branch${Math.ceil(i / 5)}.Tag${i}`, true));
+    }
+    renderPicker({ tagMap: bigMap, currentTagIds: [] });
+    expect(screen.queryByRole('button', { name: /cancel/i })).not.toBeNull();
+    expect(screen.queryByRole('button', { name: /ok/i })).not.toBeNull();
+  });
 });

@@ -6,12 +6,16 @@ export interface ModalProps extends React.HTMLAttributes<HTMLDivElement> {
   onClose: () => void;
   title?: string;
   maxWidthClass?: string;
+  /** Replaces the full `${maxWidthClass} w-full` size token pair. When provided, maxWidthClass is ignored. */
+  widthClass?: string;
+  /** Replaces the default body div class. Use when the caller manages its own internal scrolling. */
+  bodyClassName?: string;
 }
 
 /**
  * Modal primitive - stateless, zero domain knowledge
  */
-export const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, maxWidthClass = 'max-w-2xl', children, ...props }) => {
+export const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, maxWidthClass = 'max-w-2xl', widthClass, bodyClassName, children, ...props }) => {
   useEffect(() => {
     if (isOpen) {
       // Prevent body scroll when modal is open
@@ -35,7 +39,7 @@ export const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, maxWidthCl
       {/* Modal content */}
       <div className="relative z-10 flex min-h-full items-center justify-center p-4">
         <div
-          className={`relative bg-white rounded-lg shadow-xl ${maxWidthClass} w-full max-h-[90vh] overflow-hidden`}
+          className={`relative bg-white rounded-lg shadow-xl ${widthClass ?? `${maxWidthClass} w-full`} max-h-[90vh] overflow-hidden`}
           onClick={(e) => e.stopPropagation()}
         >
           {/* Header */}
@@ -46,7 +50,7 @@ export const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, maxWidthCl
           )}
 
           {/* Body */}
-          <div className="px-6 py-4 overflow-y-auto max-h-[calc(90vh-8rem)]">
+          <div className={bodyClassName ?? 'px-6 py-4 overflow-y-auto max-h-[calc(90vh-8rem)]'}>
             {children}
           </div>
         </div>

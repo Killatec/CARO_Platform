@@ -718,14 +718,26 @@ describe('Legend — bucket/fetch section', () => {
 // ── Signals header row ────────────────────────────────────────────────────────
 
 describe('Legend — Signals header row', () => {
-  it('renders "Signals" label', () => {
-    renderLegend([1]);
-    expect(screen.getByText('Signals')).toBeTruthy();
+  it('Signals header renders between value row and tag table', () => {
+    const { container } = renderLegend([1]);
+    const signalsEl = screen.getByText('Signals');
+    const table = container.querySelector('table')!;
+    // Signals label must precede the table in document order.
+    expect(
+      signalsEl.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    // Value row ("Value: Last Sample") must precede the Signals label.
+    const valueRow = screen.getByText('Value: Last Sample');
+    expect(
+      valueRow.compareDocumentPosition(signalsEl) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
-  it('renders gear icon button with configure-signals title', () => {
+  it('Signals header has bottom border', () => {
     renderLegend([1]);
-    expect(screen.getByTitle('Configure signals')).toBeTruthy();
+    const signalsEl = screen.getByText('Signals');
+    // React serialises camelCase style props to HTML; check the outerHTML for the value.
+    expect(signalsEl.parentElement?.outerHTML).toContain('1px solid');
   });
 
   it('gear button click invokes onSettingsClick', () => {

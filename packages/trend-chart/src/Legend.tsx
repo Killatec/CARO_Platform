@@ -57,6 +57,15 @@ const SIGNALS_HEADER: CSSProperties = {
   alignItems: 'center',
   paddingLeft: 4,
   paddingBottom: 6,
+  borderBottom: '1px solid #e5e7eb',
+  marginTop: 8,
+};
+
+const SIGNALS_LABEL: CSSProperties = {
+  fontSize: 13,
+  color: '#374151',
+  fontFamily: 'monospace',
+  fontWeight: 600,
 };
 
 const GEAR_BTN: CSSProperties = {
@@ -224,8 +233,12 @@ export function Legend({ tagIds, data, tagMap, selectedTagId, cursorTsMs, siteTi
 
   return (
     <div style={STRIP}>
+      <div style={CURSOR_ROW}>
+        Cursor: {cursorTsMs == null ? '--' : formatDateTime(cursorTsMs, { timezone: siteTimezone })}
+      </div>
+      <div style={HEADER_STYLE}>{headerText}</div>
       <div style={SIGNALS_HEADER}>
-        <span style={LABEL_STYLE}>Signals</span>
+        <span style={SIGNALS_LABEL}>Signals</span>
         <button
           onClick={onSettingsClick}
           title="Configure signals"
@@ -238,10 +251,6 @@ export function Legend({ tagIds, data, tagMap, selectedTagId, cursorTsMs, siteTi
           </svg>
         </button>
       </div>
-      <div style={CURSOR_ROW}>
-        Cursor: {cursorTsMs == null ? '--' : formatDateTime(cursorTsMs, { timezone: siteTimezone })}
-      </div>
-      <div style={HEADER_STYLE}>{headerText}</div>
       <table style={TABLE_STYLE}>
         <colgroup>
           <col style={{ width: SWATCH_COL_PX }} />

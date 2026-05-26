@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { CSSProperties } from 'react';
 import { Modal } from '@caro/ui';
 import type { TagDef } from '@caro/hmi-context';
@@ -59,10 +59,17 @@ function nodeMatchesSearch(node: TagForestNode, search: string): boolean {
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 
+const OUTER_WRAPPER: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  maxHeight: 'calc(90vh - 8rem)',
+};
+
 const PANE_ROW: CSSProperties = {
+  flex: 1,
+  minHeight: 0,
   display: 'flex',
   gap: 12,
-  minHeight: 400,
   overflow: 'hidden',
 };
 
@@ -92,15 +99,17 @@ const SEARCH_BOX: CSSProperties = {
   fontSize: 13,
   fontFamily: 'monospace',
   outline: 'none',
+  flexShrink: 0,
 };
 
 const ERROR_ROW: CSSProperties = {
   fontSize: 12,
   fontFamily: 'monospace',
   lineHeight: '16px',
-  minHeight: 16,
+  height: 16,
   color: '#dc2626',
   padding: '4px 0',
+  flexShrink: 0,
 };
 
 const FOOTER_ROW: CSSProperties = {
@@ -108,6 +117,7 @@ const FOOTER_ROW: CSSProperties = {
   justifyContent: 'flex-end',
   gap: 8,
   paddingTop: 8,
+  flexShrink: 0,
 };
 
 const BTN_BASE: CSSProperties = {
@@ -173,6 +183,22 @@ const REMOVE_BTN: CSSProperties = {
   marginLeft: 'auto',
 };
 
+/** Returns pathKeys of all branch nodes that have at least one descendant matching the search. */
+function computeMatchedBranchKeys(forest: TagForestNode[], search: string): string[] {
+  const keys: string[] = [];
+  function visit(node: TagForestNode): boolean {
+    if (node.tag !== null) return nodeMatchesSearch(node, search);
+    let hasMatch = false;
+    for (const child of node.children) {
+      if (visit(child)) hasMatch = true;
+    }
+    if (hasMatch) keys.push(node.pathKey);
+    return hasMatch;
+  }
+  for (const root of forest) visit(root);
+  return keys;
+}
+
 // ── Tree node component ───────────────────────────────────────────────────────
 
 interface TreeNodeProps {
@@ -180,22 +206,20 @@ interface TreeNodeProps {
   depth: number;
   stagedIds: number[];
   expandedKeys: Set<string>;
-  forceExpand: boolean;
   onToggle: (pathKey: string) => void;
   onStage: (tag: TagDef) => void;
 }
 
-function TreeNode({ node, depth, stagedIds, expandedKeys, forceExpand, onToggle, onStage }: TreeNodeProps) {
+function TreeNode({ node, depth, stagedIds, expandedKeys, onToggle, onStage }: TreeNodeProps) {
   const indent = depth * 16;
   const isLeaf = node.tag !== null;
-  const isExpanded = forceExpand || expandedKeys.has(node.pathKey);
+  const isExpanded = expandedKeys.has(node.pathKey);
 
   if (isLeaf) {
     const tag = node.tag!;
     const isStaged = stagedIds.includes(tag.tag_id);
     const isNonTrendable = !tag.trendable;
     const label = tag.tag_name ?? `Tag-${tag.tag_id}`;
-    const color = colorAssign(tag.tag_id);
 
     const rowStyle: CSSProperties = {
       ...TREE_ROW_BASE,
@@ -212,7 +236,6 @@ function TreeNode({ node, depth, stagedIds, expandedKeys, forceExpand, onToggle,
         onClick={isNonTrendable || isStaged ? undefined : () => onStage(tag)}
         title={tag.tag_path}
       >
-        <span style={{ ...SWATCH, background: color }} />
         <span>{label}</span>
       </div>
     );
@@ -241,7 +264,6 @@ function TreeNode({ node, depth, stagedIds, expandedKeys, forceExpand, onToggle,
           depth={depth + 1}
           stagedIds={stagedIds}
           expandedKeys={expandedKeys}
-          forceExpand={forceExpand}
           onToggle={onToggle}
           onStage={onStage}
         />
@@ -279,7 +301,23 @@ export function TagPickerModal({
   const trimmedSearch = search.trim();
   const isSearching = trimmedSearch !== '';
 
-  // Filter forest for search. Returns filtered nodes; matched branches force-expanded.
+  // Auto-expand branches whose descendants match the new search term (additive, never
+  // collapses). User toggles during an active filter are respected and preserved across
+  // subsequent filter changes.
+  const lastSearchRef = useRef('');
+  useEffect(() => {
+    if (search === lastSearchRef.current) return;
+    lastSearchRef.current = search;
+    if (search.trim() === '') return;
+    const matched = computeMatchedBranchKeys(forest, search);
+    setExpandedKeys(prev => {
+      const next = new Set(prev);
+      for (const key of matched) next.add(key);
+      return next;
+    });
+  }, [search, forest]);
+
+  // Filter forest for search. Returns filtered nodes only — expansion driven by expandedKeys.
   const filteredForest = useMemo(() => {
     if (!isSearching) return forest;
     function filterNode(node: TagForestNode): TagForestNode | null {
@@ -327,7 +365,8 @@ export function TagPickerModal({
   }, [onCommit, onClose, stagedIds]);
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Signals" maxWidthClass="max-w-4xl">
+    <Modal isOpen={isOpen} onClose={onClose} title="Signals" widthClass="w-[960px] max-w-[95vw]" bodyClassName="px-6 py-4 overflow-hidden">
+      <div style={OUTER_WRAPPER}>
       <input
         type="text"
         placeholder="Search tags…"
@@ -346,7 +385,6 @@ export function TagPickerModal({
               depth={0}
               stagedIds={stagedIds}
               expandedKeys={expandedKeys}
-              forceExpand={isSearching}
               onToggle={handleToggle}
               onStage={handleStage}
             />
@@ -383,6 +421,7 @@ export function TagPickerModal({
       <div style={FOOTER_ROW}>
         <button style={BTN_CANCEL} onClick={onClose}>Cancel</button>
         <button style={BTN_OK} onClick={handleOk}>OK</button>
+      </div>
       </div>
     </Modal>
   );

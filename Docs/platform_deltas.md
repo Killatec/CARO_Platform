@@ -6,3 +6,4 @@ Read once at session start alongside `Docs/platform_handoff.md`.
 
 ---
 
+- @caro/ui Modal: added `widthClass` prop (replaces the full `max-w-* w-full` token pair when provided; `maxWidthClass` retained for back-compat) and `bodyClassName` prop (so callers can manage internal scrolling). Existing consumers (BooleanSet, tag-registry modals) unaffected — default behavior preserved.
