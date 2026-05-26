@@ -20,8 +20,9 @@
 
 **Last cleared:** 2026-05-26. Four entries propagated: (1) Y-axis `Y_AXIS_SIZE_PX=60` / `Y_AXIS_LABEL_SIZE_PX=16` + label=`' '` fallback → spec §8.1, handoff §2 `uplotConfig.ts`, platform_handoff `@caro/trend-chart` row; (2) Legend `tag_name` label source + STRIP sizing → spec §8.4 (already reflected), handoff §2 `Legend.tsx`; (3) Legend 5-col table + `format` plumbing + `formatValue` signature → spec §8.4 (already reflected), handoff §2 `Legend.tsx` + `formatValue.ts`; (4) Label reorg (`CursorDisplay` range-message-only, cursor row into `Legend`, `SpanIndicator`/`BucketFetchIndicator` split, container cursor-state removal) → spec §8.5 + §8.6, handoff §2 file map (Legend, CursorDisplay, TrendChartContainer, TrendChart, new components, test entries), handoff §7 Container Wiring, handoff §1 test count 698→730, platform_handoff `@caro/trend-chart` row.
 
-- Step 12 polish: "Signals" label moved from top of Legend strip to a section header (13px, 600 weight, bottom border) immediately above the tag table, between the "Value: …" row and the `<table>`.
+- Step 12 polish: Legend "Signals" header moved into `<thead><tr><th colSpan={5} scope="colgroup">` inside the tag table (supersedes earlier "section header above the table" entry); gear button lives inside the `<th>`.
 - Step 12 polish: TagPickerModal width is explicit-inline 880px (maxWidth 100%) inside Modal with `widthClass='max-w-4xl'`; panes carry inline min-widths (tree 480, trending 280) so content never collapses or truncates. Earlier `w-[960px]` arbitrary Tailwind value approach abandoned — not compiled by the consuming app's CSS scan.
-- Step 12 polish: TagPickerModal scrolls internally (tree + Trending panes); Cancel/OK footer pinned outside the scroll area.
-- Step 12 polish: tree leaves no longer show color swatches (swatches retained on Trending / staged list).
-- Step 12 polish: filter auto-expands matching branches once (additive only, never collapses); user toggles after auto-expand are respected and persist across subsequent filter changes.
+- Step 12 polish: TagPickerModal scrolls internally (tag list + Trending panes); Cancel/OK footer pinned outside the scroll area.
+- Step 12 redesign: TagPickerModal left pane is a flat alphabetical list of trendable tags (filtered by `tag.trendable === true`), replaces the prior tree view of the full tag registry. Dropped: tree state, expand/collapse persistence, non-trendable gray-out, filter auto-expand.
+- Step 12 redesign: `buildTagForest` helper + tests + index exports removed from `@caro/trend-chart` — no consumer remains after the flat-list pivot.
+- Step 12 redesign: orphaned localStorage key `caro.hmi.tagPicker.expandedNodes` left in place (harmless; not read by any code path post-redesign).

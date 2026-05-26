@@ -1,9 +1,7 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import type { CSSProperties } from 'react';
 import { Modal } from '@caro/ui';
 import type { TagDef } from '@caro/hmi-context';
-import { buildTagForest } from './buildTagForest.js';
-import type { TagForestNode } from './buildTagForest.js';
 import { colorAssign } from './colorAssign.js';
 
 export interface TagPickerModalProps {
@@ -15,47 +13,7 @@ export interface TagPickerModalProps {
   maxTags?: number;
 }
 
-const EXPANDED_STORAGE_KEY = 'caro.hmi.tagPicker.expandedNodes';
 const DEFAULT_MAX_TAGS = 16;
-
-function loadExpandedKeys(): Set<string> {
-  try {
-    const raw = localStorage.getItem(EXPANDED_STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as unknown;
-      if (Array.isArray(parsed)) return new Set(parsed as string[]);
-    }
-  } catch {
-    // ignore
-  }
-  return new Set<string>();
-}
-
-function saveExpandedKeys(keys: Set<string>): void {
-  try {
-    localStorage.setItem(EXPANDED_STORAGE_KEY, JSON.stringify([...keys]));
-  } catch {
-    // ignore
-  }
-}
-
-// Fuzzy sequential-substring match (case-insensitive).
-function fuzzyMatch(haystack: string, needle: string): boolean {
-  const h = haystack.toLowerCase();
-  const n = needle.toLowerCase();
-  let hi = 0;
-  for (let ni = 0; ni < n.length; ni++) {
-    const idx = h.indexOf(n[ni]!, hi);
-    if (idx === -1) return false;
-    hi = idx + 1;
-  }
-  return true;
-}
-
-function nodeMatchesSearch(node: TagForestNode, search: string): boolean {
-  if (node.tag !== null) return fuzzyMatch(node.tag.tag_path, search);
-  return node.children.some(c => nodeMatchesSearch(c, search));
-}
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 
@@ -146,18 +104,6 @@ const BTN_OK: CSSProperties = {
   color: '#fff',
 };
 
-const TREE_ROW_BASE: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 4,
-  padding: '2px 8px',
-  fontSize: 12,
-  fontFamily: 'monospace',
-  lineHeight: '18px',
-  cursor: 'pointer',
-  userSelect: 'none',
-};
-
 const RIGHT_ROW: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
@@ -187,95 +133,6 @@ const REMOVE_BTN: CSSProperties = {
   marginLeft: 'auto',
 };
 
-/** Returns pathKeys of all branch nodes that have at least one descendant matching the search. */
-function computeMatchedBranchKeys(forest: TagForestNode[], search: string): string[] {
-  const keys: string[] = [];
-  function visit(node: TagForestNode): boolean {
-    if (node.tag !== null) return nodeMatchesSearch(node, search);
-    let hasMatch = false;
-    for (const child of node.children) {
-      if (visit(child)) hasMatch = true;
-    }
-    if (hasMatch) keys.push(node.pathKey);
-    return hasMatch;
-  }
-  for (const root of forest) visit(root);
-  return keys;
-}
-
-// ── Tree node component ───────────────────────────────────────────────────────
-
-interface TreeNodeProps {
-  node: TagForestNode;
-  depth: number;
-  stagedIds: number[];
-  expandedKeys: Set<string>;
-  onToggle: (pathKey: string) => void;
-  onStage: (tag: TagDef) => void;
-}
-
-function TreeNode({ node, depth, stagedIds, expandedKeys, onToggle, onStage }: TreeNodeProps) {
-  const indent = depth * 16;
-  const isLeaf = node.tag !== null;
-  const isExpanded = expandedKeys.has(node.pathKey);
-
-  if (isLeaf) {
-    const tag = node.tag!;
-    const isStaged = stagedIds.includes(tag.tag_id);
-    const isNonTrendable = !tag.trendable;
-    const label = tag.tag_name ?? `Tag-${tag.tag_id}`;
-
-    const rowStyle: CSSProperties = {
-      ...TREE_ROW_BASE,
-      paddingLeft: indent + 8,
-      color: isNonTrendable ? '#9ca3af' : '#111827',
-      fontWeight: isStaged ? 700 : 400,
-      background: isStaged ? '#f3f4f6' : 'transparent',
-      cursor: isNonTrendable || isStaged ? 'default' : 'pointer',
-    };
-
-    return (
-      <div
-        style={rowStyle}
-        onClick={isNonTrendable || isStaged ? undefined : () => onStage(tag)}
-        title={tag.tag_path}
-      >
-        <span>{label}</span>
-      </div>
-    );
-  }
-
-  // Branch node
-  const isBranchGrayed = !node.hasTrendableDescendant;
-  const rowStyle: CSSProperties = {
-    ...TREE_ROW_BASE,
-    paddingLeft: indent + 8,
-    color: isBranchGrayed ? '#9ca3af' : '#374151',
-  };
-
-  return (
-    <>
-      <div style={rowStyle} onClick={() => onToggle(node.pathKey)}>
-        <span style={{ fontSize: 10, width: 10, display: 'inline-block', textAlign: 'center' }}>
-          {isExpanded ? '▾' : '▸'}
-        </span>
-        <span>{node.name}</span>
-      </div>
-      {isExpanded && node.children.map(child => (
-        <TreeNode
-          key={child.pathKey}
-          node={child}
-          depth={depth + 1}
-          stagedIds={stagedIds}
-          expandedKeys={expandedKeys}
-          onToggle={onToggle}
-          onStage={onStage}
-        />
-      ))}
-    </>
-  );
-}
-
 // ── Main modal component ──────────────────────────────────────────────────────
 
 export function TagPickerModal({
@@ -289,7 +146,6 @@ export function TagPickerModal({
   const [stagedIds, setStagedIds] = useState<number[]>([]);
   const [search, setSearch]       = useState('');
   const [error, setError]         = useState<string | null>(null);
-  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(() => loadExpandedKeys());
 
   // Reset staged state when modal opens.
   useEffect(() => {
@@ -300,52 +156,27 @@ export function TagPickerModal({
     }
   }, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const forest = useMemo(() => buildTagForest(tagMap), [tagMap]);
-
-  const trimmedSearch = search.trim();
-  const isSearching = trimmedSearch !== '';
-
-  // Auto-expand branches whose descendants match the new search term (additive, never
-  // collapses). User toggles during an active filter are respected and preserved across
-  // subsequent filter changes.
-  const lastSearchRef = useRef('');
-  useEffect(() => {
-    if (search === lastSearchRef.current) return;
-    lastSearchRef.current = search;
-    if (search.trim() === '') return;
-    const matched = computeMatchedBranchKeys(forest, search);
-    setExpandedKeys(prev => {
-      const next = new Set(prev);
-      for (const key of matched) next.add(key);
-      return next;
-    });
-  }, [search, forest]);
-
-  // Filter forest for search. Returns filtered nodes only — expansion driven by expandedKeys.
-  const filteredForest = useMemo(() => {
-    if (!isSearching) return forest;
-    function filterNode(node: TagForestNode): TagForestNode | null {
-      if (node.tag !== null) {
-        return nodeMatchesSearch(node, trimmedSearch) ? node : null;
-      }
-      const filteredChildren = node.children
-        .map(filterNode)
-        .filter((c): c is TagForestNode => c !== null);
-      if (filteredChildren.length === 0) return null;
-      return { ...node, children: filteredChildren };
+  const availableTags = useMemo(() => {
+    const tags: TagDef[] = [];
+    for (const tag of tagMap.values()) {
+      if (tag.trendable) tags.push(tag);
     }
-    return forest.map(filterNode).filter((n): n is TagForestNode => n !== null);
-  }, [forest, isSearching, trimmedSearch]);
-
-  const handleToggle = useCallback((pathKey: string) => {
-    setExpandedKeys(prev => {
-      const next = new Set(prev);
-      if (next.has(pathKey)) next.delete(pathKey);
-      else next.add(pathKey);
-      saveExpandedKeys(next);
-      return next;
+    tags.sort((a, b) => {
+      const an = a.tag_name ?? `Tag-${a.tag_id}`;
+      const bn = b.tag_name ?? `Tag-${b.tag_id}`;
+      return an.localeCompare(bn);
     });
-  }, []);
+    return tags;
+  }, [tagMap]);
+
+  const trimmedSearch = search.trim().toLowerCase();
+  const filteredTags = useMemo(() => {
+    if (!trimmedSearch) return availableTags;
+    return availableTags.filter(tag => {
+      const label = (tag.tag_name ?? `Tag-${tag.tag_id}`).toLowerCase();
+      return label.includes(trimmedSearch);
+    });
+  }, [availableTags, trimmedSearch]);
 
   const handleStage = useCallback((tag: TagDef) => {
     setStagedIds(prev => {
@@ -380,19 +211,35 @@ export function TagPickerModal({
         aria-label="Search tags"
       />
       <div style={PANE_ROW}>
-        {/* Left pane — tag tree */}
-        <div style={LEFT_PANE} role="tree" aria-label="Tag tree">
-          {filteredForest.map(root => (
-            <TreeNode
-              key={root.pathKey}
-              node={root}
-              depth={0}
-              stagedIds={stagedIds}
-              expandedKeys={expandedKeys}
-              onToggle={handleToggle}
-              onStage={handleStage}
-            />
-          ))}
+        {/* Left pane — flat alphabetical list of trendable tags */}
+        <div style={LEFT_PANE} role="list" aria-label="Available tags">
+          {filteredTags.map(tag => {
+            const label = tag.tag_name ?? `Tag-${tag.tag_id}`;
+            const isStaged = stagedIds.includes(tag.tag_id);
+            const rowStyle: CSSProperties = {
+              padding: '4px 8px',
+              fontSize: 12,
+              fontFamily: 'monospace',
+              lineHeight: '18px',
+              cursor: isStaged ? 'default' : 'pointer',
+              userSelect: 'none',
+              fontWeight: isStaged ? 700 : 400,
+              background: isStaged ? '#f3f4f6' : 'transparent',
+              color: '#374151',
+              borderBottom: '1px solid #f3f4f6',
+            };
+            return (
+              <div
+                key={tag.tag_id}
+                style={rowStyle}
+                onClick={isStaged ? undefined : () => handleStage(tag)}
+                title={tag.tag_path}
+                role="listitem"
+              >
+                {label}
+              </div>
+            );
+          })}
         </div>
         {/* Right pane — staged list */}
         <div style={RIGHT_PANE} aria-label="Staged signals">

@@ -1,22 +1,8 @@
 import React from 'react';
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
 import type { TagDef } from '@caro/hmi-context';
 import { TagPickerModal } from '../src/TagPickerModal.js';
-
-// ── localStorage mock ─────────────────────────────────────────────────────────
-
-const localStorageMock = (() => {
-  let store: Record<string, string> = {};
-  return {
-    getItem: (k: string) => store[k] ?? null,
-    setItem: (k: string, v: string) => { store[k] = v; },
-    removeItem: (k: string) => { delete store[k]; },
-    clear: () => { store = {}; },
-  };
-})();
-
-Object.defineProperty(window, 'localStorage', { value: localStorageMock });
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -38,9 +24,10 @@ function makeTag(id: number, path: string, trendable = true, tag_name: string | 
   };
 }
 
+// Alphabetical by tag_name: Pressure < Temperature. Status is non-trendable.
 const TAG_1 = makeTag(1, 'Plant.Mod1.Temp',    true,  'Temperature');
 const TAG_2 = makeTag(2, 'Plant.Mod1.Pressure', true,  'Pressure');
-const TAG_3 = makeTag(3, 'Plant.Mod2.Status',   false, 'Status');   // non-trendable
+const TAG_3 = makeTag(3, 'Plant.Mod2.Status',   false, 'Status');
 
 const TAG_MAP = new Map<number, TagDef>([
   [1, TAG_1],
@@ -59,137 +46,94 @@ function renderPicker(props: Partial<React.ComponentProps<typeof TagPickerModal>
   return render(<TagPickerModal {...defaults} {...props} />);
 }
 
-beforeEach(() => localStorageMock.clear());
 afterEach(() => vi.restoreAllMocks());
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe('TagPickerModal', () => {
-  it('renders tree from tagMap', () => {
+  it('non-trendable tags do not appear in the left pane', () => {
     renderPicker();
-    // Root branch visible; children hidden until expanded
-    expect(screen.getByText('Plant')).toBeTruthy();
-    expect(screen.queryByText('Mod1')).toBeNull();
-
-    // Expand root
-    fireEvent.click(screen.getByText('Plant'));
-    expect(screen.getByText('Mod1')).toBeTruthy();
-    expect(screen.getByText('Mod2')).toBeTruthy();
+    expect(screen.queryByTitle('Plant.Mod2.Status')).toBeNull();
+    expect(screen.getByTitle('Plant.Mod1.Temp')).toBeTruthy();
+    expect(screen.getByTitle('Plant.Mod1.Pressure')).toBeTruthy();
   });
 
-  it('non-trendable tags are rendered (grayed by style) and clicking is a no-op', () => {
-    const onCommit = vi.fn();
-    renderPicker({ onCommit });
-
-    // Expand Mod2 to show Status leaf
-    fireEvent.click(screen.getByText('Plant'));
-    fireEvent.click(screen.getByText('Mod2'));
-
-    const statusEl = screen.getByTitle('Plant.Mod2.Status');
-    expect(statusEl).toBeTruthy();
-    // Clicking non-trendable leaf should not stage it
-    fireEvent.click(statusEl);
-
-    // Click OK — staged list should be empty
-    fireEvent.click(screen.getByText('OK'));
-    expect(onCommit).toHaveBeenCalledWith([]);
+  it('trendable tags are listed in alphabetical order by tag_name', () => {
+    renderPicker();
+    const rows = screen.getAllByRole('listitem');
+    // Alphabetical: Pressure (2) before Temperature (1)
+    expect(rows[0]!.textContent).toBe('Pressure');
+    expect(rows[1]!.textContent).toBe('Temperature');
   });
 
-  it('clicking a trendable, not-staged tag stages it', () => {
+  it('clicking an available tag stages it', () => {
     const onCommit = vi.fn();
     renderPicker({ onCommit });
-
-    // Expand to reach Tag 1
-    fireEvent.click(screen.getByText('Plant'));
-    fireEvent.click(screen.getByText('Mod1'));
     fireEvent.click(screen.getByTitle('Plant.Mod1.Temp'));
-
     fireEvent.click(screen.getByText('OK'));
     expect(onCommit).toHaveBeenCalledWith([1]);
   });
 
-  it('clicking an already-staged tag in the left pane is a no-op (not duplicated)', () => {
+  it('already-staged tag in the left pane renders bold and click is a no-op', () => {
     const onCommit = vi.fn();
     renderPicker({ currentTagIds: [1], onCommit });
-
-    fireEvent.click(screen.getByText('Plant'));
-    fireEvent.click(screen.getByText('Mod1'));
-
-    // Click the already-staged tag leaf again
-    const tempEl = screen.getByTitle('Plant.Mod1.Temp');
-    fireEvent.click(tempEl);
-    fireEvent.click(tempEl);
-
+    const tempRow = screen.getByTitle('Plant.Mod1.Temp');
+    expect(tempRow.style.fontWeight).toBe('700');
+    fireEvent.click(tempRow);
+    fireEvent.click(tempRow);
     fireEvent.click(screen.getByText('OK'));
-    // Should still be [1] only
     expect(onCommit).toHaveBeenCalledWith([1]);
   });
 
   it('× button in right pane unstages a tag', () => {
     const onCommit = vi.fn();
     renderPicker({ currentTagIds: [1, 2], onCommit });
-
-    // Remove tag 1 via × button
-    const removeBtn = screen.getByLabelText('Remove Temperature');
-    fireEvent.click(removeBtn);
-
+    fireEvent.click(screen.getByLabelText('Remove Temperature'));
     fireEvent.click(screen.getByText('OK'));
     expect(onCommit).toHaveBeenCalledWith([2]);
   });
 
   it('cap: 17th add attempt sets error message; removing one clears error', () => {
-    // Build a tagMap with 17 trendable tags
     const bigMap = new Map<number, TagDef>();
     for (let i = 1; i <= 17; i++) {
-      bigMap.set(i, makeTag(i, `Root.Mod.Tag${i}`, true));
+      bigMap.set(i, makeTag(i, `Root.Mod.Tag${i}`, true, `Tag${String(i).padStart(2, '0')}`));
     }
     const onCommit = vi.fn();
     const currentTagIds = Array.from({ length: 16 }, (_, i) => i + 1);
     renderPicker({ tagMap: bigMap, currentTagIds, onCommit });
 
     expect(screen.queryByText(/Max 16 signals/)).toBeNull();
-
-    // Expand tree to reach tag 17
-    fireEvent.click(screen.getByText('Root'));
-    fireEvent.click(screen.getByText('Mod'));
     fireEvent.click(screen.getByTitle('Root.Mod.Tag17'));
-
     expect(screen.getByText(/Max 16 signals. Remove one to add another./)).toBeTruthy();
 
-    // Remove one via × button — error should clear
-    const removeBtn = screen.getAllByTitle(/Remove/)[0]!;
-    fireEvent.click(removeBtn);
-
+    // Remove one — error clears
+    fireEvent.click(screen.getAllByTitle(/Remove/)[0]!);
     expect(screen.queryByText(/Max 16 signals/)).toBeNull();
   });
 
-  it('search filters tree; non-trendable matches still appear', () => {
+  it('search filters the left list by case-insensitive substring match on tag_name', () => {
     renderPicker();
-
-    const searchInput = screen.getByPlaceholderText('Search tags…');
-    fireEvent.change(searchInput, { target: { value: 'status' } });
-
-    // Status (non-trendable) should appear
-    expect(screen.getByTitle('Plant.Mod2.Status')).toBeTruthy();
-    // Temperature and Pressure should not appear
+    fireEvent.change(screen.getByPlaceholderText('Search tags…'), { target: { value: 'pres' } });
+    expect(screen.getByTitle('Plant.Mod1.Pressure')).toBeTruthy();
     expect(screen.queryByTitle('Plant.Mod1.Temp')).toBeNull();
   });
 
-  it('expandedKeys persist to localStorage on branch toggle', () => {
+  it('search is case-insensitive', () => {
     renderPicker();
-    fireEvent.click(screen.getByText('Plant'));
+    fireEvent.change(screen.getByPlaceholderText('Search tags…'), { target: { value: 'TEMP' } });
+    expect(screen.getByTitle('Plant.Mod1.Temp')).toBeTruthy();
+    expect(screen.queryByTitle('Plant.Mod1.Pressure')).toBeNull();
+  });
 
-    const stored = localStorageMock.getItem('caro.hmi.tagPicker.expandedNodes');
-    expect(stored).not.toBeNull();
-    const parsed = JSON.parse(stored!) as string[];
-    expect(parsed).toContain('Plant');
+  it('hovering a row shows the full tag_path via the title attribute', () => {
+    renderPicker();
+    expect(screen.getByTitle('Plant.Mod1.Temp').getAttribute('title')).toBe('Plant.Mod1.Temp');
   });
 
   it('OK calls onCommit(stagedIds) then onClose()', () => {
     const onCommit = vi.fn();
     const onClose  = vi.fn();
     renderPicker({ currentTagIds: [1], onCommit, onClose });
-
     fireEvent.click(screen.getByText('OK'));
     expect(onCommit).toHaveBeenCalledWith([1]);
     expect(onClose).toHaveBeenCalled();
@@ -199,62 +143,12 @@ describe('TagPickerModal', () => {
     const onCommit = vi.fn();
     const onClose  = vi.fn();
     renderPicker({ currentTagIds: [1], onCommit, onClose });
-
     fireEvent.click(screen.getByText('Cancel'));
     expect(onCommit).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalled();
   });
 
-  // ── Filter auto-expand ──────────────────────────────────────────────────────
-
-  it('typing into search auto-expands branches with matching descendants', () => {
-    renderPicker();
-    // All branches collapsed initially.
-    expect(screen.queryByText('Mod1')).toBeNull();
-
-    fireEvent.change(screen.getByPlaceholderText('Search tags…'), { target: { value: 'temp' } });
-
-    // Plant and Mod1 should be auto-expanded; Temperature leaf visible.
-    expect(screen.getByText('Mod1')).toBeTruthy();
-    expect(screen.getByTitle('Plant.Mod1.Temp')).toBeTruthy();
-  });
-
-  it('user can collapse an auto-expanded branch while the filter is active', () => {
-    renderPicker();
-    fireEvent.change(screen.getByPlaceholderText('Search tags…'), { target: { value: 'temp' } });
-
-    // Mod1 was auto-expanded. User clicks to collapse it.
-    fireEvent.click(screen.getByText('Mod1'));
-
-    // Temp leaf no longer visible (Mod1 is collapsed under the active filter).
-    expect(screen.queryByTitle('Plant.Mod1.Temp')).toBeNull();
-  });
-
-  it('subsequent filter change expands newly matching branches but not user-collapsed ones', () => {
-    renderPicker();
-    const searchInput = screen.getByPlaceholderText('Search tags…');
-
-    // Filter 1: "temp" → Plant and Mod1 auto-expanded.
-    fireEvent.change(searchInput, { target: { value: 'temp' } });
-    expect(screen.getByText('Mod1')).toBeTruthy();
-
-    // User collapses Mod1.
-    fireEvent.click(screen.getByText('Mod1'));
-
-    // Filter 2: "status" → Mod2 auto-expanded. Mod1 not re-expanded (Status is under Mod2).
-    fireEvent.change(searchInput, { target: { value: 'status' } });
-
-    // Clear search to make all nodes visible; expansion is now driven purely by expandedKeys.
-    fireEvent.change(searchInput, { target: { value: '' } });
-
-    // Plant.Mod2 was newly auto-expanded → Status leaf visible.
-    expect(screen.getByTitle('Plant.Mod2.Status')).toBeTruthy();
-    // Plant.Mod1 was never re-expanded → Temperature leaf not visible.
-    expect(screen.queryByTitle('Plant.Mod1.Temp')).toBeNull();
-  });
-
-  it('Cancel and OK buttons remain visible even with a large tag tree', () => {
-    // Large tagMap that would overflow a scrolling body — footer must stay in view.
+  it('Cancel and OK buttons remain visible even with a large tag map', () => {
     const bigMap = new Map<number, TagDef>();
     for (let i = 1; i <= 40; i++) {
       bigMap.set(i, makeTag(i, `Root.Branch${Math.ceil(i / 5)}.Tag${i}`, true));
@@ -265,22 +159,19 @@ describe('TagPickerModal', () => {
   });
 
   it('picker outer wrapper has width:880 and Trending list renders full tag_name without truncation', () => {
-    // Representative paths (~25 chars) and names (~21 chars) matching real-world depth.
     const repMap = new Map<number, TagDef>([
       [10, makeTag(10, 'PS1.HV_Switch.Current.Mon', true, 'HV_Switch.Current.Mon')],
       [11, makeTag(11, 'PS1.HV_Switch.Voltage.Mon', true, 'HV_Switch.Voltage.Mon')],
     ]);
     renderPicker({ tagMap: repMap, currentTagIds: [10, 11] });
 
-    // Outer wrapper is the direct parent of the search input; carries the explicit inline width.
     const wrapper = screen.getByPlaceholderText('Search tags…').parentElement!;
     expect(wrapper.style.width).toBe('880px');
 
-    // Full tag_name text is in the DOM (no DOM-level truncation).
-    expect(screen.getByText('HV_Switch.Current.Mon')).toBeTruthy();
-    expect(screen.getByText('HV_Switch.Voltage.Mon')).toBeTruthy();
+    // Appears in both left pane (list item) and right pane (staged) — no DOM-level truncation.
+    expect(screen.getAllByText('HV_Switch.Current.Mon').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('HV_Switch.Voltage.Mon').length).toBeGreaterThan(0);
 
-    // Footer still reachable.
     expect(screen.queryByRole('button', { name: /cancel/i })).not.toBeNull();
     expect(screen.queryByRole('button', { name: /ok/i })).not.toBeNull();
   });
