@@ -512,30 +512,32 @@ export function TrendChart({
   }, [tagIds]);
 
   // Memoised to avoid flickering on parent re-renders caused by xRange ticks.
+  // Always rendered — even with tagIds=[] the Signals header + gear icon must
+  // be visible so the user can open TagPickerModal (fix: empty-tagIds layout).
   const legend = useMemo(() => (
-    tagIds.length > 0 ? (
-      <Legend
-        tagIds={tagIds}
-        data={data}
-        tagMap={tagMap}
-        selectedTagId={effectiveSelectedId}
-        cursorTsMs={cursorState?.tsMs}
-        siteTimezone={siteTimezone}
-        bucketSMs={bucketSMs}
-        lastFetchMs={lastFetchMs}
-        showLastWhenIdle={showLastWhenIdle}
-        onSelect={setSelectedTagId}
-        onRemove={tagId => onTagRemove?.(tagId)}
-        onSettingsClick={onSettingsClick}
-      />
-    ) : null
+    <Legend
+      tagIds={tagIds}
+      data={data}
+      tagMap={tagMap}
+      selectedTagId={effectiveSelectedId}
+      cursorTsMs={cursorState?.tsMs}
+      siteTimezone={siteTimezone}
+      bucketSMs={bucketSMs}
+      lastFetchMs={lastFetchMs}
+      showLastWhenIdle={showLastWhenIdle}
+      onSelect={setSelectedTagId}
+      onRemove={tagId => onTagRemove?.(tagId)}
+      onSettingsClick={onSettingsClick}
+    />
   // eslint-disable-next-line react-hooks/exhaustive-deps
   ), [tagIds, data, tagMap, effectiveSelectedId, cursorState?.tsMs, siteTimezone, bucketSMs, lastFetchMs, onTagRemove, showLastWhenIdle, onSettingsClick]);
 
   return (
     <div style={WRAPPER}>
       <div style={LEFT_COLUMN} ref={leftColRef}>
-        <div ref={containerRef} />
+        {/* height is always set so the plot area retains its vertical footprint
+            when uPlot is torn down (e.g. tagIds=[]) — fix: empty-tagIds layout. */}
+        <div ref={containerRef} style={{ height }} />
         {footer && (
           <div style={{
             width: '100%',

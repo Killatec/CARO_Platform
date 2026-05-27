@@ -411,3 +411,101 @@ describe('TrendChart', () => {
     expect(callsAfter).toBe(callsBefore);
   });
 });
+
+// ── Empty tagIds — layout preservation ───────────────────────────────────────
+//
+// When tagIds=[], TrendChart must render the Signals header + gear button (so
+// the user can open the picker) and the plot container div must have non-zero
+// height (so the layout doesn't collapse).
+
+describe('TrendChart — empty tagIds', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // Minimal aggregate data with an empty series Map — the placeholder that
+  // TrendChartContainer synthesises when tagIds=[].
+  function makeEmptyPlaceholder(): AggregateSeriesData {
+    return {
+      type: 'aggregate',
+      source: 'mixed',
+      startTime: 1_700_000_000_000n,
+      endTime: 1_700_003_600_000n,
+      n: 2,
+      bucketSMs: 3_600_000,
+      series: new Map(),
+    };
+  }
+
+  it('renders the Signals header with gear button when tagIds=[]', () => {
+    render(
+      <MockHmiProvider tagDefs={TAG_DEFS}>
+        <TrendChart
+          data={makeEmptyPlaceholder()}
+          tagIds={[]}
+          siteTimezone="UTC"
+          height={400}
+          onSettingsClick={vi.fn()}
+        />
+      </MockHmiProvider>,
+    );
+
+    // Signals header must be present.
+    expect(screen.getByText('Signals')).toBeTruthy();
+    // Gear button must be present — it is the sole entry point to add tags.
+    expect(screen.getByTitle('Configure signals')).toBeTruthy();
+  });
+
+  it('plot container div has non-zero height (= the height prop) when tagIds=[]', () => {
+    const { container } = render(
+      <MockHmiProvider tagDefs={TAG_DEFS}>
+        <TrendChart
+          data={makeEmptyPlaceholder()}
+          tagIds={[]}
+          siteTimezone="UTC"
+          height={400}
+        />
+      </MockHmiProvider>,
+    );
+
+    // The containerRef div is the first child of LEFT_COLUMN (the first flex child
+    // inside the wrapper).  Find it by its inline height style.
+    const heightDiv = container.querySelector('div[style*="height: 400"]') as HTMLElement | null;
+    expect(heightDiv).not.toBeNull();
+    // Inline style height matches the prop.
+    expect(heightDiv!.style.height).toBe('400px');
+  });
+
+  it('clicking the gear button invokes onSettingsClick when tagIds=[]', () => {
+    const onSettingsClick = vi.fn();
+    render(
+      <MockHmiProvider tagDefs={TAG_DEFS}>
+        <TrendChart
+          data={makeEmptyPlaceholder()}
+          tagIds={[]}
+          siteTimezone="UTC"
+          height={400}
+          onSettingsClick={onSettingsClick}
+        />
+      </MockHmiProvider>,
+    );
+
+    fireEvent.click(screen.getByTitle('Configure signals'));
+    expect(onSettingsClick).toHaveBeenCalledOnce();
+  });
+
+  it('renders no remove-trace buttons when tagIds=[]', () => {
+    render(
+      <MockHmiProvider tagDefs={TAG_DEFS}>
+        <TrendChart
+          data={makeEmptyPlaceholder()}
+          tagIds={[]}
+          siteTimezone="UTC"
+          height={400}
+        />
+      </MockHmiProvider>,
+    );
+
+    expect(screen.queryAllByTitle('Remove trace')).toHaveLength(0);
+  });
+});
