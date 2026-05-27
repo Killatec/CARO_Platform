@@ -21,10 +21,10 @@ afterEach(() => {
 // ── Initial state ─────────────────────────────────────────────────────────────
 
 describe('TimescaleSizeMonitor — initial state', () => {
-  it('sizeBytes is 0n and sizeGB is 0 before first poll', () => {
+  it('sizeBytes and sizeGB are null before first successful poll', () => {
     const monitor = new TimescaleSizeMonitor({ pollMs: 60_000 });
-    expect(monitor.sizeBytes).toBe(0n);
-    expect(monitor.sizeGB).toBe(0);
+    expect(monitor.sizeBytes).toBeNull();
+    expect(monitor.sizeGB).toBeNull();
   });
 });
 

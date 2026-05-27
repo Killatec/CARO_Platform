@@ -16,8 +16,16 @@ export class TimescaleSizeMonitor {
       ?? Number(process.env.TIMESCALE_SIZE_POLL_MS ?? 30_000);
   }
 
-  get sizeBytes(): bigint { return this._sizeBytes; }
-  get sizeGB(): number    { return Number(this._sizeBytes) / 1e9; }
+  // Both getters return null until the first successful poll completes,
+  // so consumers (telemetry channel, etc.) can distinguish "no reading yet"
+  // from a true zero. After the first success they return the latest value
+  // (held across subsequent failures).
+  get sizeBytes(): bigint | null {
+    return this._lastSuccessMs === 0 ? null : this._sizeBytes;
+  }
+  get sizeGB(): number | null {
+    return this._lastSuccessMs === 0 ? null : Number(this._sizeBytes) / 1e9;
+  }
   get lastSuccessMs(): number { return this._lastSuccessMs; }
 
   start(): void {
