@@ -210,18 +210,19 @@ export function TrendChartContainer({
 
   // ── Callbacks ─────────────────────────────────────────────────────────────
 
-  const handleTagRemove = useCallback((tagId: number) => {
-    setTagIds(prev => prev.filter(id => id !== tagId));
-  }, []);
-
-  // Invalidate the live-edge tile's stale committedThroughTs before committing
-  // a tag-picker change. Without this the tile's old committedThroughTs leaves a
-  // visible null gap between the tile coverage seam and the fresh live tail
-  // (same root cause as the Fixed→Live gap, same fix pattern — §10.6/§10.7).
+  // Single mutation entry point for tagIds. All callers MUST go through here
+  // so the live-edge tile's committedThroughTs is invalidated before the state
+  // update — otherwise the merge seam falls outside the accumulator's coverage
+  // and the chart shows a null gap. See Docs/hmi_trend_viewer_deltas.md (2026-05-27)
+  // and Docs/hmi_trend_viewer_spec.md §10.6/§10.7.
   const commitTagIds = useCallback((newIds: number[]) => {
     trendData.invalidateNonTerminalTiles();
     setTagIds(newIds);
   }, [trendData.invalidateNonTerminalTiles, setTagIds]);
+
+  const handleTagRemove = useCallback((tagId: number) => {
+    commitTagIds(tagIds.filter(id => id !== tagId));
+  }, [commitTagIds, tagIds]);
 
   const rafIdRef = useRef<number | null>(null);
   const pendingRangeRef = useRef<{ min: bigint; max: bigint } | null>(null);
