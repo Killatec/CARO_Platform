@@ -374,7 +374,7 @@ Seven tags under `CARO_1.HMI.Trend_Info.*` expose the health of the pipeline to 
 | `Trend_Info.Flush_ms` | Float 32 | `ms` | `dbPipeline.lastFlushMs` | Wall-clock duration of last flush. Includes I/O wait — does not represent CPU time. |
 | `Trend_Info.Dropped_Pkgs` | Int 16 | — | `dbPipeline.droppedPkgsTotal` | Lifetime count, clipped at 9999. Queue-overflow evictions. |
 | `Trend_Info.Error_Count` | Int 16 | — | `dbPipeline.errorCountTotal` | Lifetime count, clipped at 9999. `writer.write()` throws. |
-| `Trend_Info.DB_Size` | Float 32 | `GB` | `TimescaleSizeMonitor.sizeGB` | Polled at `TIMESCALE_SIZE_POLL_MS` (default 30 s) via `pg_database_size(current_database())`. |
+| `Trend_Info.DB_Size` | Float 32 | `GB` | `TimescaleSizeMonitor.sizeGB` | Polled at `TIMESCALE_SIZE_POLL_MS` (default 30 s) via `pg_database_size(current_database())`. Publishes `null` until the first successful poll completes (boot window); thereafter holds the most recent value across transient poll failures. |
 
 ### 7.1 Sampling Cadence Rules
 
@@ -413,6 +413,7 @@ Key properties:
 
 - **Only instantiated on the TimescaleDbWriter path.** The null-writer boot does not create the monitor.
 - **Poll cadence `TIMESCALE_SIZE_POLL_MS` (default 30 000 ms).** `pg_database_size()` is a stat-call sum over the DB's file tree — 10-50 ms on a warm DB. Polling at 30 s is effectively free.
+- **Returns `null` until the first successful poll.** `sizeBytes` and `sizeGB` both return `null` while `_lastSuccessMs === 0`. Consumers (telemetry channel, widgets) can distinguish "no reading yet" from a true zero; `Trend_Info.DB_Size` publishes `null` on server restart instead of a misleading 0 GB.
 - **Holds last value on error.** The widget shows the last successful reading; stale-but-useful is better than flashing zeros.
 - **Log throttle one per hour.** Prevents log spam during extended outages.
 

@@ -120,7 +120,7 @@ Worst-case throughput: 360 tags × 10 Hz × 100% COV = ~25 GB/day uncompressed. 
 ## Operational Notes
 
 - **Unreachable at boot:** If TimescaleDB is down when the HMI server starts, it falls back to `NullDbWriter`. Historical data is not buffered across this fallback — it is simply not written. To reconnect, bring TimescaleDB back up and then restart the HMI server. (Periodic automatic reconnect is on the backlog.)
-- **Live health tags:** Seven `CARO_1.HMI.Trend_Info.*` tags show historian health in real time on any HMI dashboard: `Trending` (bool — pipeline actively writing), `Queue_Depth` (backpressure), `Rows_Per_Sec`, `Flush_ms`, `Dropped_Pkgs`, `Error_Count` (flush failures since boot), and `DB_Size` (current database size in GB, updated every 30s by `TimescaleSizeMonitor`).
+- **Live health tags:** Seven `CARO_1.HMI.Trend_Info.*` tags show historian health in real time on any HMI dashboard: `Trending` (bool — pipeline actively writing), `Queue_Depth` (backpressure), `Rows_Per_Sec`, `Flush_ms`, `Dropped_Pkgs`, `Error_Count` (flush failures since boot), and `DB_Size` (current database size in GB, updated every 30s by `TimescaleSizeMonitor`; reads `null` until the first poll completes after boot).
 
 ---
 
