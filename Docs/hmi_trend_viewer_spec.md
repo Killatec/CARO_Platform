@@ -11,6 +11,7 @@ hmi_trend_viewer_reference | hmi_functional_spec | hmi_API_spec | hmi_widget_spe
 
 | Version | Date | Author | Summary |
 |---|---|---|---|
+| 2.2 | 2026-05-27 | PM / Claude | §13.6 Session Persistence added. localStorage-backed restoration of tagIds, Y-scale overrides, selectedTagId, sizeMs, mode, and toMs across HMI page navigation and browser refresh. Live-fixed→live-trailing reconciliation when now ≥ savedToMs. Opt-in via `persistKey` prop on `TrendChartContainer`. |
 | 2.1 | 2026-05-27 | PM / Claude | Post-Step-12 fix propagation. `commitTagIds` single-mutation contract: all `tagIds` mutations route through `commitTagIds`, which calls `invalidateNonTerminalTiles()` before `setTagIds()` — §10.7 Add/Remove tag paragraphs updated; §11.3 OK-commit updated to reference `commitTagIds`. Empty-tagIds layout: `tagIds=[]` renders full layout (blank plot at normal height + Signals header + gear icon) instead of a large "Add tags" button — §13.5 rewritten. |
 | 2.0 | 2026-05-27 | PM / Claude | Step 12 (Tag Picker) complete. §11 rewritten: gear icon in Legend `<thead><th>` opens modal (supersedes drawer); flat trendable list (supersedes tree); click-to-stage (supersedes checkbox + Add N); trendable filter; modal sizing formula; 16-tag cap. Spec status bumped to Steps 1–12 complete. |
 | 1.9 | 2026-05-26 | PM / Claude | Session-end propagation pass. `responseTailTs` renamed `committedThroughTs` throughout (wire type, `ActiveTileEntry`, `needsFetch`, merge seam). `needsFetch` live branch collapsed to `return false` — WS tail + `invalidateNonTerminalTiles` + `REFETCH_LAG_MS` cover all live-mode cases (§10.6). `invalidateNonTerminalTiles` added to `dispatchModeAction` Fixed→Live edge (§10.6/§10.7). `mergeTrendData` `totalN` cap added (§10.6). `querySegment` absent-tag bounded-prev fallback documented (§5.5). `seamResponseTailTs` renamed `seamCommittedThroughTs`. |
@@ -1101,6 +1102,36 @@ Each row has edit and delete icons. Bottom of the dropdown: "Save current as…"
 ### 13.5 Default State
 
 No saved default view. The mode state machine initializes in `live-trailing` (see §9.3 and `useTrendMode.ts`). When `tagIds.length === 0` — first-time open or after all tags are removed — the chart renders its **full layout unchanged**: a blank plot area at normal height, the Legend strip with the Signals header and gear icon, and the footer. The gear icon remains the sole entry point to the tag picker modal (see §11); there is no separate "Add tags" button. Once tags are added via the modal, `live-trailing` is already the active mode and the chart begins tailing immediately.
+
+### 13.6 Session Persistence
+
+The trend viewer restores the operator's current view across HMI page navigation and full browser refreshes. This is distinct from Saved Views (§13.1–§13.4), which are user-named, optionally server-persisted, and capture a different subset of state.
+
+**Scope of persisted state.** The following fields are written to storage on change and restored on mount:
+
+- Tag list (`tagIds`)
+- Per-tag Y-scale overrides (`yScaleOverrides`) — keyed by tag ID; min/max pairs
+- Selected tag ID (`selectedTagId`)
+- Viewport span (`sizeMs`) — a BigInt stored as a decimal string
+- Mode (`fixed` | `live-trailing` | `live-fixed`)
+- Viewport end timestamp (`toMs`) — a BigInt as decimal string; present only for `fixed` and `live-fixed` modes
+
+Colors are not persisted because `colorAssign(tagId)` is deterministic. Cursor position, hover state, picker-open state, and other transient UX state are not persisted.
+
+**Storage.** Values are stored in `window.localStorage` under the key `caro.trend-viewer.session.${persistKey}`, where `persistKey` is an optional prop on `TrendChartContainer`. When the prop is absent, persistence is off entirely — no reads and no writes are performed. This opt-in design prevents future embedded mini-chart instances from inheriting persistence behaviour they do not expect.
+
+**Schema.** The stored value is JSON-encoded and schema-versioned. The current schema is V1 (`version: 1`). Parse failures, unknown version numbers, and quota or access exceptions (e.g. Safari private browsing, storage full) all fail silently: the session is discarded and the chart initialises from its default state, with a `console.warn` for developer diagnostics.
+
+**Write cadence.** The container writes a debounced save (approximately 250 ms) whenever `tagIds`, mode state, `selectedTagId`, or Y-scale overrides change. Any pending write is flushed synchronously on container unmount.
+
+**Hydration reconciliation.** On mount, after a valid session is loaded from storage:
+
+- `tagIds` are filtered against the current trendable tag set. Any stored tag ID that is no longer trendable (or no longer exists in the registry) is silently dropped. If filtering leaves the list empty, the chart starts with `tagIds = []` rather than falling back to the `tagIds` prop.
+- `mode === 'live-fixed'` with `Date.now() >= Number(toMs)`: the saved viewport end has passed, so the mode is promoted to `live-trailing` with the saved `sizeMs`; `toMs` is discarded.
+- `mode === 'fixed'`: viewport is reconstructed as `from = toMs − sizeMs`, `to = toMs`.
+- `mode === 'live-trailing'`: only `sizeMs` is restored; the viewport rolls from the live edge.
+
+**Relationship to Saved Views.** Session persistence is the always-on, single-key, browser-local restoration of the operator's working view. Saved Views (Phase B, §13.1–§13.4) are user-named, server-persisted, and capture a different field subset — notably they do not include Y-scale overrides (§13.1). The two mechanisms coexist: loading a Saved View updates the in-memory state and the updated state becomes the next persisted session on the following debounced write.
 
 ---
 
