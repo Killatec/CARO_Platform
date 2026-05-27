@@ -161,14 +161,17 @@ export interface UseTrendModeResult {
 
 /** Stateful hook: owns the mode reducer. The 'tick' action is dispatched
  *  externally by TrendChartContainer.handleDataReceived from the WS frame's
- *  max moduleTs — there is no internal interval. */
-export function useTrendMode(): UseTrendModeResult {
-  const [state, dispatch] = useReducer(trendModeReducer, undefined, () => ({
-    mode: 'live-trailing' as const,
-    sizeMs: DEFAULT_SIZE_MS,
-    nowMs: BigInt(Date.now()),
-    lastIntent: null as LastIntent,
-  }));
+ *  max moduleTs — there is no internal interval.
+ *  @param initialState Optional override for first-render state (session hydration). */
+export function useTrendMode(initialState?: ModeState): UseTrendModeResult {
+  const [state, dispatch] = useReducer(trendModeReducer, undefined, () =>
+    initialState ?? {
+      mode: 'live-trailing' as const,
+      sizeMs: DEFAULT_SIZE_MS,
+      nowMs: BigInt(Date.now()),
+      lastIntent: null as LastIntent,
+    },
+  );
 
   const viewport = modeToViewport(state);
   return { state, viewport, dispatch };

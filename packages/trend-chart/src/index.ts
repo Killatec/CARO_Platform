@@ -45,3 +45,8 @@ export { mergeTrendData } from './mergeTrendData.js';
 export { formatSpanMs } from './render/formatSpanMs.js';
 export { TagPickerModal } from './TagPickerModal.js';
 export type { TagPickerModalProps } from './TagPickerModal.js';
+export {
+  loadSession, saveSession, clearSession,
+  serialiseSession, parseSession,
+} from './sessionPersistence.js';
+export type { TrendViewerSessionV1 } from './sessionPersistence.js';

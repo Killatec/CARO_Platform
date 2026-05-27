@@ -9,6 +9,8 @@ import { useTrendData } from '../src/useTrendData.js';
 import { formatDateTime } from '@caro/ui';
 import type { UseTrendDataResult } from '../src/useTrendData.js';
 import { MIN_VIEWPORT_SPAN_MS, MAX_VIEWPORT_SPAN_MS } from '../src/level.js';
+import { serialiseSession } from '../src/sessionPersistence.js';
+import type { TrendViewerSessionV1 } from '../src/sessionPersistence.js';
 
 // ── useLiveSubscription mock (hoisted so vi.mock factory can close over it) ───
 
@@ -1354,6 +1356,211 @@ describe('TrendChartContainer', () => {
       expect(updateIdx).toBeGreaterThanOrEqual(0);
       expect(invalidateIdx).toBeLessThan(updateIdx);
     });
+  });
+});
+
+// ── Session persistence ───────────────────────────────────────────────────────
+//
+// Tests for the persistKey prop: session hydration (tagIds, mode, sizeMs),
+// live-fixed→live-trailing reconciliation, trendable filtering, and debounced writes.
+
+const LS_PREFIX = 'caro.trend-viewer.session.';
+const TEST_KEY = 'test-persist';
+
+function makeValidSession(overrides: Partial<TrendViewerSessionV1> = {}): TrendViewerSessionV1 {
+  return {
+    version: 1,
+    tagIds: [1, 2],
+    selectedTagId: 1,
+    sizeMs: '3600000',
+    mode: 'live-trailing',
+    toMs: null,
+    yScaleOverrides: {},
+    ...overrides,
+  };
+}
+
+function seedSession(session: TrendViewerSessionV1, key = TEST_KEY) {
+  localStorage.setItem(LS_PREFIX + key, serialiseSession(session));
+}
+
+function renderWithPersist(tagIds = [1, 2], key = TEST_KEY) {
+  return render(
+    <MockHmiProvider tagDefs={TAG_DEFS}>
+      <TrendChartContainer tagIds={tagIds} siteTimezone="UTC" height={400} persistKey={key} />
+    </MockHmiProvider>,
+  );
+}
+
+describe('TrendChartContainer — session persistence', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    capturedOnXRangeChange = undefined;
+    capturedOnXPan = undefined;
+    capturedOnDragZoom = undefined;
+    capturedData = undefined;
+    capturedOnSettingsClick = undefined;
+    liveHoisted.setTail(null);
+    liveHoisted.setLatestSampleTs(null);
+    localStorage.clear();
+    mockUseTrendData.mockReturnValue(makeResult([1, 2]));
+    Object.defineProperty(HTMLInputElement.prototype, 'showPicker', {
+      value: vi.fn(),
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    localStorage.clear();
+  });
+
+  // ── Hydration ─────────────────────────────────────────────────────────────
+
+  it('restores tagIds from session — useTrendData receives session tagIds', () => {
+    seedSession(makeValidSession({ tagIds: [1], sizeMs: '3600000', mode: 'live-trailing', toMs: null }));
+    renderWithPersist([]);
+    // useTrendData should be called with the session's tagIds, not the prop ([]).
+    const found = mockUseTrendData.mock.calls.some(([opts]) =>
+      opts.tagIds.length === 1 && opts.tagIds[0] === 1,
+    );
+    expect(found).toBe(true);
+  });
+
+  it('restores sizeMs from session — SpanIndicator shows saved span', () => {
+    // 4h = 14_400_000 ms
+    seedSession(makeValidSession({ tagIds: [1], sizeMs: '14400000', mode: 'live-trailing', toMs: null }));
+    mockUseTrendData.mockReturnValue(makeResult([1]));
+    renderWithPersist([]);
+    expect(screen.getByText('Span: 4 h')).toBeTruthy();
+  });
+
+  it('restores fixed mode from session — shows "Go Live" button', () => {
+    const toMs = String(1_700_000_000_000n);
+    const sizeMs = String(3_600_000n);
+    seedSession(makeValidSession({ tagIds: [1], mode: 'fixed', toMs, sizeMs }));
+    mockUseTrendData.mockReturnValue(makeResult([1]));
+    renderWithPersist([]);
+    expect(screen.getByText('Go Live')).toBeTruthy();
+  });
+
+  it('live-fixed reconciliation: past toMs promotes to live-trailing on mount', () => {
+    // Set time to well after toMs so Date.now() >= toMs
+    const pastToMs = 1_000_000_000n; // year 2001 — definitively in the past
+    vi.setSystemTime(new Date(Number(pastToMs) + 1_000_000));
+    seedSession(makeValidSession({
+      tagIds: [1],
+      mode: 'live-fixed',
+      toMs: String(pastToMs),
+      sizeMs: '3600000',
+    }));
+    mockUseTrendData.mockReturnValue(makeResult([1]));
+    renderWithPersist([]);
+    // Reconciled to live-trailing → shows "● Live"
+    expect(screen.getByText('● Live')).toBeTruthy();
+  });
+
+  it('live-fixed with future toMs stays live-fixed on mount (shows ● Live, isLive=true)', () => {
+    // toMs far in the future relative to Date.now()
+    const futureToMs = BigInt(Date.now()) + 3_600_000n;
+    seedSession(makeValidSession({
+      tagIds: [1],
+      mode: 'live-fixed',
+      toMs: String(futureToMs),
+      sizeMs: '3600000',
+    }));
+    mockUseTrendData.mockReturnValue(makeResult([1]));
+    liveHoisted.setLatestSampleTs(BigInt(Date.now()) - 5_000_000n);
+    renderWithPersist([]);
+    // live-fixed still shows ● Live (isLive = true)
+    expect(screen.getByText('● Live')).toBeTruthy();
+    expect(liveHoisted.getLastOpts()?.isLive).toBe(true);
+  });
+
+  // ── Trendable filtering ───────────────────────────────────────────────────
+
+  it('filters session tagIds against trendable tags — non-trendable tags dropped', () => {
+    // Tag 3 in TAG_DEFS is trendable=false. Session includes it; it should be dropped.
+    seedSession(makeValidSession({ tagIds: [1, 3] }));
+    mockUseTrendData.mockReturnValue(makeResult([1]));
+    renderWithPersist([]);
+    // Only tag 1 should survive (tag 3 is not trendable).
+    const found = mockUseTrendData.mock.calls.some(([opts]) =>
+      opts.tagIds.length === 1 && opts.tagIds[0] === 1,
+    );
+    expect(found).toBe(true);
+    // useTrendData should never see tag 3.
+    const hasTag3 = mockUseTrendData.mock.calls.some(([opts]) =>
+      opts.tagIds.includes(3),
+    );
+    expect(hasTag3).toBe(false);
+  });
+
+  it('all session tagIds filtered out → falls through to empty chart (not prop tagIds)', () => {
+    // Session only has tag 3 which is non-trendable. Prop tagIds=[1,2] (should be ignored).
+    seedSession(makeValidSession({ tagIds: [3] }));
+    mockUseTrendData.mockReturnValue(makeResult([], { data: null, isLoading: false }));
+    renderWithPersist([1, 2]);
+    // Empty result after filtering → chart initialized with [] (empty chart, gear accessible).
+    const found = mockUseTrendData.mock.calls.some(([opts]) => opts.tagIds.length === 0);
+    expect(found).toBe(true);
+    // Prop tagIds [1,2] must NOT be used.
+    const hasPropTags = mockUseTrendData.mock.calls.some(([opts]) =>
+      opts.tagIds.length === 2 && opts.tagIds[0] === 1,
+    );
+    expect(hasPropTags).toBe(false);
+  });
+
+  it('no session → falls through to prop tagIds', () => {
+    // No localStorage entry → prop tagIds=[1,2] used as seed.
+    renderWithPersist([1, 2]);
+    const found = mockUseTrendData.mock.calls.some(([opts]) =>
+      opts.tagIds.length === 2 && opts.tagIds[0] === 1 && opts.tagIds[1] === 2,
+    );
+    expect(found).toBe(true);
+  });
+
+  // ── No persistKey → no localStorage writes ────────────────────────────────
+
+  it('no persistKey prop → localStorage.setItem never called during mode/tag changes', () => {
+    const setItemSpy = vi.spyOn(Storage.prototype, 'setItem');
+    // Render WITHOUT persistKey.
+    render(
+      <MockHmiProvider tagDefs={TAG_DEFS}>
+        <TrendChartContainer tagIds={[1, 2]} siteTimezone="UTC" height={400} />
+      </MockHmiProvider>,
+    );
+    // Trigger state changes.
+    fireEvent.click(screen.getByText('4h'));
+    act(() => { vi.runAllTimers(); });
+    expect(setItemSpy).not.toHaveBeenCalled();
+    setItemSpy.mockRestore();
+  });
+
+  // ── Debounced write ───────────────────────────────────────────────────────
+
+  it('rapid preset changes produce a single debounced localStorage write', () => {
+    const setItemSpy = vi.spyOn(Storage.prototype, 'setItem');
+    renderWithPersist([1]);
+
+    // Three rapid preset clicks — each schedules a 250 ms save, cancelling the previous.
+    fireEvent.click(screen.getByText('1m'));
+    fireEvent.click(screen.getByText('5m'));
+    fireEvent.click(screen.getByText('15m'));
+
+    // Before the debounce window fires: no writes yet (timers not advanced).
+    // (The initial mount's scheduled save is also pending.)
+    const writesBefore = setItemSpy.mock.calls.length;
+
+    // Advance time to flush the debounce.
+    act(() => { vi.runAllTimers(); });
+
+    // Exactly one write should fire for the last preset (15m).
+    const writesAfter = setItemSpy.mock.calls.length;
+    expect(writesAfter - writesBefore).toBe(1);
+    setItemSpy.mockRestore();
   });
 });
 

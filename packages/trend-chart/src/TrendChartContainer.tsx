@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, useMemo, useRef } from 'react';
 import type { CSSProperties } from 'react';
 import { useTagMap } from '@caro/hmi-context';
 import { useTrendMode, trendModeReducer, isLive } from './useTrendMode.js';
-import type { TrendModeAction } from './useTrendMode.js';
+import type { TrendModeAction, ModeState } from './useTrendMode.js';
 import { useTrendData } from './useTrendData.js';
 import { useLiveSubscription } from './useLiveSubscription.js';
 import type { UseLiveSubscriptionResult } from './useLiveSubscription.js';
@@ -16,18 +16,29 @@ import { EndPicker } from './EndPicker.js';
 import { CursorDisplay } from './CursorDisplay.js';
 import { TREND_VIEWER_DEFAULTS, MIN_VIEWPORT_SPAN_MS, MAX_VIEWPORT_SPAN_MS } from './level.js';
 import type { ActiveTileEntry, AggregateSeriesData } from './types.js';
+import {
+  loadSession, saveSession,
+  type TrendViewerSessionV1,
+} from './sessionPersistence.js';
 
 const VISIBLE_TILES_PER_WINDOW = TREND_VIEWER_DEFAULTS.visibleTilesPerWindow;
 const BUCKET_COUNT = TREND_VIEWER_DEFAULTS.bucketCount;
 
 export interface TrendChartContainerProps {
   /**
-   * Initial tag ID list. Container owns the list and handles removes via the
-   * Legend. Tag additions go through TagPickerModal (Step 12).
+   * Initial tag ID list (seed only at first mount). Container owns the list
+   * and handles removes via the Legend. Tag additions go through TagPickerModal.
+   * When `persistKey` is set, session data takes precedence over this seed.
    */
   tagIds: number[];
   siteTimezone?: string;
   height?: number;
+  /**
+   * When provided, session state (tagIds, mode, spans, Y-scale overrides,
+   * selected tag) is persisted in localStorage under this key and restored on
+   * next mount. When undefined, persistence is off entirely.
+   */
+  persistKey?: string;
 }
 
 const FOOTER: CSSProperties = {
@@ -63,14 +74,53 @@ const LOADING_HINT: CSSProperties = {
   fontFamily: 'monospace',
 };
 
+/** Build a ModeState from a saved session, applying the live-fixed→live-trailing
+ *  reconciliation when Date.now() >= savedToMs. */
+function buildInitialModeState(session: TrendViewerSessionV1): ModeState {
+  const sizeMs = BigInt(session.sizeMs);
+  if (session.mode === 'live-trailing') {
+    return { mode: 'live-trailing', sizeMs, nowMs: BigInt(Date.now()), lastIntent: null };
+  }
+  const toMs = BigInt(session.toMs!);
+  if (session.mode === 'live-fixed') {
+    // Reconcile: if now >= savedToMs the live-fixed window has elapsed → live-trailing.
+    if (Date.now() >= Number(toMs)) {
+      return { mode: 'live-trailing', sizeMs, nowMs: BigInt(Date.now()), lastIntent: null };
+    }
+    return { mode: 'live-fixed', from: toMs - sizeMs, to: toMs, sizeMs, lastIntent: null };
+  }
+  // fixed
+  return { mode: 'fixed', from: toMs - sizeMs, to: toMs, sizeMs, lastIntent: null };
+}
+
 
 export function TrendChartContainer({
   tagIds: initialTagIds,
   siteTimezone,
   height = 420,
+  persistKey,
 }: TrendChartContainerProps) {
+
+  // ── Session loading (runs once — ref guards re-initialization) ────────────
+  // Sentinel: undefined = "not yet initialized", null = "no session found".
+  const initRef = useRef<{
+    session: TrendViewerSessionV1 | null;
+    modeState: ModeState | undefined;
+  } | null>(null);
+
+  if (initRef.current === null) {
+    const session = persistKey ? loadSession(persistKey) : null;
+    initRef.current = {
+      session,
+      modeState: session ? buildInitialModeState(session) : undefined,
+    };
+  }
+
+  const savedSession = initRef.current.session;
+  const initialModeState = initRef.current.modeState;
+
   // ── Mode state machine ────────────────────────────────────────────────────
-  const { state: modeState, viewport: modeViewport, dispatch } = useTrendMode();
+  const { state: modeState, viewport: modeViewport, dispatch } = useTrendMode(initialModeState);
 
   // ── modeViewport-derived out-of-range booleans ────────────────────────────
   const uxRangeTooNarrow = useMemo(
@@ -82,9 +132,23 @@ export function TrendChartContainer({
     [modeViewport.start, modeViewport.end],
   );
 
-  // ── Tag list (container owns; removes come from Legend, adds from TagPickerModal) ──
-  const [tagIds, setTagIds] = useState<number[]>(initialTagIds);
+  // ── Tag list (tagMap first so it's available in useState initializer) ─────
   const tagMap = useTagMap();
+
+  // Tag list: seeded from session if available (filtered against current trendable set),
+  // otherwise falls through to the prop. With persistKey + session → filtered or [];
+  // without session → prop as-is (backward compat for non-persisted consumers).
+  const [tagIds, setTagIds] = useState<number[]>(() => {
+    if (!savedSession) return initialTagIds;
+    const trendableIds = new Set(
+      [...tagMap.values()].filter(t => t.trendable).map(t => t.tag_id),
+    );
+    const filtered = savedSession.tagIds.filter(id => trendableIds.has(id));
+    // Empty after filtering → treat as no saved session (fall through to empty chart,
+    // NOT to the prop — there is no prop default when persistKey is set).
+    return filtered.length > 0 ? filtered : [];
+  });
+
   const [isPickerOpen, setIsPickerOpen] = useState(false);
 
   // ── Zoom-level state ──────────────────────────────────────────────────────
@@ -103,8 +167,6 @@ export function TrendChartContainer({
   const getLatestSampleTs = useCallback(() => liveSubRef.current?.getLatestSampleTs() ?? null, []);
 
   // ── Data fetch (driven by modeViewport + currentBucketSMs) ───────────────
-  // modeViewport is the single source of truth for both display and fetch.
-  // currentBucketSMs fixes the resolution so tiles don't shift during continuous zoom.
   const trendData = useTrendData({
     viewport: modeViewport,
     bucketSMs: currentBucketSMs,
@@ -120,7 +182,6 @@ export function TrendChartContainer({
   // ── Live subscription inputs ──────────────────────────────────────────────
   const viewportSpanMs = modeViewport.end - modeViewport.start;
 
-  // Derived from tile data (unified path — no spine).
   const tailMode: 'aggregate' | 'raw' | null =
     data?.type === 'aggregate' ? 'aggregate'
     : data?.type === 'raw'       ? 'raw'
@@ -129,7 +190,6 @@ export function TrendChartContainer({
   const bucketSMs: bigint | null =
     data?.type === 'aggregate' ? BigInt(data.bucketSMs) : null;
 
-  // Active-set-aware trim threshold (§4.2): committedThroughTs is the real data edge.
   const trimThreshold: number | null = trendData.committedThroughTs ?? null;
 
   const seedFromCachedTile = useMemo(() => {
@@ -141,7 +201,6 @@ export function TrendChartContainer({
     return m;
   }, [data, swapCounter]);
 
-  // Advances nowMs from WS frame's max moduleTs — only while tailing.
   const handleDataReceived = useCallback((maxModuleTs: number) => {
     if (!isLive(modeStateRef.current.mode)) return;
     dispatch({ type: 'tick', nowMs: BigInt(maxModuleTs) });
@@ -158,14 +217,8 @@ export function TrendChartContainer({
     onDataReceived: handleDataReceived,
   });
 
-  // Synchronous ref update — liveSubRef is always fresh before any callback fires.
   liveSubRef.current = liveSub;
 
-  // Phase 4 refinement: button is orange ONLY when the live edge is off-screen
-  // (latestSampleTs is BEFORE the viewport's left edge in live-fixed). When the
-  // live edge is visible inside [from, to] OR no live data has arrived yet, the
-  // button stays highlighted same as live-trailing. Read per render — refs update
-  // on every WS sample's setTail re-render, so this is fresh.
   const liveEdgeBehindWindow = (() => {
     if (modeState.mode !== 'live-fixed') return false;
     const lts = liveSubRef.current?.getLatestSampleTs() ?? null;
@@ -174,9 +227,6 @@ export function TrendChartContainer({
   })();
 
   // ── Merged data for rendering ─────────────────────────────────────────────
-  // Single unified path: tile data + live tail (§5.2).
-  // swapCounter drives recompute when the active tile set changes;
-  // seamResponseTailTs aligns the seam-bucket min/max combination.
   const mergedData = useMemo(
     () => mergeTrendData(data, liveSub.tail, {
       seamCommittedThroughTs: getSeamCommittedThroughTs(trendData.activeTilesRef),
@@ -184,8 +234,6 @@ export function TrendChartContainer({
     [data, liveSub.tail, swapCounter], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
-  // ── xRange: passes the live mode viewport to TrendChart for imperative
-  //    setScale — updated every tick in tailing, or on preset/EndPicker/zoom. ──
   const xRange = useMemo(
     () => ({ startMs: modeViewport.start, endMs: modeViewport.end }),
     [modeViewport.start, modeViewport.end],
@@ -200,9 +248,6 @@ export function TrendChartContainer({
     if (isLive(prev.mode) && !isLive(next.mode)) {
       liveSubRef.current?.drainBuffers();
     } else if (!isLive(prev.mode) && isLive(next.mode)) {
-      // Refresh any non-terminal tile preserved from the prior (Fixed) mode
-      // — its committedThroughTs is stale and would otherwise produce a
-      // visible gap at the live edge until needsFetch line 143 fired.
       trendData.invalidateNonTerminalTiles();
     }
     dispatch(action);
@@ -230,7 +275,6 @@ export function TrendChartContainer({
   const panRafIdRef = useRef<number | null>(null);
   const pendingPanRef = useRef<{ min: bigint; max: bigint } | null>(null);
 
-  // Cancel any pending RAFs on unmount so we don't dispatch into an unmounted tree.
   useEffect(() => () => {
     if (rafIdRef.current !== null) cancelAnimationFrame(rafIdRef.current);
     if (panRafIdRef.current !== null) cancelAnimationFrame(panRafIdRef.current);
@@ -297,8 +341,6 @@ export function TrendChartContainer({
     [dispatchModeAction],
   );
 
-  // _handleDragZoom sets the gesture resolution (gestureBucketSMs) for the zoomed view.
-  // dispatchModeAction updates modeViewport to the raw selection bounds.
   const handleDragZoom = useCallback(
     (selectionStartMs: bigint, selectionEndMs: bigint) => {
       _handleDragZoom(selectionStartMs, selectionEndMs);
@@ -313,10 +355,6 @@ export function TrendChartContainer({
     [_handleDragZoom, dispatchModeAction],
   );
 
-  // Wrap zoom-level switch: update resolution state (currentBucketSMs, zoomAnchorSpan).
-  // zoomApplied is NOT dispatched here — onXRangeChange fires on every X-scale mutation
-  // (including level-switch ticks) and handleXRangeChange dispatches it via RAF, covering
-  // all cases (sub-threshold, zoom-out, level-switch) through a single path.
   const handleZoomLevelSwitch = useCallback(
     (direction: 'in' | 'out') => {
       _handleZoomLevelSwitch(direction);
@@ -324,6 +362,103 @@ export function TrendChartContainer({
     [_handleZoomLevelSwitch],
   );
 
+  // ── Session persistence ───────────────────────────────────────────────────
+  // Refs track the latest selectedTagId and yScaleOverrides from TrendChart
+  // callbacks without lifting those values to container state (which would
+  // cause extra renders on every Y-pan tick).
+  const persistKeyRef = useRef(persistKey);
+  persistKeyRef.current = persistKey;
+
+  const latestSaveDataRef = useRef<{
+    tagIds: number[];
+    modeState: ModeState;
+    selectedTagId: number | null;
+    yScaleOverrides: Map<number, { min: number; max: number }>;
+  }>({
+    tagIds,
+    modeState,
+    selectedTagId: savedSession?.selectedTagId ?? null,
+    yScaleOverrides: savedSession?.yScaleOverrides
+      ? new Map(Object.entries(savedSession.yScaleOverrides).map(([k, v]) => [Number(k), v]))
+      : new Map(),
+  });
+
+  // Always-fresh ref — keep in sync with latest state without making it a dep.
+  latestSaveDataRef.current.tagIds = tagIds;
+  latestSaveDataRef.current.modeState = modeState;
+
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const scheduleSave = useCallback(() => {
+    const key = persistKeyRef.current;
+    if (!key) return;
+    if (saveTimerRef.current !== null) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      saveTimerRef.current = null;
+      const { tagIds: ids, modeState: ms, selectedTagId: sel, yScaleOverrides: ys } = latestSaveDataRef.current;
+      const toMs = ms.mode !== 'live-trailing' ? String(ms.to) : null;
+      saveSession(key, {
+        version: 1,
+        tagIds: ids,
+        selectedTagId: sel,
+        sizeMs: String(ms.sizeMs),
+        mode: ms.mode,
+        toMs,
+        yScaleOverrides: Object.fromEntries([...ys.entries()]),
+      });
+    }, 250);
+  }, []);
+
+  // Schedule a save whenever tagIds or modeState change.
+  useEffect(() => {
+    if (!persistKey) return;
+    scheduleSave();
+  }, [tagIds, modeState, persistKey, scheduleSave]);
+
+  // Flush any pending write on unmount (avoids losing the last state change
+  // if the component unmounts within the 250 ms debounce window).
+  useEffect(() => {
+    return () => {
+      if (saveTimerRef.current !== null) {
+        clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+        const key = persistKeyRef.current;
+        if (!key) return;
+        const { tagIds: ids, modeState: ms, selectedTagId: sel, yScaleOverrides: ys } = latestSaveDataRef.current;
+        const toMs = ms.mode !== 'live-trailing' ? String(ms.to) : null;
+        saveSession(key, {
+          version: 1,
+          tagIds: ids,
+          selectedTagId: sel,
+          sizeMs: String(ms.sizeMs),
+          mode: ms.mode,
+          toMs,
+          yScaleOverrides: Object.fromEntries([...ys.entries()]),
+        });
+      }
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Callbacks from TrendChart — update snapshot refs and schedule a save.
+  const handleSelectedTagChange = useCallback((tagId: number) => {
+    latestSaveDataRef.current.selectedTagId = tagId;
+    scheduleSave();
+  }, [scheduleSave]);
+
+  const handleYScaleOverridesChange = useCallback(
+    (overrides: Map<number, { min: number; max: number }>) => {
+      latestSaveDataRef.current.yScaleOverrides = overrides;
+      scheduleSave();
+    },
+    [scheduleSave],
+  );
+
+  // Initial overrides Map derived from session (stable across renders).
+  const initialYScaleOverridesMapRef = useRef<Map<number, { min: number; max: number }>>(
+    latestSaveDataRef.current.yScaleOverrides,
+  );
+
+  // ── Range message ─────────────────────────────────────────────────────────
   const rangeMessage = uxRangeExceeded
     ? 'Range too wide. Zoom in or pick a smaller preset.'
     : uxRangeTooNarrow
@@ -373,10 +508,6 @@ export function TrendChartContainer({
       })()
     : mergedData;
 
-  // Bridge across mode transitions: when chartData briefly drops to null
-  // (tile fetch in-flight after a mode change) the loading hint would unmount
-  // <TrendChart>, flickering the uPlot canvas. Hold the most-recent non-null
-  // chartData so the chart stays mounted across the in-flight window.
   const lastChartDataRef = useRef<typeof chartData>(null);
   if (chartData !== null) lastChartDataRef.current = chartData;
   const effectiveChartData = chartData ?? lastChartDataRef.current;
@@ -413,6 +544,10 @@ export function TrendChartContainer({
         rangeExceeded={uxRangeExceeded}
         rangeTooNarrow={uxRangeTooNarrow}
         onSettingsClick={() => setIsPickerOpen(true)}
+        initialSelectedTagId={savedSession?.selectedTagId}
+        initialYScaleOverrides={persistKey ? initialYScaleOverridesMapRef.current : undefined}
+        onSelectedTagChange={persistKey ? handleSelectedTagChange : undefined}
+        onYScaleOverridesChange={persistKey ? handleYScaleOverridesChange : undefined}
       />
       <TagPickerModal
         isOpen={isPickerOpen}
