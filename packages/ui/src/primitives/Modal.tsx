@@ -6,15 +6,6 @@ export interface ModalProps extends React.HTMLAttributes<HTMLDivElement> {
   isOpen: boolean;
   onClose: () => void;
   title?: string;
-  maxWidthClass?: string;
-  /** Replaces the full `${maxWidthClass} w-full` size token pair. When provided, maxWidthClass is ignored. */
-  widthClass?: string;
-  /** Appended to the outer white box's className. Use to add padding or other styles to the modal frame. */
-  outerClassName?: string;
-  /** Replaces the default header div class. */
-  headerClassName?: string;
-  /** Replaces the default body div class. Use when the caller manages its own internal scrolling. */
-  bodyClassName?: string;
   /** Inline style applied to the outer white box. Takes precedence over class-based styles. */
   outerStyle?: CSSProperties;
   /** Inline style applied to the header div. */
@@ -26,7 +17,7 @@ export interface ModalProps extends React.HTMLAttributes<HTMLDivElement> {
 /**
  * Modal primitive - stateless, zero domain knowledge
  */
-export const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, maxWidthClass = 'max-w-2xl', widthClass, outerClassName, headerClassName, bodyClassName, outerStyle, headerStyle, bodyStyle, children, ...props }) => {
+export const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, outerStyle, headerStyle, bodyStyle, children, ...props }) => {
   useEffect(() => {
     if (isOpen) {
       // Prevent body scroll when modal is open
@@ -50,19 +41,19 @@ export const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, maxWidthCl
       {/* Modal content */}
       <div className="relative z-10 flex min-h-full items-center justify-center p-4">
         <div
-          className={`relative bg-white rounded-lg shadow-xl ${widthClass ?? `${maxWidthClass} w-full`} max-h-[90vh] overflow-hidden${outerClassName ? ' ' + outerClassName : ''}`}
+          className="relative bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-hidden"
           style={outerStyle}
           onClick={(e) => e.stopPropagation()}
         >
           {/* Header */}
           {title && (
-            <div className={headerClassName ?? 'px-6 py-4 border-b border-gray-200'} style={headerStyle}>
+            <div className="px-6 py-4 border-b border-gray-200" style={headerStyle}>
               <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
             </div>
           )}
 
           {/* Body */}
-          <div className={bodyClassName ?? 'px-6 py-4 overflow-y-auto max-h-[calc(90vh-8rem)]'} style={bodyStyle}>
+          <div className="px-6 py-4 overflow-y-auto max-h-[calc(90vh-8rem)]" style={bodyStyle}>
             {children}
           </div>
         </div>
