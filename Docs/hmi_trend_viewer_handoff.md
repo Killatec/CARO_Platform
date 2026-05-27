@@ -1,5 +1,5 @@
 # CARO_HMI Trend Viewer — Subsystem Handoff
-**Updated:** 2026-05-26 | **Phase A Steps 1–11 + unified-tile refactor + unified-viewport arc complete** | **Next:** Step 12 (Tag picker)
+**Updated:** 2026-05-27 | **Phase A Steps 1–12 complete** | **Next:** TBD (see `Docs/platform_todo.md`)
 
 ---
 
@@ -20,8 +20,9 @@ Phase A Steps 1–11 are complete. Steps 1–6 delivered the server-side trends 
 | 9 | `TrendChart` static rendering: uPlot wrapper, per-trace Y-scales, legend (vertical right column), cursor display | ✅ Done |
 | 10 | Mode state machine + time-range UI: live-trailing/live-fixed/fixed transitions, 8-preset strip, End picker (End-only), Live button, pan/zoom interactions | ✅ Done |
 | 11 | Live tail: dedicated trend WS channel, `useLiveSubscription` hook (ring buffer + bucket accumulator + raw buffer; `commitAndDrain` returns void), unified `mergeTrendData` (live-wins-on-coverage, no `isTailing`), eviction-on-live-entry cache freshness (Gap B fix), server-side future-bucket nulling in `getTrendTile`, no-clamp wheel-zoom + `gatedFetchTile` over-range gating + inline "Range too wide" message in `CursorDisplay`, `dispatchModeAction` cleanup wrapper | ✅ Done |
+| 12 | Tag picker modal: gear icon in Legend's `<thead><th colSpan={5}>` opens modal; flat alphabetical trendable-tag list (left pane) + Trending list (right pane); click-to-stage, × to unstage, search filter, 16-tag stage cap; OK commits to `setTagIds`; inline-style chrome via `@caro/ui Modal` | ✅ Done |
 
-**Test coverage (2026-05-26):** 730 passing in `@caro/trend-chart`, 67 in `@caro/hmi-context`, 156 in `@caro/db`, 289 in the HMI server, 33 in the HMI client.
+**Test coverage (2026-05-27):** 752 passing in `@caro/trend-chart`, 67 in `@caro/hmi-context`, 156 in `@caro/db`, 301 in the HMI server, 33 in the HMI client.
 
 **Audit remediation pass (2026-05-15 → 2026-05-17):** all items from the May 2026 trend-viewer audit landed across Phases 1–5. Notable architectural change: **M1 metadata-as-return-value** — `getTrendTile()` now returns `Promise<{ tile, meta }>` (see spec §4.1 / §14.7); the `__test_lastUsedSources` module singleton is gone, with per-segment source/timing/rowCount now flowing through `meta.segments[]`. Operational hardening: F5 per-tag outbox cap (spec §4.4), TG-7 `commitAndDrain` bug fix (§10 gotcha below), TG-1 plan-pruning regression test (§10 gotcha below). All other items were refactors, test additions, or comment cleanup with no observable behavior change.
 
@@ -114,6 +115,9 @@ packages/trend-chart/
                                   # (any size-preserving intent stays highlighted; zoom excluded)
     EndPicker.tsx                 # footer: End datetime picker button + Live/Go Live button
     Legend.tsx                    # right-side strip; top-to-bottom:
+                                  #   (0) <thead><th colSpan={5} scope="colgroup"> — "Signals"
+                                  #       label + gear button (opens TagPickerModal); bottom
+                                  #       border on the th
                                   #   (1) Cursor row — "Cursor: HH:MM:SS" or "Cursor: --";
                                   #       formatDateTime from @caro/ui; siteTimezone prop
                                   #   (2) Value header — "Value: Max @ Cursor" / "Value: Last
@@ -130,6 +134,14 @@ packages/trend-chart/
                                   #       + last fetch; bucketSMs/lastFetchMs props
                                   # All four label groups use unified style: 12px, #374151,
                                   # monospace, lineHeight 16px
+    TagPickerModal.tsx            # modal opened by Legend gear button; flat alphabetical
+                                  # trendable-tag list (left pane) + Trending list (right
+                                  # pane); both panes width = max(MIN_PANE_PX, longest
+                                  # tag_name × FONT_WIDTH_PX + PANE_PADDING_PX); outer
+                                  # wrapper width = paneWidth × 2 + PANE_GAP_PX; height
+                                  # pinned at calc(90vh - 8rem); 16-tag stage cap; inline-
+                                  # style chrome via @caro/ui Modal outerStyle/headerStyle/
+                                  # bodyStyle
     CursorDisplay.tsx             # range-message-only bar above the footer preset row;
                                   # renders "Range too wide…" or "Range too narrow…" in red
                                   # when the viewport span is out of bounds; otherwise empty;
@@ -334,7 +346,7 @@ It also renders:
 - `CursorDisplay` (range-message bar — rendered above the footer, below the chart canvas)
 - Footer row: `SpanPresets` | `SpanIndicator` | `EndPicker + Live button`
 
-It owns `tagIds` state (initialized from `initialTagIds` prop; removes come from `Legend` via `TrendChart.onTagRemove`). It derives `xRange` from `modeViewport` via `useMemo`. It passes `showLastWhenIdle={isLive(modeState.mode)}`, `bucketSMs={bucketSMsIndicator}`, and `lastFetchMs={lastFetchMs}` to `TrendChart` (all forwarded to `Legend`). There is no `cursorTsMs` state in the container — the cursor row is owned entirely by `Legend`.
+It owns `tagIds` state (initialized from `initialTagIds` prop; removes come from `Legend` via `TrendChart.onTagRemove`; additions come from `TagPickerModal.onCommit`). It also owns `isPickerOpen` state; the gear click in `Legend` → `onSettingsClick` → `setIsPickerOpen(true)`. `<TagPickerModal>` is mounted as a sibling to `<TrendChart>`, receiving `isOpen={isPickerOpen}`, `onClose={() => setIsPickerOpen(false)}`, `onCommit={setTagIds}`, `currentTagIds={tagIds}`, and `tagMap`. It derives `xRange` from `modeViewport` via `useMemo`. It passes `showLastWhenIdle={isLive(modeState.mode)}`, `bucketSMs={bucketSMsIndicator}`, and `lastFetchMs={lastFetchMs}` to `TrendChart` (all forwarded to `Legend`). There is no `cursorTsMs` state in the container — the cursor row is owned entirely by `Legend`.
 
 Props: `tagIds: number[]`, `siteTimezone?: string`, `height?: number` (default 420). Width is measured via `ResizeObserver` inside `TrendChart`.
 
@@ -403,6 +415,16 @@ Divergences from the spec that remain current. Entries absorbed into the spec du
 31. **`invalidateNonTerminalTiles` on Fixed→Live.** `dispatchModeAction` calls `trendData.invalidateNonTerminalTiles()` on `!isLive(prev) && isLive(next)` transitions (symmetric to `drainBuffers` on Live→Fixed). Resets `committedThroughTs` to `null` on non-terminal active entries; `needsFetch`'s "entry not resolved" branch immediately re-fetches them with a fresh watermark. Terminal LRU entries are untouched. Without this, tiles preserved from Fixed mode carry a stale `committedThroughTs` and never re-fetch in live mode.
 
 32. **`mergeTrendData` `totalN` cap prevents white-gap at the live-edge tile seam.** During the ~1-bucket window before the WS accumulator closes its first bucket in a new tile's range, the live-edge tile has non-null buckets from a prior fetch but the accumulator's coverage starts at 0. Without capping, `totalN = liveEndIndex + 1` extended past the cached tile's actual data, emitting null future-coverage buckets that rendered as a white gap. Fix: when `liveStartIndex < 0 && seamBucketIndex >= 0 && liveEndIndex <= seamBucketIndex`, cap `totalN = seamBucketIndex`. Implemented in `mergeTrendData.ts`.
+
+34. **Click-to-stage / ×-to-unstage (supersedes spec §11.3 checkbox multi-select + "Add N" commit).** Staging is immediate on click; the right (Trending) pane reflects insertion order. Clicking an already-staged row in the left pane is a no-op. Unstaging via × in the right pane. OK commits the full staged set in one call to `setTagIds`.
+
+35. **16-tag picker stage cap.** The spec §11 did not specify a picker stage cap. The 17th add attempt shows an inline error row; removing a tag clears it. The chart UX cap (§2: max plotted tags = 20) is unchanged.
+
+36. **Modal, not drawer (supersedes spec §11.1).** The picker is a content-sized modal, not a right-side drawer. The chart-visible-while-picking property is preserved because the modal is sized to content rather than full-screen.
+
+37. **Non-trendable tags filtered out entirely (supersedes spec §11.4 grayed + footer hint).** Tags with `trendable === false` are absent from the left pane. The "N matching tags are not trendable" footer hint is not implemented.
+
+38. **Inline-style modal chrome (supersedes spec §11.5, which was unspecified).** `TagPickerModal` uses `@caro/ui Modal`'s `outerStyle`/`headerStyle`/`bodyStyle` props rather than Tailwind class strings — consistent with `@caro/trend-chart`'s inline-style-pure convention.
 
 33. **`querySegment` absent-tag bounded-prev fallback.** Tags whose `time_bucket_gapfill` output has zero in-window rows (COV tags in windows narrower than the mandatory 60 s snapshot interval) receive a dedicated bounded-prev query (`DISTINCT ON (tag_id) … WHERE timeCol < startTime AND timeCol >= startTime − 5 min`) and are filled flat at the prior value. Only tags with no prior history in the 5-minute window remain `null × n`. The spec's §5.5 `prev` subquery only seeds the LOCF carry-forward within the gapfill range; this fallback handles the degenerate case where the gapfill emits nothing to carry forward. Implemented in `packages/db/timescale/trends.ts`; 2 integration tests added.
 
@@ -498,14 +520,6 @@ Observations from production behavior. Not divergences from spec — document he
 
 > **Note:** `@caro/trend-chart` ships from `dist/`. After editing source, run `npm run build --workspace=packages/trend-chart` before testing in the browser. Tests run against source directly.
 
-| Step | Summary | Spec reference |
-|---|---|---|
-| 12 | **Tag picker drawer**: tree + search (§11.2), multi-select commit (§11.3), trendable filter (§11.4). | §11 |
+Phase A Steps 1–12 are complete. Next priority TBD. See `Docs/platform_todo.md` for the current open items list.
 
 > Pool sizing and other operational monitoring watchlist items live in `Docs/platform_todo.md`, not as development steps.
-
-**Reading order for Step 12:**
-1. This file (orientation, especially §7 Container Wiring)
-2. `apps/caro-hmi/CLAUDE.md` — trendable tag route (`GET /api/v1/tags/trendable`) and WS architecture
-3. `Docs/hmi_trend_viewer_spec.md` §11 — Tag Picker spec
-4. `packages/trend-chart/src/TrendChartContainer.tsx` — wire point for `tagIds` state (`setTagIds`)

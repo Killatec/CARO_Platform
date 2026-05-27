@@ -55,6 +55,7 @@ Client is a standard Vite React app. `vite.config.ts` proxies `/api` and `/ws` t
 
 ## Key Design Decisions
 
+- **Tailwind v4 content discovery via `@source` directives in `client/src/index.css`.** Any workspace package whose source files use Tailwind class names must be listed there. Currently listed: `@caro/ui`, `@caro/widgets`, `@caro/hmi-context`, `@caro/trend-chart`. Without a `@source` entry, class strings from that package silently fail to compile.
 - **No quality enum.** Null value = bad quality. Watchdog writes null on telemetry loss.
 - **No per-tag timestamp in LKV.** Generation counters drive WS change detection. DB uses module-level timestamp from MQTT.
 - **Widgets use `assetPath` string prop**, not pre-resolved TagDef. `useResolveAssetPath(assetPath)` does contiguous segment matching on dot-separated tag_path. Abbreviated paths supported.

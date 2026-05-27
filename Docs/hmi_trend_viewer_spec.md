@@ -1,6 +1,6 @@
 # CARO_HMI Trend Viewer — Design Specification
 **Date:** 2026-05-05
-**Status:** Phase A Steps 1–11 complete. Step 12 (Tag picker) pending.
+**Status:** Phase A Steps 1–12 complete.
 **Companion Documents**
 
 hmi_trend_viewer_reference | hmi_functional_spec | hmi_API_spec | hmi_widget_spec | CARO_DB_Spec | DB_Config_Usage_And_Perf | platform_handoff
@@ -11,6 +11,7 @@ hmi_trend_viewer_reference | hmi_functional_spec | hmi_API_spec | hmi_widget_spe
 
 | Version | Date | Author | Summary |
 |---|---|---|---|
+| 2.0 | 2026-05-27 | PM / Claude | Step 12 (Tag Picker) complete. §11 rewritten: gear icon in Legend `<thead><th>` opens modal (supersedes drawer); flat trendable list (supersedes tree); click-to-stage (supersedes checkbox + Add N); trendable filter; modal sizing formula; 16-tag cap. Spec status bumped to Steps 1–12 complete. |
 | 1.9 | 2026-05-26 | PM / Claude | Session-end propagation pass. `responseTailTs` renamed `committedThroughTs` throughout (wire type, `ActiveTileEntry`, `needsFetch`, merge seam). `needsFetch` live branch collapsed to `return false` — WS tail + `invalidateNonTerminalTiles` + `REFETCH_LAG_MS` cover all live-mode cases (§10.6). `invalidateNonTerminalTiles` added to `dispatchModeAction` Fixed→Live edge (§10.6/§10.7). `mergeTrendData` `totalN` cap added (§10.6). `querySegment` absent-tag bounded-prev fallback documented (§5.5). `seamResponseTailTs` renamed `seamCommittedThroughTs`. |
 | 1.8 | 2026-05-24 | PM / Claude | Unified-viewport + storm-fix arc. `dataViewport` removed from `useZoomState`; `useTrendData` now driven by `modeViewport` + explicit `bucketSMs` — fetch coverage follows display viewport directly, closing the blank-tile-on-zoom-out regression (§9.3/§10.5). `tilesForViewport` contract updated: explicit `tileSpanMs` parameter; left-anchor grid strategy; variable visible-tile count (typically 2–4) covering the full viewport; `MAX_VISIBLE_TILES = 16` defense-in-depth cap (§10.5). `useZoomState` rewritten: `currentBucketSMs` derived at render time for non-zoom intents (`derivedBucketSMs = modeViewportSpan / buckets`), eliminating the one-render transient that fired a tile storm on wide preset clicks; sticky `gestureBucketSMs` state only during `lastIntent === 'zoom'` (§9.3). `mergeAggregate` gained a `liveStartIndex >= 0` guard: when `live.startMs < cached.startTime`, cached data outside live's actual output coverage is preserved (§10.6). |
 | 1.7 | 2026-05-19 | PM / Claude | Docs-only pass for Phases 1–4 (three-state mode machine) with refinements. §9.3 replaced with three-state machine (`fixed`/`live-trailing`/`live-fixed`), symmetric window-vs-live-edge classification rule (supersedes proposal D6/D7), auto-promote, `latestSampleTs === null` fallback. §10.6 updated for unified Live buffer (`spineRef`, `seedFromSpineFetch`, `getBufferSnapshot`, generation counter, `latestSampleTs` semantics, right-`overfetch=0` asymmetric pattern). §10.7 clarifies bucketing gates on `isLive(mode)` predicate. §10.8 expands `evictAll` triggers (all `fixed → live-*` and `live-* → live-trailing` via preset/Live). §12.1 documents preset-from-Live full teardown. §12.2 updated with symmetric endPicker rule (future-end → `live-fixed` from any state). §12.3 updated with three-state button (default / highlighted / orange). §13.1 adds `live-fixed` "Not saved" entry. §14.4 expands WS backoff scope and adds disconnect-duration to reconnect log. §19 adds Live Mode, Trailing, Unified Live Buffer, Auto-promote, `latestSampleTs`, `sessionHighWaterMark`, Generation counter, `liveEdgeBehindWindow` glossary entries. |
@@ -947,28 +948,41 @@ The right-edge writer-lag window (`TIMESCALE_DB_TICK_MS` ≈ 500 ms plus FIFO tr
 
 ### 11.1 Entry Point
 
-"Add tag" button above the legend. Click opens a **side drawer** (right-side panel, does not cover the chart). Drawer dismisses via an X button, Esc key, or click outside. Keeping the chart visible while picking was preferred over a modal because operators often use visible tag values to decide which additional tags are relevant.
+Gear icon in the Legend's `<thead><th colSpan={5} scope="colgroup">` header row opens a modal. The modal closes via:
+- **OK button** — commits the staged set to `setTagIds`.
+- **Cancel button**, **Esc key**, or **click outside** — discards staged changes silently.
+
+The chart remains visible during picking: the modal is sized to content (not full-screen), preserving the original chart-visible-while-picking rationale without a side-panel layout.
 
 ### 11.2 Browse Model
 
-Both tree and search:
+Flat alphabetical list of trendable tags in the left pane. Tags are sorted by `tag_name` (fallback `Tag-<id>` when `tag_name` is null). A search box above the list filters by case-insensitive substring match on `tag_name`.
 
-- **Tree.** Mirrors the module hierarchy from the Tag Registry. Each module node expands to show its tags. Tree state (expanded/collapsed) persists within a session.
-- **Search box** at the top of the drawer. Type-ahead fuzzy match against tag path (`Tank_01.Level`, `Pump_03.Speed.Feedback`). Matches filter the tree in-place — branches with no matches collapse; branches with matches auto-expand and highlight matching leaves.
-
-Power users type. New operators browse. Both paths end at the same selection model.
+There is no tree view, no expand/collapse state, and no filter auto-expand.
 
 ### 11.3 Selection Model
 
-Checkboxes on tree/list entries. Multi-select permitted. Commit with "Add N tags" button at the bottom of the drawer. Committing issues a single tile fetch for all newly added tags.
+- **Click an available tag** in the left pane to stage it. It appears in the right (Trending) pane in insertion order.
+- **Click × in the right pane** to unstage a tag.
+- **Already-staged tags** in the left pane render bold and tinted; clicking them is a no-op.
+- **OK** commits the staged set to `setTagIds` and closes the modal.
+- **Cancel / Esc / click outside** closes without committing.
 
-Rationale: adding five tags one-at-a-time is tedious and triggers five separate render cycles. Batch commit is both UX-nicer and performance-nicer.
+This supersedes the checkbox multi-select + "Add N tags" commit model. Selection is immediate (click → staged) rather than accumulated-then-committed.
 
 ### 11.4 Trendable Filter
 
-Non-trendable tags are hidden from the tree and search results. The Tag Registry flags trendable tags explicitly; non-trendable tags have no `tag_samples` data and cannot be plotted.
+Non-trendable tags (`tag.trendable === false`) are filtered out of the left pane entirely. The picker reads `tag.trendable` directly off the `tagMap`; no separate endpoint fetch. The "N matching tags are not trendable" footer hint is not implemented.
 
-Footer hint: when a search term matches non-trendable tags that are otherwise hidden, a small text note appears: *"3 matching tags are not trendable."* Prevents operator confusion when a known tag doesn't appear in results.
+### 11.5 Modal Sizing
+
+Both panes share the same computed width: `max(MIN_PANE_PX, ceil(longestTagNameLen × FONT_WIDTH_PX) + PANE_PADDING_PX)`, memoised off `availableTags` (not the filtered list) so search does not change pane widths. Outer wrapper width = `paneWidth × 2 + PANE_GAP_PX`. Height pinned at `calc(90vh - 8rem)` so the modal does not shrink when search narrows the list.
+
+Modal chrome uses inline styles on `@caro/ui Modal` (`outerStyle` / `headerStyle` / `bodyStyle`) — consistent with `@caro/trend-chart`'s inline-style-pure convention.
+
+### 11.6 Cap
+
+The staged set is capped at 16 tags. The 17th add attempt shows an inline error; removing a tag clears it. The chart UX cap (maximum plotted tags) remains 20, per §2 / §6.6 fan-out math.
 
 ---
 
@@ -1085,7 +1099,7 @@ Each row has edit and delete icons. Bottom of the dropdown: "Save current as…"
 
 ### 13.5 Default State
 
-No saved default view. The mode state machine initializes in `live-trailing` (see §9.3 and `useTrendMode.ts`) — the empty-state prompt is driven by tag count, not by mode. Whenever `tagIds.length === 0`, including first-time open, the plot area shows a blank chart with an empty-state prompt: a large "Add tags" button that opens the tag picker drawer. Once tags are added, `live-trailing` is already the active mode and the chart begins tailing immediately.
+No saved default view. The mode state machine initializes in `live-trailing` (see §9.3 and `useTrendMode.ts`) — the empty-state prompt is driven by tag count, not by mode. Whenever `tagIds.length === 0`, including first-time open, the plot area shows a blank chart with an empty-state prompt: a large "Add tags" button that opens the tag picker modal (see §11). Once tags are added, `live-trailing` is already the active mode and the chart begins tailing immediately.
 
 ---
 
@@ -1271,7 +1285,7 @@ No formal percentage target. Every public function in `cache/` and `hooks/` has 
 - Tile cache keyed by `(tagId, startTime, endTime, bucketCount)`, 500-bucket ranges, LRU at 50 MB
 - Live / fixed modes with implicit transitions
 - Preset buttons + custom range + Live button
-- Tag picker drawer (tree + search, multi-select commit)
+- Tag picker modal (flat trendable-tag list + Trending list; click-to-stage, search filter, 16-tag cap)
 - Legend (name, color, current value, click to select trace, remove button)
 - Cursor time in Legend strip (`Cursor:` field, site-timezone formatted); per-tag value at the cursor already in Legend rows (§8.5). A separate floating cursor overlay is Phase B.
 - Null-as-gap rendering (uPlot `spanGaps: false`)
@@ -1304,7 +1318,7 @@ Non-binding, but each step is landable independently and its tests pass in isola
 | 10 | **Mode state machine + time range UI**: live/fixed transitions (§9.3), preset strip (§12.1), custom range picker (§12.2), Live button (§12.3), pan/zoom interactions (§9.1–9.2). Still no WS. ✓ Done. | 9 | interaction model, mode correctness |
 | A.5 | **v0.8 min/max bands (feature/trends-min-max-bands).** DB aggregate path returns `min`/`max` per series; three-case JS post-pass (§6.5); REST v0.8 serializes both arrays; `@caro/trend-chart` always-band 2-series render (§8.7); `bandsFromTrendData` helper; `bucketSMs === 0n` + `newStart >= 1n` defensive guards (§9.5); SpanBucketIndicator `lastFetchMs` / Last Fetch line. ✓ Done — `@caro/db` 102 passing, HMI server 233 passing, `@caro/trend-chart` 424 passing. | 1–10 | full band pipeline, defensive guards |
 | 11 | **Live tail**: dedicated trend WS channel (`SUBSCRIBE_TREND`/`UNSUBSCRIBE_TREND`/`TREND_DELTA`), `useLiveSubscription` hook (ring buffer + bucket accumulator for aggregate; raw buffer for raw mode; 2×viewportSpanMs trim; `commitAndDrain` returns void), unified `mergeTrendData` (live-wins-on-coverage, `isLive(mode)` predicate replaces old `isTailing` boolean), `isLive`-gated tile-fetch suppression in `useTrendData`, eviction-on-live-entry cache freshness (`evictAll` on fixed→live-*, eliminates Gap B), server-side future-bucket nulling in `getTrendTile`, no-clamp wheel-zoom + `gatedFetchTile` over-range gating + inline "Range too wide" message in `CursorDisplay`, `dispatchModeAction` wrapper for atomic live-exit cleanup. ✓ Done — 583 `@caro/trend-chart` + 67 `@caro/hmi-context` tests passing. | 10 | live stitching, subscription correctness, mode-transition cleanup, over-range UX |
-| 12 | **Tag picker drawer**: tree + search (§11.2), multi-select commit (§11.3), trendable filter (§11.4). | 11 | picker UX, trendable filtering |
+| 12 | **Tag picker modal**: gear icon in Legend `<thead><th>` opens modal; flat trendable-tag list (§11.2); click-to-stage, × to unstage (§11.3); trendable filter (§11.4); modal sizing (§11.5); 16-tag stage cap (§11.6). ✓ Done — 752 `@caro/trend-chart` tests passing. | 11 | picker UX, trendable filtering |
 
 > **Note (post-Phase-A).** The fetch and live-tail architecture delivered in Steps 8 and 11 was subsequently unified: the separate live-spine and history-tile fetch paths were replaced by a single tile pipeline (`runTileFetch`) governed by the terminal-cache rule. The current architecture is §10.6; the Step 8 / 11 rows above record the original build sequence, not the present design.
 

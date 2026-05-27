@@ -8,7 +8,6 @@
 
 ## HMI
 
-- [ ] **Step 12 — Tag picker drawer:** Side drawer with tag tree + type-ahead search (§11.2), multi-select commit (§11.3), trendable filter (§11.4). Depends on Step 11.
 - [ ] Add NULL `prev` rate monitoring per `DB_Config_Usage_And_Perf.md` §8.1 — daily sample at 1-min bound; non-zero rate signals writer-cadence drift
 
 ### Trend Viewer — Deferred / Possible Future Improvements
