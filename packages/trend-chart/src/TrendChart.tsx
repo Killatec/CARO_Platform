@@ -62,6 +62,14 @@ export interface TrendChartProps {
   lastFetchMs?: number | null;
   /** Forwarded to Legend's Signals header gear icon. */
   onSettingsClick?: () => void;
+  /** Seeds selectedTagId state on first mount (session hydration). */
+  initialSelectedTagId?: number | null;
+  /** Seeds yScaleOverridesRef on first mount (session hydration). */
+  initialYScaleOverrides?: Map<number, { min: number; max: number }>;
+  /** Fired whenever the user changes the selected tag (legend click). Notification only — runtime state stays in TrendChart. */
+  onSelectedTagChange?: (tagId: number) => void;
+  /** Fired whenever the Y-scale override Map is mutated (Y-pan or Y-wheel). Receives a shallow clone so identity comparison works. Notification only — runtime state stays in TrendChart. */
+  onYScaleOverridesChange?: (overrides: Map<number, { min: number; max: number }>) => void;
 }
 
 const WRAPPER: CSSProperties = {
@@ -109,11 +117,16 @@ export function TrendChart({
   bucketSMs = null,
   lastFetchMs = null,
   onSettingsClick,
+  initialSelectedTagId,
+  initialYScaleOverrides,
+  onSelectedTagChange,
+  onYScaleOverridesChange,
 }: TrendChartProps) {
   const tagMap = useTagMap();
 
   // selectedTagId is pure UI state — stays in TrendChart.
-  const [selectedTagId, setSelectedTagId] = useState<number>(() => tagIds[0] ?? 0);
+  // initialSelectedTagId seeds from session on first mount; null/undefined falls back to first tag.
+  const [selectedTagId, setSelectedTagId] = useState<number>(() => initialSelectedTagId ?? tagIds[0] ?? 0);
   const [cursorState, setCursorState] = useState<{ idx: number; tsMs: number | null } | null>(null);
 
   // If the selected tag was removed by the container, fall back to first remaining.
@@ -144,7 +157,10 @@ export function TrendChart({
   const userScaleRef = useRef<{ min: number; max: number } | null>(null);
   // Persists user Y-axis pan/zoom across rebuilds. Keyed by tagId.
   // Ref (not state) so handler writes don't trigger re-renders.
-  const yScaleOverridesRef = useRef<Map<number, { min: number; max: number }>>(new Map());
+  // initialYScaleOverrides seeds from session on first mount (useRef only uses the arg once).
+  const yScaleOverridesRef = useRef<Map<number, { min: number; max: number }>>(
+    initialYScaleOverrides !== undefined ? new Map(initialYScaleOverrides) : new Map(),
+  );
 
   // Stable ref so pan/zoom handlers never stale-close over effectiveSelectedId.
   const selectedTagIdRef = useRef(effectiveSelectedId);
@@ -175,6 +191,18 @@ export function TrendChart({
 
   const lastIntentRef = useRef(lastIntent);
   lastIntentRef.current = lastIntent;
+
+  const onSelectedTagChangeRef = useRef(onSelectedTagChange);
+  onSelectedTagChangeRef.current = onSelectedTagChange;
+
+  const onYScaleOverridesChangeRef = useRef(onYScaleOverridesChange);
+  onYScaleOverridesChangeRef.current = onYScaleOverridesChange;
+
+  // Stable handler: sets local selectedTagId state and notifies container for persistence.
+  const handleSelectTag = useCallback((tagId: number) => {
+    setSelectedTagId(tagId);
+    onSelectedTagChangeRef.current?.(tagId);
+  }, []);
 
   const onCursorChange = useCallback(
     (idx: number | null, tsMs: number | null) => {
@@ -333,6 +361,7 @@ export function TrendChart({
         const sc = u.scales[key];
         if (sc?.min != null && sc?.max != null) {
           yScaleOverridesRef.current.set(selectedTagIdRef.current, { min: sc.min, max: sc.max });
+          onYScaleOverridesChangeRef.current?.(new Map(yScaleOverridesRef.current));
         }
       }
     };
@@ -364,6 +393,7 @@ export function TrendChart({
       const sc = u.scales[key];
       if (sc?.min != null && sc?.max != null) {
         yScaleOverridesRef.current.set(selectedTagIdRef.current, { min: sc.min, max: sc.max });
+        onYScaleOverridesChangeRef.current?.(new Map(yScaleOverridesRef.current));
       }
     };
 
@@ -525,12 +555,12 @@ export function TrendChart({
       bucketSMs={bucketSMs}
       lastFetchMs={lastFetchMs}
       showLastWhenIdle={showLastWhenIdle}
-      onSelect={setSelectedTagId}
+      onSelect={handleSelectTag}
       onRemove={tagId => onTagRemove?.(tagId)}
       onSettingsClick={onSettingsClick}
     />
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  ), [tagIds, data, tagMap, effectiveSelectedId, cursorState?.tsMs, siteTimezone, bucketSMs, lastFetchMs, onTagRemove, showLastWhenIdle, onSettingsClick]);
+  ), [tagIds, data, tagMap, effectiveSelectedId, cursorState?.tsMs, siteTimezone, bucketSMs, lastFetchMs, onTagRemove, showLastWhenIdle, onSettingsClick, handleSelectTag]);
 
   return (
     <div style={WRAPPER}>
