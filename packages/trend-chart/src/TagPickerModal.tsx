@@ -14,13 +14,14 @@ export interface TagPickerModalProps {
 }
 
 const DEFAULT_MAX_TAGS = 16;
-const FONT_WIDTH_PX = 7.2;       // 12px monospace
-const LEFT_PANE_PADDING_PX = 100; // row padding + scrollbar + breathing room
-const MIN_LEFT_PANE_PX = 200;
+const FONT_WIDTH_PX = 7.2;     // 12px monospace
+const PANE_PADDING_PX = 100;   // row padding + scrollbar + breathing room
+const MIN_PANE_PX = 200;
+const PANE_GAP_PX = 12;
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 
-const OUTER_WRAPPER: CSSProperties = {
+const OUTER_WRAPPER_BASE: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   gap: 16,
@@ -32,17 +33,8 @@ const PANE_ROW: CSSProperties = {
   flex: 1,
   minHeight: 0,
   display: 'flex',
-  gap: 12,
+  gap: PANE_GAP_PX,
   overflow: 'hidden',
-};
-
-const RIGHT_PANE: CSSProperties = {
-  flex: '0 0 280px',
-  minWidth: 280,
-  overflowY: 'auto',
-  border: '1px solid #e5e7eb',
-  borderRadius: 4,
-  padding: 8,
 };
 
 const SEARCH_BOX: CSSProperties = {
@@ -168,16 +160,28 @@ export function TagPickerModal({
     });
   }, [availableTags, trimmedSearch]);
 
-  const leftPaneWidth = useMemo(() => {
+  // Both panes use the same width, computed from the longest trendable tag_name.
+  // Memoised off availableTags so search filter does not change pane widths.
+  const paneWidth = useMemo(() => {
     const maxLen = availableTags.reduce((max, tag) => {
       const name = tag.tag_name ?? `Tag-${tag.tag_id}`;
       return name.length > max ? name.length : max;
     }, 0);
     return Math.max(
-      MIN_LEFT_PANE_PX,
-      Math.ceil(maxLen * FONT_WIDTH_PX) + LEFT_PANE_PADDING_PX,
+      MIN_PANE_PX,
+      Math.ceil(maxLen * FONT_WIDTH_PX) + PANE_PADDING_PX,
     );
   }, [availableTags]);
+
+  const paneStyle: CSSProperties = {
+    width: paneWidth,
+    minWidth: paneWidth,
+    flex: '0 0 auto',
+    overflowY: 'auto',
+    border: '1px solid #e5e7eb',
+    borderRadius: 4,
+    padding: 8,
+  };
 
   const handleStage = useCallback((tag: TagDef) => {
     setStagedIds(prev => {
@@ -205,11 +209,11 @@ export function TagPickerModal({
       isOpen={isOpen}
       onClose={onClose}
       title="Signals"
-      outerStyle={{ maxWidth: '64rem', padding: 24 }}
+      outerStyle={{ width: 'fit-content', maxWidth: 'calc(100vw - 32px)', padding: 24 }}
       headerStyle={{ padding: '0 0 12px 0' }}
       bodyStyle={{ padding: 0, overflow: 'hidden' }}
     >
-      <div style={OUTER_WRAPPER}>
+      <div style={{ ...OUTER_WRAPPER_BASE, width: paneWidth * 2 + PANE_GAP_PX }}>
       <input
         type="text"
         placeholder="Search tags…"
@@ -220,7 +224,7 @@ export function TagPickerModal({
       />
       <div style={PANE_ROW}>
         {/* Left pane — flat alphabetical list of trendable tags */}
-        <div style={{ width: leftPaneWidth, minWidth: leftPaneWidth, flex: '0 0 auto', overflowY: 'auto', border: '1px solid #e5e7eb', borderRadius: 4, padding: 8 }} role="list" aria-label="Available tags">
+        <div style={paneStyle} role="list" aria-label="Available tags">
           {filteredTags.map(tag => {
             const label = tag.tag_name ?? `Tag-${tag.tag_id}`;
             const isStaged = stagedIds.includes(tag.tag_id);
@@ -250,7 +254,7 @@ export function TagPickerModal({
           })}
         </div>
         {/* Right pane — staged list */}
-        <div style={RIGHT_PANE} aria-label="Staged signals">
+        <div style={paneStyle} aria-label="Staged signals">
           {stagedIds.map(tagId => {
             const tag = tagMap.get(tagId);
             const label = tag?.tag_name ?? `Tag-${tagId}`;

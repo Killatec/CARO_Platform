@@ -173,31 +173,54 @@ describe('TagPickerModal', () => {
     expect(screen.queryByRole('button', { name: /ok/i })).not.toBeNull();
   });
 
-  it('left pane width is derived from the longest tag_name in the full trendable list', () => {
+  it('both panes use the same content-driven width from the longest tag_name', () => {
     const longMap = new Map<number, TagDef>([
-      [1, makeTag(1, 'A.B.Short',            true, 'ShortName')],
-      [2, makeTag(2, 'A.B.Long',             true, 'AVeryLongTagName')],  // 16 chars
+      [1, makeTag(1, 'A.B.Short', true, 'ShortName')],
+      [2, makeTag(2, 'A.B.Long',  true, 'AVeryLongTagName')],  // 16 chars
     ]);
-    renderPicker({ tagMap: longMap });
-    const leftPane = screen.getByRole('list', { name: 'Available tags' });
+    renderPicker({ tagMap: longMap, currentTagIds: [1] });
     const FONT_WIDTH_PX = 7.2;
-    const LEFT_PANE_PADDING_PX = 100;
-    const MIN_LEFT_PANE_PX = 200;
+    const PANE_PADDING_PX = 100;
+    const MIN_PANE_PX = 200;
     const expectedWidth = Math.max(
-      MIN_LEFT_PANE_PX,
-      Math.ceil(16 * FONT_WIDTH_PX) + LEFT_PANE_PADDING_PX,
+      MIN_PANE_PX,
+      Math.ceil(16 * FONT_WIDTH_PX) + PANE_PADDING_PX,
     );
+    const leftPane = screen.getByRole('list', { name: 'Available tags' });
+    // Modal renders via createPortal — query document.body, not container.
+    const rightPane = document.body.querySelector('[aria-label="Staged signals"]') as HTMLElement;
     expect(leftPane.style.width).toBe(`${expectedWidth}px`);
+    expect(rightPane.style.width).toBe(`${expectedWidth}px`);
   });
 
-  it('left pane width does not change when search narrows the list', () => {
+  it('pane widths do not change when search narrows the list', () => {
     renderPicker();
     const leftPane = screen.getByRole('list', { name: 'Available tags' });
+    const rightPane = document.body.querySelector('[aria-label="Staged signals"]') as HTMLElement;
     const widthBefore = leftPane.style.width;
     expect(widthBefore).toBeTruthy();
 
     fireEvent.change(screen.getByPlaceholderText('Search tags…'), { target: { value: 'temp' } });
 
     expect(leftPane.style.width).toBe(widthBefore);
+    expect(rightPane.style.width).toBe(widthBefore);
+  });
+
+  it('outer wrapper width equals paneWidth * 2 + PANE_GAP_PX', () => {
+    const longMap = new Map<number, TagDef>([
+      [1, makeTag(1, 'A.B.Short', true, 'ShortName')],
+      [2, makeTag(2, 'A.B.Long',  true, 'AVeryLongTagName')],  // 16 chars
+    ]);
+    renderPicker({ tagMap: longMap });
+    const FONT_WIDTH_PX = 7.2;
+    const PANE_PADDING_PX = 100;
+    const MIN_PANE_PX = 200;
+    const PANE_GAP_PX = 12;
+    const paneWidth = Math.max(
+      MIN_PANE_PX,
+      Math.ceil(16 * FONT_WIDTH_PX) + PANE_PADDING_PX,
+    );
+    const wrapper = screen.getByPlaceholderText('Search tags…').parentElement!;
+    expect(wrapper.style.width).toBe(`${paneWidth * 2 + PANE_GAP_PX}px`);
   });
 });
