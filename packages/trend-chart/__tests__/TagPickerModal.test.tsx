@@ -158,15 +158,12 @@ describe('TagPickerModal', () => {
     expect(screen.queryByRole('button', { name: /ok/i })).not.toBeNull();
   });
 
-  it('picker outer wrapper has width:880 and Trending list renders full tag_name without truncation', () => {
+  it('Trending list renders full tag_name without truncation', () => {
     const repMap = new Map<number, TagDef>([
       [10, makeTag(10, 'PS1.HV_Switch.Current.Mon', true, 'HV_Switch.Current.Mon')],
       [11, makeTag(11, 'PS1.HV_Switch.Voltage.Mon', true, 'HV_Switch.Voltage.Mon')],
     ]);
     renderPicker({ tagMap: repMap, currentTagIds: [10, 11] });
-
-    const wrapper = screen.getByPlaceholderText('Search tags…').parentElement!;
-    expect(wrapper.style.width).toBe('880px');
 
     // Appears in both left pane (list item) and right pane (staged) — no DOM-level truncation.
     expect(screen.getAllByText('HV_Switch.Current.Mon').length).toBeGreaterThan(0);
@@ -174,5 +171,33 @@ describe('TagPickerModal', () => {
 
     expect(screen.queryByRole('button', { name: /cancel/i })).not.toBeNull();
     expect(screen.queryByRole('button', { name: /ok/i })).not.toBeNull();
+  });
+
+  it('left pane width is derived from the longest tag_name in the full trendable list', () => {
+    const longMap = new Map<number, TagDef>([
+      [1, makeTag(1, 'A.B.Short',            true, 'ShortName')],
+      [2, makeTag(2, 'A.B.Long',             true, 'AVeryLongTagName')],  // 16 chars
+    ]);
+    renderPicker({ tagMap: longMap });
+    const leftPane = screen.getByRole('list', { name: 'Available tags' });
+    const FONT_WIDTH_PX = 7.2;
+    const LEFT_PANE_PADDING_PX = 100;
+    const MIN_LEFT_PANE_PX = 200;
+    const expectedWidth = Math.max(
+      MIN_LEFT_PANE_PX,
+      Math.ceil(16 * FONT_WIDTH_PX) + LEFT_PANE_PADDING_PX,
+    );
+    expect(leftPane.style.width).toBe(`${expectedWidth}px`);
+  });
+
+  it('left pane width does not change when search narrows the list', () => {
+    renderPicker();
+    const leftPane = screen.getByRole('list', { name: 'Available tags' });
+    const widthBefore = leftPane.style.width;
+    expect(widthBefore).toBeTruthy();
+
+    fireEvent.change(screen.getByPlaceholderText('Search tags…'), { target: { value: 'temp' } });
+
+    expect(leftPane.style.width).toBe(widthBefore);
   });
 });

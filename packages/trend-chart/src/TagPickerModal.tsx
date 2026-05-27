@@ -14,14 +14,17 @@ export interface TagPickerModalProps {
 }
 
 const DEFAULT_MAX_TAGS = 16;
+const FONT_WIDTH_PX = 7.2;       // 12px monospace
+const LEFT_PANE_PADDING_PX = 100; // row padding + scrollbar + breathing room
+const MIN_LEFT_PANE_PX = 200;
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 const OUTER_WRAPPER: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  width: 880,
-  maxWidth: '100%',
+  gap: 16,
+  height: 'calc(90vh - 8rem)',
   maxHeight: 'calc(90vh - 8rem)',
 };
 
@@ -31,15 +34,6 @@ const PANE_ROW: CSSProperties = {
   display: 'flex',
   gap: 12,
   overflow: 'hidden',
-};
-
-const LEFT_PANE: CSSProperties = {
-  flex: 1,
-  minWidth: 480,
-  overflowY: 'auto',
-  border: '1px solid #e5e7eb',
-  borderRadius: 4,
-  padding: 8,
 };
 
 const RIGHT_PANE: CSSProperties = {
@@ -55,7 +49,6 @@ const SEARCH_BOX: CSSProperties = {
   width: '100%',
   boxSizing: 'border-box',
   padding: '6px 8px',
-  marginBottom: 8,
   border: '1px solid #d1d5db',
   borderRadius: 4,
   fontSize: 13,
@@ -68,9 +61,7 @@ const ERROR_ROW: CSSProperties = {
   fontSize: 12,
   fontFamily: 'monospace',
   lineHeight: '16px',
-  height: 16,
   color: '#dc2626',
-  padding: '4px 0',
   flexShrink: 0,
 };
 
@@ -78,7 +69,8 @@ const FOOTER_ROW: CSSProperties = {
   display: 'flex',
   justifyContent: 'flex-end',
   gap: 8,
-  paddingTop: 8,
+  paddingTop: 12,
+  borderTop: '1px solid #e5e7eb',
   flexShrink: 0,
 };
 
@@ -178,6 +170,17 @@ export function TagPickerModal({
     });
   }, [availableTags, trimmedSearch]);
 
+  const leftPaneWidth = useMemo(() => {
+    const maxLen = availableTags.reduce((max, tag) => {
+      const name = tag.tag_name ?? `Tag-${tag.tag_id}`;
+      return name.length > max ? name.length : max;
+    }, 0);
+    return Math.max(
+      MIN_LEFT_PANE_PX,
+      Math.ceil(maxLen * FONT_WIDTH_PX) + LEFT_PANE_PADDING_PX,
+    );
+  }, [availableTags]);
+
   const handleStage = useCallback((tag: TagDef) => {
     setStagedIds(prev => {
       if (prev.length >= maxTags) {
@@ -212,7 +215,7 @@ export function TagPickerModal({
       />
       <div style={PANE_ROW}>
         {/* Left pane — flat alphabetical list of trendable tags */}
-        <div style={LEFT_PANE} role="list" aria-label="Available tags">
+        <div style={{ width: leftPaneWidth, minWidth: leftPaneWidth, flex: '0 0 auto', overflowY: 'auto', border: '1px solid #e5e7eb', borderRadius: 4, padding: 8 }} role="list" aria-label="Available tags">
           {filteredTags.map(tag => {
             const label = tag.tag_name ?? `Tag-${tag.tag_id}`;
             const isStaged = stagedIds.includes(tag.tag_id);
@@ -268,7 +271,7 @@ export function TagPickerModal({
           })}
         </div>
       </div>
-      <div style={ERROR_ROW} role="alert">{error ?? ''}</div>
+      {error !== null && <div style={ERROR_ROW} role="alert">{error}</div>}
       <div style={FOOTER_ROW}>
         <button style={BTN_CANCEL} onClick={onClose}>Cancel</button>
         <button style={BTN_OK} onClick={handleOk}>OK</button>

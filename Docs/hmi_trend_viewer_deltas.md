@@ -26,3 +26,6 @@
 - Step 12 redesign: TagPickerModal left pane is a flat alphabetical list of trendable tags (filtered by `tag.trendable === true`), replaces the prior tree view of the full tag registry. Dropped: tree state, expand/collapse persistence, non-trendable gray-out, filter auto-expand.
 - Step 12 redesign: `buildTagForest` helper + tests + index exports removed from `@caro/trend-chart` — no consumer remains after the flat-list pivot.
 - Step 12 redesign: orphaned localStorage key `caro.hmi.tagPicker.expandedNodes` left in place (harmless; not read by any code path post-redesign).
+- Step 12 polish: TagPickerModal height pinned at `calc(90vh - 8rem)` (height + maxHeight) so the modal does not shrink when search narrows the list.
+- Step 12 polish: TagPickerModal flex column gap of 16px between search / panes / error / footer; error row now renders conditionally; footer carries a top border + padding for visual separation from the panes.
+- Step 12 polish: left pane width is now content-driven: `max(MIN_LEFT_PANE_PX, longest tag_name × FONT_WIDTH_PX + LEFT_PANE_PADDING_PX)`. Sized off the full trendable list (not the filtered list) so search does not change pane width. Previously fixed `width: 880` on the picker wrapper is dropped; Modal `max-w-4xl` continues to cap upper bound.
