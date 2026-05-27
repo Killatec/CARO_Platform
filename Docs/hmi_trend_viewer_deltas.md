@@ -32,3 +32,4 @@
 - Step 12 polish: TagPickerModal body padding increased to `px-8 py-6` (32/24px) for consistent breathing room around search, panes, and footer.
 - Step 12 polish: footer divider (`borderTop` + `paddingTop`) removed — flex column `gap: 16` provides sufficient visual separation.
 - Step 12 polish: TagPickerModal uses Modal `outerClassName='p-6'` to inset header+body block from the modal's outer rounded edge; inner header/body padding reduced (header `px-6 py-3`, body `px-6 py-4`) to stack sensibly with outer padding rather than doubling-up.
+- Step 12 polish: TagPickerModal chrome migrated to inline styles for consistency with the rest of trend-chart (inline-style-pure package). Dropped `widthClass` / `bodyClassName` / `outerClassName` / `headerClassName` props in favor of `outerStyle` / `headerStyle` / `bodyStyle` inline CSSProperties. Padding values now live as plain numbers in TagPickerModal.tsx.

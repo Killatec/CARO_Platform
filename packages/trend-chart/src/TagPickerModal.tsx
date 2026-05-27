@@ -201,7 +201,14 @@ export function TagPickerModal({
   }, [onCommit, onClose, stagedIds]);
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Signals" widthClass="max-w-4xl" outerClassName="p-6" headerClassName="px-6 py-3 border-b border-gray-200" bodyClassName="px-6 py-4 overflow-hidden">
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Signals"
+      outerStyle={{ maxWidth: '64rem', padding: 24 }}
+      headerStyle={{ padding: '0 0 12px 0' }}
+      bodyStyle={{ padding: 0, overflow: 'hidden' }}
+    >
       <div style={OUTER_WRAPPER}>
       <input
         type="text"
