@@ -56,6 +56,7 @@ vi.mock('../src/TrendChart.js', () => ({
   TrendChart: (props: {
     data?: { startTime: bigint; endTime: bigint; n?: number; series?: Map<unknown, unknown> };
     tagIds: number[];
+    height?: number;
     footer?: unknown;
     onTagRemove?: (id: number) => void;
     onXRangeChange?: (min: bigint, max: bigint) => void;
@@ -76,6 +77,15 @@ vi.mock('../src/TrendChart.js', () => ({
         {props.tagIds.map(id => (
           <button key={id} title="Remove trace" onClick={() => props.onTagRemove?.(id)}>×</button>
         ))}
+        {/* Always render gear button so empty-tagIds tests can assert it's in DOM. */}
+        <button
+          aria-label="Configure signals"
+          data-testid="gear-btn"
+          onClick={props.onSettingsClick}
+          style={{ height: props.height }}
+        >
+          ⚙
+        </button>
         <span data-testid="idle-mode">{props.showLastWhenIdle ? 'live' : 'fixed'}</span>
         {props.footer as React.ReactNode}
       </div>
@@ -252,10 +262,13 @@ describe('TrendChartContainer', () => {
     expect(screen.getByText('Loading…')).toBeTruthy();
   });
 
-  it('shows no-tags hint when tagIds is empty', () => {
+  it('renders TrendChart (not loading hint) when tagIds is empty', () => {
+    // Fix: empty tagIds now shows the full chart shell (gear button accessible),
+    // not the bare "No tags selected." hint.
     mockUseTrendData.mockReturnValue(makeResult([], { data: null, isLoading: false }));
     renderContainer([]);
-    expect(screen.getByText('No tags selected.')).toBeTruthy();
+    expect(screen.queryByText('No tags selected.')).toBeNull();
+    expect(screen.getByTestId('gear-btn')).toBeTruthy();
   });
 
   it('modeViewport over-range: shows range message in cursor row; chart and controls remain interactive', () => {
@@ -1176,6 +1189,72 @@ describe('TrendChartContainer', () => {
 
       expect(invalidate).toHaveBeenCalledOnce();
       expect(screen.getAllByTitle('Remove trace').length).toBe(1);
+    });
+  });
+
+  // ── Empty tagIds — layout preservation ──────────────────────────────────────
+  //
+  // When tagIds=[] the container must render the full TrendChart shell (gear icon
+  // accessible, footer controls alive) regardless of whether this is a first-time
+  // open (no prior data) or a remove-all operation.  The old code returned a bare
+  // "No tags selected." hint in both cases — this broke the UI dead-end.
+
+  describe('empty tagIds', () => {
+    it('first-time open with empty tagIds renders gear button and modal', () => {
+      // No prior data, no isLoading — pure empty first-time open.
+      mockUseTrendData.mockReturnValue(makeResult([], { data: null, isLoading: false }));
+      renderContainer([]);
+
+      // TrendChart must be rendered (gear button in DOM).
+      const gearBtn = screen.getByTestId('gear-btn');
+      expect(gearBtn).toBeTruthy();
+
+      // Clicking the gear button opens TagPickerModal.
+      fireEvent.click(gearBtn);
+      expect(screen.getByText('Cancel')).toBeTruthy();
+      expect(screen.getByText('OK')).toBeTruthy();
+    });
+
+    it('removing all tags preserves chart layout and gear access', () => {
+      mockUseTrendData.mockReturnValue(makeResult([1, 2]));
+      renderContainer([1, 2]);
+
+      // Both remove buttons present initially.
+      expect(screen.getAllByTitle('Remove trace').length).toBe(2);
+
+      // Remove tag 1.
+      fireEvent.click(screen.getAllByTitle('Remove trace')[0]!);
+      // Remove the remaining tag.
+      fireEvent.click(screen.getByTitle('Remove trace'));
+
+      // (a) Gear button still in DOM after removing all tags.
+      expect(screen.getByTestId('gear-btn')).toBeTruthy();
+
+      // (b) capturedData is the placeholder aggregate (non-null) — chart layout preserved.
+      expect(capturedData).not.toBeNull();
+
+      // (c) Clicking gear opens modal — entry point is alive.
+      fireEvent.click(screen.getByTestId('gear-btn'));
+      expect(screen.getByText('Cancel')).toBeTruthy();
+      expect(screen.getByText('OK')).toBeTruthy();
+    });
+
+    it('empty tagIds passes placeholder aggregate (n=2, empty series) to TrendChart', () => {
+      mockUseTrendData.mockReturnValue(makeResult([], { data: null, isLoading: false }));
+      renderContainer([]);
+
+      expect(capturedData).not.toBeNull();
+      expect(capturedData!.n).toBe(2);
+      expect(capturedData!.series!.size).toBe(0); // empty series — no tags
+    });
+
+    it('footer controls remain accessible when tagIds is empty', () => {
+      mockUseTrendData.mockReturnValue(makeResult([], { data: null, isLoading: false }));
+      renderContainer([]);
+
+      // Span presets are still in the DOM (via footer prop).
+      expect(screen.getByText('1m')).toBeTruthy();
+      expect(screen.getByText('1h')).toBeTruthy();
     });
   });
 

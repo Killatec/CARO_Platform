@@ -754,3 +754,58 @@ describe('Legend — Signals header row', () => {
     expect(onSettingsClick).toHaveBeenCalledTimes(1);
   });
 });
+
+// ── Empty tagIds — layout preservation ───────────────────────────────────────
+//
+// When tagIds=[], Legend must render the Signals header + gear button (so the
+// user can open TagPickerModal) and must NOT throw or produce tbody rows.
+// The valueColPx useMemo uses Array.prototype.reduce with initial value MIN_CHARS,
+// so empty tagIds is safe — no Math.max(...[]) / -Infinity risk.
+
+describe('Legend — empty tagIds', () => {
+  // Minimal aggregate placeholder with no series entries.
+  function makeEmptyAggData(): AggregateSeriesData {
+    return {
+      type: 'aggregate',
+      source: 'mixed',
+      startTime: 1_700_000_000_000n,
+      endTime: 1_700_003_600_000n,
+      n: 2,
+      bucketSMs: 3_600_000,
+      series: new Map(),
+    };
+  }
+
+  it('renders without throwing when tagIds=[]', () => {
+    expect(() => {
+      renderLegend([], makeEmptyAggData());
+    }).not.toThrow();
+  });
+
+  it('Signals <thead> is present when tagIds=[]', () => {
+    const { container } = renderLegend([], makeEmptyAggData());
+    const th = container.querySelector('thead th') as HTMLTableCellElement | null;
+    expect(th).not.toBeNull();
+    expect(th!.colSpan).toBe(5);
+    expect(th!.textContent).toContain('Signals');
+  });
+
+  it('gear button is present when tagIds=[]', () => {
+    renderLegend([], makeEmptyAggData());
+    expect(screen.getByTitle('Configure signals')).toBeTruthy();
+  });
+
+  it('no <tbody> rows emitted when tagIds=[]', () => {
+    const { container } = renderLegend([], makeEmptyAggData());
+    const rows = container.querySelectorAll('tbody tr');
+    expect(rows.length).toBe(0);
+  });
+
+  it('cursor row and value header still render when tagIds=[]', () => {
+    renderLegend([], makeEmptyAggData(), vi.fn(), { showLastWhenIdle: true });
+    // Cursor row.
+    expect(screen.getByText(/^Cursor:/).textContent).toBe('Cursor: --');
+    // Value header — aggregate + tailing → "Value: Last Sample".
+    expect(screen.getByText('Value: Last Sample')).toBeTruthy();
+  });
+});

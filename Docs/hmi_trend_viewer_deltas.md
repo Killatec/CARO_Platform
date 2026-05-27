@@ -23,3 +23,5 @@
 **Last cleared:** 2026-05-27. Step 12 (Tag Picker) Phase 4 + polish + cleanup propagated: spec §11 rewritten (§11.1–§11.6); handoff §1 (Step 12 row + test counts 752/67/156/301/33), §2 (Legend.tsx + TagPickerModal.tsx file map), §7 (picker wire point), §10 (divergences 34–38), §12 (Step 12 row removed); platform_handoff apps + packages tables updated; Platform Rules `trendable` added; `apps/caro-hmi/CLAUDE.md` @source note added; platform_todo.md Step 12 removed.
 
 **2026-05-27** — `TrendChartContainer.tsx`: all `tagIds` mutations route through `commitTagIds` (modal commit + legend remove) which calls `invalidateNonTerminalTiles()` before `setTagIds()` to keep the live-edge tile's `committedThroughTs` fresh and close the merge-seam gap on tag change. Spec §11 does not describe this invalidation requirement — divergence from the as-specified picker commit and legend-remove paths.
+
+**2026-05-27** — Empty tagIds preserves full chart layout (gear icon as picker entry) instead of the spec §13.5 "Add tags" button. Applies to first-time open and remove-all uniformly.

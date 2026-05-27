@@ -229,6 +229,8 @@ function getLegendDisplayText(
 export function Legend({ tagIds, data, tagMap, selectedTagId, cursorTsMs, siteTimezone, bucketSMs, lastFetchMs, showLastWhenIdle, onSelect, onRemove, onSettingsClick }: LegendProps) {
   const { headerText } = deriveLegendContext(data.type, cursorTsMs, showLastWhenIdle);
 
+  // Safe for tagIds=[]: reduce returns the initial value MIN_CHARS when the
+  // array is empty — no Math.max(...[]) / -Infinity risk here.
   const valueColPx = useMemo(() => {
     const maxChars = tagIds.reduce((max, id) => {
       const c = charsForTag(tagMap.get(id));

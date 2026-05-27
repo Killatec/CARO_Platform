@@ -352,7 +352,7 @@ export function TrendChartContainer({
     </>
   );
 
-  const chartData = (uxRangeExceeded || uxRangeTooNarrow)
+  const chartData = (uxRangeExceeded || uxRangeTooNarrow || tagIds.length === 0)
     ? (() => {
         const span = modeViewport.end - modeViewport.start;
         return {
