@@ -69,8 +69,6 @@ const FOOTER_ROW: CSSProperties = {
   display: 'flex',
   justifyContent: 'flex-end',
   gap: 8,
-  paddingTop: 12,
-  borderTop: '1px solid #e5e7eb',
   flexShrink: 0,
 };
 
@@ -203,7 +201,7 @@ export function TagPickerModal({
   }, [onCommit, onClose, stagedIds]);
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Signals" widthClass="max-w-4xl" bodyClassName="px-6 py-4 overflow-hidden">
+    <Modal isOpen={isOpen} onClose={onClose} title="Signals" widthClass="max-w-4xl" bodyClassName="px-8 py-6 overflow-hidden">
       <div style={OUTER_WRAPPER}>
       <input
         type="text"

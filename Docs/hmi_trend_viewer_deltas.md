@@ -29,3 +29,5 @@
 - Step 12 polish: TagPickerModal height pinned at `calc(90vh - 8rem)` (height + maxHeight) so the modal does not shrink when search narrows the list.
 - Step 12 polish: TagPickerModal flex column gap of 16px between search / panes / error / footer; error row now renders conditionally; footer carries a top border + padding for visual separation from the panes.
 - Step 12 polish: left pane width is now content-driven: `max(MIN_LEFT_PANE_PX, longest tag_name × FONT_WIDTH_PX + LEFT_PANE_PADDING_PX)`. Sized off the full trendable list (not the filtered list) so search does not change pane width. Previously fixed `width: 880` on the picker wrapper is dropped; Modal `max-w-4xl` continues to cap upper bound.
+- Step 12 polish: TagPickerModal body padding increased to `px-8 py-6` (32/24px) for consistent breathing room around search, panes, and footer.
+- Step 12 polish: footer divider (`borderTop` + `paddingTop`) removed — flex column `gap: 16` provides sufficient visual separation.
