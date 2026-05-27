@@ -1100,6 +1100,85 @@ describe('TrendChartContainer', () => {
 
   });
 
+  // ── Legend remove ────────────────────────────────────────────────────────────
+  //
+  // The legend "×" button calls handleTagRemove → commitTagIds, so every remove
+  // also invalidates the live-edge tile before the tagIds state update.  These
+  // tests mirror the tag-picker modal invalidation tests to verify the same
+  // contract holds for the second mutation entry point.
+
+  describe('legend remove', () => {
+    it('in live-trailing calls invalidateNonTerminalTiles exactly once', () => {
+      const invalidate = vi.fn();
+      mockUseTrendData.mockReturnValue(makeResult([1, 2], {
+        invalidateNonTerminalTiles: invalidate,
+      }));
+
+      renderContainer([1, 2]);
+      // Default mode is live-trailing.
+
+      // Click × for tag 1 (first remove button in tag order).
+      fireEvent.click(screen.getAllByTitle('Remove trace')[0]!);
+
+      expect(invalidate).toHaveBeenCalledOnce();
+      // tagIds updated to [2].
+      expect(screen.getAllByTitle('Remove trace').length).toBe(1);
+    });
+
+    it('invalidateNonTerminalTiles fires before tagIds update propagates (legend remove, live-trailing)', () => {
+      const callLog: Array<{ event: string; tagIds?: number[] }> = [];
+      const invalidate = vi.fn(() => {
+        callLog.push({ event: 'invalidate' });
+      });
+
+      mockUseTrendData.mockImplementation((opts: Parameters<typeof useTrendData>[0]) => {
+        callLog.push({ event: 'useTrendData', tagIds: [...opts.tagIds] });
+        return makeResult(opts.tagIds, { invalidateNonTerminalTiles: invalidate });
+      });
+
+      renderContainer([1, 2]);
+      // Reset log after initial renders.
+      callLog.length = 0;
+      invalidate.mockClear();
+
+      // Click × for tag 1.
+      fireEvent.click(screen.getAllByTitle('Remove trace')[0]!);
+
+      expect(invalidate).toHaveBeenCalledOnce();
+
+      // 'invalidate' must precede the first 'useTrendData' call with tagIds=[2].
+      const invalidateIdx = callLog.findIndex(e => e.event === 'invalidate');
+      const updateIdx = callLog.findIndex(
+        e => e.event === 'useTrendData' && e.tagIds?.length === 1 && e.tagIds[0] === 2,
+      );
+
+      expect(invalidateIdx).toBeGreaterThanOrEqual(0);
+      expect(updateIdx).toBeGreaterThanOrEqual(0);
+      expect(invalidateIdx).toBeLessThan(updateIdx);
+    });
+
+    it('in fixed mode also routes through commitTagIds (invalidation is no-op for terminal tiles but contract holds)', () => {
+      const invalidate = vi.fn();
+      mockUseTrendData.mockReturnValue(makeResult([1, 2], {
+        invalidateNonTerminalTiles: invalidate,
+      }));
+
+      renderContainer([1, 2]);
+
+      // Enter fixed mode.
+      const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: '2020-01-02T00:00:00' } });
+      expect(screen.getByText('Go Live')).toBeTruthy(); // sanity: fixed mode
+      invalidate.mockClear(); // ignore any calls from the mode transition
+
+      // Click × for tag 1 — still goes through commitTagIds in fixed mode.
+      fireEvent.click(screen.getAllByTitle('Remove trace')[0]!);
+
+      expect(invalidate).toHaveBeenCalledOnce();
+      expect(screen.getAllByTitle('Remove trace').length).toBe(1);
+    });
+  });
+
   // ── Tag picker modal ────────────────────────────────────────────────────────
 
   describe('tag picker modal', () => {
@@ -1128,6 +1207,73 @@ describe('TrendChartContainer', () => {
       expect(screen.queryByText('Cancel')).toBeNull();
       // Container committed [2] → TrendChart re-rendered with tagIds=[2].
       expect(screen.getAllByTitle('Remove trace').length).toBe(1);
+    });
+
+    // ── Tag-pick invalidation (gap-on-tag-change fix) ─────────────────────────
+    //
+    // When the operator commits a tag-picker change in live-trailing mode the
+    // live-edge tile's committedThroughTs may be minutes stale.  commitTagIds
+    // must call invalidateNonTerminalTiles() before setTagIds() so the next
+    // runTileFetch re-fetches the live-edge tile for the full (new) tag set and
+    // the ring-buffer seam is covered without a gap.
+
+    it('tag-pick commit in live-trailing calls invalidateNonTerminalTiles exactly once', () => {
+      const invalidate = vi.fn();
+      mockUseTrendData.mockReturnValue(makeResult([1, 2], {
+        invalidateNonTerminalTiles: invalidate,
+      }));
+
+      renderContainer([1, 2]);
+      // Default mode is live-trailing.
+
+      act(() => { capturedOnSettingsClick?.(); });
+      // Unstage tag 1, then commit → commitTagIds([2]).
+      fireEvent.click(screen.getByTitle('Remove Tag-1'));
+      fireEvent.click(screen.getByText('OK'));
+
+      expect(invalidate).toHaveBeenCalledOnce();
+      // Modal closed and tagIds updated (confirms setTagIds was also called).
+      expect(screen.queryByText('Cancel')).toBeNull();
+      expect(screen.getAllByTitle('Remove trace').length).toBe(1);
+    });
+
+    it('invalidateNonTerminalTiles fires before tagIds update propagates (live-trailing)', () => {
+      // Use a shared call-log to verify ordering: invalidate must be recorded
+      // before useTrendData is ever called with the new (reduced) tag set.
+      const callLog: Array<{ event: string; tagIds?: number[] }> = [];
+
+      const invalidate = vi.fn(() => {
+        callLog.push({ event: 'invalidate' });
+      });
+
+      mockUseTrendData.mockImplementation((opts: Parameters<typeof useTrendData>[0]) => {
+        callLog.push({ event: 'useTrendData', tagIds: [...opts.tagIds] });
+        return makeResult(opts.tagIds, { invalidateNonTerminalTiles: invalidate });
+      });
+
+      renderContainer([1, 2]);
+
+      // Open picker, then reset the log so we only track the commit sequence.
+      act(() => { capturedOnSettingsClick?.(); });
+      callLog.length = 0;
+      invalidate.mockClear();
+
+      // Unstage tag 1 → commit → commitTagIds([2]).
+      fireEvent.click(screen.getByTitle('Remove Tag-1'));
+      fireEvent.click(screen.getByText('OK'));
+
+      // Exactly one invalidation on this commit.
+      expect(invalidate).toHaveBeenCalledOnce();
+
+      // 'invalidate' must precede the first 'useTrendData' call with tagIds=[2].
+      const invalidateIdx = callLog.findIndex(e => e.event === 'invalidate');
+      const updateIdx = callLog.findIndex(
+        e => e.event === 'useTrendData' && e.tagIds?.length === 1 && e.tagIds[0] === 2,
+      );
+
+      expect(invalidateIdx).toBeGreaterThanOrEqual(0);
+      expect(updateIdx).toBeGreaterThanOrEqual(0);
+      expect(invalidateIdx).toBeLessThan(updateIdx);
     });
   });
 });
