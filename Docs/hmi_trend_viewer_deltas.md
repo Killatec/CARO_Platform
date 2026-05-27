@@ -31,3 +31,4 @@
 - Step 12 polish: left pane width is now content-driven: `max(MIN_LEFT_PANE_PX, longest tag_name × FONT_WIDTH_PX + LEFT_PANE_PADDING_PX)`. Sized off the full trendable list (not the filtered list) so search does not change pane width. Previously fixed `width: 880` on the picker wrapper is dropped; Modal `max-w-4xl` continues to cap upper bound.
 - Step 12 polish: TagPickerModal body padding increased to `px-8 py-6` (32/24px) for consistent breathing room around search, panes, and footer.
 - Step 12 polish: footer divider (`borderTop` + `paddingTop`) removed — flex column `gap: 16` provides sufficient visual separation.
+- Step 12 polish: TagPickerModal uses Modal `outerClassName='p-6'` to inset header+body block from the modal's outer rounded edge; inner header/body padding reduced (header `px-6 py-3`, body `px-6 py-4`) to stack sensibly with outer padding rather than doubling-up.

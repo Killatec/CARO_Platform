@@ -8,6 +8,10 @@ export interface ModalProps extends React.HTMLAttributes<HTMLDivElement> {
   maxWidthClass?: string;
   /** Replaces the full `${maxWidthClass} w-full` size token pair. When provided, maxWidthClass is ignored. */
   widthClass?: string;
+  /** Appended to the outer white box's className. Use to add padding or other styles to the modal frame. */
+  outerClassName?: string;
+  /** Replaces the default header div class. */
+  headerClassName?: string;
   /** Replaces the default body div class. Use when the caller manages its own internal scrolling. */
   bodyClassName?: string;
 }
@@ -15,7 +19,7 @@ export interface ModalProps extends React.HTMLAttributes<HTMLDivElement> {
 /**
  * Modal primitive - stateless, zero domain knowledge
  */
-export const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, maxWidthClass = 'max-w-2xl', widthClass, bodyClassName, children, ...props }) => {
+export const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, maxWidthClass = 'max-w-2xl', widthClass, outerClassName, headerClassName, bodyClassName, children, ...props }) => {
   useEffect(() => {
     if (isOpen) {
       // Prevent body scroll when modal is open
@@ -39,12 +43,12 @@ export const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, maxWidthCl
       {/* Modal content */}
       <div className="relative z-10 flex min-h-full items-center justify-center p-4">
         <div
-          className={`relative bg-white rounded-lg shadow-xl ${widthClass ?? `${maxWidthClass} w-full`} max-h-[90vh] overflow-hidden`}
+          className={`relative bg-white rounded-lg shadow-xl ${widthClass ?? `${maxWidthClass} w-full`} max-h-[90vh] overflow-hidden${outerClassName ? ' ' + outerClassName : ''}`}
           onClick={(e) => e.stopPropagation()}
         >
           {/* Header */}
           {title && (
-            <div className="px-6 py-4 border-b border-gray-200">
+            <div className={headerClassName ?? 'px-6 py-4 border-b border-gray-200'}>
               <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
             </div>
           )}
