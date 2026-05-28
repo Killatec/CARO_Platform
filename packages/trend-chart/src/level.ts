@@ -76,20 +76,23 @@ export const MAX_VIEWPORT_SPAN_MS =
 
 /**
  * Smallest viewport span the chart will fetch for. Below this threshold,
- * gatedFetchTile rejects with CLIENT_UNDER_RANGE; TrendChartContainer derives
- * uxRangeTooNarrow from modeViewport and renders placeholderData with
- * "Range too narrow. Zoom out or pick a wider preset." in CursorDisplay.
+ * gatedFetchTile rejects with CLIENT_UNDER_RANGE and TrendChartContainer
+ * renders the under-range placeholder.
  *
- * Derived to keep bucketSMs ≥ 1ms in the live-spine path (bucketCount=1000):
- * below 1s, Math.round produces 0 and the chart breaks visually downstream.
+ * The floor is the per-bucket-width minimum (1 ms — below which Math.round
+ * produces 0 and downstream gapfill math breaks) scaled by the total bucket
+ * count per viewport. Tracks TREND_VIEWER_DEFAULTS, so changing the
+ * bucketCount or visibleTilesPerWindow defaults updates this automatically.
  *
- * Client-side concept only. The server does not enforce a corresponding
- * threshold — sub-100s windows route to queryRaw via shape dispatch and
- * return correctly (raw COV samples, possibly empty); the bucketed branch's
+ * Client-side concept only. The server has no symmetric threshold — sub-100 s
+ * windows route to queryRaw via shape dispatch; the bucketed branch's
  * INVALID_BUCKET_S check catches genuinely invalid cases. See spec §6.3
  * Out-of-range UX.
  */
-export const MIN_VIEWPORT_SPAN_MS = 1000n;
+export const MIN_VIEWPORT_SPAN_MS =
+  1n  // min bucketSMs in ms (gapfill math floor)
+    * BigInt(TREND_VIEWER_DEFAULTS.bucketCount)
+    * BigInt(TREND_VIEWER_DEFAULTS.visibleTilesPerWindow);
 
 /**
  * Lag in ms between a tile's endTime and nowMs before a refetch is triggered.

@@ -1,10 +1,8 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import {
-  pruneAndAdd,
   makeActiveTileEntry,
   makeActiveTileEntryFromCache,
   computeCommittedThroughTs,
-  MAX_ACTIVE_TILES,
 } from '../src/tileActiveSet.js';
 import type { ActiveTileEntry } from '../src/types.js';
 import type { TileApiResponse } from '../src/api.js';
@@ -17,71 +15,6 @@ const HALF_HOUR = 1_800_000n;
 function makeEntry(startMs: bigint, endMs: bigint, bucketCount = 500): ActiveTileEntry {
   return { tile: { startTime: startMs, endTime: endMs, bucketCount }, committedThroughTs: null, shape: null, data: null };
 }
-
-function makeRange(fromMs: bigint, count: number): ActiveTileEntry[] {
-  return Array.from({ length: count }, (_, i) =>
-    makeEntry(fromMs + BigInt(i) * HALF_HOUR, fromMs + BigInt(i + 1) * HALF_HOUR),
-  );
-}
-
-// ─── pruneAndAdd ──────────────────────────────────────────────────────────────
-
-describe('pruneAndAdd', () => {
-  it('empty active set: returns singleton', () => {
-    const newEntry = makeEntry(0n, HALF_HOUR);
-    expect(pruneAndAdd([], newEntry)).toEqual([newEntry]);
-  });
-
-  it('below maxSize: all entries kept, sorted by tile.startTime', () => {
-    const existing = makeRange(HALF_HOUR, 3); // [1h, 1.5h, 2h] in half-hour tiles
-    const newEntry = makeEntry(0n, HALF_HOUR);  // left of extent
-    const result = pruneAndAdd(existing, newEntry);
-    expect(result).toHaveLength(4);
-    expect(result[0]!.tile.startTime).toBe(0n);
-    expect(result[3]!.tile.startTime).toBe(HALF_HOUR * 3n);
-  });
-
-  it('right-end extension at capacity: drops leftmost entry', () => {
-    const existing = makeRange(0n, MAX_ACTIVE_TILES); // 8 entries starting at 0
-    const newEntry = makeEntry(BigInt(MAX_ACTIVE_TILES) * HALF_HOUR, BigInt(MAX_ACTIVE_TILES + 1) * HALF_HOUR);
-    const result = pruneAndAdd(existing, newEntry);
-    expect(result).toHaveLength(MAX_ACTIVE_TILES);
-    expect(result[0]!.tile.startTime).toBe(HALF_HOUR); // leftmost dropped
-    expect(result[MAX_ACTIVE_TILES - 1]!.tile.startTime).toBe(BigInt(MAX_ACTIVE_TILES) * HALF_HOUR);
-  });
-
-  it('left-end extension at capacity: drops rightmost entry', () => {
-    const existing = makeRange(HALF_HOUR, MAX_ACTIVE_TILES); // entries starting at 0.5h
-    const newEntry = makeEntry(0n, HALF_HOUR); // left of extent
-    const result = pruneAndAdd(existing, newEntry);
-    expect(result).toHaveLength(MAX_ACTIVE_TILES);
-    expect(result[0]!.tile.startTime).toBe(0n); // new entry is leftmost
-    expect(result[MAX_ACTIVE_TILES - 1]!.tile.startTime).toBe(BigInt(MAX_ACTIVE_TILES - 1) * HALF_HOUR); // rightmost dropped
-  });
-
-  it('middle gap-fill at capacity: drops leftmost entry, no warn', () => {
-    const left  = makeRange(0n, 4);
-    const right = makeRange(5n * HALF_HOUR, 4);
-    const existing = [...left, ...right]; // 8 entries
-    expect(existing).toHaveLength(MAX_ACTIVE_TILES);
-
-    const warnSpy = vi.spyOn(console, 'warn');
-    const gapEntry = makeEntry(4n * HALF_HOUR, 5n * HALF_HOUR);
-    const result = pruneAndAdd(existing, gapEntry);
-
-    expect(warnSpy).not.toHaveBeenCalled();
-    expect(result).toHaveLength(MAX_ACTIVE_TILES);
-    expect(result[0]!.tile.startTime).toBe(HALF_HOUR); // leftmost dropped
-    warnSpy.mockRestore();
-  });
-
-  it('exact maxSize match: no pruning', () => {
-    const existing = makeRange(0n, MAX_ACTIVE_TILES - 1); // 7 entries
-    const newEntry = makeEntry(BigInt(MAX_ACTIVE_TILES - 1) * HALF_HOUR, BigInt(MAX_ACTIVE_TILES) * HALF_HOUR);
-    const result = pruneAndAdd(existing, newEntry);
-    expect(result).toHaveLength(MAX_ACTIVE_TILES);
-  });
-});
 
 // ─── makeActiveTileEntry ──────────────────────────────────────────────────────
 

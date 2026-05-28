@@ -1022,7 +1022,7 @@ describe('useLiveSubscription — getLatestSampleTs', () => {
     expect(result.current.getLatestSampleTs()).toBe(5000n);
   });
 
-  it('ring samples remain visible via getLatestSampleTs after drainBuffers (ring is kept)', () => {
+  it('returns null after drainBuffers (HWM reset; ring is kept but not consulted)', () => {
     const { result } = renderHook(() =>
       useLiveSubscription({ tagIds: [1], trimThreshold: null }),
     );
@@ -1030,8 +1030,11 @@ describe('useLiveSubscription — getLatestSampleTs', () => {
     expect(result.current.getLatestSampleTs()).toBe(1000n); // sanity
 
     act(() => { result.current.drainBuffers(); });
-    // HWM is reset, but ring is intact — getLatestSampleTs reads the ring.
-    expect(result.current.getLatestSampleTs()).toBe(1000n);
+    // Spec §19: latestSampleTs is reset to null by drainBuffers. The ring is
+    // preserved (it seeds the accumulator on Live re-entry) but is not
+    // consulted by getLatestSampleTs — callers handle null via classifyByWindow's
+    // viewport.end fallback (spec §9.3).
+    expect(result.current.getLatestSampleTs()).toBeNull();
   });
 
   it('is monotonic-non-decreasing: sessionHighWaterMark floors value when tag is removed', () => {
@@ -1055,14 +1058,15 @@ describe('useLiveSubscription — getLatestSampleTs', () => {
     expect(result.current.getLatestSampleTs()).toBe(9000n);
   });
 
-  it('advances getLatestSampleTs after drain + new samples (ring seed preserved)', () => {
+  it('advances getLatestSampleTs after drain + new samples (HWM re-bumps from null)', () => {
     const { result } = renderHook(() =>
       useLiveSubscription({ tagIds: [1], trimThreshold: null }),
     );
     act(() => { fireCb(1, 5000, 1); });
     act(() => { result.current.drainBuffers(); });
-    // Ring is kept — returns the ring entry, not null.
-    expect(result.current.getLatestSampleTs()).toBe(5000n);
+    // HWM reset → null. Ring is kept (seeds the next live re-entry's
+    // accumulator/raw buffer) but is not consulted by getLatestSampleTs.
+    expect(result.current.getLatestSampleTs()).toBeNull();
 
     act(() => { fireCb(1, 7000, 2); });
     expect(result.current.getLatestSampleTs()).toBe(7000n);
@@ -1073,15 +1077,15 @@ describe('useLiveSubscription — getLatestSampleTs', () => {
 // ─── drainBuffers ─────────────────────────────────────────────────────────────
 
 describe('useLiveSubscription — drainBuffers', () => {
-  it('resets sessionHighWaterMark but ring keeps getLatestSampleTs non-null', () => {
+  it('resets sessionHighWaterMark — getLatestSampleTs returns null after drain', () => {
     const { result } = renderHook(() =>
       useLiveSubscription({ tagIds: [1], trimThreshold: null }),
     );
     act(() => { fireCb(1, 5000, 1); });
     expect(result.current.getLatestSampleTs()).toBe(5000n);
     act(() => { result.current.drainBuffers(); });
-    // HWM is cleared, but ring still holds the sample — not null.
-    expect(result.current.getLatestSampleTs()).toBe(5000n);
+    // Spec §19: latestSampleTs reset to null by drainBuffers.
+    expect(result.current.getLatestSampleTs()).toBeNull();
   });
 
   it('does not break subscriptions — new samples still arrive and advance HWM', () => {

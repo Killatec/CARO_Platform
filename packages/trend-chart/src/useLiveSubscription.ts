@@ -3,11 +3,15 @@ import { useHmiContext } from '@caro/hmi-context';
 import { TS_BUCKET_ORIGIN_MS, floorDiv } from './level.js';
 
 /**
- * Per-tag bounded buffer for samples arriving during the fetch-in-flight
- * window. Trimmed to `committedThroughTs` on every tile response — the
- * DbPipeline commit watermark, which is the real data edge. Capacity bounds
- * the pathological case of an unusually slow fetch (cold CAG query, network
- * blip) at ~5 s of live history at 4 Hz.
+ * Per-tag bounded ring buffer capacity for samples arriving during the
+ * fetch-in-flight window. Trimmed to `committedThroughTs` on every tile
+ * response — the DbPipeline commit watermark, which is the real data edge.
+ * Capacity bounds the pathological case of an unusually slow fetch (cold CAG
+ * query, network blip) at ~5 s of live history at 4 Hz.
+ *
+ * Exported for test access only — not part of the package's public API
+ * surface (intentionally omitted from `index.ts`). Production code does not
+ * tune this value; there is no constructor or option to override it.
  */
 export const TREND_RING_CAPACITY = 20;
 
@@ -319,6 +323,19 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
         if (isLiveRef.current) {
           const mode = tailModeRef.current;
           if (mode === 'aggregate' && bucketSMsRef.current !== null) {
+            // Known race (intentional, not a bug): bucketSMsRef.current is updated
+            // synchronously during render, but the tailMode effect that re-allocates
+            // the accumulator with the new bucketSMs runs AFTER the render commit.
+            // A TREND_DELTA arriving in that ~1-16 ms window feeds the new bucketSMs
+            // into an accumulator whose openBucket.startMs is still aligned to the
+            // old value, causing one frame of misaligned bucket arithmetic.
+            //
+            // We accept this because (a) the ring receives every sample
+            // unconditionally above (line ~310), and (b) the tailMode effect's
+            // reseed-from-ring on bucketSMs change replays every ring entry into a
+            // fresh accumulator at the new bucketSMs — so any mis-bucketed sample
+            // is corrected on the next render cycle. Adding a detect-and-skip guard
+            // here would duplicate the reseed's correctness guarantee.
             const bSMs = bucketSMsRef.current;
             const state = accumulatorsRef.current.get(tagId);
             if (state) {
@@ -447,32 +464,49 @@ export function useLiveSubscription(opts: UseLiveSubscriptionOptions): UseLiveSu
   }, [isLive, bucketSMsStr, tagIdsKey, tailMode]);
 
   // ── drainBuffers ──────────────────────────────────────────────────────────
-  // Clears accumulators, raw buffers, sessionHighWaterMark. Ring is left intact.
+  // Resets accumulators, raw buffers, sessionHighWaterMark in-place.
+  // Ring is left intact (it is bounded, self-refreshing, and the seed source the
+  // tailMode effect rebuilds the buffer from on Live re-entry).
   // Does NOT bump any counter — tile-fetch staleness is handled by
   // useTrendData.generationRef which is independent (§4.4).
+  //
+  // In-place reset (not .clear()) is required: the subscribe callback's
+  // `if (state)` / `if (buf)` guards would silently drop every event between
+  // drainBuffers and the next tailMode-effect re-allocation if the per-tag keys
+  // disappeared. See handoff Gotchas section — the rawBuffersRef fix is the
+  // canonical reference; accumulatorsRef follows the same pattern.
 
   const drainBuffers = useCallback((): void => {
-    accumulatorsRef.current.clear();
+    for (const state of accumulatorsRef.current.values()) {
+      state.openBucket          = null;
+      state.closed.value.length = 0;
+      state.closed.min.length   = 0;
+      state.closed.max.length   = 0;
+      state.firstClosedStartMs  = null;
+      state.lastKnownValue      = null;
+    }
     for (const arr of rawBuffersRef.current.values()) arr.length = 0;
     sessionHighWaterMarkRef.current = null;
     setTail(null);
   }, []);
 
   // ── getLatestSampleTs ─────────────────────────────────────────────────────
+  //
+  // Returns the highest moduleTs seen since session start, or null when no
+  // sample has arrived yet (or after drainBuffers reset the session — matching
+  // spec §19 glossary "Reset to null by drainBuffers").
+  //
+  // HWM is bumped on every WS sample before any conditional logic (see the
+  // subscribe callback above), so HWM is always ≥ any current ring tail in a
+  // live session. The previous implementation walked rings as a fallback for
+  // the post-drain state, but every consumer of this value already handles
+  // null gracefully (classifyByWindow falls back to viewport.end; the orange
+  // Live button is gated on live-fixed mode, which can't be active post-drain).
+  // The ring-walk fallback would have given a third behavior (classify against
+  // a stale pre-drain tail) that no caller depends on.
 
   const getLatestSampleTs = useCallback((): bigint | null => {
-    let currentMax: bigint | null = null;
-    for (const arr of ringsRef.current.values()) {
-      if (arr.length > 0) {
-        const ts = BigInt(arr[arr.length - 1]!.moduleTs);
-        if (currentMax === null || ts > currentMax) currentMax = ts;
-      }
-    }
-    const hwm = sessionHighWaterMarkRef.current;
-    if (hwm === null && currentMax === null) return null;
-    if (hwm === null) return currentMax;
-    if (currentMax === null) return hwm;
-    return hwm > currentMax ? hwm : currentMax;
+    return sessionHighWaterMarkRef.current;
   }, []);
 
   const tailToReturn = useMemo(

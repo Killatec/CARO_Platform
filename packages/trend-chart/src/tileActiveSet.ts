@@ -2,8 +2,6 @@ import { TileCache, makeTileCacheKey } from './tileCache.js';
 import type { Tile, ActiveTileEntry, TrendData, AggregateSeriesData, RawSeriesData } from './types.js';
 import type { TileApiResponse } from './api.js';
 
-export const MAX_ACTIVE_TILES = 8;
-
 export function chunkArray<T>(arr: T[], size: number): T[][] {
   const chunks: T[][] = [];
   for (let i = 0; i < arr.length; i += size) {
@@ -157,11 +155,24 @@ export function assembleData(
   }
 
   // Aggregate path — one pass per tile.
+  //
+  // `hasAllMin` is a defensive flag: it stays true as long as every present
+  // tile entry for a tag carries a min/max pair, and flips to false the first
+  // time a present entry is missing one. The flag is read at the end of the
+  // loop to decide whether to emit bands (`{ value, min, max }`) or fall back
+  // to a value-only series.
+  //
+  // In normal operation the flag never flips: the TileApiResponse type requires
+  // min/max on every aggregate response, so storeTileResult cannot write a cache
+  // entry without them, and entry.data on a non-terminal tile is built from the
+  // same response type. The flag exists so future cache-shape variants (or any
+  // path that bypasses the type system) degrade to "no bands for that tag"
+  // rather than rendering a partial band that would be visually misleading.
   type AggTagAccum = {
     value:     (number | null)[];
     mins:      (number | null)[];
     maxs:      (number | null)[];
-    hasAllMin: boolean; // false when any present cache entry lacks min (v0.7 hit)
+    hasAllMin: boolean;
   };
   const perTag = new Map<number, AggTagAccum>();
   for (const tagId of tagIds) {
@@ -215,7 +226,8 @@ export function assembleData(
       te.value.push(...(td?.value ?? nullFill));
       te.mins.push(...(td?.min   ?? nullFill));
       te.maxs.push(...(td?.max   ?? nullFill));
-      // Present entry with no min = v0.7 cache hit → disable bands for this tag.
+      // Defensive: a present entry without min disables bands for this tag
+      // — see the AggTagAccum type comment above for the rationale.
       if (td !== undefined && td.min === undefined) te.hasAllMin = false;
     }
   }
@@ -284,51 +296,6 @@ export function makeActiveTileEntryFromCache(tile: Tile, cached: CachedEntry): A
 }
 
 /**
- * Synthesizes a null TrendData object for a failed tile refetch (§4.3).
- * All value/min/max buckets are null (aggregate) or empty arrays (raw).
- * Caller is responsible for storing this in the LRU and updating the entry's
- * committedThroughTs = Number(tile.endTime).
- */
-export function synthesizeNullTile(
-  tile: Tile,
-  shape: 'raw' | 'aggregate',
-  tagIds: number[],
-): AggregateSeriesData | RawSeriesData {
-  if (shape === 'aggregate') {
-    const n = tile.bucketCount;
-    const bucketSMs = n > 0 ? Number(tile.endTime - tile.startTime) / n : 0;
-    const nullArr = (): (number | null)[] => new Array<null>(n).fill(null);
-    const series = new Map<number, { value: (number | null)[]; min: (number | null)[]; max: (number | null)[] }>();
-    for (const tagId of tagIds) {
-      series.set(tagId, { value: nullArr(), min: nullArr(), max: nullArr() });
-    }
-    const result: AggregateSeriesData = {
-      type: 'aggregate',
-      source: 'mixed',
-      startTime: tile.startTime,
-      endTime: tile.endTime,
-      n,
-      bucketSMs,
-      series,
-    };
-    return result;
-  }
-  // Raw: empty series per tag.
-  const series = new Map<number, { ts: bigint[]; value: (number | null)[] }>();
-  for (const tagId of tagIds) {
-    series.set(tagId, { ts: [], value: [] });
-  }
-  const result: RawSeriesData = {
-    type: 'raw',
-    source: 'raw',
-    startTime: tile.startTime,
-    endTime: tile.endTime,
-    series,
-  };
-  return result;
-}
-
-/**
  * Stores a synthesized null tile into the LRU cache so the terminal-cache rule
  * is satisfied and the refetch trigger predicate becomes false (§4.3).
  * committedThroughTs is set to Number(tile.endTime) so committedThroughTs >= endTime.
@@ -375,20 +342,3 @@ export function computeCommittedThroughTs(entries: ActiveTileEntry[]): number | 
   return max;
 }
 
-/**
- * Add `newEntry` to `activeSet` and prune to `maxSize`.
- *
- * - newEntry left of extent  → drop rightmost entry.
- * - newEntry right of extent → drop leftmost entry.
- * - newEntry in the middle (gap-fill or extension into a discontiguous region)
- *   → drop leftmost entry.
- */
-export function pruneAndAdd(activeSet: ActiveTileEntry[], newEntry: ActiveTileEntry, maxSize = MAX_ACTIVE_TILES): ActiveTileEntry[] {
-  if (activeSet.length === 0) return [newEntry];
-  const sorted = [...activeSet, newEntry].sort((a, b) => Number(a.tile.startTime - b.tile.startTime));
-  if (sorted.length <= maxSize) return sorted;
-
-  const isLeftEnd = newEntry.tile.startTime < activeSet[0]!.tile.startTime;
-  if (isLeftEnd) return sorted.slice(0, maxSize);
-  return sorted.slice(sorted.length - maxSize);
-}

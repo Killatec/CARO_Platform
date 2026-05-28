@@ -8,9 +8,6 @@ import type { CachedEntry, HookState } from './tileActiveSet.js';
 import { buildGatedFetchTile } from './gatedFetchTile.js';
 import { runTileFetch } from './runTileFetch.js';
 
-// Re-export for external consumers.
-export { pruneAndAdd } from './tileActiveSet.js';
-
 const DEFAULT_CACHE_CAPACITY = 50_000_000;
 
 export interface UseTrendDataOptions {

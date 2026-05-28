@@ -16,7 +16,7 @@ export interface ActiveTileEntry {
   /**
    * 'raw' for source==='raw' responses; 'aggregate' for tag_samples / *_cagg / mixed.
    * null until first fetch resolves.
-   * Used by synthesizeNullTile on refetch failure to produce the correct shape.
+   * Used by storeNullTile on refetch failure to produce the correct shape.
    */
   shape: 'raw' | 'aggregate' | null;
   /**

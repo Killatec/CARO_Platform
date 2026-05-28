@@ -109,7 +109,11 @@ function mergeAggregate(
     const cachedArrs = cached.series.get(tagId);
     const liveArrs   = live.perTag.get(tagId) ?? { value: [], min: [], max: [] };
 
-    // LOCF seed for gap between effectiveCachedN and liveStartIndex.
+    // LOCF seed for the "neither cached nor live" branch below (line ~144):
+    // fires only when an output index falls outside cached.n AND outside live's
+    // coverage — i.e., a gap between effectiveCachedN and liveStartIndex, or for
+    // a tag that's absent from cached but present in live. NOT used for live-end
+    // extension past the cached extent (live owns that range via the `inLive` branch).
     const lastCachedV   = cachedArrs ? (cachedArrs.value[effectiveCachedN - 1] ?? null) : null;
     const lastCachedMin = cachedArrs?.min ? (cachedArrs.min[effectiveCachedN - 1] ?? null) : null;
     const lastCachedMax = cachedArrs?.max ? (cachedArrs.max[effectiveCachedN - 1] ?? null) : null;

@@ -38,12 +38,11 @@ export function buildGatedFetchTile(): GatedFetchFn {
 
     const tileSpanBigint = args.endTime - args.startTime;
 
-    // Check that bucketSMs (bigint integer division) is non-zero.
-    // Below this, the server's time_bucket receives a 0-second interval and
-    // breaks. Equivalent to tile span < bucketCount ms.
-    // For the live-spine (bucketCount=2×500=1000): triggers at span < 1000n ms = MIN_VIEWPORT_SPAN_MS.
-    // For history tiles (bucketCount=500): triggers at span < 500n ms (viewport < MIN_VIEWPORT_SPAN_MS
-    // is caught by the main-effect pre-check; this guards any bypass path).
+    // Check that per-tile bucketSMs (bigint integer division) is non-zero.
+    // Below this, the server's time_bucket receives a 0-second interval and breaks.
+    // Equivalent to tile span < bucketCount ms. Viewport-level under-range is
+    // caught earlier by useTrendData's MIN_VIEWPORT_SPAN_MS pre-check; this is
+    // the per-tile guard for any bypass path. See spec §6.3 Out-of-range UX.
     if (tileSpanBigint / BigInt(args.bucketCount) === 0n) {
       return Promise.reject(
         Object.assign(new Error('tile bucketSMs would be 0 — fetch skipped client-side'),

@@ -1,6 +1,6 @@
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { useTrendData, pruneAndAdd } from '../src/useTrendData.js';
+import { useTrendData } from '../src/useTrendData.js';
 import { fetchTile } from '../src/api.js';
 import { MAX_BUCKET_S, MIN_VIEWPORT_SPAN_MS, TREND_VIEWER_DEFAULTS } from '../src/level.js';
 import type { Viewport, Tile, ActiveTileEntry } from '../src/types.js';
@@ -64,87 +64,6 @@ function makeTile(startMs: bigint, endMs: bigint, bucketCount = 500): Tile {
 function makeEntry(startMs: bigint, endMs: bigint, bucketCount = 500): ActiveTileEntry {
   return { tile: makeTile(startMs, endMs, bucketCount), committedThroughTs: null, shape: null, data: null };
 }
-
-// ─── pruneAndAdd ─────────────────────────────────────────────────────────────
-
-describe('pruneAndAdd', () => {
-  const SPAN = 1_800_000n; // 30 min tiles
-
-  it('empty active set → returns [newEntry]', () => {
-    const newEntry = makeEntry(0n, SPAN);
-    expect(pruneAndAdd([], newEntry)).toEqual([newEntry]);
-  });
-
-  it('active set of 3 + left entry → 4 entries, all originals kept', () => {
-    const entries = [makeEntry(0n, SPAN), makeEntry(SPAN, SPAN * 2n), makeEntry(SPAN * 2n, SPAN * 3n)];
-    const newEntry = makeEntry(-SPAN, 0n);
-    const result = pruneAndAdd(entries, newEntry);
-    expect(result).toHaveLength(4);
-    expect(result[0]).toEqual(newEntry);
-    expect(result[3]).toEqual(entries[2]);
-  });
-
-  it('active set of 8 + left entry → 8 entries, rightmost dropped', () => {
-    const entries = [
-      makeEntry(0n, SPAN), makeEntry(SPAN, SPAN * 2n), makeEntry(SPAN * 2n, SPAN * 3n), makeEntry(SPAN * 3n, SPAN * 4n),
-      makeEntry(SPAN * 4n, SPAN * 5n), makeEntry(SPAN * 5n, SPAN * 6n), makeEntry(SPAN * 6n, SPAN * 7n), makeEntry(SPAN * 7n, SPAN * 8n),
-    ];
-    const newEntry = makeEntry(-SPAN, 0n);
-    const result = pruneAndAdd(entries, newEntry);
-    expect(result).toHaveLength(8);
-    expect(result[0]).toEqual(newEntry);
-    // Rightmost entry (SPAN*7n:SPAN*8n) must be gone.
-    expect(result.some(e => e.tile.startTime === SPAN * 7n)).toBe(false);
-  });
-
-  it('active set of 8 + right entry → 8 entries, leftmost dropped', () => {
-    const entries = [
-      makeEntry(0n, SPAN), makeEntry(SPAN, SPAN * 2n), makeEntry(SPAN * 2n, SPAN * 3n), makeEntry(SPAN * 3n, SPAN * 4n),
-      makeEntry(SPAN * 4n, SPAN * 5n), makeEntry(SPAN * 5n, SPAN * 6n), makeEntry(SPAN * 6n, SPAN * 7n), makeEntry(SPAN * 7n, SPAN * 8n),
-    ];
-    const newEntry = makeEntry(SPAN * 8n, SPAN * 9n);
-    const result = pruneAndAdd(entries, newEntry);
-    expect(result).toHaveLength(8);
-    expect(result[result.length - 1]).toEqual(newEntry);
-    // Leftmost entry (0n:SPAN) must be gone.
-    expect(result.some(e => e.tile.startTime === 0n)).toBe(false);
-  });
-
-  it('active set of 8 + middle entry (gap-fill) → 8 entries, leftmost dropped, no warn', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    const entries = [
-      makeEntry(0n, SPAN * 2n), makeEntry(SPAN * 2n, SPAN * 4n), makeEntry(SPAN * 4n, SPAN * 6n), makeEntry(SPAN * 6n, SPAN * 8n),
-      makeEntry(SPAN * 8n, SPAN * 10n), makeEntry(SPAN * 10n, SPAN * 12n), makeEntry(SPAN * 12n, SPAN * 14n), makeEntry(SPAN * 14n, SPAN * 16n),
-    ];
-    // Middle entry: tile.startTime > entries[0].tile.startTime, tile.endTime < entries[last].tile.endTime (gap-fill).
-    const newEntry = makeEntry(SPAN, SPAN * 3n);
-    const result = pruneAndAdd(entries, newEntry);
-    expect(result).toHaveLength(8);
-    // Leftmost entry (0n:SPAN*2n) must be dropped.
-    expect(result.some(e => e.tile.startTime === 0n)).toBe(false);
-    // No warn — middle insertion is a legitimate gap-fill scenario post-F7.
-    expect(warnSpy).not.toHaveBeenCalled();
-    warnSpy.mockRestore();
-  });
-
-  it('maxSize override: no pruning until count exceeds maxSize', () => {
-    const entries = [makeEntry(0n, SPAN), makeEntry(SPAN, SPAN * 2n), makeEntry(SPAN * 2n, SPAN * 3n), makeEntry(SPAN * 3n, SPAN * 4n)];
-    const newEntry = makeEntry(SPAN * 4n, SPAN * 5n);
-    const result = pruneAndAdd(entries, newEntry, 6);
-    // 4 + 1 = 5 ≤ 6 → no pruning.
-    expect(result).toHaveLength(5);
-    expect(result[result.length - 1]).toEqual(newEntry);
-  });
-
-  it('sorted output: inserted entry in correct position regardless of insertion order', () => {
-    const entries = [makeEntry(SPAN, SPAN * 2n), makeEntry(SPAN * 2n, SPAN * 3n), makeEntry(SPAN * 3n, SPAN * 4n)];
-    const newEntry = makeEntry(0n, SPAN); // prepend
-    const result = pruneAndAdd(entries, newEntry, 5);
-    expect(result[0]).toEqual(newEntry);
-    expect(result[1]).toEqual(entries[0]);
-  });
-});
-
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 

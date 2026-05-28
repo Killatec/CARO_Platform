@@ -295,6 +295,10 @@ async function getWatermarkMs(source: AggregateSource): Promise<number> {
       );
       const wmUs =
         (rows[0] as { wm_us: string | null } | undefined)?.wm_us ?? null;
+      // wmUs === null indicates the CAG has never refreshed (no buckets materialized).
+      // Returning 0 routes the entire request range through the next-finer source
+      // via queryRecursive's splitBoundaryMs <= startTime branch — correct behavior:
+      // the un-refreshed CAG covers nothing, so the finer source serves everything.
       const ms = wmUs === null ? 0 : Number(BigInt(wmUs) / 1000n);
       watermarkCache.set(source, { value: ms, expiresAt: Date.now() + WATERMARK_TTL_MS });
       return ms;
@@ -762,7 +766,11 @@ export function dropSeamDuplicates(segments: SegmentResult[], bucketSMs: number)
  * boundary bucket (start === cutoffMs) is preserved; only strictly future buckets
  * are nulled.
  *
- * Mutates each series's value/min/max arrays in place.
+ * **Mutation contract:** mutates each series's `value`, `min`, and `max` arrays
+ * in place. The function is exported only for unit-test access; production
+ * callers are `getTrendTile` only, where the input arrays are freshly assembled
+ * within the same call and not shared. Future external callers must own the
+ * input arrays (no shared references) or be prepared for in-place mutation.
  */
 export function nullFutureBuckets(
   series: AggregateTrendSeries[],

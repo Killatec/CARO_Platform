@@ -73,13 +73,28 @@ router.get('/tile', asyncWrap(async (req, res) => {
 
   const q = req.query as Record<string, string | undefined>;
 
-  // Presence check — all four params are required.
-  for (const name of ['tag_ids', 'start_time', 'end_time', 'bucket_count'] as const) {
-    if (!q[name]) bad('MISSING_QUERY_PARAM', `Missing required query parameter: ${name}`);
+  // Presence-check helper. bad() returns `never`, so TS narrows v to `string`
+  // and callers get a non-undefined return without an explicit cast.
+  // Self-contained per call site → safe against future refactors that might
+  // move or relax the previous loop-based presence check.
+  function requireParam(name: 'tag_ids' | 'start_time' | 'end_time' | 'bucket_count'): string {
+    const v = q[name];
+    if (typeof v !== 'string' || v === '') {
+      bad('MISSING_QUERY_PARAM', `Missing required query parameter: ${name}`);
+    }
+    return v;
   }
 
+  const tagIdsRaw      = requireParam('tag_ids');
+  const startTimeRaw   = requireParam('start_time');
+  const endTimeRaw     = requireParam('end_time');
+  const bucketCountRaw = requireParam('bucket_count');
+
+  // Truncate echoed raw values in error messages to a safe length.
+  const echo = (s: string): string => s.length > 32 ? `${s.slice(0, 32)}…` : s;
+
   // tag_ids — comma-separated, 1–8 positive integers (§6.6 cap is enforced by @caro/db).
-  const tagIds = (q.tag_ids as string).split(',').map(s =>
+  const tagIds = tagIdsRaw.split(',').map(s =>
     parseIntStrict(s, 'INVALID_TAG_IDS', 'tag_ids must be 1–8 comma-separated positive integers'),
   );
   if (
@@ -93,29 +108,33 @@ router.get('/tile', asyncWrap(async (req, res) => {
   // start_time — positive integer string → BigInt.
   let startTime: bigint;
   try {
-    startTime = BigInt((q.start_time as string).trim());
+    startTime = BigInt(startTimeRaw.trim());
   } catch {
-    bad('INVALID_RANGE', 'start_time must be a positive integer (ms since epoch)');
+    bad('INVALID_RANGE', `start_time must be a positive integer (ms since epoch); got "${echo(startTimeRaw)}"`);
   }
-  if (startTime! <= 0n) bad('INVALID_RANGE', 'start_time must be a positive integer (ms since epoch)');
+  if (startTime! <= 0n) {
+    bad('INVALID_RANGE', `start_time must be a positive integer (ms since epoch); got "${echo(startTimeRaw)}"`);
+  }
 
   // end_time — positive integer string → BigInt, must exceed start_time.
   let endTime: bigint;
   try {
-    endTime = BigInt((q.end_time as string).trim());
+    endTime = BigInt(endTimeRaw.trim());
   } catch {
-    bad('INVALID_RANGE', 'end_time must be a positive integer (ms since epoch)');
+    bad('INVALID_RANGE', `end_time must be a positive integer (ms since epoch); got "${echo(endTimeRaw)}"`);
   }
-  if (endTime! <= startTime!) bad('INVALID_RANGE', 'end_time must be greater than start_time');
+  if (endTime! <= startTime!) {
+    bad('INVALID_RANGE', `end_time must be greater than start_time; got start=${startTime!}, end="${echo(endTimeRaw)}"`);
+  }
 
   // bucket_count — integer in 1..2500.
   const bucketCount = parseIntStrict(
-    q.bucket_count as string,
+    bucketCountRaw,
     'INVALID_BUCKET_COUNT',
     'bucket_count must be an integer in 1..2500',
   );
   if (bucketCount < 1 || bucketCount > 2500) {
-    bad('INVALID_BUCKET_COUNT', 'bucket_count must be an integer in 1..2500');
+    bad('INVALID_BUCKET_COUNT', `bucket_count must be an integer in 1..2500; got ${bucketCount}`);
   }
 
   try {
