@@ -448,15 +448,21 @@ export function TrendChart({
       const cursorXPx = e.clientX - r.left;
       zoomXScale(u, e.deltaY, cursorXPx, u.over.clientWidth, 1.2, userScaleRef);
 
-      const xScale = u.scales['x'];
-      if (xScale?.min != null && xScale?.max != null) {
+      // Read the new range from userScaleRef — zoomXScale updates it synchronously
+      // (the source of truth this same tick). DO NOT read u.scales['x'] here: uPlot's
+      // setScale defers the .min/.max update to the next animation frame, so reading
+      // u.scales['x'] immediately after zoomXScale returns the pre-zoom values. That
+      // would make the dispatched range one wheel behind — sizeMs in mode state, the
+      // Span label, and the CAG zoom-level threshold all lag by one tick.
+      const newRange = userScaleRef.current;
+      if (newRange) {
         // Fire on every wheel tick — drives mode-state sync regardless of threshold.
-        const emitFromMs = BigInt(Math.round(xScale.min * 1000));
-        const emitToMs   = BigInt(Math.round(xScale.max * 1000));
+        const emitFromMs = BigInt(Math.round(newRange.min * 1000));
+        const emitToMs   = BigInt(Math.round(newRange.max * 1000));
         onXRangeChangeRef.current?.(emitFromMs, emitToMs);
 
         // Check for zoom-level threshold crossing (CAG bucket-size switch).
-        const newSpanSec = xScale.max - xScale.min;
+        const newSpanSec = newRange.max - newRange.min;
         const newSpanMs = BigInt(Math.round(newSpanSec * 1000));
         const anchorSpan = zoomAnchorSpanRef.current;
         const switchCb = onZoomLevelSwitchRef.current;

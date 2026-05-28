@@ -10,6 +10,10 @@ import type { AggregateSeriesData, RawSeriesData } from '../src/types.js';
 vi.mock('uplot', () => {
   const MockUPlot = vi.fn().mockImplementation(() => {
     const over = document.createElement('div');
+    // jsdom returns 0 for clientWidth on detached elements; zoomXScale guards on
+    // overWidthPx === 0 to avoid division by zero. Give the mock a realistic width
+    // so zoomXScale runs and populates userScaleRef.current in wheel-zoom tests.
+    Object.defineProperty(over, 'clientWidth', { value: 1000, configurable: true });
     return {
       destroy: vi.fn(),
       setData: vi.fn(),

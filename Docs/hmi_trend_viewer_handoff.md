@@ -440,6 +440,8 @@ Divergences from the spec that remain current. Entries absorbed into the spec du
 
 33. **`querySegment` absent-tag bounded-prev fallback.** Tags whose `time_bucket_gapfill` output has zero in-window rows (COV tags in windows narrower than the mandatory 60 s snapshot interval) receive a dedicated bounded-prev query (`DISTINCT ON (tag_id) … WHERE timeCol < startTime AND timeCol >= startTime − 5 min`) and are filled flat at the prior value. Only tags with no prior history in the 5-minute window remain `null × n`. The spec's §5.5 `prev` subquery only seeds the LOCF carry-forward within the gapfill range; this fallback handles the degenerate case where the gapfill emits nothing to carry forward. Implemented in `packages/db/timescale/trends.ts`; 2 integration tests added.
 
+41. **`onXWheel` reads from `userScaleRef.current`, not `u.scales['x']`, after `zoomXScale`.** `zoomXScale` writes the new `{ min, max }` range into `userScaleRef.current` synchronously before calling `u.setScale` — callers on the same tick can read back the actual new scale from the ref. `u.setScale` queues `.min`/`.max` mutation to the next animation frame, so reading `u.scales['x']` immediately after returns stale pre-zoom values. The pre-fix `onXWheel` read from `u.scales['x']`, dispatching a one-wheel-stale range to `handleXRangeChange` — leaving `sizeMs`, the Span label, and the CAG zoom-level-threshold check one tick behind. See Gotcha: *`uPlot.setScale` defers `.min`/`.max` update*.
+
 ### Historical decisions
 
 Design alternatives that were explicitly considered and rejected. Recorded here so future readers understand why the current approach was chosen.
@@ -477,6 +479,10 @@ Hard-won lessons from the min/max upgrade and perf engineering work.
 **uPlot `width: 0` disables `_paths.band` computation.** A series with `width: 0` is treated by uPlot as "nothing to draw," and the renderer skips path generation for it — including the band path geometry. Bands referencing such a series produce no visible fill regardless of fill color or alpha. Use `stroke: 'transparent'` (with default `width: 1`) to hide a stroke while keeping the path computed for band participation.
 
 **uPlot `bands[].series` is directional.** The array is `[upperSeriesIdx, lowerSeriesIdx]` — fill is drawn from the upper edge downward, clipped by the lower. Inverting the order produces an empty intersection. Code comment at `render/uplotConfig.ts` near the bands registration documents this in-line.
+
+**`uPlot.setScale` defers `.min`/`.max` update — read from `userScaleRef.current`, not `u.scales['x']`, when you need the new range on the same tick.** `u.setScale('x', { min, max })` queues the mutation for the next animation frame; reading `u.scales.x.min`/`max` immediately after returns the pre-call values. `axisInteractions.ts` `zoomXScale` writes the new range into the ref synchronously before calling `setScale` specifically so callers (currently `onXWheel`) can read it back this tick. The pre-fix `onXWheel` read from `u.scales['x']` and dispatched a one-wheel-stale range to `handleXRangeChange`, leaving the Span label, `sizeMs`, and CAG zoom-level-threshold check one tick behind.
+
+**Test-mock corollary:** `MockUPlot.over` must set `clientWidth` (e.g. 1000). Without it, `zoomXScale`'s `overWidthPx === 0` guard short-circuits the wheel path and the test silently exercises a different code path. Pre-fix `trendChart.test.tsx` wheel tests passed for the wrong reason — they fell through to the old stale `u.scales['x']` read.
 
 **dotenv import order matters.** `import 'dotenv/config'` must execute before ANY module that reads `process.env` at the top level. Top-level `const X = process.env.Y === '1'` lines capture the env state at module-load time. The `@caro/hmi-server` `index.ts` puts `import 'dotenv/config'` at line 1 for this reason. The `LOG_TILE_QUERIES` constant in `packages/db/timescale/trends.ts` is the canonical example of this pattern.
 

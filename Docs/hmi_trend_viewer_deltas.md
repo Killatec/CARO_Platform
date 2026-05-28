@@ -4,6 +4,8 @@
 
 ---
 
+**Last cleared:** 2026-05-28. Wheel-zoom one-tick-stale fix propagated: `onXWheel` reads new range from `userScaleRef.current` (synchronously updated by `zoomXScale`) instead of `u.scales['x']` (uPlot's `setScale` defers `.min`/`.max` to the next animation frame). Fix + test-mock `clientWidth` corollary propagated to handoff §10 Gotcha (new entry) and §10 Divergence 41. Single sentence added to spec §9.2 Implementation note. Spec bumped to v2.5.
+
 **Last cleared:** 2026-05-17. Audit remediation pass closure — M1 (signature change + meta + singleton removal), D1 (top-level summary log), F5 (per-tag outbox cap), TG-7 follow-up (`commitAndDrain` fix), and TG-1 (chunk-pruning regression test) propagated to spec §4.1 / §4.4 / §14.7 and handoff §1 / §10. `Docs/Update_plan.md` deleted; audit history in git: commits through 2026-05-17.
 
 **Last cleared:** 2026-05-18. Phase 2 implementation bug-fix arc closure — five architectural decisions from the post-Phase-2 fix cascade propagated to handoff §10 divergences 25–29 and §5 / §8 invariants: (25) `spineMetadataMatches` gates the live-wins clip in `seedFromSpineFetch`; (26) wholesale replace clears accumulators / rawBuffers / sessionHighWaterMark synchronously; (27) type-coherence guard in `getBufferSnapshot`; (28) split live/history paths for `mergedData` in `TrendChartContainer`; (29) `lastChartDataRef` bridges chart data across transitions. Commits: 4763614 (initial 3 fixes), 6ffa8ee (Phase 2b cutover), Phase 2c trim, e9f10dd (wholesale-replace clear), e8b926f (diagnostic cleanup).
