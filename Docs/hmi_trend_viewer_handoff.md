@@ -19,12 +19,12 @@ Phase A Steps 1–11 are complete. Steps 1–6 delivered the server-side trends 
 | 8 | `useTrendData` hook: 2-visible + 2-prefetch parallelism, ⌈N/8⌉ fan-out, stale-gen guard | ✅ Done |
 | 9 | `TrendChart` static rendering: uPlot wrapper, per-trace Y-scales, legend (vertical right column), cursor display | ✅ Done |
 | 10 | Mode state machine + time-range UI: live-trailing/live-fixed/fixed transitions, 8-preset strip, End picker (End-only), Live button, pan/zoom interactions | ✅ Done |
-| 11 | Live tail: dedicated trend WS channel, `useLiveSubscription` hook (ring buffer + bucket accumulator + raw buffer; `commitAndDrain` returns void), unified `mergeTrendData` (live-wins-on-coverage, no `isTailing`), eviction-on-live-entry cache freshness (Gap B fix), server-side future-bucket nulling in `getTrendTile`, no-clamp wheel-zoom + `gatedFetchTile` over-range gating + inline "Range too wide" message in `CursorDisplay`, `dispatchModeAction` cleanup wrapper | ✅ Done |
+| 11 | Live tail: dedicated trend WS channel, `useLiveSubscription` hook (ring buffer + bucket accumulator + raw buffer; `drainBuffers` returns void — originally shipped as `commitAndDrain`, renamed in the unified-tile refactor §29 below), unified `mergeTrendData` (live-wins-on-coverage, no `isTailing`), eviction-on-live-entry cache freshness (Gap B fix), server-side future-bucket nulling in `getTrendTile`, no-clamp wheel-zoom + `gatedFetchTile` over-range gating + inline "Range too wide" message in `CursorDisplay`, `dispatchModeAction` cleanup wrapper | ✅ Done |
 | 12 | Tag picker modal: gear icon in Legend's `<thead><th colSpan={5}>` opens modal; flat alphabetical trendable-tag list (left pane) + Trending list (right pane); click-to-stage, × to unstage, search filter, 16-tag stage cap; OK commits to `setTagIds`; inline-style chrome via `@caro/ui Modal` | ✅ Done |
 
-**Test coverage (2026-05-27):** 770 passing in `@caro/trend-chart`, 67 in `@caro/hmi-context`, 156 in `@caro/db`, 301 in the HMI server, 33 in the HMI client.
+**Test coverage (2026-05-27, post-audit):** 797 passing in `@caro/trend-chart`, 67 in `@caro/hmi-context`, 158 in `@caro/db`, 301 in the HMI server, 33 in the HMI client. Trend-chart delta from the 2026-05-27 pre-audit baseline (815): +6 from new `onTransition` tests in `useTrendMode.test.ts` (audit Issue 4), −24 from deletions of `pruneAndAdd` describe blocks in `tileActiveSet.test.ts` and `useTrendData.test.ts` plus the whole `SpanBucketIndicator.test.tsx` file (audit Issue 5); 3 tests in `useLiveSubscription.test.ts` were updated in place for the HWM-only `getLatestSampleTs` (audit Issue 7) with no count delta.
 
-**Audit remediation pass (2026-05-15 → 2026-05-17):** all items from the May 2026 trend-viewer audit landed across Phases 1–5. Notable architectural change: **M1 metadata-as-return-value** — `getTrendTile()` now returns `Promise<{ tile, meta }>` (see spec §4.1 / §14.7); the `__test_lastUsedSources` module singleton is gone, with per-segment source/timing/rowCount now flowing through `meta.segments[]`. Operational hardening: F5 per-tag outbox cap (spec §4.4), TG-7 `commitAndDrain` bug fix (§10 gotcha below), TG-1 plan-pruning regression test (§10 gotcha below). All other items were refactors, test additions, or comment cleanup with no observable behavior change.
+**Audit remediation pass (2026-05-15 → 2026-05-17):** all items from the May 2026 trend-viewer audit landed across Phases 1–5. Notable architectural change: **M1 metadata-as-return-value** — `getTrendTile()` now returns `Promise<{ tile, meta }>` (see spec §4.1 / §14.7); the `__test_lastUsedSources` module singleton is gone, with per-segment source/timing/rowCount now flowing through `meta.segments[]`. Operational hardening: F5 per-tag outbox cap (spec §4.4), TG-7 `drainBuffers` bug fix (then named `commitAndDrain`; renamed in the unified-tile refactor — see §10 gotcha below), TG-1 plan-pruning regression test (§10 gotcha below). All other items were refactors, test additions, or comment cleanup with no observable behavior change.
 
 **Unified-tile refactor (2026-05-21).** The Step 8 / Step 11 fetch architecture — a separate live-spine path and history-tile path — was replaced by a single tile pipeline (`runTileFetch`) governed by the **terminal-cache rule**: a tile enters the LRU only once it is terminal, and the live-edge tile is held uncached in `activeTilesRef`. This closed handoff Issues E, F, and G by construction and removed `liveSpineFetch.ts`, `historyTileFetch.ts`, `seedFromSpineFetch`, `getBufferSnapshot`, `evictAll`, `refetchHistory`, the spine generation counter, and `commitAndDrain` (now `drainBuffers`). §5 and §8 describe the as-built unified architecture; spec §10.6 is the design reference. A follow-up fix (audit H4) keeps `drainBuffers` from clearing the ring.
 
@@ -161,38 +161,37 @@ packages/trend-chart/
       formatSpanMs.ts             # viewport span → human-readable (e.g. "1 h")
       formatFetchMs.ts            # last-fetch duration → human-readable
 
-    __tests__/
-      level.test.ts               # alignedTilesInRange, tilesForViewport, deriveBucketSMs
-      tileCache.test.ts           # LRU eviction, cache key, size accounting
-      colorAssign.test.ts         # deterministic palette assignment
-      api.test.ts                 # fetchTile wire format + error handling
-      tileActiveSet.test.ts       # direct-seam: pruneAndAdd geometry (empty, below-capacity,
-                                  # left-end, right-end, middle gap-fill at capacity — no warn)
-      useTrendData.test.ts        # fetch orchestration, fan-out, tag-generation guard,
+  __tests__/                      # sibling of src/ — not nested under it
+    level.test.ts                 # alignedTilesInRange, tilesForViewport, deriveBucketSMs
+    tileCache.test.ts             # LRU eviction, cache key, size accounting
+    colorAssign.test.ts           # deterministic palette assignment
+    api.test.ts                   # fetchTile wire format + error handling
+    tileActiveSet.test.ts         # makeActiveTileEntry / makeActiveTileEntryFromCache /
+                                  # computeCommittedThroughTs helpers
+    useTrendData.test.ts          # fetch orchestration, fan-out, tag-generation guard,
                                   # bucketSMs integer invariant, gatedFetchTile
                                   # CLIENT_OVER_RANGE / CLIENT_PRE_EPOCH sentinels
-      useTrendMode.test.ts        # trendModeReducer pure unit tests
-      useLiveSubscription.test.ts # Step 11: ring buffer lifecycle, bucket accumulator close,
+    useTrendMode.test.ts          # trendModeReducer pure unit tests + onTransition tests
+    useLiveSubscription.test.ts   # ring buffer lifecycle, bucket accumulator close,
                                   # raw buffer, viewportSpanMs trim, rawBuffers NOT trimmed
                                   # on threshold, boolean coercion, drainBuffers (ring kept)
-      mergeTrendData.test.ts      # Step 11: unified coverage rule, aggregate clip at
+    mergeTrendData.test.ts        # unified coverage rule, aggregate clip at
                                   # liveEndIndex, raw live-wins overlap, bucketSMs mismatch
                                   # passthrough
-      axisInteractions.test.ts    # all 7 helper functions
-      TrendChartContainer.test.tsx # container behavior: presets, Live, End picker, tag remove,
+    axisInteractions.test.ts      # all 7 helper functions
+    TrendChartContainer.test.tsx  # container behavior: presets, Live, End picker, tag remove,
                                   # loading hints; computeDragZoomViewport pure tests
-      trendChart.test.tsx         # TrendChart render, Y-scale defaults, legend display
-      legend.test.tsx             # Legend component unit tests (cursor row, value header,
+    trendChart.test.tsx           # TrendChart render, Y-scale defaults, legend display
+    legend.test.tsx               # Legend component unit tests (cursor row, value header,
                                   # table, BucketFetchIndicator integration)
-      SpanBucketIndicator.test.tsx # legacy: span + bucket size display (SpanBucketIndicator)
-      SpanIndicator.test.tsx      # SpanIndicator: span formatting
-      BucketFetchIndicator.test.tsx # BucketFetchIndicator: bucket + fetch display
-      SpanPresets.test.tsx        # preset highlight rule, mode-aware behavior
-      EndPicker.test.tsx          # End picker interaction, snap-back on invalid input
-      CursorDisplay.test.tsx      # range-message-only: over-range / under-range message
-      render/formatters.test.ts   # formatBucketS, formatValue, formatSpanMs
-      render/uplotConfig.test.ts
-      render/yScales.test.ts      # Y-scale defaults
+    SpanIndicator.test.tsx        # SpanIndicator: span formatting
+    BucketFetchIndicator.test.tsx # BucketFetchIndicator: bucket + fetch display
+    SpanPresets.test.tsx          # preset highlight rule, mode-aware behavior
+    EndPicker.test.tsx            # End picker interaction, snap-back on invalid input
+    CursorDisplay.test.tsx        # range-message-only: over-range / under-range message
+    render/formatters.test.ts     # formatBucketS, formatValue, formatSpanMs
+    render/uplotConfig.test.ts
+    render/yScales.test.ts        # Y-scale defaults
 ```
 
 ---
@@ -322,22 +321,31 @@ A separate imperative effect (keyed on `xRange`) calls `u.setScale('x', ...)` wi
 
 ## 7. Container Wiring (`TrendChartContainer.tsx`)
 
-`TrendChartContainer` is intentionally thin — it wires the hooks and passes props:
+`TrendChartContainer` is the thin wiring layer — it composes the hooks and passes props (~440 lines after the 2026-05-27 audit refactor; see audit Issue 4):
 
 ```
-useTrendMode()         →  modeState, modeViewport, dispatch
+useSessionPersistence()→  initialTagIds, initialModeState, initialSelectedTagId,
+                          initialYScaleOverrides, onSelectedTagChange,
+                          onYScaleOverridesChange, scheduleSave
+useTrendMode({         →  modeState, modeViewport, dispatch
+  initialState,             (dispatch wraps onTransition: fires synchronously on
+  onTransition,              prev.mode !== next.mode, then calls baseDispatch)
+})
 useZoomState(...)      →  currentBucketSMs, zoomAnchorSpan,
                           handleDragZoom, handleZoomLevelSwitch
 useTrendData(...)      →  data, isLoading, swapCounter, activeTileCount,
                           lastFetchMs, committedThroughTs, activeTilesRef,
                           invalidateNonTerminalTiles
+useLiveSubscription(.) →  drainBuffers, getLatestSampleTs, tail
 ```
 
-`dispatchModeAction` wraps `dispatch` for all mode transitions. It computes `next = trendModeReducer(prev, action)` and applies two conditional side effects before dispatching:
+**Mode-transition side effects** live inside `useTrendMode` via the `onTransition` callback — the prior `dispatchModeAction` container wrapper is gone. The container provides a stable `stableTransitionHandler` to `useTrendMode` that reads the latest handler from a ref (so hooks can be declared in their natural order — `useTrendMode` before `useTrendData`/`useLiveSubscription` — while the handler is wired after they return). The handler dispatches on the mode-discriminant change:
 - **Live → fixed** (`isLive(prev) && !isLive(next)`): calls `liveSubRef.current.drainBuffers()` to clear the accumulator, raw buffers, and session high-water mark.
 - **Fixed → live** (`!isLive(prev) && isLive(next)`): calls `trendData.invalidateNonTerminalTiles()` to reset non-terminal active entries so they are re-fetched with a fresh watermark.
 
-There is no `syncDataViewport`, no `evictAll`, no `refetchHistory`, and no `isFreshLiveLanding` branch.
+All call sites use `dispatch` directly — there is no wrapper to remember. There is no `syncDataViewport`, no `evictAll`, no `refetchHistory`, no `isFreshLiveLanding`, and no `dispatchModeAction` branch.
+
+**Session persistence** is owned entirely by `useSessionPersistence` — `buildInitialModeState`, the initial-load sentinel ref, the trendable-tagId filter, the debounced (~250 ms) save scheduling, the unmount flush, and the snapshot-callbacks for `selectedTagId` / `yScaleOverrides` all live in that hook. The container retains a 4-line `useEffect` that calls `persistence.scheduleSave({ tagIds, modeState })` on change; everything else is opaque to the container. When `persistKey` is undefined the hook is a no-op and the snapshot callbacks return `undefined` (so `TrendChart` sees no callback to invoke).
 
 `liveEdgeBehindWindow` is derived per-render as `latestSampleTs !== null && latestSampleTs < modeState.from` using `liveSubRef.current.getLatestSampleTs()` and passed to `EndPicker` as a prop for the orange button state.
 
@@ -490,7 +498,7 @@ Hard-won lessons from the min/max upgrade and perf engineering work.
 
 **Pan-back data-loss window.** On live → fixed transition, `drainBuffers` clears the live tail immediately. Live values that arrived in the last ~`TIMESCALE_DB_TICK_MS` + FIFO trim buffer (~1.5 s by default: 500 ms DB tick + 1 s trim tolerance) may not yet be committed to TimescaleDB when the next REST fetch fires. Those values are not lost in the historian — they land within the next DB flush cycle — but the brief in-transit window renders as null/gap until the subsequent refetch picks them up. Deliberate property of the tail-extension model: keeping live-exit synchronous and simple outweighs the cost of a sub-2 s null flash on pan-back. Not a bug.
 
-**`drainBuffers` must reset per-tag arrays in place, not `.clear()` the map.** `rawBuffersRef` is `Map<tagId, Array>`. Calling `.clear()` removes every per-tag key; the subscribe callback's `if (buf)` guard then silently drops every subsequent event until something re-allocates the map keys. Production lifecycle mode-flip + tailMode-effect re-allocation masked the bug, but it surfaces immediately under stable-mode drain (the TG-7 audit test). Fix: `for (const arr of rawBuffersRef.current.values()) arr.length = 0` plus `setTail(null)` for explicit React-state drain. Spec §10.6 documents the contract; the in-place mutation pattern is the implementation choice that matches it. Surfaced + closed during the 2026-05-17 audit pass.
+**`drainBuffers` must reset per-tag arrays/state in place, not `.clear()` the maps.** Both `rawBuffersRef` (`Map<tagId, Array>`) and `accumulatorsRef` (`Map<tagId, AccumulatorState>`) are vulnerable to the same pattern: calling `.clear()` removes every per-tag key; the subscribe callback's `if (buf)` / `if (state)` guards then silently drop every subsequent event until something re-allocates the map keys. Production lifecycle (mode flip + tailMode-effect re-allocation) masks the bug, but it surfaces immediately under any future drain path that doesn't flip `isLiveRef.current` to `false` first. Fix is in-place reset: `for (const arr of rawBuffersRef.current.values()) arr.length = 0` for the raw buffer; and `for (const state of accumulatorsRef.current.values()) { state.openBucket = null; state.closed.value.length = 0; state.closed.min.length = 0; state.closed.max.length = 0; state.firstClosedStartMs = null; state.lastKnownValue = null; }` for the accumulator. Plus `setTail(null)` for explicit React-state drain. Spec §10.6 documents the contract; the in-place mutation pattern is the implementation choice that matches it. Raw-buffer fix surfaced + closed during the 2026-05-17 audit pass (TG-7); accumulator fix surfaced + closed during the 2026-05-27 audit pass (Issue 2, both refs now use the same pattern).
 
 **EXPLAIN of `locf(prev => ...)` hides the prev subquery in TimescaleDB 2.26.3 output.** When validating chunk pruning on the bounded-prev pattern (spec §5.5), `EXPLAIN (FORMAT JSON)` on a `locf()` call does not expose the nested correlated subquery in the plan tree — pruning structure for the `prev` lookup is invisible. The TG-1 plan-assertion test (`packages/db/__tests__/timescale/trends.test.ts`) works around this by extracting the inner prev SQL directly from `buildGapfillSql`'s output via regex and EXPLAIN-ing it as a standalone statement. Future tests of the bounded-prev shape must do the same.
 

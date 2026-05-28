@@ -11,6 +11,8 @@ hmi_trend_viewer_reference | hmi_functional_spec | hmi_API_spec | hmi_widget_spe
 
 | Version | Date | Author | Summary |
 |---|---|---|---|
+| 2.4 | 2026-05-27 | PM / Claude | 2026-05-27 audit propagation pass (Issues 2–10). §7 client package structure: `useSessionPersistence.ts` added to the file map; `useTrendMode.ts` description expanded for `onTransition`; `TrendChartContainer.tsx` description updated to "thin wiring layer" with the actual line count (~440) and hook-composition list; `SpanBucketIndicator.tsx` removed (file deleted); §7.1 closing "hooks pending" line updated. §19 glossary: `latestSampleTs` simplified to `sessionHighWaterMark` with a historical note about the prior `max(...)` formula; `Live Mode` entry expanded to enumerate the three semantic uses of "live" in the codebase (mode predicate / `isLive` prop / tile-level live-edge per terminal-cache rule). §6.1 INVALID_TAG_IDS row clarified to explicitly include "non-positive integer (`id ≤ 0`)"; request param description tightened to "positive integers (>0)". §7.1 axisInteractions file-map line corrected (9 → 7 exported functions). |
+| 2.3 | 2026-05-27 | PM / Claude | §4.4 brought into line with as-built per-ingest WS trend listener: signature is `(moduleTs, moduleId)` not `(moduleTs, tagId, value)`; `handleTrendDelta` snapshots LKV for every trendable tag in the module on every ingest; synthetic-on-flush is the rare fallback for tags whose module did not ingest in the flush window (not the documented common branch). Outbox sizing re-justified under per-ingest at the current HMI publish tick. Per-ingest-vs-per-COV design intent captured: revisit when `module_ingest_rate > TREND_FLUSH_HZ` or when subscriber counts exceed the picker cap. Closes the audit Issue 1 / `platform_todo.md` open item. |
 | 2.2 | 2026-05-27 | PM / Claude | §13.6 Session Persistence added. localStorage-backed restoration of tagIds, Y-scale overrides, selectedTagId, sizeMs, mode, and toMs across HMI page navigation and browser refresh. Live-fixed→live-trailing reconciliation when now ≥ savedToMs. Opt-in via `persistKey` prop on `TrendChartContainer`. |
 | 2.1 | 2026-05-27 | PM / Claude | Post-Step-12 fix propagation. `commitTagIds` single-mutation contract: all `tagIds` mutations route through `commitTagIds`, which calls `invalidateNonTerminalTiles()` before `setTagIds()` — §10.7 Add/Remove tag paragraphs updated; §11.3 OK-commit updated to reference `commitTagIds`. Empty-tagIds layout: `tagIds=[]` renders full layout (blank plot at normal height + Signals header + gear icon) instead of a large "Add tags" button — §13.5 rewritten. |
 | 2.0 | 2026-05-27 | PM / Claude | Step 12 (Tag Picker) complete. §11 rewritten: gear icon in Legend `<thead><th>` opens modal (supersedes drawer); flat trendable list (supersedes tree); click-to-stage (supersedes checkbox + Add N); trendable filter; modal sizing formula; 16-tag cap. Spec status bumped to Steps 1–12 complete. |
@@ -152,11 +154,14 @@ Client (Live mode)                                 Server
   ├─────────────────────────────────────────────────▶│  registers per-client trend outbox
   │                                                  │
   │                                                  │  MQTT ingest → TelemetryIntake.ingest()
-  │                                                  │    → trendDeltaListener(moduleTs, tagId, value)
-  │                                                  │    → per-client outbox.push(sample)
+  │                                                  │    → trendDeltaListener(moduleTs, moduleId)
+  │                                                  │    → for each trendable tag T in moduleId:
+  │                                                  │        for each client subscribed to T:
+  │                                                  │          outbox[T].push({ moduleTs, value: LKV[T] })
   │                                                  │
   │                                                  │  TREND_FLUSH_HZ tick (default 4 Hz):
-  │                                                  │    for each subscribed tag with no real event:
+  │                                                  │    for each subscribed tag with no outbox entries
+  │                                                  │      (its module did not ingest this window):
   │                                                  │      emit synthetic { moduleTs: now, value: LKV }
   │                                                  │    flush outbox → TREND_DELTA frame
   │                                                  │
@@ -175,9 +180,13 @@ The trend live tail uses a **dedicated WS channel** — not the existing `useLiv
 
 **Server-side membership filter.** The server silently filters incoming `SUBSCRIBE_TREND` tag IDs against the boot-time trendable set. Non-trendable IDs are dropped without error (one batched `console.warn` per ignored subscribe message identifies the offending IDs). The Tag Picker (§11.4) is the UX-layer gate; this is server-side defense against stale saved views and a guard against the detrendified-tag synthetic-flatline regression (a non-trendable subscription would otherwise receive synthetic LKV samples every flush that masquerade as live trend data with no historian backing). Asymmetric with `/api/v1/trends/tile` (§6.1), which is permissive — REST reads serve whatever the historian has; WS serves only current live trend updates.
 
-`TelemetryIntake.setTrendDeltaListener(fn)` wires the ingest path to the WS server's outbox accumulator. The flush at `TREND_FLUSH_HZ` emits one `TREND_DELTA` frame per client containing all buffered samples plus one synthetic event per subscribed tag that had no real event in the flush window. **Purpose of the synthetic event: propagate the LKV as the LOCF value into the client's bucket accumulator at the flush cadence — it advances bucket boundaries on flatline tags.** `moduleTs: now` resolves to the HMI server's `Date.now()`. Exact timestamp precision is not critical: by LOCF semantics the value is the same at any moment in the flatline window, so a bucket-boundary shift due to clock-domain skew between server and module places identical content in the resulting bucket. See handoff §11.D. `committedThroughTs` in the tile response (§6.2) gates the client's ring trim threshold — WS events older than that are pruned as already covered by cached tile data.
+`TelemetryIntake.setTrendDeltaListener(fn)` wires the ingest path to the WS server's outbox accumulator. **Listener signature is `(moduleTs, moduleId)` — per-MQTT-ingest, not per-COV-of-tag.** `TelemetryIntake.ingest()` fires the listener once per MQTT frame with the frame's timestamp and the originating module ID; the listener does not see per-tag values. `WsServer.handleTrendDelta(moduleTs, moduleId)` then snapshots `LKV[t]` for every trendable tag `t` in the module and pushes one outbox entry `{ moduleTs, value: LKV[t] }` per (subscribed tag × subscribing client). The push happens regardless of whether the tag's value actually changed in that frame — the listener has no COV signal to filter on. Bandwidth follows module ingest rate × subscribed-tags-in-module, not per-tag COV rate. At the current HMI publish tick (~250 ms) and the picker stage cap (16 tags, §11.6), per-client outbox growth is ≤ 16 entries/flush; at `TREND_FLUSH_HZ = 4` Hz this is roughly equivalent in bandwidth to a per-COV implementation that re-emits LKV at flush cadence for flatlines.
 
-**Bounded outbox (operational invariant).** The per-client outbox is per-tag (`Map<tagId, Array<{moduleTs, value}>>`). Each per-tag array is capped at `MAX_TREND_OUTBOX_PER_TAG = 500` entries — ≈50 seconds of nominal 10 Hz COV per tag, generous headroom for back-pressure. On overflow the oldest entry is dropped (`shift()`) and a per-client `trendDroppedCount` is incremented. `trendFlush` emits one batched `console.warn` per flush summarizing the drop count, then resets the counter. Worst-case memory per stuck client = subscribed_tags × 500 × ~48 bytes/event; bounded even at the 8-tag UX cap. Drop-oldest is correct for live tail (newest data is most relevant); historical reads come from the REST `/api/v1/trends/tile` path, not the WS outbox.
+The flush at `TREND_FLUSH_HZ` emits one `TREND_DELTA` frame per client containing all buffered samples plus one synthetic event per subscribed tag whose outbox is empty (the tag's module did not ingest in this flush window — typically a silent module, or modules ingesting slower than `TREND_FLUSH_HZ`). **Purpose of the synthetic event: propagate the LKV as the LOCF value into the client's bucket accumulator at the flush cadence — it advances bucket boundaries on flatline-and-silent tags.** Under the per-ingest design above, the synthetic branch is the rare fallback only when no per-ingest LKV-snapshot landed in the outbox between flushes. `moduleTs: now` resolves to the HMI server's `Date.now()`. Exact timestamp precision is not critical: by LOCF semantics the value is the same at any moment in the flatline window, so a bucket-boundary shift due to clock-domain skew between server and module places identical content in the resulting bucket. See handoff §11.D. `committedThroughTs` in the tile response (§6.2) gates the client's ring trim threshold — WS events older than that are pruned as already covered by cached tile data.
+
+**Per-ingest vs per-COV — design intent.** The listener could in principle be wired per-COV-write (`(moduleTs, tagId, value)`), pushing only changed tags into the outbox and relying entirely on synthetic-on-flush for flatline advancement. At the current `module_ingest_rate ≈ TREND_FLUSH_HZ` operating point the two designs produce roughly identical outbox bandwidth (one entry/tag/flush either way: a real LKV from ingest, or a synthetic from flush). Per-COV's bandwidth advantage only materializes when `module_ingest_rate > TREND_FLUSH_HZ` (faster modules, or lower flush rate), which is not the current configuration. The simpler `(moduleTs, moduleId)` signature is therefore retained; revisit if a faster-ingest module is introduced or if subscriber counts exceed the picker cap (e.g. saved-view subscribers in Phase B).
+
+**Bounded outbox (operational invariant).** The per-client outbox is per-tag (`Map<tagId, Array<{moduleTs, value}>>`). Each per-tag array is capped at `MAX_TREND_OUTBOX_PER_TAG = 500` entries. Under the per-ingest design above, a per-tag outbox fills at the rate of `module_ingest_rate` (one entry per ingest of the tag's module); at the current HMI publish tick of ~250 ms this is 4 entries/second, giving ~125 seconds of back-pressure tolerance before drops start. On overflow the oldest entry is dropped (`shift()`) and a per-client `trendDroppedCount` is incremented. `trendFlush` emits one batched `console.warn` per flush summarizing the drop count, then resets the counter. Worst-case memory per stuck client = `subscribed_tags × 500 × ~48 bytes/event`; bounded at the picker stage cap of 16 tags (§11.6) to ≤ ~400 KB per stuck client. Drop-oldest is correct for live tail (newest data is most relevant); historical reads come from the REST `/api/v1/trends/tile` path, not the WS outbox.
 
 ---
 
@@ -293,7 +302,7 @@ The result fills the entire grid flat at the most-recent prior value. Tags with 
 
 ```
 GET /api/v1/trends/tile
-  ?tag_ids=42,87,93           # comma-separated int list, required, 1 ≤ count ≤ 8 (§6.6)
+  ?tag_ids=42,87,93           # comma-separated positive integers (>0); required, 1 ≤ count ≤ 8 (§6.6)
   &start_time=1776864000000   # ms since epoch, positive integer
   &end_time=1776864480000     # ms since epoch, positive integer; must satisfy end_time > start_time
   &bucket_count=250           # positive integer, 1..2500
@@ -386,7 +395,7 @@ Validation errors:
 | Code | Trigger |
 |---|---|
 | `MISSING_QUERY_PARAM` | any of `tag_ids`, `start_time`, `end_time`, `bucket_count` is absent |
-| `INVALID_TAG_IDS` | `tag_ids` empty, count > 8, or contains non-integer |
+| `INVALID_TAG_IDS` | `tag_ids` empty, count > 8, contains a non-integer, or contains a non-positive integer (`id ≤ 0`) |
 | `INVALID_RANGE` | `end_time ≤ start_time`, or either timestamp is non-positive |
 | `INVALID_BUCKET_COUNT` | `bucket_count` outside 1..2500 or non-integer |
 | `INVALID_BUCKET_S` | derived `bucketS` outside `(0, MAX_BUCKET_S]` (§6.3) — thrown by `getTrendTile()` in the **bucketed branch only**. Raw COV requests skip `bucketSMs` derivation entirely (Phase 6 dispatch); the route no longer validates `bucketS`. Normal clients do not trigger this because over-range UX is handled by the client-side `gatedFetchTile` gate (§6.3 Out-of-range UX). |
@@ -538,19 +547,33 @@ packages/trend-chart/
                                   # MAX_VIEWPORT_SPAN_MS, floorDiv, ceilDiv
     tileCache.ts                  # TileCache (LRU, 50 MB cap), makeTileCacheKey
     colorAssign.ts                # colorAssign(tagId), PALETTE, PALETTE_SIZE
-    axisInteractions.ts           # pure axis pan/zoom helpers (9 exported functions)
+    axisInteractions.ts           # pure axis pan/zoom helpers (7 exported functions)
     (date formatting lives in @caro/ui — see formatDateTime / formatDate)
 
     # ── React hooks ─────────────────────────────────────────────────────────
     useTrendData.ts               # REST fetch orchestration; owns TileCache instance
-    useTrendMode.ts               # live/fixed three-state mode machine; exports reducer
+    useTrendMode.ts               # live/fixed three-state mode machine; reducer plus
+                                  # an onTransition callback (fires on prev.mode !== next.mode)
+                                  # that owns the live↔fixed side effects (drainBuffers,
+                                  # invalidateNonTerminalTiles) — supersedes the prior
+                                  # dispatchModeAction container wrapper
     useZoomState.ts               # zoom level state; exports computeDragZoomViewport
+    useSessionPersistence.ts      # debounced localStorage save (~250 ms), unmount flush,
+                                  # initial-load reconciliation (filter saved tagIds against
+                                  # trendable set, promote stale live-fixed to live-trailing
+                                  # if savedToMs has passed); owns the buildInitialModeState
+                                  # helper. Returns initial values + snapshot callbacks +
+                                  # scheduleSave. No-op when persistKey is undefined.
 
     # ── Components ──────────────────────────────────────────────────────────
     TrendChart.tsx                # uPlot canvas wrapper; rebuild lifecycle, X-scale
                                   # preservation, per-trace Y-scale overrides, wheel/drag
-    TrendChartContainer.tsx       # stateful wiring layer (renamed from TrendChartProvider)
-    SpanBucketIndicator.tsx       # footer: viewport span + bucket size + last-fetch duration
+    TrendChartContainer.tsx       # thin wiring layer: composes useTrendMode +
+                                  # useSessionPersistence + useTrendData + useLiveSubscription
+                                  # + useZoomState + TrendChart + TagPickerModal. Owns
+                                  # tagIds state, picker open state, the lastChartDataRef
+                                  # bridge, range-message derivation, RAF coalescing for
+                                  # pan/zoom. ~440 lines after the 2026-05-27 refactor.
     SpanPresets.tsx               # footer: 8-preset strip (1m/5m/15m/1h/4h/24h/7d/14d)
     EndPicker.tsx                 # footer: End datetime picker button + Live/Go Live button
     Legend.tsx                    # vertical column on the right side of the chart
@@ -571,7 +594,7 @@ packages/trend-chart/
   tsconfig.json
 ```
 
-Hooks that are in the original spec but not yet built: `useLiveSubscription.ts` (Step 11), `useTrendViews.ts` (Phase B). `TagPickerDrawer.tsx` (Step 12), `SavedViewDropdown.tsx` (Phase B) are also pending.
+Step 11/12 hooks and components are now built (`useLiveSubscription.ts`, `TagPickerModal.tsx`). Phase B items still pending: `useTrendViews.ts`, `SavedViewDropdown.tsx`. `SpanBucketIndicator.tsx` was deleted in the 2026-05-27 audit pass — the original combined widget is superseded by the `SpanIndicator` + `BucketFetchIndicator` split (see §8.6).
 
 ### 7.2 Dependencies
 
@@ -1442,10 +1465,10 @@ Questions resolved during v0.1–v0.4 design:
 | Div | Ratio of requested `bucket_s` to the chosen CAG's native bucket size. The outer `time_bucket(bucket_s)` operation re-aggregates `Div` source rows per output bucket. |
 | Fixed | Historical mode. Chart window is a static `[from, to]`; no live updates. WS ring fills but bucketing is suppressed. |
 | Tag-generation counter | Monotonic integer (`tagGenerationRef`) owned by `useTrendData`. Bumped only when the `tagIds` list changes. A tile fetch captures it at dispatch; a non-terminal resolve whose captured value no longer matches is discarded. Decouples tile-fetch staleness from viewport changes and the live heartbeat. |
-| `latestSampleTs` | `max(sessionHighWaterMark, currentMaxAcrossSubscribedTags)`. The scalar that drives all `live-trailing ↔ live-fixed` transitions. Returns `null` before the first `TREND_DELTA` arrives in a session. Monotonic-non-decreasing within a session — the high-water-mark floor prevents regression when the max-providing tag is removed. Reset to `null` by `drainBuffers`. |
+| `latestSampleTs` | `sessionHighWaterMark`. The scalar that drives all `live-trailing ↔ live-fixed` transitions. Returns `null` before the first `TREND_DELTA` arrives in a session, and again after `drainBuffers` resets it. Monotonic-non-decreasing within a continuous live session. (Prior to the 2026-05-27 audit pass the formula was `max(sessionHighWaterMark, currentMaxAcrossSubscribedTags)`; the ring-walk fallback was removed because every consumer handles `null` via classifyByWindow's `viewport.end` fallback per §9.3, and the ring fallback gave a third behavior — classify against a stale pre-drain tail — that no caller depended on. See audit Issue 7.) |
 | `liveEdgeBehindWindow` | Derived boolean in `TrendChartContainer`: `latestSampleTs !== null && latestSampleTs < modeState.from`. True when the live data edge is entirely off-screen to the left. Passed to `EndPicker` to trigger the orange Live button state. |
 | LKV | Last known value. The HMI server's in-memory cache of the most recent value per tag. |
-| Live Mode | Flag indicating WS subscription is active, bucketing is gated open (`isLive(mode) === true`), and the unified buffer is being fed. True in both `live-trailing` and `live-fixed`. |
+| Live Mode | Flag indicating WS subscription is active, bucketing is gated open (`isLive(mode) === true`), and the unified buffer is being fed. True in both `live-trailing` and `live-fixed`. **"Live" appears in three places in the codebase, all consistent:** (1) `isLive(mode)` — the mode-discriminant predicate over `ModeState`; (2) the `isLive: boolean` prop threaded into `useTrendData` and `useLiveSubscription` — derived from the predicate; (3) the **live edge** semantic on a single tile — a tile is "at the live edge" when `committedThroughTs < tile.endTime` (terminal-cache rule, §10.6 / §10.8). The first two are mode-level; the third is tile-level and applies even outside Live mode (a tile whose right edge sits past the current data commit watermark). |
 | LOCF | Last observation carried forward. Gap-fill mode that repeats the last seen value into missing buckets. Implemented via the bounded `prev` correlated subquery (§5.5). |
 | Null-as-gap | The contract that null sample values render as visual gaps in the chart, never interpolated. Requires `null_count` materialized in CAGs to enforce on the CAG path. |
 | `sessionHighWaterMark` | Bigint owned by `useLiveSubscription`, recording the highest `moduleTs` observed since Live entry. Bumped on every WS sample whose `moduleTs` exceeds the current mark. Reset to `null` by `drainBuffers`. Internal — not exposed on the hook surface. |
