@@ -1,4 +1,4 @@
-import { useReducer } from 'react';
+import { useReducer, useRef, useCallback } from 'react';
 import type { Dispatch } from 'react';
 import type { Viewport } from './types.js';
 import { MAX_VIEWPORT_SPAN_MS } from './level.js';
@@ -159,12 +159,24 @@ export interface UseTrendModeResult {
   dispatch: Dispatch<TrendModeAction>;
 }
 
+export interface UseTrendModeOptions {
+  /** Optional override for first-render state (session hydration). */
+  initialState?: ModeState;
+  /**
+   * Fires synchronously before baseDispatch when the mode changes (prev.mode !== next.mode).
+   * May be called multiple times in a single React tick if multiple mode-changing actions
+   * dispatch back-to-back; each call sees the render-committed prev state (not mid-batch
+   * state). Side effects should be idempotent.
+   */
+  onTransition?: (prev: ModeState, next: ModeState) => void;
+}
+
 /** Stateful hook: owns the mode reducer. The 'tick' action is dispatched
  *  externally by TrendChartContainer.handleDataReceived from the WS frame's
- *  max moduleTs — there is no internal interval.
- *  @param initialState Optional override for first-render state (session hydration). */
-export function useTrendMode(initialState?: ModeState): UseTrendModeResult {
-  const [state, dispatch] = useReducer(trendModeReducer, undefined, () =>
+ *  max moduleTs — there is no internal interval. */
+export function useTrendMode(opts: UseTrendModeOptions = {}): UseTrendModeResult {
+  const { initialState, onTransition } = opts;
+  const [state, baseDispatch] = useReducer(trendModeReducer, undefined, () =>
     initialState ?? {
       mode: 'live-trailing' as const,
       sizeMs: DEFAULT_SIZE_MS,
@@ -172,6 +184,24 @@ export function useTrendMode(initialState?: ModeState): UseTrendModeResult {
       lastIntent: null as LastIntent,
     },
   );
+
+  // stateRef must update synchronously every render so dispatch reads current state
+  // without a stale closure (React may batch multiple dispatches before re-rendering).
+  const stateRef = useRef(state);
+  stateRef.current = state;
+
+  // onTransition can be reassigned per render; ref keeps the dispatch callback stable.
+  const onTransitionRef = useRef(onTransition);
+  onTransitionRef.current = onTransition;
+
+  const dispatch = useCallback<Dispatch<TrendModeAction>>((action) => {
+    const prev = stateRef.current;
+    const next = trendModeReducer(prev, action);
+    if (prev.mode !== next.mode) {
+      onTransitionRef.current?.(prev, next);
+    }
+    baseDispatch(action);
+  }, []); // only reads refs — stable across renders
 
   const viewport = modeToViewport(state);
   return { state, viewport, dispatch };

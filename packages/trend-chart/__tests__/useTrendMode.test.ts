@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
-import { trendModeReducer, modeToViewport } from '../src/useTrendMode.js';
+import { describe, it, expect, vi } from 'vitest';
+import { renderHook, act } from '@testing-library/react';
+import { trendModeReducer, modeToViewport, useTrendMode } from '../src/useTrendMode.js';
 import type { ModeState, TrendModeAction } from '../src/useTrendMode.js';
 import { MAX_VIEWPORT_SPAN_MS } from '../src/level.js';
 
@@ -915,5 +916,103 @@ describe('zoomApplied — Phase 3 (D7 repealed)', () => {
     expect(next.to).toBe(to);
     expect(next.sizeMs).toBe(to - from);
     expect(next.lastIntent).toBe('zoom');
+  });
+});
+
+// ── useTrendMode hook — onTransition ──────────────────────────────────────────
+//
+// These tests exercise the hook (not just the reducer) to verify that the
+// onTransition callback fires correctly for mode-changing actions.
+
+describe('useTrendMode hook — onTransition', () => {
+  it('onTransition fires with (prev, next) on a Live→fixed transition', () => {
+    const onTransition = vi.fn();
+
+    const { result } = renderHook(() =>
+      useTrendMode({ initialState: LIVE_TRAILING_1H, onTransition }),
+    );
+
+    // Pan to a window well before NOW → live-trailing → fixed (mode changes).
+    act(() => {
+      result.current.dispatch({
+        type: 'panApplied',
+        from: FAR_PAST,
+        to: FAR_PAST + 3_600_000n,
+        nowMs: NOW,
+        latestSampleTs: null,
+      });
+    });
+
+    expect(onTransition).toHaveBeenCalledOnce();
+    const [prev, next] = onTransition.mock.calls[0] as [ModeState, ModeState];
+    expect(prev.mode).toBe('live-trailing');
+    expect(next.mode).toBe('fixed');
+  });
+
+  it('onTransition is NOT called when no mode transition occurs (tick in live-trailing)', () => {
+    const onTransition = vi.fn();
+
+    const { result } = renderHook(() =>
+      useTrendMode({ initialState: LIVE_TRAILING_1H, onTransition }),
+    );
+
+    // Tick advances nowMs but mode stays live-trailing → prev.mode === next.mode.
+    act(() => {
+      result.current.dispatch({ type: 'tick', nowMs: NOW + 1_000n });
+    });
+
+    expect(onTransition).not.toHaveBeenCalled();
+  });
+
+  it('onTransition is NOT called for preset in live-trailing (mode unchanged)', () => {
+    const onTransition = vi.fn();
+
+    const { result } = renderHook(() =>
+      useTrendMode({ initialState: LIVE_TRAILING_1H, onTransition }),
+    );
+
+    act(() => {
+      result.current.dispatch({ type: 'presetClicked', sizeMs: 900_000n, nowMs: NOW });
+    });
+
+    // presetClicked from live-trailing → live-trailing: same mode → NOT called.
+    expect(onTransition).not.toHaveBeenCalled();
+  });
+
+  it('onTransition fires on fixed→live transition (Live button click)', () => {
+    const onTransition = vi.fn();
+
+    const { result } = renderHook(() =>
+      useTrendMode({ initialState: FIXED_1H, onTransition }),
+    );
+
+    act(() => {
+      result.current.dispatch({ type: 'liveClicked', nowMs: NOW });
+    });
+
+    expect(onTransition).toHaveBeenCalledOnce();
+    const [prev, next] = onTransition.mock.calls[0] as [ModeState, ModeState];
+    expect(prev.mode).toBe('fixed');
+    expect(next.mode).toBe('live-trailing');
+  });
+
+  it('reducer purity: state produced with onTransition equals state produced without', () => {
+    const { result: withCb } = renderHook(() =>
+      useTrendMode({ initialState: LIVE_TRAILING_1H, onTransition: vi.fn() }),
+    );
+    const { result: withoutCb } = renderHook(() =>
+      useTrendMode({ initialState: LIVE_TRAILING_1H }),
+    );
+
+    const action: TrendModeAction = { type: 'presetClicked', sizeMs: 900_000n, nowMs: NOW };
+    act(() => { withCb.current.dispatch(action); });
+    act(() => { withoutCb.current.dispatch(action); });
+
+    expect(withCb.current.state).toEqual(withoutCb.current.state);
+  });
+
+  it('useTrendMode with no opts uses default live-trailing state', () => {
+    const { result } = renderHook(() => useTrendMode());
+    expect(result.current.state.mode).toBe('live-trailing');
   });
 });
