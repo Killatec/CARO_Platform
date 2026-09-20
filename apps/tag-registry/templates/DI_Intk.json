@@ -1,0 +1,14 @@
+{
+  "template_name": "DI_Intk",
+  "template_type": "interlock",
+  "fields": {
+    "In_Tag_Name": { "field_type": "Boolean", "default": false }
+  },
+  "children": [
+    { "template_name": "boolean_set", "asset_name": "INE_Set", "fields": {} },
+    { "template_name": "boolean_set", "asset_name": "Test", "fields": {} },
+    { "template_name": "boolean_mon", "asset_name": "Mon", "fields": { "Trends": false } },
+    { "template_name": "boolean_mon", "asset_name": "INE_Mon", "fields": { "Trends": false } },
+    { "template_name": "boolean_mon", "asset_name": "Intk", "fields": { "Trends": false } }
+  ]
+}

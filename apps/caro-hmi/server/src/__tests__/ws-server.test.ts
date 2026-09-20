@@ -573,11 +573,19 @@ const MALFORMED_INPUTS = [
   { name: 'negative element',    payload: [-1, -2] },
 ] as const;
 
+// SUBSCRIBE/UNSUBSCRIBE no longer discard a whole batch for containing some invalid
+// elements (see ws-server.ts parseTagIdsArray) — only a non-array payload is wholly
+// malformed now. SUBSCRIBE_TREND/UNSUBSCRIBE_TREND below still exercise the full set:
+// an array's invalid elements never resolve to a trendable tag either, so those two
+// cases still produce zero TREND_DELTA frames, just via the trendable-set filter
+// rather than whole-payload rejection.
+const NON_ARRAY_INPUTS = MALFORMED_INPUTS.filter(input => !Array.isArray(input.payload));
+
 describe('WsServer — TG-4: SUBSCRIBE / UNSUBSCRIBE shape validation', () => {
   for (const messageType of ['SUBSCRIBE', 'UNSUBSCRIBE'] as const) {
     describe(`${messageType}`, () => {
-      for (const input of MALFORMED_INPUTS) {
-        it(`rejects ${input.name}: connection stays open, no response sent`, async () => {
+      for (const input of NON_ARRAY_INPUTS) {
+        it(`rejects ${input.name} wholesale: connection stays open, no response sent`, async () => {
           const ws = await openClient(port);
           openClients.push(ws);
 
@@ -598,6 +606,57 @@ describe('WsServer — TG-4: SUBSCRIBE / UNSUBSCRIBE shape validation', () => {
       }
     });
   }
+
+  it('SUBSCRIBE with [validId, 0, validId] subscribes the valid ids and reports 0 by value', async () => {
+    lkv.set(1, 'a');
+    lkv.set(2, 'b');
+    const ws = await makeClient();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const resp = await roundtrip(ws, { type: 'SUBSCRIBE', tagIds: [1, 0, 2] }) as {
+        type: string;
+        values: Record<string, unknown>;
+      };
+
+      expect(resp.type).toBe('SNAPSHOT');
+      expect(resp.values['1']).toBe('a');
+      expect(resp.values['2']).toBe('b');
+      expect('0' in resp.values).toBe(false);
+
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy.mock.calls[0][0]).toContain('0');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('UNSUBSCRIBE with [validId, 0, validId] unsubscribes the valid ids and reports 0 by value', async () => {
+    lkv.set(1, 10);
+    lkv.set(2, 20);
+    const ws = await makeClient();
+    await roundtrip(ws, { type: 'SUBSCRIBE', tagIds: [1, 2] });
+    await wait(TICK_MS * 2);
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      ws.send(JSON.stringify({ type: 'UNSUBSCRIBE', tagIds: [1, 0, 2] }));
+      await wait(TICK_MS);
+
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy.mock.calls[0][0]).toContain('0');
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    // Both valid ids were unsubscribed — no further DELTA for either.
+    let received = false;
+    ws.on('message', () => { received = true; });
+    lkv.set(1, 999);
+    lkv.set(2, 888);
+    await wait(TICK_MS * 3);
+    expect(received).toBe(false);
+  });
 });
 
 describe('WsServer — TG-4: SUBSCRIBE_TREND / UNSUBSCRIBE_TREND shape validation', () => {

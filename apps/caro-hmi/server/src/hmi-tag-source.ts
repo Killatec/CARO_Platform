@@ -67,6 +67,8 @@ export class HmiTagSource {
   private sizeMonitor: TimescaleSizeMonitor | undefined;
   private dbSizeTagId: number | undefined;
   private readonly trendTagIds: TrendInfoTagIds;
+  // Names absorbed by the Proxy's unknown-property path, so each is logged once.
+  private readonly reportedUnknownProps = new Set<string>();
 
   private constructor(
     deps: HmiTagSourceDeps,
@@ -90,6 +92,27 @@ export class HmiTagSource {
     this.sizeMonitor = deps.sizeMonitor;
     this.trendTagIds = dbPipeline !== undefined ? this.resolveTrendInfoTagIds() : {};
     this.dbSizeTagId = deps.sizeMonitor !== undefined ? this.resolveDbSizeTagId() : undefined;
+    this.logIfNoHmiTagsFound();
+  }
+
+  /**
+   * Honest startup statement: how many HMI tags this module actually has, not
+   * a count against an expected set (there is no such list — property names
+   * are derived at runtime from whatever the registry contains). Only worth
+   * logging when it's zero, the "template never instantiated" case; a
+   * partially-populated subtree surfaces lazily via reportUnknownProp below,
+   * as whichever specific property a caller tries to use turns out missing.
+   */
+  private logIfNoHmiTagsFound(): void {
+    if (this.propertyToTagId.size > 0) return;
+    console.log('[HmiTagSource] 0 HMI tags found in registry — self-monitoring tags unavailable');
+  }
+
+  /** Logs an absorbed write to an unrecognized property once per distinct name. */
+  private reportUnknownProp(prop: string): void {
+    if (this.reportedUnknownProps.has(prop)) return;
+    this.reportedUnknownProps.add(prop);
+    console.log(`[HmiTagSource] "${prop}" has no matching registry tag — write absorbed`);
   }
 
   /**
@@ -160,6 +183,13 @@ export class HmiTagSource {
     }
 
     // Compute module ordering from all tags with a non-null module (HMI included).
+    // The client (ModuleInfoTable.tsx) computes this same ordering independently over
+    // the tag map it fetches from this server, using an equivalent filter — module_id
+    // !== 'unknown' there, matching this file's `t.module != null` (the client's
+    // TagDef.module_id already carries the 'unknown' fallback baked in by tag-map.ts's
+    // getModuleId for a tag with no module ancestor — the same condition, just a
+    // different null-vs-sentinel convention). Both sides derive their sequence from
+    // the same filtered set by construction, independent of registry validation config.
     const tagEntryMap = new Map(
       allTags
         .filter(t => t.module != null)
@@ -176,6 +206,11 @@ export class HmiTagSource {
           if (tagId !== undefined) {
             return target.values.get(tagId) ?? null;
           }
+          // Not a registry tag and not a real class member — same "no value" as
+          // any other tag the registry doesn't define.
+          if (!(prop in target)) {
+            return null;
+          }
         }
         // Fall through to actual class property (methods, private fields, etc.)
         return Reflect.get(target, prop);
@@ -188,9 +223,12 @@ export class HmiTagSource {
             target.values.set(tagId, value as number | boolean | string | number[] | null);
             return true;
           }
-          // Not an HMI tag property — reject unless it's a real class member
+          // Not a registry tag and not a real class member — the registry doesn't
+          // define this property (or it's a typo). Absorb the write and report the
+          // name once; there is no maintained list to check it against.
           if (!(prop in target)) {
-            throw new Error(`HmiTagSource: unknown property "${prop}"`);
+            target.reportUnknownProp(prop);
+            return true;
           }
         }
         return Reflect.set(target, prop, value);
@@ -309,20 +347,12 @@ export class HmiTagSource {
     const ids: TrendInfoTagIds = {};
     for (const [key, prop] of mapping) {
       const id = this.propertyToTagId.get(prop);
-      if (id !== undefined) {
-        ids[key] = id;
-      } else {
-        console.warn(`[HmiTagSource] Trend_Info tag "${prop}" not found in registry — skipping`);
-      }
+      if (id !== undefined) ids[key] = id;
     }
     return ids;
   }
 
   private resolveDbSizeTagId(): number | undefined {
-    const id = this.propertyToTagId.get('Trend_Info_DB_Size');
-    if (id === undefined) {
-      console.warn('[HmiTagSource] Trend_Info tag "Trend_Info_DB_Size" not found in registry — skipping');
-    }
-    return id;
+    return this.propertyToTagId.get('Trend_Info_DB_Size');
   }
 }

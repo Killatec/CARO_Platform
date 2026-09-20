@@ -47,7 +47,10 @@ export interface HmiDataContextValue {
   tagMap: Map<number, TagDef>;
   tagPathIndex: TagPathIndex;
   getLiveValue: (tagId: number) => LiveValue;
-  subscribeLiveValue: (tagId: number, callback: (lv: LiveValue) => void) => () => void;
+  // tagId may be undefined — an unresolved (but legitimately optional) asset path.
+  // Implementations must treat undefined as a non-event: no subscriber registered,
+  // no wire traffic, callback receives { value: null }.
+  subscribeLiveValue: (tagId: number | undefined, callback: (lv: LiveValue) => void) => () => void;
   subscribeTrend: (
     tagId: number,
     callback: (moduleTs: number, value: number | boolean | string | null) => void,

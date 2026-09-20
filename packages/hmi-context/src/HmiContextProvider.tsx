@@ -274,7 +274,14 @@ export function HmiContextProvider({ children, apiUrl, wsUrl }: HmiContextProvid
   }, []);
 
   const subscribeLiveValue = useCallback(
-    (tagId: number, callback: (lv: LiveValue) => void): (() => void) => {
+    (tagId: number | undefined, callback: (lv: LiveValue) => void): (() => void) => {
+      // An unresolved (but legitimately optional) asset path — non-event: no
+      // subscriber, no desiredRef entry, no wire traffic.
+      if (tagId === undefined) {
+        callback({ value: null });
+        return () => {};
+      }
+
       // Register the callback.
       let subs = subscribersRef.current.get(tagId);
       if (!subs) {

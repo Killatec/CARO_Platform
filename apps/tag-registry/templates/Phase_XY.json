@@ -1,0 +1,11 @@
+{
+  "template_name": "Phase_XY",
+  "template_type": "RF",
+  "fields": {
+    "In_Tag_Name": { "field_type": "Boolean", "default": false }
+  },
+  "children": [
+    { "template_name": "numeric_mon", "asset_name": "X", "fields": { "data_type": "i16", "unit": "#", "format": "#", "eng_min": -32768, "eng_max": 32767, "Trends": true } },
+    { "template_name": "numeric_mon", "asset_name": "Y", "fields": { "data_type": "i16", "unit": "#", "format": "#", "eng_min": -32768, "eng_max": 32767, "Trends": true } }
+  ]
+}

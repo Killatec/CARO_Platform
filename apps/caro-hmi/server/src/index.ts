@@ -69,6 +69,9 @@ async function start(): Promise<void> {
     console.error('[HMI] Failed to fetch active tags from DB:', (err as Error).message);
     process.exit(1);
   }
+  if (rows.length === 0) {
+    console.warn('[HMI] tag_registry returned no active tags — apply a registry revision first.');
+  }
 
   let tagMapResult: Awaited<ReturnType<typeof loadTagMap>>;
   try {

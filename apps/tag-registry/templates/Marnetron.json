@@ -1,0 +1,26 @@
+{
+  "template_name": "Marnetron",
+  "template_type": "RF",
+  "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": false
+    }
+  },
+  "children": [
+    {
+      "template_name": "Coupler2",
+      "asset_name": "Fwd",
+      "fields": {
+        "In_Tag_Name": true
+      }
+    },
+    {
+      "template_name": "Coupler2",
+      "asset_name": "Ref",
+      "fields": {
+        "In_Tag_Name": true
+      }
+    }
+  ]
+}

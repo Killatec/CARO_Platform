@@ -1,0 +1,18 @@
+{
+  "template_name": "RF_Pwr",
+  "template_type": "RF",
+  "fields": {
+    "In_Tag_Name": { "field_type": "Boolean", "default": false }
+  },
+  "children": [
+    { "template_name": "numeric_set", "asset_name": "Gain", "fields": { "unit": "#", "format": "#.####", "eng_min": 0, "eng_max": 10, "Trends": false } },
+    { "template_name": "numeric_set", "asset_name": "Offset", "fields": { "unit": "dB", "format": "#.##", "eng_min": -120, "eng_max": 40, "Trends": false } },
+    { "template_name": "numeric_set", "asset_name": "Att", "fields": { "unit": "dB", "format": "#.##", "eng_min": -120, "eng_max": 40, "Trends": false } },
+    { "template_name": "numeric_set", "asset_name": "Intk_Level", "fields": { "unit": "kW", "format": "#.##", "eng_min": 0, "eng_max": 1000, "Trends": false } },
+    { "template_name": "boolean_set", "asset_name": "Intk_En", "fields": {} },
+    { "template_name": "numeric_mon", "asset_name": "Raw", "fields": { "data_type": "i16", "unit": "#", "format": "#", "Trends": false } },
+    { "template_name": "numeric_mon", "asset_name": "dBm", "fields": { "unit": "dBm", "format": "#.##", "eng_min": -140, "eng_max": 100, "Trends": true } },
+    { "template_name": "numeric_mon", "asset_name": "kW", "fields": { "unit": "kW", "format": "#.#", "eng_min": 0, "eng_max": 1000, "Trends": true } },
+    { "template_name": "boolean_mon", "asset_name": "Intk_Status", "fields": { "Trends": false } }
+  ]
+}

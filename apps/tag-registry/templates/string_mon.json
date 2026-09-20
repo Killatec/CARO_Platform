@@ -1,0 +1,10 @@
+{
+  "template_type": "tag",
+  "template_name": "string_mon",
+  "fields": {
+    "In_Tag_Name": { "field_type": "Boolean", "default": true },
+    "data_type": { "field_type": "TagType", "default": "string" },
+    "is_setpoint": { "field_type": "Boolean", "default": false },
+    "Trends": { "field_type": "Boolean", "default": false }
+  }
+}

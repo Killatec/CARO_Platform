@@ -1,0 +1,752 @@
+{
+  "template_name": "Narya_RF",
+  "template_type": "module",
+  "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": false
+    },
+    "Module_Type": {
+      "field_type": "ModuleType",
+      "default": "MQTT"
+    }
+  },
+  "children": [
+    {
+      "template_name": "Info",
+      "asset_name": "Info",
+      "fields": {}
+    },
+    {
+      "template_name": "string_mon",
+      "asset_name": "Status",
+      "fields": {}
+    },
+    {
+      "template_name": "string_mon",
+      "asset_name": "IP",
+      "fields": {}
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Time",
+      "fields": {
+        "data_type": "i16",
+        "unit": "s",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Set_CRC",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "Analog_In",
+      "asset_name": "Freq",
+      "fields": {
+        "In_Tag_Name": true,
+        "unit": "MHz",
+        "RSS.unit": "MHz/s",
+        "format": "#.###",
+        "Mon.format": "#.##",
+        "eng_min": 900,
+        "eng_max": 930
+      }
+    },
+    {
+      "template_name": "Coupler2",
+      "asset_name": "Mag_1",
+      "fields": {
+        "In_Tag_Name": true
+      }
+    },
+    {
+      "template_name": "Coupler2",
+      "asset_name": "Mag_2",
+      "fields": {
+        "In_Tag_Name": true
+      }
+    },
+    {
+      "template_name": "Coupler2",
+      "asset_name": "Comb",
+      "fields": {
+        "In_Tag_Name": true
+      }
+    },
+    {
+      "template_name": "DI_Intk",
+      "asset_name": "Amtek_Intk",
+      "fields": {
+        "In_Tag_Name": true
+      }
+    },
+    {
+      "template_name": "DI_Intk",
+      "asset_name": "HPS_WD_Intk",
+      "fields": {
+        "In_Tag_Name": true
+      }
+    },
+    {
+      "template_name": "DI_Intk",
+      "asset_name": "SC_Status_Intk",
+      "fields": {
+        "In_Tag_Name": true
+      }
+    },
+    {
+      "template_name": "DI_Intk",
+      "asset_name": "Spec_Intk",
+      "fields": {
+        "In_Tag_Name": true
+      }
+    },
+    {
+      "template_name": "Phase_XY",
+      "asset_name": "Phase_XY",
+      "fields": {
+        "In_Tag_Name": true
+      }
+    },
+    {
+      "template_name": "SpecA",
+      "asset_name": "SpecA",
+      "fields": {
+        "In_Tag_Name": true
+      }
+    },
+    {
+      "template_name": "boolean_set",
+      "asset_name": "RF_Enable",
+      "fields": {}
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "PLL_Mux_Out",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "eng_min": 0,
+        "eng_max": 32767,
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Phase_X_Offset",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Phase_Y_Offset",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Phase_Filter_K",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Phase_Mon",
+      "fields": {
+        "unit": "deg",
+        "format": "#.#",
+        "eng_min": -180,
+        "eng_max": 180
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Phase_Spread",
+      "fields": {
+        "unit": "deg",
+        "format": "#.#",
+        "eng_min": -180,
+        "eng_max": 180
+      }
+    },
+    {
+      "template_name": "boolean_set",
+      "asset_name": "Phase_PID_En",
+      "fields": {}
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Shifter_Set",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "eng_min": -32768,
+        "eng_max": 32767,
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Phase_KP",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Phase_KI",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Phase_KD",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Phase_KFF",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Phase_Mon_Delay",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Phase_Step_Mask",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Phase_Error",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#"
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Shifter_CMD",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#"
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Phase_Set_1",
+      "fields": {
+        "unit": "deg",
+        "format": "#.##",
+        "eng_min": -180,
+        "eng_max": 180
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Phase_Set_2",
+      "fields": {
+        "unit": "deg",
+        "format": "#.##",
+        "eng_min": -180,
+        "eng_max": 180
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Phase_Set_RSS",
+      "fields": {
+        "unit": "deg/us",
+        "format": "#.###",
+        "eng_min": 0,
+        "eng_max": 35.2
+      }
+    },
+    {
+      "template_name": "boolean_set",
+      "asset_name": "Power_PID_En",
+      "fields": {}
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Power_KP",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Power_KI1",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Power_KI2",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Power_KD",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Power_D_Fil",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Pwr_SIM_A",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Pwr_SIM_B",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Power_Set_1",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Power_Set_2",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Power_Set_RSS",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Power_Mon",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#"
+      }
+    },
+    {
+      "template_name": "boolean_set",
+      "asset_name": "Pulse_En",
+      "fields": {}
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Pulse_Freq",
+      "fields": {
+        "unit": "Hz",
+        "format": "#.###",
+        "eng_min": 0,
+        "eng_max": 10000
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Pulse_Width",
+      "fields": {
+        "unit": "us",
+        "format": "#.###",
+        "eng_min": 0,
+        "eng_max": 1000000
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Pulse_Freq_RSS",
+      "fields": {
+        "unit": "Hz/s",
+        "format": "#.###",
+        "eng_min": 0,
+        "eng_max": 10000
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Pulse_Width_RSS",
+      "fields": {
+        "unit": "us/s",
+        "format": "#.###",
+        "eng_min": 0,
+        "eng_max": 1000000
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Pulse_Freq_Mon",
+      "fields": {
+        "unit": "Hz",
+        "format": "#.###",
+        "eng_min": 0,
+        "eng_max": 10000
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Pulse_Width_Mon",
+      "fields": {
+        "unit": "us",
+        "format": "#.#",
+        "eng_min": 0,
+        "eng_max": 1000000
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Intk_Mask_Delay",
+      "fields": {
+        "data_type": "i16",
+        "unit": "ms",
+        "format": "#",
+        "eng_min": 0,
+        "eng_max": 32767,
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Spec_Intk_Delay_Set",
+      "fields": {
+        "data_type": "i16",
+        "unit": "s",
+        "format": "#.#",
+        "eng_min": 0,
+        "eng_max": 32.767,
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Spec_Intk_Delay_Mon",
+      "fields": {
+        "unit": "s",
+        "format": "#.#",
+        "eng_min": 0,
+        "eng_max": 32.767,
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Pwr_Filter_K",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "An_Display_1",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "eng_min": 0,
+        "eng_max": 32767,
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "An_Display_2",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "eng_min": 0,
+        "eng_max": 32767,
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Dig_Display_1",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "eng_min": 0,
+        "eng_max": 32767,
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Dig_Display_2",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "eng_min": 0,
+        "eng_max": 32767,
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Display_1_Offset",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Display_2_Offset",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "boolean_set",
+      "asset_name": "GPIO033_Clk_En",
+      "fields": {}
+    },
+    {
+      "template_name": "boolean_set",
+      "asset_name": "GPIO033_Value",
+      "fields": {}
+    },
+    {
+      "template_name": "boolean_set",
+      "asset_name": "Test_Digital",
+      "fields": {}
+    },
+    {
+      "template_name": "boolean_set",
+      "asset_name": "Force_WatchDog",
+      "fields": {}
+    },
+    {
+      "template_name": "boolean_set",
+      "asset_name": "Force_SCR",
+      "fields": {}
+    },
+    {
+      "template_name": "boolean_set",
+      "asset_name": "Amp_Intk",
+      "fields": {}
+    },
+    {
+      "template_name": "boolean_set",
+      "asset_name": "COM_1_TX",
+      "fields": {}
+    },
+    {
+      "template_name": "boolean_set",
+      "asset_name": "COM_2_TX",
+      "fields": {}
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "All_Intks_Ok",
+      "fields": {
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "Intks_Active",
+      "fields": {
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "Sets_Ok",
+      "fields": {
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "Spare_DI",
+      "fields": {
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "COM_1_RX",
+      "fields": {
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "COM_2_RX",
+      "fields": {
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "SCR_Enable",
+      "fields": {
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "Remote_Start",
+      "fields": {
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "Remote_Stop",
+      "fields": {
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "SC_Status",
+      "fields": {
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "SC_Mag_1_On",
+      "fields": {
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "SC_Mag_2_On",
+      "fields": {
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "Mag_On",
+      "fields": {
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Phase_Set",
+      "fields": {
+        "unit": "deg",
+        "format": "#.#",
+        "eng_min": -180,
+        "eng_max": 180
+      }
+    }
+  ]
+}

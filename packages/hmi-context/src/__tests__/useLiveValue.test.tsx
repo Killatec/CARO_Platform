@@ -96,7 +96,7 @@ describe('useLiveValue', () => {
     function SyncCallbackProvider({ children }: { children: React.ReactNode }) {
       const getLiveValue = useCallback((_tagId: number): LiveValue => ({ value: null }), []);
       const subscribeLiveValue = useCallback(
-        (_tagId: number, callback: (lv: LiveValue) => void): (() => void) => {
+        (_tagId: number | undefined, callback: (lv: LiveValue) => void): (() => void) => {
           callback(freshValue);
           return () => {};
         },
@@ -128,5 +128,17 @@ describe('useLiveValue', () => {
 
     const { result } = renderHook(() => useLiveValue(1001), { wrapper: SyncCallbackProvider });
     expect(result.current.value).toBe(999);
+  });
+
+  it('returns { value: null } for an undefined tagId (e.g. an unresolved asset path)', () => {
+    const { result } = renderHook(() => useLiveValue(undefined), {
+      wrapper: ({ children }) => (
+        <MockHmiProvider tagDefs={{ 1001: mockTag }} tagValues={{ 1001: { value: 42 } }}>
+          {children}
+        </MockHmiProvider>
+      ),
+    });
+
+    expect(result.current).toEqual({ value: null });
   });
 });

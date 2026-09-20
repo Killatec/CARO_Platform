@@ -88,25 +88,36 @@ describe('HmiTagSource', () => {
     expect(hmiTags.Module_Count).toBe(11);
   });
 
-  it('unknown property throws on set', () => {
-    const { intake } = makeIntake([1066]);
-    const hmiTags = HmiTagSource.create(
-      [makeActiveTag(1066, 'CARO_1.HMI.Module_Count')],
-      { intake, hmiPublishIntervalMs: HMI_PUBLISH_INTERVAL_MS, dutyTracker: new DutyTracker() },
-    );
+  it('unknown property absorbs the write, reads back as null, and is reported once', () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const { intake } = makeIntake([1066]);
+      const hmiTags = HmiTagSource.create(
+        [makeActiveTag(1066, 'CARO_1.HMI.Module_Count')],
+        { intake, hmiPublishIntervalMs: HMI_PUBLISH_INTERVAL_MS, dutyTracker: new DutyTracker() },
+      );
+      logSpy.mockClear(); // registry has an HMI tag, so no startup log — but don't rely on it
 
-    expect(() => { (hmiTags as Record<string, unknown>).Nonexistent = 5; })
-      .toThrow('unknown property');
+      expect(() => { (hmiTags as Record<string, unknown>).Nonexistent = 5; }).not.toThrow();
+      expect((hmiTags as Record<string, unknown>).Nonexistent).toBeNull();
+
+      (hmiTags as Record<string, unknown>).Nonexistent = 6; // second write — must not report again
+
+      expect(logSpy).toHaveBeenCalledTimes(1);
+      expect(logSpy.mock.calls[0][0]).toContain('Nonexistent');
+    } finally {
+      logSpy.mockRestore();
+    }
   });
 
-  it('unknown property returns undefined on get', () => {
+  it('unknown property returns null on get with no prior write', () => {
     const { intake } = makeIntake([1066]);
     const hmiTags = HmiTagSource.create(
       [makeActiveTag(1066, 'CARO_1.HMI.Module_Count')],
       { intake, hmiPublishIntervalMs: HMI_PUBLISH_INTERVAL_MS, dutyTracker: new DutyTracker() },
     );
 
-    expect((hmiTags as Record<string, unknown>).Nonexistent).toBeUndefined();
+    expect((hmiTags as Record<string, unknown>).Nonexistent).toBeNull();
   });
 
   it('publish tick calls intake.ingest with correct TelemetryMessage shape', () => {
@@ -567,14 +578,14 @@ describe('HmiTagSource — Trend_Info observability', () => {
     expect(lkv.getValue(TREND_TAG_IDS.ERROR_COUNT)).toBe(1);
   });
 
-  it('skips missing tag and logs warn once — other five still publish', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  it('missing tag is silently skipped (bypasses the Proxy) — other five still publish', () => {
+    // Trend_Info values are written straight into the values map by tag_id,
+    // never through the Proxy — so a missing Trend_Info tag never reaches the
+    // unknown-property path and produces no log line of its own.
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
       const ps: PipelineState = { trending: true, rowsPerSec: 0, queueDepth: 2, lastFlushMs: 8, droppedPkgsTotal: 0, errorCountTotal: 0 };
       const { hmiTags, lkv } = makeTrendInfoSource(ps, makeTrendInfoTags('Flush_ms'));
-
-      expect(warnSpy).toHaveBeenCalledTimes(1);
-      expect(warnSpy.mock.calls[0][0]).toContain('Trend_Info_Flush_ms');
 
       hmiTags.publishNow();
 
@@ -583,23 +594,9 @@ describe('HmiTagSource — Trend_Info observability', () => {
       expect(lkv.getValue(TREND_TAG_IDS.DROPPED_PKGS)).toBe(0);
       expect(lkv.getValue(TREND_TAG_IDS.ERROR_COUNT)).toBe(0);
       expect(lkv.getValue(TREND_TAG_IDS.FLUSH_MS)).toBeNull();
+      expect(logSpy).not.toHaveBeenCalled();
     } finally {
-      warnSpy.mockRestore();
-    }
-  });
-
-  it('no Trend_Info warnings when dbPipeline is not provided', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      const lkv = new LkvCache();
-      const { intake } = makeIntake([1001], lkv);
-      HmiTagSource.create(
-        [makeActiveTag(1001, 'CARO_1.HMI.Some_Tag')],
-        { intake, hmiPublishIntervalMs: 250, dutyTracker: new DutyTracker() },
-      );
-      expect(warnSpy).not.toHaveBeenCalled();
-    } finally {
-      warnSpy.mockRestore();
+      logSpy.mockRestore();
     }
   });
 });
@@ -663,17 +660,129 @@ describe('HmiTagSource — Trend_Info.DB_Size', () => {
     expect(lkv.getValue(DB_SIZE_TAG_ID)).toBeNull();
   });
 
-  it('warns once when DB_Size tag id is missing from registry', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  it('DB_Size absence produces no log (bypasses the Proxy, same as other Trend_Info tags)', () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
       const mockMonitor = { sizeGB: 1.0 } as unknown as TimescaleSizeMonitor;
       // includeSizeTag=false → DB_Size absent from registry
       makeDbSizeSource(basePs, mockMonitor, false);
 
-      expect(warnSpy).toHaveBeenCalledTimes(1);
-      expect(warnSpy.mock.calls[0][0]).toContain('Trend_Info_DB_Size');
+      expect(logSpy).not.toHaveBeenCalled();
     } finally {
-      warnSpy.mockRestore();
+      logSpy.mockRestore();
+    }
+  });
+});
+
+// ── Startup resilience — registry missing the HMI's own diagnostic tags ──────
+//
+// index.ts writes hmiTags.Module_Info_Module_Count and hmiTags.Tag_Count
+// unconditionally at startup, and hmiTags.Telemetry_CPU on every publish tick
+// via onBeforePublish — none of these were previously guarded, so a registry
+// that hadn't instantiated the HMI/Module_Info/Trend_Info templates threw and
+// crashed the server before it could bind its port. There is no maintained
+// list of expected property names to check writes against any more — an
+// unrecognized property (whether a legitimate diagnostic tag the registry
+// lacks, or a genuine typo) absorbs instead of throwing, and reads back null.
+
+describe('HmiTagSource — startup with registry missing self-monitoring tags', () => {
+  it('zero tags in the registry: startup-shaped writes do not throw', () => {
+    const { intake } = makeIntake([]);
+    const hmiTags = HmiTagSource.create(
+      [],
+      { intake, hmiPublishIntervalMs: HMI_PUBLISH_INTERVAL_MS, dutyTracker: new DutyTracker() },
+    );
+
+    // Mirrors index.ts:140-145 exactly.
+    expect(() => {
+      hmiTags.Module_Info_Module_Count = 0;
+      hmiTags.Tag_Count = 0;
+      hmiTags.Telemetry_CPU = 0;
+    }).not.toThrow();
+
+    // Absorbed writes have no backing tag_id — get() returns null, same as any
+    // other unrecognized property.
+    expect(hmiTags.Module_Info_Module_Count).toBeNull();
+    expect(hmiTags.Tag_Count).toBeNull();
+  });
+
+  it('tags present but no Module_Info or Trend_Info subtree: startup-shaped writes do not throw, real tags still work', () => {
+    // Narya_1's expected steady state: the HMI.json top-level fields exist,
+    // but Module_Info/Trend_Info were never instantiated.
+    const lkv = new LkvCache();
+    const { intake } = makeIntake([9001, 9002, 9003], lkv);
+    const hmiTags = HmiTagSource.create(
+      [
+        makeActiveTag(9001, 'CARO_1.HMI.Tag_Count'),
+        makeActiveTag(9002, 'CARO_1.HMI.Telemetry_CPU'),
+        makeActiveTag(9003, 'CARO_1.HMI.Reset_Count'),
+      ],
+      { intake, hmiPublishIntervalMs: HMI_PUBLISH_INTERVAL_MS, dutyTracker: new DutyTracker() },
+    );
+
+    expect(() => {
+      hmiTags.Module_Info_Module_Count = 3; // absent — must not throw
+      hmiTags.Tag_Count = 3;                // present — should actually publish
+      hmiTags.Telemetry_CPU = 12.5;         // present — should actually publish
+    }).not.toThrow();
+
+    hmiTags.publishNow();
+
+    expect(lkv.getValue(9001)).toBe(3);
+    expect(lkv.getValue(9002)).toBe(12.5);
+    // Module_Info_Module_Count was absorbed silently — no tag_id to check it against.
+  });
+
+  it('logs plainly that no HMI tags were found — one line, no list of names', () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const { intake } = makeIntake([]);
+      HmiTagSource.create(
+        [],
+        { intake, hmiPublishIntervalMs: HMI_PUBLISH_INTERVAL_MS, dutyTracker: new DutyTracker() },
+      );
+
+      expect(logSpy).toHaveBeenCalledTimes(1);
+      expect(logSpy.mock.calls[0][0]).toContain('0 HMI tags found in registry');
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it('a full registry (this fixture\'s HMI tags all present) logs nothing at startup', () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const { intake } = makeIntake([1066]);
+      HmiTagSource.create(
+        [makeActiveTag(1066, 'CARO_1.HMI.Tag_Count')],
+        { intake, hmiPublishIntervalMs: HMI_PUBLISH_INTERVAL_MS, dutyTracker: new DutyTracker() },
+      );
+
+      expect(logSpy).not.toHaveBeenCalled();
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it('repeated write to the same unknown property reports once, not once per write', () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const { intake } = makeIntake([1066]);
+      const hmiTags = HmiTagSource.create(
+        [makeActiveTag(1066, 'CARO_1.HMI.Tag_Count')],
+        { intake, hmiPublishIntervalMs: HMI_PUBLISH_INTERVAL_MS, dutyTracker: new DutyTracker() },
+      );
+      logSpy.mockClear(); // registry has an HMI tag — no startup log expected, but isolate anyway
+
+      // Mirrors Telemetry_CPU being written every 250ms via onBeforePublish.
+      for (let i = 0; i < 5; i++) {
+        (hmiTags as Record<string, unknown>).Telemetry_CPU = i;
+      }
+
+      expect(logSpy).toHaveBeenCalledTimes(1);
+      expect(logSpy.mock.calls[0][0]).toContain('Telemetry_CPU');
+    } finally {
+      logSpy.mockRestore();
     }
   });
 });

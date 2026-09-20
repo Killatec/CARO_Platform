@@ -203,6 +203,40 @@ describe('HmiContextProvider', () => {
     expect(subscribes[0].tagIds).toContain(1002);
   });
 
+  // 7b. useLiveValue(undefined) — unresolved asset path is a non-event
+  it('useLiveValue(undefined) sends no SUBSCRIBE and returns { value: null }', async () => {
+    const wrapper = makeWrapper();
+    const { result } = renderHook(() => useLiveValue(undefined), { wrapper });
+
+    const ws = await getWsInstance();
+    await openWs(ws);
+
+    expect(result.current).toEqual({ value: null });
+    const subscribes = ws.sentMessages
+      .map(m => JSON.parse(m) as { type: string; tagIds?: number[] })
+      .filter(m => m.type === 'SUBSCRIBE');
+    expect(subscribes).toHaveLength(0);
+  });
+
+  // 7c. Mixing defined and undefined tagIds across components sends only the defined ones
+  it('mixing defined and undefined tagIds sends a SUBSCRIBE with only the defined id', async () => {
+    const wrapper = makeWrapper();
+    renderHook(
+      () => ({ v1: useLiveValue(1001), v2: useLiveValue(undefined) }),
+      { wrapper },
+    );
+
+    const ws = await getWsInstance();
+    await openWs(ws);
+
+    const subscribes = ws.sentMessages
+      .map(m => JSON.parse(m) as { type: string; tagIds: number[] })
+      .filter(m => m.type === 'SUBSCRIBE');
+
+    expect(subscribes).toHaveLength(1);
+    expect(subscribes[0].tagIds).toEqual([1001]);
+  });
+
   // 8. Unsubscribe (last subscriber removed) sends UNSUBSCRIBE
   it('sends UNSUBSCRIBE when the last subscriber unmounts', async () => {
     // Keep the provider mounted — only unmount the hook consumer component so

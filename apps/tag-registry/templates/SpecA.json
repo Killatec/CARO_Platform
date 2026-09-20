@@ -172,7 +172,7 @@
       "template_name": "numeric_mon",
       "asset_name": "Peak_Power",
       "fields": {
-        "unit": "dBm",
+        "unit": "dBFS",
         "eng_min": -140,
         "eng_max": 0
       }
@@ -181,7 +181,7 @@
       "template_name": "numeric_mon",
       "asset_name": "Noise_Floor",
       "fields": {
-        "unit": "dBm",
+        "unit": "dBFS",
         "eng_min": -140,
         "eng_max": 0
       }
@@ -198,6 +198,138 @@
       "template_name": "Int16_Array",
       "asset_name": "Spectrum",
       "fields": {}
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Spec_Intk_Band_Set",
+      "fields": {
+        "unit": "kHz",
+        "format": "#.##",
+        "eng_min": 0,
+        "eng_max": 14000
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Spec_Intk_Level_Set",
+      "fields": {
+        "unit": "dBFS",
+        "format": "#.##",
+        "eng_min": -140,
+        "eng_max": 0
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Spec_Intk_Band_Mon",
+      "fields": {
+        "unit": "kHz",
+        "format": "#.##",
+        "eng_min": 0,
+        "eng_max": 14000
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Spec_Intk_Level_Mon",
+      "fields": {
+        "unit": "dBFS",
+        "format": "#.##",
+        "eng_min": -140,
+        "eng_max": 0
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Spec_Intk_Freq_Mon",
+      "fields": {
+        "unit": "MHz",
+        "format": "#.###",
+        "eng_min": 900,
+        "eng_max": 930
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Spec_Start",
+      "fields": {
+        "unit": "Hz",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Spec_Bin",
+      "fields": {
+        "unit": "Hz",
+        "format": "#.###",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "Spec_Trace_Ok",
+      "fields": {
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Reset_Count",
+      "fields": {
+        "data_type": "i16",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "LO",
+      "fields": {
+        "unit": "MHz",
+        "format": "#.###",
+        "eng_min": 900,
+        "eng_max": 930
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "CPU",
+      "fields": {
+        "unit": "%",
+        "format": "#.#",
+        "eng_min": 0,
+        "eng_max": 100
+      }
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "Peak_Valid",
+      "fields": {
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "FFT_Size_Mon",
+      "fields": {
+        "data_type": "i16",
+        "unit": "bins",
+        "format": "#",
+        "eng_min": 512,
+        "eng_max": 32768
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Rate_Mon",
+      "fields": {
+        "unit": "Hz",
+        "format": "#",
+        "eng_min": 1,
+        "eng_max": 500
+      }
     }
   ]
 }

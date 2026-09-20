@@ -1,0 +1,24 @@
+{
+  "template_name": "Narya1",
+  "template_type": "system",
+  "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": false
+    }
+  },
+  "children": [
+    {
+      "template_name": "HMI",
+      "asset_name": "HMI",
+      "fields": {}
+    },
+    {
+      "template_name": "Narya_RF",
+      "asset_name": "RF1",
+      "fields": {
+        "In_Tag_Name": true
+      }
+    }
+  ]
+}

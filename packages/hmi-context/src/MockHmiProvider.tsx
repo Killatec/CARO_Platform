@@ -67,7 +67,11 @@ export function MockHmiProvider({
   );
 
   const subscribeLiveValue = useCallback(
-    (tagId: number, callback: (lv: LiveValue) => void): (() => void) => {
+    (tagId: number | undefined, callback: (lv: LiveValue) => void): (() => void) => {
+      if (tagId === undefined) {
+        callback({ value: null });
+        return () => {};
+      }
       if (!subscribersRef.current.has(tagId)) {
         subscribersRef.current.set(tagId, new Set());
       }

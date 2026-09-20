@@ -1,0 +1,20 @@
+{
+  "template_name": "Info",
+  "template_type": "Group",
+  "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": false
+    }
+  },
+  "children": [
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Firmware",
+      "fields": {
+        "format": "#",
+        "data_type": "i16"
+      }
+    }
+  ]
+}

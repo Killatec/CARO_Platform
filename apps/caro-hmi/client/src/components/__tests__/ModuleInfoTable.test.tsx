@@ -1,5 +1,5 @@
 import { render, screen } from '@testing-library/react';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { MockHmiProvider } from '@caro/hmi-context/testing';
 import type { TagDef, LiveValue } from '@caro/hmi-context';
@@ -83,6 +83,22 @@ describe('ModuleInfoTable', () => {
     render(<ModuleInfoTable />, { wrapper: wrapper(ALL_TAGS, LIVE_4) });
     const cells = screen.getAllByRole('cell');
     const moduleNames = cells.filter(c => ['RF', 'POW', 'COOL', 'HMI'].includes(c.textContent ?? ''));
+    expect(moduleNames.map(c => c.textContent)).toEqual(['RF', 'POW', 'COOL', 'HMI']);
+  });
+
+  it('excludes a tag with no module ancestor from the ordering, matching the server\'s filter', () => {
+    // A tag with no module-type ancestor surfaces client-side as module_id: 'unknown'
+    // (tag-map.ts's getModuleId fallback) — the same condition the server excludes via
+    // `t.module != null`. Give it a tag_id smaller than everything else so it would
+    // shift to the front of the ordering (and add a phantom row) if not filtered out,
+    // making a regression visible rather than silently passing.
+    const tags: Record<number, TagDef> = {
+      ...ALL_TAGS,
+      0: makeTagDef({ tag_id: 0, tag_path: 'Orphan.Tag', module_id: 'unknown', module_type: 'MQTT' }),
+    };
+    render(<ModuleInfoTable />, { wrapper: wrapper(tags, LIVE_4) });
+    const cells = screen.getAllByRole('cell');
+    const moduleNames = cells.filter(c => ['RF', 'POW', 'COOL', 'HMI', 'unknown'].includes(c.textContent ?? ''));
     expect(moduleNames.map(c => c.textContent)).toEqual(['RF', 'POW', 'COOL', 'HMI']);
   });
 
@@ -225,5 +241,95 @@ describe('ModuleInfoTable', () => {
   it('does not crash or reference a Module_Names tag', () => {
     render(<ModuleInfoTable />, { wrapper: wrapper(ALL_TAGS, LIVE_4) });
     expect(screen.queryByText(/error/i)).toBeNull();
+  });
+
+  it('renders without error when Module_Info paths do not resolve (e.g. a different project root)', () => {
+    // Registry has MQTT modules but no CARO_1.HMI.Module_Info.* subtree at all —
+    // e.g. Narya_1, which never instantiated the HMI.json template's Module_Info
+    // child. useResolveAssetPath returns [] for all six paths, so every id
+    // passed to useLiveValue is undefined.
+    render(<ModuleInfoTable />, { wrapper: wrapper(MQTT_TAGS, {}) });
+
+    // Renders the 3 MQTT rows without throwing or showing a mismatch banner.
+    expect(screen.queryByText(/error/i)).toBeNull();
+    expect(screen.queryByText(/Module array length mismatch/)).toBeNull();
+    const rows = screen.getAllByRole('row');
+    expect(rows).toHaveLength(4); // 1 header + RF, POW, COOL
+  });
+
+  it('does not alias all six absent ids to tag_id 0 (regression guard for the old `?? 0` fallback)', () => {
+    // The bug this fix removes: `moduleCountTags[0]?.tag_id ?? 0` substituted the
+    // sentinel 0 for every one of the six unresolved ids, aliasing them all onto
+    // whatever tag_id 0 happens to hold. Seed it with a value that would leak
+    // through (and collide across all six fields) if that fallback ever returns.
+    const live: Record<number, LiveValue> = { 0: { value: 999 } };
+    render(<ModuleInfoTable />, { wrapper: wrapper(MQTT_TAGS, live) });
+
+    expect(screen.queryByText(/error/i)).toBeNull();
+    expect(screen.queryByText('999')).toBeNull();
+    expect(screen.queryByText(/Module array length mismatch/)).toBeNull();
+  });
+
+  describe('root-agnostic path resolution', () => {
+    // Same six tags, no CARO_1. prefix — proves the component names no root.
+    const NARYA1_HMI_TAGS: Record<number, TagDef> = {
+      9001: makeTagDef({ tag_id: 9001, tag_path: 'Narya_1.HMI.Module_Info.Module_Count', data_type: 'i16' }),
+      9002: makeTagDef({ tag_id: 9002, tag_path: 'Narya_1.HMI.Module_Info.Status',       data_type: 'i16[]' }),
+      9003: makeTagDef({ tag_id: 9003, tag_path: 'Narya_1.HMI.Module_Info.Data_Rate',    data_type: 'f32[]' }),
+      9004: makeTagDef({ tag_id: 9004, tag_path: 'Narya_1.HMI.Module_Info.Pkg_Rate',     data_type: 'f32[]' }),
+      9005: makeTagDef({ tag_id: 9005, tag_path: 'Narya_1.HMI.Module_Info.Tags_Per_Pkg', data_type: 'i16[]' }),
+      9006: makeTagDef({ tag_id: 9006, tag_path: 'Narya_1.HMI.Module_Info.Watchdog',     data_type: 'i16[]' }),
+    };
+
+    it('resolves all six fields under a CARO_1-rooted tag map', () => {
+      render(<ModuleInfoTable />, { wrapper: wrapper(ALL_TAGS, LIVE_4) });
+      // HMI row (index 3): moduleCount=4 confirms Module_Count resolved and rendered elsewhere;
+      // watchdog bit 1 (POW) is red per LIVE_4 — data reaching the table proves all six resolved.
+      expect(screen.getByText('1.5')).toBeTruthy();  // dataRate (RF)
+      expect(screen.getByText('10')).toBeTruthy();   // pkgRate (RF)
+      expect(screen.getByText('4')).toBeTruthy();    // tagsPerPkg (RF)
+    });
+
+    it('resolves all six fields under a Narya_1-rooted tag map with no CARO_1 tag anywhere', () => {
+      const tags = { ...MQTT_TAGS, ...NARYA1_HMI_TAGS };
+      render(<ModuleInfoTable />, { wrapper: wrapper(tags, LIVE_4) });
+      expect(screen.getByText('1.5')).toBeTruthy();
+      expect(screen.getByText('10')).toBeTruthy();
+      expect(screen.getByText('4')).toBeTruthy();
+      expect(screen.queryByText(/Module array length mismatch/)).toBeNull();
+    });
+
+    it('two matches for the same abbreviated path warns once and renders the field as unresolved', () => {
+      // Two distinct roots each with their own HMI.Module_Info.Module_Count — the
+      // abbreviated key matches both. Only Module_Count is duplicated; the other five
+      // stay single-rooted so their values still render, isolating the ambiguous field.
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const tags: Record<number, TagDef> = {
+          ...MQTT_TAGS,
+          9001: TAG_MODULE_COUNT, // CARO_1.HMI.Module_Info.Module_Count
+          9002: TAG_STATUS,
+          9003: TAG_DATA_RATE,
+          9004: TAG_PKG_RATE,
+          9005: TAG_TAGS_PER_PKG,
+          9006: TAG_WATCHDOG,
+          9101: makeTagDef({ tag_id: 9101, tag_path: 'Narya_1.HMI.Module_Info.Module_Count', data_type: 'i16' }),
+        };
+        render(<ModuleInfoTable />, { wrapper: wrapper(tags, LIVE_4) });
+
+        // Module_Count itself never renders as a visible number in this table (it only
+        // gates hasMismatch/rowCount), so assert via the warning and via hasMismatch
+        // being suppressed (moduleCount === null skips the mismatch check entirely,
+        // same as the zero-match case) rather than a mismatch banner appearing.
+        expect(screen.queryByText(/Module array length mismatch/)).toBeNull();
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        const msg = warnSpy.mock.calls[0][0] as string;
+        expect(msg).toContain('HMI.Module_Info.Module_Count');
+        expect(msg).toContain('CARO_1.HMI.Module_Info.Module_Count');
+        expect(msg).toContain('Narya_1.HMI.Module_Info.Module_Count');
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
   });
 });

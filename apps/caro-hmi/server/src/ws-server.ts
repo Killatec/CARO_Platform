@@ -147,12 +147,24 @@ export class WsServer {
     }
   }
 
-  private parseTagIdsArray(value: unknown): number[] | null {
+  /**
+   * A non-array payload is genuinely malformed — callers reject it wholesale
+   * (returns null). An array is never wholly discarded for containing some
+   * invalid elements — those are split out as `rejected` so callers can act
+   * on the valid ids and log the rejected ones by value.
+   */
+  private parseTagIdsArray(value: unknown): { valid: number[]; rejected: unknown[] } | null {
     if (!Array.isArray(value)) return null;
+    const valid: number[] = [];
+    const rejected: unknown[] = [];
     for (const v of value) {
-      if (typeof v !== 'number' || !Number.isInteger(v) || v <= 0) return null;
+      if (typeof v === 'number' && Number.isInteger(v) && v > 0) {
+        valid.push(v);
+      } else {
+        rejected.push(v);
+      }
     }
-    return value as number[];
+    return { valid, rejected };
   }
 
   private handleMessage(client: WsClient, raw: Buffer): void {
@@ -165,8 +177,12 @@ export class WsServer {
 
     switch (msg.type) {
       case 'SUBSCRIBE': {
-        const tagIds = this.parseTagIdsArray((msg as { tagIds?: unknown }).tagIds);
-        if (!tagIds) { console.warn('[WsServer] SUBSCRIBE: ignored malformed tagIds payload'); return; }
+        const parsed = this.parseTagIdsArray((msg as { tagIds?: unknown }).tagIds);
+        if (!parsed) { console.warn('[WsServer] SUBSCRIBE: ignored malformed (non-array) tagIds payload'); return; }
+        const { valid: tagIds, rejected } = parsed;
+        if (rejected.length > 0) {
+          console.warn(`[WsServer] SUBSCRIBE: ignored ${rejected.length} invalid tagId(s): ${rejected.join(', ')}`);
+        }
         const newTagIds = tagIds.filter(id => !client.subscriptions.has(id));
         for (const id of tagIds) client.subscriptions.add(id);
         const values: Record<string, LkvValue> = {};
@@ -179,8 +195,12 @@ export class WsServer {
       }
 
       case 'UNSUBSCRIBE': {
-        const tagIds = this.parseTagIdsArray((msg as { tagIds?: unknown }).tagIds);
-        if (!tagIds) { console.warn('[WsServer] UNSUBSCRIBE: ignored malformed tagIds payload'); return; }
+        const parsed = this.parseTagIdsArray((msg as { tagIds?: unknown }).tagIds);
+        if (!parsed) { console.warn('[WsServer] UNSUBSCRIBE: ignored malformed (non-array) tagIds payload'); return; }
+        const { valid: tagIds, rejected } = parsed;
+        if (rejected.length > 0) {
+          console.warn(`[WsServer] UNSUBSCRIBE: ignored ${rejected.length} invalid tagId(s): ${rejected.join(', ')}`);
+        }
         for (const id of tagIds) {
           client.subscriptions.delete(id);
           client.lastSentGen.delete(id);
@@ -189,8 +209,12 @@ export class WsServer {
       }
 
       case 'SUBSCRIBE_TREND': {
-        const tagIds = this.parseTagIdsArray((msg as { tagIds?: unknown }).tagIds);
-        if (!tagIds) { console.warn('[WsServer] SUBSCRIBE_TREND: ignored malformed tagIds payload'); return; }
+        const parsed = this.parseTagIdsArray((msg as { tagIds?: unknown }).tagIds);
+        if (!parsed) { console.warn('[WsServer] SUBSCRIBE_TREND: ignored malformed (non-array) tagIds payload'); return; }
+        const { valid: tagIds, rejected: invalid } = parsed;
+        if (invalid.length > 0) {
+          console.warn(`[WsServer] SUBSCRIBE_TREND: ignored ${invalid.length} invalid tagId(s): ${invalid.join(', ')}`);
+        }
         const rejected: number[] = [];
         for (const id of tagIds) {
           if (this.trendableTagIds.has(id)) {
@@ -208,8 +232,12 @@ export class WsServer {
       }
 
       case 'UNSUBSCRIBE_TREND': {
-        const tagIds = this.parseTagIdsArray((msg as { tagIds?: unknown }).tagIds);
-        if (!tagIds) { console.warn('[WsServer] UNSUBSCRIBE_TREND: ignored malformed tagIds payload'); return; }
+        const parsed = this.parseTagIdsArray((msg as { tagIds?: unknown }).tagIds);
+        if (!parsed) { console.warn('[WsServer] UNSUBSCRIBE_TREND: ignored malformed (non-array) tagIds payload'); return; }
+        const { valid: tagIds, rejected } = parsed;
+        if (rejected.length > 0) {
+          console.warn(`[WsServer] UNSUBSCRIBE_TREND: ignored ${rejected.length} invalid tagId(s): ${rejected.join(', ')}`);
+        }
         for (const id of tagIds) {
           client.trendSubscriptions.delete(id);
           client.trendOutbox.delete(id);
