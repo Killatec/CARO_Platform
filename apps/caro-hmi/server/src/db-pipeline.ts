@@ -25,7 +25,7 @@ interface DbPipelineOptions {
 }
 
 export class DbPipeline {
-  private readonly writer: DbWriter;
+  private writer: DbWriter;
   private readonly _queueMax: number;
   private readonly _maxEntriesPerFlush: number;
   private readonly _tickMs: number;
@@ -34,6 +34,7 @@ export class DbPipeline {
   private timer: ReturnType<typeof setInterval> | null = null;
   private _inflightPromise: Promise<void> | null = null;
   private _dropWarnTimer: ReturnType<typeof setTimeout> | null = null;
+  private _writerErrorWarnTimer: ReturnType<typeof setTimeout> | null = null;
 
   private _rowsWrittenTotal = 0;
   private _droppedPkgsTotal = 0;
@@ -66,12 +67,13 @@ export class DbPipeline {
     if (this.queue.length >= this._queueMax) {
       this.queue.shift();
       this._droppedPkgsTotal = Math.min(this._droppedPkgsTotal + 1, 9999);
-      // Rate-limit the warn to once per 5 s burst so logs don't flood.
+      // Rate-limit the warn to once per 30 s burst so logs don't flood while the
+      // historian is down and the queue stays pinned at capacity.
       if (this._dropWarnTimer === null) {
         console.warn(`[DbPipeline:${this.writer.name}] queue full — dropping oldest entries`);
         this._dropWarnTimer = setTimeout(() => {
           this._dropWarnTimer = null;
-        }, 5000);
+        }, 30_000);
       }
     }
     this.queue.push(entry);
@@ -97,7 +99,18 @@ export class DbPipeline {
       clearTimeout(this._dropWarnTimer);
       this._dropWarnTimer = null;
     }
+    if (this._writerErrorWarnTimer !== null) {
+      clearTimeout(this._writerErrorWarnTimer);
+      this._writerErrorWarnTimer = null;
+    }
     return this._inflightPromise ?? Promise.resolve();
+  }
+
+  /** Swap the active writer at runtime (e.g. historian came back after starting on NullDbWriter). */
+  setWriter(writer: DbWriter): void {
+    console.info(`[DbPipeline] historian writer changed: ${this.writer.name} -> ${writer.name}`);
+    this.writer = writer;
+    this._historianHealthy = true;
   }
 
   /**
@@ -144,15 +157,22 @@ export class DbPipeline {
       .catch((err: unknown) => {
         this._errorCountTotal = Math.min(this._errorCountTotal + 1, 9999);
         this._historianHealthy = false;
-        if (this.writer.name === 'null') {
-          console.error(
-            `[DbPipeline] No historian writer — data not being persisted (errorCount=${this._errorCountTotal})`,
-          );
-        } else {
-          console.error(
-            `[DbPipeline:${this.writer.name}] flush error:`,
-            err instanceof Error ? err.message : String(err),
-          );
+        // Rate-limit to once per 30 s burst so a down/absent historian doesn't
+        // flood the console — errorCount above still climbs on every tick.
+        if (this._writerErrorWarnTimer === null) {
+          if (this.writer.name === 'null') {
+            console.error(
+              `[DbPipeline] No historian writer — data not being persisted (errorCount=${this._errorCountTotal})`,
+            );
+          } else {
+            console.error(
+              `[DbPipeline:${this.writer.name}] flush error (errorCount=${this._errorCountTotal}):`,
+              err instanceof Error ? err.message : String(err),
+            );
+          }
+          this._writerErrorWarnTimer = setTimeout(() => {
+            this._writerErrorWarnTimer = null;
+          }, 30_000);
         }
       })
       .finally(() => {
@@ -196,6 +216,7 @@ export class DbPipeline {
   get errorCountTotal(): number { return this._errorCountTotal; }
   get lastFlushMs(): number { return this._lastFlushMs; }
   get historianHealthy(): boolean { return this._historianHealthy; }
+  get writerName(): string { return this.writer.name; }
   get inFlight(): boolean { return this._inFlight; }
   /** Monotonic operational watermark (ms since epoch). 0 until the first flush tick resolves.
    *  Advances on each successful commit or empty tick; stalls when the DB write path fails. */

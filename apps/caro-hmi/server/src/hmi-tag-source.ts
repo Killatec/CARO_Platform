@@ -64,8 +64,8 @@ export class HmiTagSource {
   private readonly moduleNames: string[];
   private publishTimer: ReturnType<typeof setInterval> | null = null;
   private readonly dbPipeline: DbPipeline | undefined;
-  private readonly sizeMonitor: TimescaleSizeMonitor | undefined;
-  private readonly dbSizeTagId: number | undefined;
+  private sizeMonitor: TimescaleSizeMonitor | undefined;
+  private dbSizeTagId: number | undefined;
   private readonly trendTagIds: TrendInfoTagIds;
 
   private constructor(
@@ -90,6 +90,18 @@ export class HmiTagSource {
     this.sizeMonitor = deps.sizeMonitor;
     this.trendTagIds = dbPipeline !== undefined ? this.resolveTrendInfoTagIds() : {};
     this.dbSizeTagId = deps.sizeMonitor !== undefined ? this.resolveDbSizeTagId() : undefined;
+  }
+
+  /**
+   * Attach (or replace) the size monitor at runtime, e.g. once the historian
+   * reconnects after starting on NullDbWriter. Resolves dbSizeTagId lazily on
+   * first attach so no-historian setups never pay the missing-tag warning.
+   */
+  attachSizeMonitor(sizeMonitor: TimescaleSizeMonitor): void {
+    this.sizeMonitor = sizeMonitor;
+    if (this.dbSizeTagId === undefined) {
+      this.dbSizeTagId = this.resolveDbSizeTagId();
+    }
   }
 
   /**

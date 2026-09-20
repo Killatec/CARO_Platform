@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import http from 'http';
+import os from 'os';
 import { ping, runMigrations, getActiveTags, pingTimescale, runTimescaleMigrations } from '@caro/db';
 import { config } from './config.js';
 import { loadTagMap } from './tag-map.js';
@@ -17,6 +18,18 @@ import { WsServer } from './ws-server.js';
 import { createApp } from './app.js';
 import { DutyTracker } from './duty-tracker.js';
 import { TrendSnapshotScheduler } from './trend-snapshot-scheduler.js';
+import { HistorianReconnector } from './historian-reconnect.js';
+
+/** Non-internal IPv4 addresses across all network interfaces, e.g. for logging reachable URLs at startup. */
+function getLocalIPs(): string[] {
+  const addrs: string[] = [];
+  for (const iface of Object.values(os.networkInterfaces())) {
+    for (const net of iface ?? []) {
+      if (net.family === 'IPv4' && !net.internal) addrs.push(net.address);
+    }
+  }
+  return addrs.length > 0 ? addrs : ['localhost'];
+}
 
 async function start(): Promise<void> {
   // 0. Verify DB connectivity and run migrations
@@ -87,7 +100,6 @@ async function start(): Promise<void> {
       console.error('[hmi] timescale migration failed, falling back to null writer:', (err as Error).message);
     }
   } catch (err) {
-    // TODO: periodic reconnect from NullDbWriter → TimescaleDbWriter — restart required for now
     console.warn(`[hmi] timescale unreachable, starting with null historian writer; reason=${(err as Error).message}`);
   }
   const dbPipeline = new DbPipeline(dbWriter);
@@ -120,6 +132,12 @@ async function start(): Promise<void> {
   hmiTags.Tag_Count    = tagMap.size;
   const hmiTagCount = rows.filter(r => r.module_type === 'HMI').length;
   console.log(`[HMI] HMI tag source: ${hmiTagCount} tags, publishing every ${config.hmiPublishIntervalMs}ms`);
+
+  // 4b. Retry the historian connection in the background if it wasn't ready at startup.
+  const historianReconnect = new HistorianReconnector(dbPipeline, hmiTags, config.timescaleReconnectMs);
+  if (dbWriter.name === 'null') {
+    historianReconnect.start();
+  }
 
   // 5. MQTT bridge (transport only — scoped to MQTT modules, delegates ingestion to TelemetryIntake)
   const mqttModuleIds = [...new Set(
@@ -189,6 +207,9 @@ async function start(): Promise<void> {
   await new Promise<void>(resolve => httpServer.listen(config.hmiPort, resolve));
 
   console.log(`[HMI] Server started on port ${config.hmiPort}`);
+  for (const addr of getLocalIPs()) {
+    console.log(`[HMI]   http://${addr}:${config.hmiPort}`);
+  }
   console.log(`[HMI]   Tags: ${tagMap.size} | Modules: ${moduleTagIds.size}`);
   console.log(`[HMI]   WS tick: ${config.wsTickMs}ms | Watchdog: ${config.watchdogTimeoutMs}ms`);
 
@@ -198,6 +219,7 @@ async function start(): Promise<void> {
     hmiTags.stopPublishing();
     intake.stopWatchdog();
     trendSnapshotScheduler.stop();
+    historianReconnect.stop();
     if (sizeMonitor) await sizeMonitor.stop();
     await dbPipeline.stop();
     await mqttBridge.stop().catch(() => {});
