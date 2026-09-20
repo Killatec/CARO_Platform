@@ -92,32 +92,27 @@ Client is a standard Vite React app. `vite.config.ts` proxies `/api` and `/ws` t
 | LKV / WebSocket pipeline | 1. This file 2. `server/src/lkv.ts` 3. `server/src/ws-server.ts` 4. `Docs/CARO_Telemetry_Path_Reference.md` |
 | Historian write pipeline | 1. This file 2. `server/src/db-pipeline.ts` 3. `server/src/timescale-writer.ts` 4. `server/src/timescale-size-monitor.ts` 5. `Docs/CARO_DB_Spec.md` §9 6. `Docs/hmi_timescale_setup.md` |
 
-## Environment (.env)
+## Environment — two layers
+
+Loaded via `loadEnv()` from `@caro/server/env` in `index.ts`: this app's own `server/.env` loads first and wins on a conflict, then the monorepo root `.env` fills in whatever is still unset. Never pass `override: true`.
+
+Root `.env` (shared with tag-registry and mqtt-simulator — see the root `CLAUDE.md` and `.env.example`): `PROJECT_ROOT`, `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DATABASE`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `TIMESCALE_HOST`, `TIMESCALE_PORT`, `TIMESCALE_USER`, `TIMESCALE_PASSWORD`, `TIMESCALE_DATABASE`.
+
+This app's own `server/.env` (see `server/.env.example`):
 
 ```
-# Main PostgreSQL
-POSTGRES_HOST=localhost
-POSTGRES_PORT=5432
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=KillaDB
-POSTGRES_DATABASE=caro_dev
-
-# TimescaleDB historian
-TIMESCALE_HOST=localhost
-TIMESCALE_PORT=5433
-TIMESCALE_USER=postgres
-TIMESCALE_PASSWORD=KillaDB
-TIMESCALE_DATABASE=caro_timescale
-
 # HMI server
 MQTT_URL=mqtt://localhost:1883
-PORT=3003
+HMI_PORT=3003
 WS_TICK_MS=125
+WATCHDOG_TIMEOUT_MS=1000
+HEARTBEAT_INTERVAL_MS=1000
 
 # DbPipeline
 TIMESCALE_DB_TICK_MS=500
 TIMESCALE_DB_QUEUE_MAX=5000
 TIMESCALE_DB_MAX_ENTRIES_PER_FLUSH=500
+TIMESCALE_RECONNECT_MS=30000
 
 # TimescaleSizeMonitor
 TIMESCALE_SIZE_POLL_MS=30000
@@ -130,7 +125,7 @@ TREND_SNAPSHOT_INTERVAL_MS=60000
 HMI_TRENDS_GZIP=                  # unset/off by default — any value enables gzip on /api/v1/trends
 TIMESCALE_LOG_TILE_QUERIES=        # unset/off by default — set to 1 to log tile query durations
 
-# Trend live tail (Step 11)
+# Trend live tail
 TREND_FLUSH_HZ=4                  # flush cadence for TREND_DELTA frames (default 4 Hz)
 ```
 

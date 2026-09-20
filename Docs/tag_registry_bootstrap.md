@@ -104,18 +104,26 @@ apps/tag-registry/
 
 ## 2. Environment Variables
 
-Server reads from `apps/tag-registry/server/.env` only. Root `.env` is never seen.
+Loaded in two layers via `loadEnv()` from `@caro/server/env`: `apps/tag-registry/server/.env` (app-local) loads first and wins on a conflict; the monorepo root `.env` loads second, filling in only what's still unset. Never pass `override: true`.
+
+Root `.env` (shared with mqtt-simulator and caro-hmi — see root `CLAUDE.md` and `.env.example`):
+
+| Variable | Default | Required |
+|---|---|---|
+| `POSTGRES_HOST` | `localhost` | No |
+| `POSTGRES_PORT` | `5432` | No |
+| `POSTGRES_DATABASE` | `caro_dev` | No |
+| `POSTGRES_USER` | `postgres` | No |
+| `POSTGRES_PASSWORD` | — | **Yes** |
+| `PROJECT_ROOT` | — | Gates `POST /api/v1/registry/apply` — unset/empty refuses every apply, `*` allows any root |
+
+App-local `server/.env` (see `server/.env.example`):
 
 | Variable | Default | Required |
 |---|---|---|
 | `TEMPLATES_DIR` | — | **Yes** — exit with clear error if missing |
 | `PORT` | `3001` | No |
 | `MAX_TAG_PATH_LENGTH` | `100` | No |
-| `POSTGRES_HOST` | `localhost` | No |
-| `POSTGRES_PORT` | `5432` | No |
-| `POSTGRES_DATABASE` | `caro_dev` | No |
-| `POSTGRES_USER` | `postgres` | No |
-| `POSTGRES_PASSWORD` | — | **Yes** |
 | `VALIDATE_REQUIRED_PARENT_TYPES` | — | No — comma-separated list |
 | `VALIDATE_UNIQUE_PARENT_TYPES` | — | No — `true`/`false` |
 
@@ -301,7 +309,7 @@ Called by `save()`, `confirmSave()`, `discard()` when `rootTemplateName` is null
 - `selectedSystemTreeNode` — full dot-separated tree path (e.g. `"Plant1_System_A.RFPowerModule.RF_Fwd.setpoint"`). UI-only identity key, never sent to server.
 - `setSelectedSystemTreeNode(ownPath, parentPath, assetName, parentTemplateName, childIndex)` — 5-argument setter. Sets all five fields and clears `selectedTemplateTree` atomically.
 - Setting one selection type clears the other atomically (system tree vs template tree).
-- `validationConfig` — `{ requiredParentTypes: [], uniqueParentTypes: false }`. Set by `AppShell` on mount via `GET /api/v1/config`.
+- `validationConfig` — `{ requiredParentTypes: [], uniqueParentTypes: false, databaseName: '', projectRoot: null }`. Set by `AppShell` on mount via `GET /api/v1/config`. `databaseName`/`projectRoot` back the Registry/History connection indicator and `RegistryPage`'s `PROJECT_ROOT` apply gate.
 
 ### `useTagTypesStore` / `useModuleTypesStore`
 - `useTagTypesStore` — stores `tagTypes` array and `displayNameMap` (type_name → display_name). Fetched on AppShell mount via `GET /api/v1/tag-types`.
@@ -345,10 +353,11 @@ Shared by `CascadeModal` and `CascadePreviewModal`. Props: `newTemplates`, `chil
 
 ### `RegistryPage`
 - Fetches DB registry via `GET /api/v1/registry`, compares with `resolveRegistry()` using `diffRegistry()`.
-- Layout: `h-full flex flex-col` outer container. Scrollable content area (`flex-1 min-h-0 overflow-auto`) wraps banners, diff bar, and table. `ValidationPanel` pinned to bottom via `flex-shrink-0` wrapper.
+- Top-level structure: an always-visible `connectionIndicator` strip (`DB: <databaseName>` / `PROJECT_ROOT: <projectRoot ?? '(not configured)'>`, `data-testid="db-connection-indicator"`), then a `mainContent` variable holding whichever body applies (no-root prompt / validation-error banner / the diffed table), rendered inside a `flex-1 min-h-0 overflow-hidden` wrapper below the indicator. The indicator sits outside all three body branches so it shows regardless of root selection or validity — this is a deliberate restructure, not an incidental one, since the three bodies used to be direct early `return`s.
+- Layout inside `mainContent`'s table branch: `h-full flex flex-col` container. Scrollable content area (`flex-1 min-h-0 overflow-auto`) wraps banners, diff bar, and table. `ValidationPanel` pinned to bottom via `flex-shrink-0` wrapper.
 - `tag_id` shows `'new'` for added rows.
 - Modified rows: changed cells `bg-amber-500/25`. Added rows: green. Retired rows: red.
-- Update DB disabled when `isDirty` or no changes. Confirmation modal requires non-empty comment.
+- Update DB disabled when `isDirty`, when there are no changes, **or** when the selected root doesn't match `validationConfig.projectRoot` (`rootMatchesProject = projectRoot !== null && (projectRoot === '*' || projectRoot === rootTemplateName)` — `null` never matches, so an unconfigured `PROJECT_ROOT` always disables the button). Tooltip branches: dirty → save/discard message; mismatch → names both the configured `PROJECT_ROOT` and the selected root; unconfigured → states apply is disabled until it's set; otherwise `undefined`. Confirmation modal requires non-empty comment.
 - If DB unavailable: amber warning banner, table displays proposed registry undiffed.
 - Table layout: `w-auto table-auto` in `border border-black/30 rounded-sm w-fit` container.
 - Columns: tag_id, tag_path, module, module_type, data_type, is_setpoint, trends, unit, format, eng_min, eng_max, meta. All columns except meta are sortable. `module_type` displays `display_name` from `useModuleTypesStore`, falling back to raw value. Display columns (`unit`, `format`, `eng_min`, `eng_max`) show `—` when null.
@@ -359,7 +368,7 @@ Shared by `CascadeModal` and `CascadePreviewModal`. Props: `newTemplates`, `chil
 - With `dbMeta` (diff mode): shows legend + per-field highlights (added → green, changed → amber, removed → line-through red).
 
 ### `AppShell`
-- Fetches `GET /api/v1/config` on mount alongside template list. On failure: store retains `{ requiredParentTypes: [], uniqueParentTypes: false }` silently.
+- Fetches `GET /api/v1/config` on mount alongside template list. On failure: store retains `{ requiredParentTypes: [], uniqueParentTypes: false, databaseName: '', projectRoot: null }` silently.
 - Fetches `GET /api/v1/tag-types` and `GET /api/v1/module-types` on mount, populating `useTagTypesStore` and `useModuleTypesStore` respectively.
 - `<main>` uses `overflow-hidden` (not `overflow-auto`) — individual pages manage their own scrolling.
 - `_buildDiffEnrichment()` computes `new_templates`, `pending_deletions`, `children_changed`, `children_reordered` from store state for both `handleSeeChanges` and `handleSave`. Reorder detection uses ordered intersection: compares only children present in both original and current arrays to avoid false positives on add/remove.
@@ -369,7 +378,7 @@ Shared by `CascadeModal` and `CascadePreviewModal`. Props: `newTemplates`, `chil
 - `pathSeverityMap` — computed via `useMemo` from `validationState.messages`; splits each `msg.ref.tag_path` by `.` and maps every prefix to worst severity; passed as prop through `AssetTree → TreeNode` for tinting.
 
 ### `HistoryPage`
-Columns: rev (right-aligned), applied_by, applied_at (`formatDateTime`), comment. Ordered DESC. Read-only.
+Columns: rev (right-aligned), applied_by, applied_at (`formatDateTime`), comment. Ordered DESC. Read-only. Same connection indicator as `RegistryPage` (`DB: <databaseName>` / `PROJECT_ROOT: <projectRoot>`) rendered at the top, unconditionally — no early returns to work around here, unlike `RegistryPage`.
 
 ---
 

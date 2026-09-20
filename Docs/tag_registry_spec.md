@@ -346,9 +346,16 @@ The Registry page shows the resolved registry compared against the database. Com
 
 Modified rows also carry `dbMeta` (the db row's meta array) enabling field-level diff highlighting in the meta View modal: changed fields amber, added fields green, removed fields red strikethrough. A legend is shown in the modal when diff data is present.
 
-An **Update DB** button is enabled when changes exist (added, modified, or retired rows). Clicking it opens a confirmation modal requiring a non-empty comment. The Confirm button is disabled until a comment is entered. On confirm, `POST /api/v1/registry/apply` is called. On success a 4-second banner shows the new revision number and the diff is re-run automatically.
+An **Update DB** button is enabled when changes exist (added, modified, or retired rows) **and** the selected root matches this server's configured `PROJECT_ROOT` (`GET /api/v1/config`'s `projectRoot` — see `tag_registry_api_spec.md` §2.6/§2.7). Clicking it opens a confirmation modal requiring a non-empty comment. The Confirm button is disabled until a comment is entered. On confirm, `POST /api/v1/registry/apply` is called; the server independently enforces the same `PROJECT_ROOT` match (§5.3) and rejects a mismatch with `PROJECT_ROOT_MISMATCH` regardless of what the client sent — the client-side gate is a UI convenience, not the enforcement point. On success a 4-second banner shows the new revision number and the diff is re-run automatically.
 
-The Update DB button is disabled when `isDirty` is true, with tooltip: "Save or discard changes before updating the registry."
+The Update DB button is disabled in three cases, each with its own tooltip:
+- `isDirty` is true: "Save or discard changes before updating the registry."
+- The selected root doesn't match a configured `PROJECT_ROOT`: names both the configured `PROJECT_ROOT` and the currently selected root.
+- `PROJECT_ROOT` is not configured on this server at all: states that apply is disabled until it's set.
+
+Selecting and authoring any root in the dropdown stays unrestricted regardless of `PROJECT_ROOT` — only the apply action is gated.
+
+Both the Registry and History pages also show a quiet, always-visible connection indicator (`DB: <databaseName>` / `PROJECT_ROOT: <projectRoot>`, or `(not configured)` when unset) sourced from the same `GET /api/v1/config` response. On the Registry page this sits above the root-selection/validation-error states, not inside them, so it shows regardless of whether a root is selected or valid.
 
 ---
 
@@ -438,7 +445,7 @@ A single global dropdown allows the user to select the root template. On selecti
 
 The **Save / See what's changed / Cancel** button group in AppShell is rendered only when `activeTab === 'editor'`. Navigating to the Registry or History tab hides the bar even if the graph is dirty.
 
-The **Update DB** button on the Registry page is disabled when `isDirty` is true, with tooltip: "Save or discard changes before updating the registry."
+The **Update DB** button on the Registry page is disabled when `isDirty` is true, when the selected root doesn't match the configured `PROJECT_ROOT`, or when `PROJECT_ROOT` isn't configured at all — see §12 for the full gating rule and tooltip text per case. Selecting the root itself is never gated by `PROJECT_ROOT`, only the apply action.
 
 ### 16.2 System Tree (Left Panel)
 

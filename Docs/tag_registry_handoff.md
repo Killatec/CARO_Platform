@@ -24,7 +24,9 @@
 - ValidationPanel height cap — capped at `max-h-[50vh]`; header is `flex-shrink-0` (always visible); message list is `overflow-y-auto` (scrollable when content overflows).
 - Dirty indicator restyle — tree nodes and FieldsPanel dirty fields use `font-semibold italic text-gray-800` (bold italic gray). Old orange bold (`text-orange-700 font-semibold`) removed. Override fields remain `text-blue-600`.
 - Validation tree tinting — System Tree nodes whose subtree contains errors receive `border-l-4 border-red-500 bg-red-50`; warnings receive `border-l-4 border-yellow-400 bg-yellow-50`. Computed in `EditorPage` as `pathSeverityMap` from `msg.ref.tag_path` prefixes; passed via props through `AssetTree → TreeNode`. Selection (blue border/bg) takes visual priority over tint.
-- Test suite — 443 Vitest unit tests (shared 210, client 135, server 98) + 86 Playwright E2E tests (Chromium); 529 total, 0 failures
+- Multi-project `PROJECT_ROOT` gate — `POST /api/v1/registry/apply` rejects a `rootName` that doesn't match the server's configured `PROJECT_ROOT` (root `.env`; `PROJECT_ROOT_MISMATCH`, 403). Unset/empty refuses every apply; `*` allows any root (used by the e2e suite). Client-side: Update DB button disabled with an explanatory tooltip on mismatch or when unconfigured; root selection/authoring itself is never gated. See `tag_registry_spec.md` §12, `tag_registry_api_spec.md` §5.3, and `Docs/platform_handoff.md` § Multi-Project Model for why the gate exists.
+- Database connection indicator — Registry and History pages show `DB: <name>` / `PROJECT_ROOT: <value>` sourced from `GET /api/v1/config`'s `databaseName`/`projectRoot` fields.
+- Test suite — 455 Vitest unit tests (shared 210, client 135, server 110) + 86 Playwright E2E tests (Chromium); 541 total, 0 failures
 
 ## What Is Not Built
 
@@ -75,7 +77,7 @@ All in `Docs/`. Read order for a new session: this file → deltas → task-spec
 ## Gotchas
 
 - **nodemon must not watch `templates/`.** Dev script watches `src/` only. If `--watch ../templates` is re-added, nodemon restarts on every template write and breaks tests.
-- **`apps/tag-registry/server/.env` is the only env file the server reads.** Root `.env` changes are never seen.
+- **`apps/tag-registry/server/.env` loads first (app-local wins).** The server also loads the monorepo root `.env` second, via `loadEnv()` from `@caro/server/env`, filling in whatever the app-local file leaves unset (`PROJECT_ROOT`, `POSTGRES_*`).
 - **`POSTGRES_PASSWORD` must be set.** `DATABASE_URL` is not used.
 - **`AppShell` fetches template list once on mount.** Templates created via API after mount won't appear in the root dropdown until page remounts.
 - **Only `system` templates appear in the root dropdown.** The dropdown filters `template_type === 'system'`. Other types (module, parameter, tag, Group, custom) are not selectable as roots. The label reads "System:" not "Root Template:".
@@ -122,7 +124,7 @@ All three layers of the tag-registry app migrated to TypeScript (`strict: true`,
 
 The E2E suite is now fully self-contained and database-isolated.
 
-- `globalSetup.js` clones `caro_dev` → `caro_test` via `pg_dump`/`pg_restore` before every run
+- `globalSetup.js` clones the live project database → `caro_test` via `pg_dump`/`pg_restore` before every run. Source resolves ambient `POSTGRES_DATABASE` → root `.env`'s `POSTGRES_DATABASE` (via a `dotenv.config({ path, processEnv })` call, same `findWorkspaceRoot()` as `loadEnv()`) → `caro_dev` default — so this keeps working correctly once `POSTGRES_DATABASE` normally lives in the root `.env` rather than an ambient shell var. `PROJECT_ROOT: '*'` is forced into the spawned test server's env so the apply-gate doesn't reject the e2e suite's dynamically-named roots.
 - Express test server runs on `:3099` against `caro_test`; Vite test client runs on `:5199`
 - `globalTeardown.js` kills both processes after suite completes
 - `TARGET_DB` env var controls database — defaults to `caro_test`; set to `caro_dev` to skip clone

@@ -68,12 +68,15 @@ Every template returned by the server carries a `hash` field: a 6-character hex 
 | POSTGRES_DATABASE | PostgreSQL database name | caro_dev | 2 only |
 | POSTGRES_USER | PostgreSQL user | postgres | 2 only |
 | POSTGRES_PASSWORD | PostgreSQL password | (required) | 2 only |
+| PROJECT_ROOT | Gates `POST /api/v1/registry/apply` (§5.3). Unset/empty refuses every apply; `*` allows any root; any other value allows only an exact match. | (unset — refuses every apply) | 2 only |
 
 > **Note:** `DATABASE_URL` must not be referenced anywhere in app code. Use the five `POSTGRES_*` variables instead, consumed by `@caro/db` pool.js.
+>
+> **Note:** as of the multi-project work, env is loaded in two layers via `loadEnv()` from `@caro/server/env` — `PORT`/`TEMPLATES_DIR`/`MAX_TAG_PATH_LENGTH`/`VALIDATE_*` stay in this app's own `server/.env`; `POSTGRES_*` and `PROJECT_ROOT` moved to the monorepo root `.env`, shared with mqtt-simulator and caro-hmi. See root `CLAUDE.md` and `Docs/platform_handoff.md` § Multi-Project Model.
 
 ### 2.7 GET /api/v1/config
 
-Returns the server-side validation configuration so the client can apply the same validation rules that are active on the server.
+Returns the server-side validation configuration so the client can apply the same validation rules that are active on the server, plus which database and project this server is connected to.
 
 **Response:**
 
@@ -82,7 +85,9 @@ Returns the server-side validation configuration so the client can apply the sam
   "ok": true,
   "data": {
     "requiredParentTypes": ["module"],
-    "uniqueParentTypes": false
+    "uniqueParentTypes": false,
+    "databaseName": "caro_dev",
+    "projectRoot": "CARO_1"
   }
 }
 ```
@@ -91,8 +96,12 @@ Returns the server-side validation configuration so the client can apply the sam
 
 - `requiredParentTypes` — derived from `VALIDATE_REQUIRED_PARENT_TYPES`: split on `,`, each token trimmed, empty strings filtered. Empty array when unset.
 - `uniqueParentTypes` — derived from `VALIDATE_UNIQUE_PARENT_TYPES`: string `"true"` (case-insensitive) → `true`, anything else → `false`.
+- `databaseName` — `POSTGRES_DATABASE`, falling back to `'caro_dev'` when unset (mirrors `@caro/db`'s own pool default, so an unconfigured install doesn't render blank).
+- `projectRoot` — `PROJECT_ROOT` verbatim, or `null` when unset/empty. Drives the Update DB gate (§5.3) and the Registry/History page connection indicator.
 
-**Client usage:** `AppShell` fetches this endpoint on mount and stores the result in `useUIStore.validationConfig`. `useValidation.js` reads the values from the store and passes them to `validateParentTypes()`, replacing hardcoded defaults.
+Fields are hand-picked, not a spread of `process.env` — `POSTGRES_PASSWORD` never appears in this or any response.
+
+**Client usage:** `AppShell` fetches this endpoint on mount and stores the result in `useUIStore.validationConfig`. `useValidation.js` reads `requiredParentTypes`/`uniqueParentTypes` and passes them to `validateParentTypes()`. `RegistryPage` and `HistoryPage` read `databaseName`/`projectRoot` directly from the store for their connection indicator; `RegistryPage` also compares `projectRoot` against the selected root to gate the Update DB button (§5.3).
 
 ---
 
@@ -366,9 +375,22 @@ Applies the resolved registry to the database.
 
 - `rootName` — required. Must be a valid template name. Returns 400 if missing.
 - `comment` — required. Non-empty string. Returns 400 if missing or empty.
+- `rootName` must match the server's configured `PROJECT_ROOT` (§2.6), checked after the two validations above and before the template is loaded. Unset/empty `PROJECT_ROOT` refuses every apply; `*` allows any root; otherwise an exact match is required. Returns 403 `PROJECT_ROOT_MISMATCH` on rejection.
 - Returns 404 if the `rootName` template does not exist on disk.
 
 Server loads the template graph via `loadRoot()`, resolves server-side via `resolveRegistry()`, diffs against `getActiveRegistry()`, writes inside a SERIALIZABLE transaction.
+
+**Rejection response (HTTP 403):**
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "PROJECT_ROOT_MISMATCH",
+    "message": "rootName \"Narya_1\" does not match this server's configured PROJECT_ROOT \"CARO_1\""
+  }
+}
+```
 
 **Success response (HTTP 200):**
 
@@ -486,5 +508,6 @@ Returns 404 if no rows exist for the given revision number.
 | TAG_NAME_TOO_LONG | 422 | A resolved `tag_name` exceeds `MAX_TAG_NAME_LENGTH` (40 characters). Emitted by `validateResolvedTags`; surfaces on registry apply and template save. |
 | DUPLICATE_TAG_NAME | 422 | Two or more resolved tags share the same `tag_name` (case-insensitive comparison, entire-registry scope). One error emitted per offending tag. Enforced in-app by `validateResolvedTags` — no DB UNIQUE constraint. Surfaces on registry apply and template save. |
 | VALIDATION_ERROR | 422 | One or more validation rules failed. See details array. Graph validation errors from batchSave (INVALID_REFERENCE, CIRCULAR_REFERENCE) are returned as VALIDATION_ERROR with specific codes in the details array — not as top-level error codes. |
+| PROJECT_ROOT_MISMATCH | 403 | `POST /api/v1/registry/apply`'s `rootName` doesn't match the server's configured `PROJECT_ROOT` (§2.6, §5.3) — including when `PROJECT_ROOT` is unset/empty, which refuses every apply. |
 
 ---

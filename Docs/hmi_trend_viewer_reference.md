@@ -616,7 +616,7 @@ Consumed by `TimescaleSizeMonitor`:
 ### 11.5 Rules of the Road
 
 - `DATABASE_URL` is **never** used anywhere in CARO_Platform. Any PR adding it should be rejected.
-- Each app reads its own `server/.env`. The root `.env` is for shared dev-convenience (e.g. `docker-compose.timescale.yml` variable substitution) and is never loaded by an app process.
+- Each app loads env in two layers via `loadEnv()` from `@caro/server/env`: its own `server/.env` (app-local) first, then the monorepo root `.env` filling in whatever is still unset. `docker-compose.timescale.yml` also reads the root `.env` directly via Compose's own variable-substitution convention — a separate mechanism, not `loadEnv()`.
 - Changing a tuning var requires HMI restart to take effect — no runtime reconfig.
 
 ---

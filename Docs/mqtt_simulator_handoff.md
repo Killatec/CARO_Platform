@@ -54,6 +54,7 @@ Read order: this file → deltas → task-specific spec.
 - **POST /start returns 202.** MQTT connect is async; `running` flips to `true` ~100ms after response. Do not assert `running: true` immediately.
 - **One MQTT client for all modules.**
 - **Simulator filters to `module_type = 'MQTT'` tags only.** Tags with other module_type values (e.g., `'HMI'`) are excluded at registry load time.
+- **`SIMULATOR_EXCLUDE_MODULES` excludes specific modules by name.** Comma-separated `module` column values (e.g. `Pole`). Applied in `services/registry.ts` after the module_type filter. Excluded modules receive no telemetry publishing and no cmd subscription. Useful when a real device owns a module and the simulator should not interfere. See bootstrap §2.
 - **`module_id` derived from `tag_registry.module` column** — not from meta array parsing. Falls back to `'unknown'` if the column is null.
 - **`tag_id` coerced to `Number` on registry load** — node-postgres returns INTEGER as string.
 - **`protobufjs` installed at monorepo root** — server-local install blocked by `@caro/db` workspace resolution. Run `npm install` from monorepo root if missing.
@@ -66,6 +67,7 @@ Read order: this file → deltas → task-specific spec.
 
 - **Zero active MQTT tags = process exit.** Apply a registry in Tag Registry before starting the simulator. The simulator requires at least one tag with `module_type = 'MQTT'`.
 - **Bootstrap §16 references port 4000** — stale, describes an earlier single-process design. Ignore. Correct ports: API 3002, UI 5174.
+- **KNOWN DEFECT (2026-09-19, not fixed): `MQTT_BROKER_URL`, `MQTT_CLIENT_ID`, and `LOG_BUFFER_SIZE` are never actually read from `.env`.** `services/mqttClient.ts:5-6` and `services/simulatorService.ts:13` read them as module-scope `const`s, evaluated when `index.ts` imports those modules — which happens before `index.ts`'s own `loadEnv()` call, since ES module imports fully evaluate before the importing module's own statements run regardless of textual order. All three silently fall back to their hardcoded defaults always; latent only because those defaults currently match `.env`'s configured values. Setting any of the three to something else in `.env` has no effect. Fix before pointing the simulator at a second project (multi-project work) — per-project broker URL and client ID are exactly what that work needs to configure, and two of those three are currently the only things that would need to differ.
 
 ---
 

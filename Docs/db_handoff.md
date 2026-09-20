@@ -31,7 +31,7 @@
 
 - Apps import named functions only. No `pool`, no `query` for ad-hoc SQL, no `pg` imports in app code.
 - New queries go in this package. Never in app code.
-- Pool is a lazy singleton — constructed on first call after `dotenv.config()` has run.
+- Pool is a lazy singleton — constructed on first call, after whatever env-loading the app has done by then (`loadEnv()` from `@caro/server/env` in all three server apps). Any new module-scope `process.env` read added to this package would not get this same protection — see `Docs/hmi_trend_viewer_handoff.md`'s note on `TIMESCALE_LOG_TILE_QUERIES` for why that matters (this package is reached transitively by any `import ... from '@caro/db'`, including re-exports).
 - `withTransaction()` releases the client in all cases (commit, rollback, rollback failure).
 
 ---

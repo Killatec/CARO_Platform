@@ -38,20 +38,28 @@ apps/mqtt-simulator/
 
 ## 2. Environment Variables
 
-Server reads from `apps/mqtt-simulator/server/.env`.
+Loaded in two layers via `loadEnv()` from `@caro/server/env`: `apps/mqtt-simulator/server/.env` (app-local) loads first and wins on a conflict; the monorepo root `.env` loads second, filling in only what's still unset. Never pass `override: true`.
+
+Root `.env` (shared with tag-registry and caro-hmi — see root `CLAUDE.md` and `.env.example`):
 
 | Variable | Default | Notes |
 |---|---|---|
-| `MQTT_BROKER_URL` | `mqtt://localhost:1883` | |
-| `MQTT_CLIENT_ID` | `caro-simulator` | Must be unique on broker |
 | `POSTGRES_HOST` | `localhost` | |
 | `POSTGRES_PORT` | `5432` | |
 | `POSTGRES_DATABASE` | `caro_dev` | |
 | `POSTGRES_USER` | `postgres` | |
 | `POSTGRES_PASSWORD` | — | **Required** |
+
+App-local `server/.env` (see `server/.env.example`):
+
+| Variable | Default | Notes |
+|---|---|---|
+| `MQTT_BROKER_URL` | `mqtt://localhost:1883` | **Not actually read from env** — see `Docs/mqtt_simulator_handoff.md` Gotchas. Always uses this default. |
+| `MQTT_CLIENT_ID` | `caro-simulator` | Must be unique on broker. **Not actually read from env** — see `Docs/mqtt_simulator_handoff.md` Gotchas. Always uses this default. |
 | `TICK_INTERVAL_MS` | `100` | 10 Hz default |
 | `SINE_PERIOD_S` | `30` | Sine wave period for f32 monitor tags |
-| `LOG_BUFFER_SIZE` | `200` | Rolling in-memory log entries |
+| `LOG_BUFFER_SIZE` | `200` | Rolling in-memory log entries. **Not actually read from env** — see `Docs/mqtt_simulator_handoff.md` Gotchas. Always uses this default. |
+| `SIMULATOR_EXCLUDE_MODULES` | _(unset)_ | Comma-separated `module` names to exclude at registry load time (e.g. `Pole,Aux`). Excluded modules are stripped from `loadTagRegistry()` — no telemetry published, no cmd subscription. Applied in `services/registry.ts` after the `module_type = 'MQTT'` filter. |
 
 ---
 

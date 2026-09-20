@@ -113,7 +113,16 @@ Migration files live in db/postgres/migrations/ and are named
 sequentially: 001_create_tag_registry.sql,
 002_create_registry_revisions.sql, etc. Migrations are idempotent
 (CREATE TABLE IF NOT EXISTS, CREATE INDEX IF NOT EXISTS, ADD COLUMN IF
-NOT EXISTS). Run in filename order using setup_dev_db.ps1.
+NOT EXISTS, INSERT ... ON CONFLICT DO NOTHING for seeded lookup rows).
+Run in filename order, skipping already-applied files, by
+runMigrations() in packages/db/migrations.ts — all three server apps
+call this at their own startup, which is how a fresh or partially
+migrated database actually catches up in practice.
+`db/postgres/scripts/setup_dev_db.ps1` does not do this: it only runs
+001 and 002 directly via psql (stale relative to the current file set;
+see the script's own header comment). Use it only to create the
+`caro_dev` database and run its seed; let an app's own startup apply
+the rest.
 
 Current migrations:
 

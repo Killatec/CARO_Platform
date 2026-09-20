@@ -17,7 +17,7 @@ Read these only if the session requires them:
 - **No URL router:** Never use `page.goto('/registry')` in tests or navigation logic. Use sidebar button clicks only.
 - **Flat templates folder:** All templates live directly in `templates/` — no subdirectories. `batchSave` writes `{template_name}.json` at the root of `TEMPLATES_DIR`. Do not create or reference subdirectories.
 - **Shared module:** `apps/tag-registry/shared/` is environment-agnostic — no `fs`, no Express, no DOM. Pure functions only.
-- **Env file:** `apps/tag-registry/server/.env` is the authoritative env file. The monorepo root `.env` is never loaded by the server process.
+- **Env files — two layers:** The server loads env in two layers via `loadEnv()` from `@caro/server/env`: `apps/tag-registry/server/.env` (app-local) loads first and wins on a conflict; the monorepo root `.env` loads second, filling in only whatever the app-local file (or a value already injected into `process.env` by a parent process, e.g. e2e's `globalSetup`) left unset. Project identity and cross-app-must-agree settings (`PROJECT_ROOT`, `POSTGRES_*`, `TIMESCALE_*`) live at root; this app's own settings (`PORT`, `TEMPLATES_DIR`, `VALIDATE_*`) live in the app-local file. Never pass `override: true` when loading either — that would make the root file authoritative over per-app settings, the opposite of the intended precedence.
 
 ## Test Suite
 
@@ -28,6 +28,6 @@ cd apps/tag-registry/server && npx vitest run
 cd apps/tag-registry/client && npx vitest run
 cd apps/tag-registry/e2e && npm run test:chromium
 
-Current baseline: 443 unit (shared 210, client 135, server 98) + 86 E2E (Chromium) = 529 tests, 0 failures.
+Current baseline: 455 unit (shared 210, client 135, server 110) + 86 E2E (Chromium) = 541 tests, 0 failures.
 Note: Firefox and WebKit projects are not passing on this machine (pre-existing environment issue — browsers not installed). Chromium is the reliable baseline.
 If a run produces a different total, investigate before reporting done.

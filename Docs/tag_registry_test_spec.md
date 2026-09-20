@@ -876,6 +876,22 @@ Skipped breakdown:
 | Failed | 0 |
 | Baseline date | 2026-04-02 |
 
+### 9.6 Baseline (2026-09-19) — multi-project (`PROJECT_ROOT`) work
+
+Per-package/per-file breakdown above (§9.1–9.5) predates a lot of unrelated growth in `shared/` and `client/` and is not reconciled here — see `apps/tag-registry/CLAUDE.md` for the current authoritative baseline command and total. This entry records only what this session's changes moved:
+
+- `server/__tests__/registry.test.js`: 17 → 22 (+5: `PROJECT_ROOT` gate — unset, empty, mismatch, exact match, `*` — plus env fixes on the pre-existing success/not-found tests so they keep passing under the new gate)
+- `server/__tests__/config.test.js`: +7 (`databaseName` fallback/configured, `projectRoot` unset/empty/configured/`*`, `POSTGRES_PASSWORD` absence)
+- `server/` total: 98 → 110
+- `shared/`, `client/`, E2E (Chromium): unchanged at 210 / 135 / 86
+
+| Metric | Value |
+|---|---|
+| Unit total (shared 210 + client 135 + server 110) | 455 |
+| E2E (Chromium) | 86 |
+| **Combined total** | **541** |
+| Failed | 0 |
+
 ---
 
 ## 10. Unit Test Suite
