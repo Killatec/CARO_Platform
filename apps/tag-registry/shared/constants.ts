@@ -33,6 +33,9 @@ export const ERROR_CODES = {
 
   // Generic
   VALIDATION_ERROR: 'VALIDATION_ERROR',
+
+  // Multi-project
+  PROJECT_ROOT_MISMATCH: 'PROJECT_ROOT_MISMATCH',
 } as const;
 
 export const MAX_TAG_PATH_LENGTH = 100;

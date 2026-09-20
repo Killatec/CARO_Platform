@@ -39,15 +39,21 @@ afterAll(async () => {
   await new Promise(resolve => server.close(resolve));
 });
 
-// Save and restore the two env vars around every test so they don't bleed.
+// Save and restore env vars around every test so they don't bleed.
 let savedRequired;
 let savedUnique;
+let savedDatabase;
+let savedProjectRoot;
 
 beforeEach(() => {
-  savedRequired = process.env.VALIDATE_REQUIRED_PARENT_TYPES;
-  savedUnique   = process.env.VALIDATE_UNIQUE_PARENT_TYPES;
+  savedRequired    = process.env.VALIDATE_REQUIRED_PARENT_TYPES;
+  savedUnique      = process.env.VALIDATE_UNIQUE_PARENT_TYPES;
+  savedDatabase    = process.env.POSTGRES_DATABASE;
+  savedProjectRoot = process.env.PROJECT_ROOT;
   delete process.env.VALIDATE_REQUIRED_PARENT_TYPES;
   delete process.env.VALIDATE_UNIQUE_PARENT_TYPES;
+  delete process.env.POSTGRES_DATABASE;
+  delete process.env.PROJECT_ROOT;
 });
 
 afterEach(() => {
@@ -60,6 +66,16 @@ afterEach(() => {
     delete process.env.VALIDATE_UNIQUE_PARENT_TYPES;
   } else {
     process.env.VALIDATE_UNIQUE_PARENT_TYPES = savedUnique;
+  }
+  if (savedDatabase === undefined) {
+    delete process.env.POSTGRES_DATABASE;
+  } else {
+    process.env.POSTGRES_DATABASE = savedDatabase;
+  }
+  if (savedProjectRoot === undefined) {
+    delete process.env.PROJECT_ROOT;
+  } else {
+    process.env.PROJECT_ROOT = savedProjectRoot;
   }
 });
 
@@ -139,5 +155,53 @@ describe('GET /api/v1/config — uniqueParentTypes', () => {
     process.env.VALIDATE_UNIQUE_PARENT_TYPES = '';
     const { body } = await getConfig();
     expect(body.data.uniqueParentTypes).toBe(false);
+  });
+});
+
+describe('GET /api/v1/config — databaseName', () => {
+  it('falls back to "caro_dev" when POSTGRES_DATABASE is unset', async () => {
+    const { body } = await getConfig();
+    expect(body.data.databaseName).toBe('caro_dev');
+  });
+
+  it('returns the configured POSTGRES_DATABASE', async () => {
+    process.env.POSTGRES_DATABASE = 'caro_narya1';
+    const { body } = await getConfig();
+    expect(body.data.databaseName).toBe('caro_narya1');
+  });
+});
+
+describe('GET /api/v1/config — projectRoot', () => {
+  it('returns null when PROJECT_ROOT is unset', async () => {
+    const { body } = await getConfig();
+    expect(body.data.projectRoot).toBeNull();
+  });
+
+  it('returns null when PROJECT_ROOT is an empty string', async () => {
+    process.env.PROJECT_ROOT = '';
+    const { body } = await getConfig();
+    expect(body.data.projectRoot).toBeNull();
+  });
+
+  it('returns the configured PROJECT_ROOT', async () => {
+    process.env.PROJECT_ROOT = 'CARO_1';
+    const { body } = await getConfig();
+    expect(body.data.projectRoot).toBe('CARO_1');
+  });
+
+  it('returns "*" verbatim', async () => {
+    process.env.PROJECT_ROOT = '*';
+    const { body } = await getConfig();
+    expect(body.data.projectRoot).toBe('*');
+  });
+});
+
+describe('GET /api/v1/config — secrets', () => {
+  it('never includes POSTGRES_PASSWORD in the response', async () => {
+    process.env.POSTGRES_PASSWORD = 'super-secret-value';
+    const { body } = await getConfig();
+    expect(JSON.stringify(body)).not.toContain('super-secret-value');
+    expect(body.data.POSTGRES_PASSWORD).toBeUndefined();
+    delete process.env.POSTGRES_PASSWORD;
   });
 });

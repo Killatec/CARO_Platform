@@ -74,9 +74,12 @@ back and re-throws on error. Always releases the client.
 
 ### `runMigrations()`
 
-Runs all `.sql` files in `db/postgres/migrations/` (sorted by filename) and
-returns `[{ file, status }]` where status is `'ok'` or `'error'`. Does not
-throw — all files are attempted even if one fails.
+Runs all `.sql` files in `db/postgres/migrations/` (sorted by filename, skipping
+any already recorded in `schema_migrations`) and resolves `[{ file, status }]`
+where status is `'ok'`, `'skipped'`, or `'error'`. **Re-throws on the first
+migration failure** — the returned array is only ever observed by a caller that
+catches the rejection and inspects it deliberately; none of the three server
+apps do this today, they all halt startup on the rejection instead.
 
 ### `getActiveTags()`
 

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Table, TableHeader, TableBody, TableRow, TableHeaderCell, TableCell } from '@caro/ui/primitives';
 import { fetchRevisions } from '../api/registry.js';
 import { formatDateTime } from '@caro/ui';
+import { useUIStore } from '../stores/useUIStore.js';
 import type { RevisionRow } from '@caro/db';
 
 const COL_BORDER = 'border-r border-black/30';
@@ -12,6 +13,8 @@ export function HistoryPage(): React.ReactElement {
   const [revisions, setRevisions]               = useState<RevisionRow[]>([]);
   const [revisionsLoading, setRevisionsLoading] = useState(true);
   const [revisionsError, setRevisionsError]     = useState<string | null>(null);
+  const databaseName = useUIStore(state => state.validationConfig.databaseName);
+  const projectRoot = useUIStore(state => state.validationConfig.projectRoot);
 
   useEffect(() => {
     fetchRevisions()
@@ -21,6 +24,15 @@ export function HistoryPage(): React.ReactElement {
 
   return (
     <div className="p-4">
+      <div
+        data-testid="db-connection-indicator"
+        className="mb-3 text-xs text-gray-400 flex items-center gap-3"
+      >
+        <span>DB: <span className="text-gray-500">{databaseName || '—'}</span></span>
+        <span aria-hidden="true">·</span>
+        <span>PROJECT_ROOT: <span className="text-gray-500">{projectRoot ?? '(not configured)'}</span></span>
+      </div>
+
       {revisionsError && (
         <div className="bg-red-50 border border-red-200 rounded p-3 text-sm text-red-700 mb-3">
           {revisionsError}

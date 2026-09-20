@@ -3,6 +3,8 @@ import { apiClient } from '@caro/ui/api/client';
 export interface ValidationConfig {
   requiredParentTypes: string[];
   uniqueParentTypes: boolean;
+  databaseName: string;
+  projectRoot: string | null;
 }
 
 /**

@@ -41,6 +41,23 @@ router.post('/apply', asyncWrap(async (req, res) => {
     throw err;
   }
 
+  // Reject an apply whose rootName doesn't match this database's configured
+  // project. PROJECT_ROOT unset/empty refuses every apply; '*' allows any
+  // rootName (the e2e suite applies dynamically-named roots per test).
+  const projectRoot = process.env.PROJECT_ROOT;
+  if (!projectRoot || projectRoot.trim() === '') {
+    const err = new Error('PROJECT_ROOT is not configured on this server — apply is refused') as CaroError;
+    err.status = 403;
+    err.code = ERROR_CODES.PROJECT_ROOT_MISMATCH;
+    throw err;
+  }
+  if (projectRoot !== '*' && projectRoot !== rootName) {
+    const err = new Error(`rootName "${rootName}" does not match this server's configured PROJECT_ROOT "${projectRoot}"`) as CaroError;
+    err.status = 403;
+    err.code = ERROR_CODES.PROJECT_ROOT_MISMATCH;
+    throw err;
+  }
+
   // Load full template graph for rootName
   const rootData = await loadRoot(rootName);
 

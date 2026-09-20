@@ -14,6 +14,17 @@
     Prompts for the postgres password when -Password is not supplied.
     reset_dev_db.ps1 passes -Password directly so the user is prompted only once.
 
+    KNOWN STALE, not fixed here:
+      - Step 2 only runs 001/002. There are 16 migrations in db/postgres/migrations/
+        as of this writing; 003-016 are not applied by this script. In practice this
+        is masked by every server app calling runMigrations() from @caro/db at its
+        own startup, which applies whatever the running database is still missing
+        (001/002 are idempotent, so re-running them here is harmless) — but running
+        this script alone does not produce a fully-migrated database.
+      - dev_seed.sql seeds a fictional "Plant1_System_A" hierarchy, not the platform's
+        actual current root ("CARO_1"). Running this script does not reproduce the
+        real dev database's registry content.
+
 .PARAMETER Password
     Optional. The postgres superuser password as a SecureString.
     When omitted the script prompts interactively.

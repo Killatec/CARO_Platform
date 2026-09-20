@@ -7,4 +7,5 @@
 INSERT INTO tag_types (type_name, display_name) VALUES
   ('string',  'String'),
   ('f32[]',   'Float 32 Array'),
-  ('i16[]',   'Int 16 Array');
+  ('i16[]',   'Int 16 Array')
+ON CONFLICT (type_name) DO NOTHING;

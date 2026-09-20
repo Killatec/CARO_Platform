@@ -5,4 +5,5 @@
 -- =============================================================================
 
 INSERT INTO tag_types (type_name, display_name)
-VALUES ('i16', 'Int 16');
+VALUES ('i16', 'Int 16')
+ON CONFLICT (type_name) DO NOTHING;

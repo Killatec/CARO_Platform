@@ -47,7 +47,7 @@ export interface UIStoreState {
  */
 export const useUIStore = create<UIStoreState>((set) => ({
   // Validation config — populated from GET /api/v1/config on app mount
-  validationConfig: { requiredParentTypes: [], uniqueParentTypes: false },
+  validationConfig: { requiredParentTypes: [], uniqueParentTypes: false, databaseName: '', projectRoot: null },
 
   // State
   selectedNodeName: null,

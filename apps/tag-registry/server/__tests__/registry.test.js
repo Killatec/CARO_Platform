@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import http from 'node:http';
 
 // Hoist mocks before any module resolution
@@ -43,6 +43,10 @@ afterAll(async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+afterEach(() => {
+  delete process.env.PROJECT_ROOT;
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -115,6 +119,12 @@ describe('POST /api/v1/registry/apply — validation', () => {
 });
 
 describe('POST /api/v1/registry/apply — not found', () => {
+  beforeEach(() => {
+    // Not testing the PROJECT_ROOT gate here — allow any rootName through so
+    // this test exercises the loadRoot-not-found branch in isolation.
+    process.env.PROJECT_ROOT = '*';
+  });
+
   it('returns 404 when root template does not exist', async () => {
     const err = new Error('Template not found');
     err.code = ERROR_CODES.TEMPLATE_NOT_FOUND;
@@ -129,6 +139,74 @@ describe('POST /api/v1/registry/apply — not found', () => {
   });
 });
 
+describe('POST /api/v1/registry/apply — PROJECT_ROOT gate', () => {
+  it('rejects with PROJECT_ROOT_MISMATCH when PROJECT_ROOT is unset', async () => {
+    delete process.env.PROJECT_ROOT;
+
+    const { status, body } = await post('/registry/apply', {
+      rootName: 'Plant1_System_A', comment: 'test',
+    });
+    expect(status).toBe(403);
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe(ERROR_CODES.PROJECT_ROOT_MISMATCH);
+    expect(templateService.loadRoot).not.toHaveBeenCalled();
+  });
+
+  it('rejects with PROJECT_ROOT_MISMATCH when PROJECT_ROOT is an empty string', async () => {
+    process.env.PROJECT_ROOT = '';
+
+    const { status, body } = await post('/registry/apply', {
+      rootName: 'Plant1_System_A', comment: 'test',
+    });
+    expect(status).toBe(403);
+    expect(body.error.code).toBe(ERROR_CODES.PROJECT_ROOT_MISMATCH);
+  });
+
+  it('rejects a rootName that does not match a configured PROJECT_ROOT', async () => {
+    process.env.PROJECT_ROOT = 'Plant1_System_A';
+
+    const { status, body } = await post('/registry/apply', {
+      rootName: 'SomeOtherRoot', comment: 'test',
+    });
+    expect(status).toBe(403);
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe(ERROR_CODES.PROJECT_ROOT_MISMATCH);
+    expect(templateService.loadRoot).not.toHaveBeenCalled();
+  });
+
+  it('allows a rootName that matches PROJECT_ROOT exactly', async () => {
+    process.env.PROJECT_ROOT = 'Plant1_System_A';
+    templateService.loadRoot.mockResolvedValue({
+      templates: { Plant1_System_A: { template: { template_type: 'module', template_name: 'Plant1_System_A', fields: {}, children: [] } } },
+    });
+    registryService.applyRegistry.mockResolvedValue({
+      ok: true, registry_rev: 1, added: 1, modified: 0, retired: 0,
+    });
+
+    const { status, body } = await post('/registry/apply', {
+      rootName: 'Plant1_System_A', comment: 'test',
+    });
+    expect(status).toBe(200);
+    expect(body.ok).toBe(true);
+  });
+
+  it('allows any rootName when PROJECT_ROOT is "*"', async () => {
+    process.env.PROJECT_ROOT = '*';
+    templateService.loadRoot.mockResolvedValue({
+      templates: { AnyRoot: { template: { template_type: 'module', template_name: 'AnyRoot', fields: {}, children: [] } } },
+    });
+    registryService.applyRegistry.mockResolvedValue({
+      ok: true, registry_rev: 1, added: 1, modified: 0, retired: 0,
+    });
+
+    const { status, body } = await post('/registry/apply', {
+      rootName: 'AnyRoot', comment: 'test',
+    });
+    expect(status).toBe(200);
+    expect(body.ok).toBe(true);
+  });
+});
+
 describe('POST /api/v1/registry/apply — success', () => {
   const rootTemplate = {
     template_type: 'module', template_name: 'Plant1_System_A',
@@ -136,6 +214,7 @@ describe('POST /api/v1/registry/apply — success', () => {
   };
 
   beforeEach(() => {
+    process.env.PROJECT_ROOT = 'Plant1_System_A';
     templateService.loadRoot.mockResolvedValue({
       templates: { Plant1_System_A: { template: rootTemplate } },
     });
