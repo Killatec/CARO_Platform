@@ -21,6 +21,13 @@
       "template_name": "Beam",
       "asset_name": "Beam_1",
       "fields": {}
+    },
+    {
+      "template_name": "Pole",
+      "asset_name": "Pole",
+      "fields": {
+        "In_Tag_Name": true
+      }
     }
   ]
 }

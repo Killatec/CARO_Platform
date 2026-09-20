@@ -6,6 +6,7 @@ import type { TagDef } from '@caro/hmi-context';
 import { errorHandler } from '@caro/server';
 import { createTagsRouter } from './routes/tags.js';
 import { createResetRouter } from './routes/reset.js';
+import { createCommandsRouter } from './routes/commands.js';
 import { createTrendsRouter } from './routes/trends.js';
 import { authStub } from './middleware/auth-stub.js';
 import type { CmdController } from './cmd-controller.js';
@@ -34,6 +35,7 @@ export function createApp(
 
   app.use('/api/v1/tags', createTagsRouter(tagMap, cmdController, trendableTagIds));
   app.use('/api/v1/reset', createResetRouter(resetBus));
+  app.use('/api/v1/commands', createCommandsRouter(cmdController));
 
   if (process.env.HMI_TRENDS_GZIP === '1') {
     app.use('/api/v1/trends', compression());

@@ -9,6 +9,7 @@ interface MockHmiProviderProps {
   tagValues?: Record<number, LiveValue>;
   tagDefs?: Record<number, TagDef>;
   onWrite?: (tagId: number, value: number | boolean | string) => Promise<void>;
+  onSendCommand?: (moduleId: string, cmdStr: string) => Promise<void>;
 }
 
 export function MockHmiProvider({
@@ -16,6 +17,7 @@ export function MockHmiProvider({
   tagValues = {},
   tagDefs = {},
   onWrite,
+  onSendCommand,
 }: MockHmiProviderProps) {
   const valuesRef = useRef<Record<number, LiveValue>>(tagValues);
   const prevTagValuesRef = useRef<Record<number, LiveValue>>(tagValues);
@@ -94,14 +96,22 @@ export function MockHmiProvider({
     [onWrite]
   );
 
+  const sendCommand = useCallback(
+    (moduleId: string, cmdStr: string): Promise<void> => {
+      if (onSendCommand) return onSendCommand(moduleId, cmdStr);
+      return Promise.resolve();
+    },
+    [onSendCommand]
+  );
+
   const mockWsStats: WsStats = useMemo(
     () => ({ connected: true, latencyMs: null, messagesPerSec: 0, bytesPerSec: 0, subscribedCount: 0 }),
     []
   );
 
   const dataValue = useMemo<HmiDataContextValue>(
-    () => ({ tagMap, tagPathIndex, getLiveValue, subscribeLiveValue, subscribeTrend, writeTag }),
-    [tagMap, tagPathIndex, getLiveValue, subscribeLiveValue, subscribeTrend, writeTag]
+    () => ({ tagMap, tagPathIndex, getLiveValue, subscribeLiveValue, subscribeTrend, writeTag, sendCommand }),
+    [tagMap, tagPathIndex, getLiveValue, subscribeLiveValue, subscribeTrend, writeTag, sendCommand]
   );
 
   return (

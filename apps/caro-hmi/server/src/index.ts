@@ -192,6 +192,12 @@ async function start(): Promise<void> {
   });
   wsServer.attach(httpServer);
   intake.setTrendDeltaListener((moduleTs, moduleId) => wsServer.handleTrendDelta(moduleTs, moduleId));
+  intake.setModuleRecoveredHandler((moduleId) => {
+    cmdController.requestSnapshot(moduleId);
+    cmdController.restorePendingSetpoints(moduleId).catch(err =>
+      console.error(`[HMI] setpoint restore failed on reconnect for ${moduleId}:`, (err as Error).message),
+    );
+  });
 
   // 7b. Start the async DB pipeline flush tick
   dbPipeline.start();
@@ -211,6 +217,14 @@ async function start(): Promise<void> {
   try {
     await mqttBridge.start();
     console.log(`[HMI] MQTT bridge connected: ${config.mqttUrl}`);
+
+    // Restore last-known setpoints to all MQTT modules on startup so devices
+    // recover their commanded values after an HMI server restart.
+    for (const moduleId of mqttModuleIds) {
+      cmdController.restorePendingSetpoints(moduleId).catch(err =>
+        console.error(`[HMI] setpoint restore failed on startup for ${moduleId}:`, (err as Error).message),
+      );
+    }
   } catch (err) {
     console.warn('[HMI] MQTT broker unavailable:', (err as Error).message);
     console.warn('[HMI] Continuing — REST and WS will serve from LKV without live telemetry');

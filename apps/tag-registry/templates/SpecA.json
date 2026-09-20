@@ -1,0 +1,203 @@
+{
+  "template_name": "SpecA",
+  "template_type": "RF",
+  "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": false
+    }
+  },
+  "children": [
+    {
+      "template_name": "boolean_set",
+      "asset_name": "Enable",
+      "fields": {}
+    },
+    {
+      "template_name": "boolean_set",
+      "asset_name": "FFT_Enable",
+      "fields": {}
+    },
+    {
+      "template_name": "boolean_set",
+      "asset_name": "Spectrum_En",
+      "fields": {}
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Center_Freq",
+      "fields": {
+        "unit": "MHz",
+        "eng_min": 900,
+        "eng_max": 930
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "FFT_Size",
+      "fields": {
+        "format": "#",
+        "eng_min": 512,
+        "eng_max": 32768
+      }
+    },
+    {
+      "template_name": "Set_Mon",
+      "asset_name": "Window",
+      "fields": {
+        "unit": "MHz",
+        "eng_min": 0.5,
+        "eng_max": 14
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "RX_Gain",
+      "fields": {
+        "format": "#.#",
+        "unit": "dB",
+        "eng_max": 70
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Averages",
+      "fields": {
+        "data_type": "i16",
+        "format": "#",
+        "eng_min": 1,
+        "eng_max": 64
+      }
+    },
+    {
+      "template_name": "Set_Mon",
+      "asset_name": "Rate",
+      "fields": {
+        "unit": "Hz",
+        "eng_min": 1,
+        "eng_max": 500,
+        "format": "#"
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "State",
+      "fields": {
+        "data_type": "i16",
+        "format": "#"
+      }
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "Connected",
+      "fields": {}
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Bin_Size",
+      "fields": {
+        "format": "#.#",
+        "unit": "Hz",
+        "eng_max": 5000
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Errors",
+      "fields": {
+        "data_type": "i16",
+        "format": "#",
+        "eng_max": 10000
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Throughput",
+      "fields": {
+        "unit": "MB/s"
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Capture_T",
+      "fields": {
+        "format": "#.##",
+        "unit": "ms",
+        "eng_max": 10,
+        "data_type": "f32"
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Process_T",
+      "fields": {
+        "unit": "ms",
+        "eng_max": 10
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Pipe_Duty",
+      "fields": {
+        "format": "#.#",
+        "unit": "%"
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Bytes",
+      "fields": {
+        "format": "#",
+        "eng_max": 100000
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Sample_Rate",
+      "fields": {
+        "format": "#.#",
+        "unit": "MSPS"
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Peak_Freq",
+      "fields": {
+        "unit": "MHz",
+        "eng_min": 900,
+        "eng_max": 930
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Peak_Power",
+      "fields": {
+        "unit": "dBm",
+        "eng_min": -140,
+        "eng_max": 0
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Noise_Floor",
+      "fields": {
+        "unit": "dBm",
+        "eng_min": -140,
+        "eng_max": 0
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "CNR",
+      "fields": {
+        "unit": "dB",
+        "eng_max": 140
+      }
+    },
+    {
+      "template_name": "Int16_Array",
+      "asset_name": "Spectrum",
+      "fields": {}
+    }
+  ]
+}

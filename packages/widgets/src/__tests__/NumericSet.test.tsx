@@ -117,10 +117,10 @@ describe('NumericSet', () => {
     expect(input.value).toBe('42.5');
   });
 
-  it('is disabled and shows --- when quality is bad (null value)', () => {
+  it('shows --- and remains editable when value is null (no live data yet)', () => {
     renderWidget(tagDefs, {}, { assetPath: 'RF_Fwd.setpoint' });
     const input = screen.getByTestId('numeric-set-input') as HTMLInputElement;
-    expect(input.disabled).toBe(true);
+    expect(input.disabled).toBe(false);
     expect(input.value).toBe('---');
   });
 

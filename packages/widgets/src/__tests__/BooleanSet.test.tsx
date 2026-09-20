@@ -87,10 +87,13 @@ describe('BooleanSet', () => {
     expect(screen.getByTestId('write-error').textContent).toContain('toggle failed');
   });
 
-  it('is disabled when value is null', () => {
-    renderWidget(tagDefs, {}, { assetPath: 'interlock_enable' });
+  it('is enabled and writes true when value is null (no live data yet)', () => {
+    const onWrite = vi.fn().mockResolvedValue(undefined);
+    renderWidget(tagDefs, {}, { assetPath: 'interlock_enable' }, onWrite);
     const btn = screen.getByTestId('toggle-button') as HTMLButtonElement;
-    expect(btn.disabled).toBe(true);
+    expect(btn.disabled).toBe(false);
+    act(() => { fireEvent.click(btn); });
+    expect(onWrite).toHaveBeenCalledWith(1005, true);
   });
 
   it('shows confirmation modal when requireConfirm=true', () => {

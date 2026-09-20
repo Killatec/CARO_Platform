@@ -1,0 +1,216 @@
+{
+  "template_name": "Pole",
+  "template_type": "module",
+  "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": false
+    },
+    "Module_Type": {
+      "field_type": "ModuleType",
+      "default": "MQTT"
+    }
+  },
+  "children": [
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Speed_Max",
+      "fields": {
+        "data_type": "f32",
+        "format": "#.#",
+        "eng_min": -30000,
+        "eng_max": 30000,
+        "unit": "mm/s"
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Accel_Max",
+      "fields": {
+        "unit": "mm/s2",
+        "format": "#.#",
+        "eng_max": 100000,
+        "data_type": "f32"
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Speed_Mon",
+      "fields": {
+        "data_type": "f32",
+        "format": "#.#",
+        "eng_min": -3000,
+        "eng_max": 3000,
+        "unit": "mm/s"
+      }
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "End_SW_1",
+      "fields": {}
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "End_SW_2",
+      "fields": {}
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "Aux_SW_1",
+      "fields": {}
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "Aux_SW_2",
+      "fields": {}
+    },
+    {
+      "template_name": "boolean_set",
+      "asset_name": "Motor_En",
+      "fields": {}
+    },
+    {
+      "template_name": "boolean_set",
+      "asset_name": "Motor_Dir",
+      "fields": {}
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Pos_1",
+      "fields": {
+        "unit": "mm",
+        "eng_max": 300,
+        "format": "#.#",
+        "eng_min": -300
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Pos_2",
+      "fields": {
+        "unit": "mm",
+        "eng_max": 3000,
+        "eng_min": -300,
+        "format": "#.#"
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Pos_Scale",
+      "fields": {
+        "eng_min": 0,
+        "format": "#.###",
+        "eng_max": 10,
+        "unit": "#/mm"
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Pos_Offset",
+      "fields": {
+        "eng_min": -300,
+        "eng_max": 300,
+        "format": "#.#",
+        "unit": "mm"
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Position_Raw",
+      "fields": {
+        "data_type": "i16",
+        "format": "#",
+        "eng_max": 1000
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Position",
+      "fields": {
+        "unit": "mm",
+        "eng_max": 300,
+        "format": "#.#",
+        "eng_min": -300
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Angle_Raw",
+      "fields": {
+        "data_type": "i16",
+        "format": "#",
+        "eng_min": -32767,
+        "eng_max": 32767
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Angle_Mon",
+      "fields": {
+        "unit": "deg",
+        "eng_max": 180,
+        "format": "#.#",
+        "eng_min": -180
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Angle_Offset",
+      "fields": {
+        "format": "#.#",
+        "unit": "deg",
+        "eng_max": 180,
+        "eng_min": -180,
+        "data_type": "f32",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "boolean_set",
+      "asset_name": "Py_Enable",
+      "fields": {}
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "Py_Connected",
+      "fields": {}
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "CPU_Duty",
+      "fields": {
+        "format": "#.#",
+        "unit": "%"
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "CPU_Duty_0",
+      "fields": {
+        "unit": "%",
+        "format": "#.#"
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "CPU_Duty_1",
+      "fields": {
+        "format": "#.#",
+        "unit": "%"
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Pole_CPU",
+      "fields": {
+        "format": "#.#",
+        "unit": "%"
+      }
+    },
+    {
+      "template_name": "SpecA",
+      "asset_name": "SpecA",
+      "fields": {}
+    }
+  ]
+}

@@ -33,7 +33,7 @@ function NumericSetInner({ assetPath, label }: NumericSetProps) {
     isFocused
       ? 'bg-amber-100 border-blue-500 text-gray-900 cursor-text'
       : badQuality
-        ? 'text-red-600 border-transparent bg-transparent cursor-not-allowed'
+        ? 'text-red-600 border-transparent bg-transparent cursor-pointer hover:border-blue-300'
         : 'text-blue-600 border-transparent cursor-pointer hover:border-blue-300',
   ].join(' ');
 
@@ -51,7 +51,6 @@ function NumericSetInner({ assetPath, label }: NumericSetProps) {
           value={inputValue}
           placeholder={placeholder}
           readOnly={!isFocused || isWriting}
-          disabled={badQuality}
           onFocus={handleFocus}
           onBlur={handleBlur}
           onKeyDown={handleKeyDown}

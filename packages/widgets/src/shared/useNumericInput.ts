@@ -62,7 +62,7 @@ export function useNumericInput(
   }, [writeError]);
 
   function handleFocus() {
-    if (badQuality || isWriting) return;
+    if (isWriting) return;
     isFocusedRef.current = true;
     setIsFocused(true);
     setPlaceholder(formattedLive);

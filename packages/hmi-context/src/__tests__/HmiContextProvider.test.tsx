@@ -315,6 +315,7 @@ function makeStableDataValue(
     getLiveValue: () => ({ value: null }),
     subscribeLiveValue: subscribeSpy as HmiDataContextValue['subscribeLiveValue'],
     subscribeTrend: () => () => {},
+    sendCommand: async () => {},
     writeTag: async () => {},
   };
 }

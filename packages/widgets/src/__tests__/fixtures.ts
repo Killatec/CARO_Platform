@@ -151,6 +151,27 @@ export const prfTagValues: Record<number, import('@caro/hmi-context').LiveValue>
   2009: { value: 19.8  }, // In_B
 };
 
+export const mockArrayTag: TagDef = {
+  tag_id: 1006,
+  tag_path: 'Plant1.Module.RF_Fwd.spectrum',
+  tag_name: null,
+  data_type: 'i16[]',
+  is_setpoint: false,
+  trendable: false,
+  module_id: 'Module',
+  module_type: 'MQTT',
+  eng_min: null,
+  eng_max: null,
+  unit: 'dBm',
+  format: null,
+  meta: [
+    { type: 'system', name: 'Plant1', fields: {} },
+    { type: 'module', name: 'Module', fields: {} },
+    { type: 'parameter', name: 'RF_Fwd', fields: {} },
+    { type: 'tag', name: 'spectrum', fields: {} },
+  ],
+};
+
 // A tag with same leaf name ("monitor") but under RF_Rev — for ambiguity tests
 export const mockNumericTagRev: TagDef = {
   tag_id: 1002,

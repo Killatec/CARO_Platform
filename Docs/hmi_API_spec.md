@@ -16,6 +16,7 @@ hmi_functional_spec | CARO_MQTT_Spec | Tag Registry Functional Spec | CARO_DB_Sp
 | 1.3 | 2026-03-26 | PM / Claude | Rate limiting defaults added: 100 req/min read, 20 req/min write, both configurable (OI-02 closed). Idempotency note added: write retries are safe — telemetry loop resolves ambiguity. command_id correlation via WebSocket not required — out-of-sync detection handles outcome visibility. |
 | 1.4 | 2026-03-28 | PM / Claude | Audit log endpoint updated: tag.write split into tag.write.request and tag.write.outcome (two-row pattern with shared command_id); tag.sync.lost and tag.sync.reset added; comment no longer required on tag writes (mode save only). Sync reset endpoint added: POST /api/v1/tags/{tag_id}/sync-reset. PENDING_TABLE_EMPTY error code updated: no longer references cmd_status. |
 | 1.5 | 2026-04-14 | PM / Claude | POST /tags/write: `comment` field changed from required to optional for individual tag writes. The HMI client sends a default value but the field is not validated as required. `comment` remains required only for mode save operations (Section 8, POST /modes/{mode_id}/save). |
+| 1.9 | 2026-06-02 | PM / Claude | Section 5.1 added: POST /api/v1/commands — module-type-agnostic command send. MQTT dispatches with CMD_ACK await (1s timeout). HMI dispatches RESET only; other cmd_str values return 400. Error codes added: VALIDATION_ERROR, COMMAND_NOT_SUPPORTED, COMMAND_REJECTED, TIMEOUT. |
 | 1.8 | 2026-05-26 | PM / Claude | Section 7 tile response: `responseTailTs` renamed `committedThroughTs` on both raw and aggregate responses. Field now carries the `DbPipeline` monotonic watermark rather than a wall-clock timestamp; client uses it directly as the ring trim threshold (no −1000 ms offset). |
 | 1.7 | 2026-05-11 | PM / Claude | Section 11 WebSocket: added SUBSCRIBE_TREND, UNSUBSCRIBE_TREND, TREND_DELTA message types (Step 11 live tail). Section 7 tile response: added `responseTailTs` field to aggregate response. Added TREND_FLUSH_HZ env var note. |
 | 1.6 | 2026-04-29 | PM / Claude | Section 7 Trends: replaced stub with live endpoint documentation — GET /api/v1/trends/tile (v0.5+ wire contract with start_time/end_time/bucket_count, watermark fall-through, discriminated source response), GET /api/v1/trends/extent (hypertable extent), GET /api/v1/tags/trendable (trendable tag discovery). Added error codes: INVALID_TAG_IDS (trends), INVALID_RANGE, INVALID_BUCKET_COUNT, INVALID_BUCKET_S, MISSING_QUERY_PARAM. Detailed spec: Docs/hmi_trend_viewer_spec.md. |
@@ -289,6 +290,38 @@ Success response:
 ```
 
 > *NOTE: Returns 200 even if the tag was not in an out-of-sync state — the reset is idempotent. Returns 404 if tag_id does not exist.*
+
+---
+
+## 5.1 Module Commands
+
+Send an arbitrary command string to a module. The server dispatches on `module_type`. The client (`useCommandSender`) is module-type agnostic — it always calls this endpoint.
+
+### POST /api/v1/commands
+
+*Required role: SV*
+
+Request body:
+```json
+{ "module_id": "Pole", "cmd_str": "RESET" }
+```
+
+Success response:
+```json
+{ "ok": true, "data": { "module_id": "Pole", "cmd_str": "RESET" } }
+```
+
+**MQTT dispatch:** Publishes `{ command_id, command_type: cmd_str, ts_utc_ms, payload: {} }` to `caro/{module_id}/cmd` and awaits a CMD_ACK with a 1-second timeout. Resolves on empty or all-accepted results. Rejects with `COMMAND_REJECTED` if any ACK result has `accepted: false`. Rejects with `TIMEOUT` (504) if no ACK arrives within 1 second.
+
+**HMI dispatch:** Only `cmd_str = "RESET"` is supported — calls `hmiTagSource.reset()` and returns immediately. Any other `cmd_str` targeting an HMI module returns 400 `COMMAND_NOT_SUPPORTED`.
+
+Error responses:
+```json
+{ "ok": false, "error": { "code": "VALIDATION_ERROR",       "message": "module_id must be a non-empty string" } }
+{ "ok": false, "error": { "code": "COMMAND_NOT_SUPPORTED",  "message": "Command 'Foo' is not supported for HMI modules" } }
+{ "ok": false, "error": { "code": "COMMAND_REJECTED",       "message": "Command rejected: UNKNOWN" } }
+{ "ok": false, "error": { "code": "TIMEOUT",                "message": "Command timed out — no ACK received" } }
+```
 
 ---
 
@@ -757,6 +790,10 @@ MODE_CHANGED payload:
 | INVALID_BUCKET_COUNT | 400 | Trends tile: bucket_count outside 1..2500 or non-integer. |
 | INVALID_BUCKET_S | 400 | Trends tile: derived bucketS (internal float seconds) outside (0, MAX_BUCKET_S] (= (0, 14746]) — request spans too large a range for the given bucket count. Normal clients do not trigger this; the trend viewer clamps viewport span to MAX_VIEWPORT_SPAN_MS in the reducer. |
 | MISSING_QUERY_PARAM | 400 | Trends tile: a required query parameter (tag_ids, start_time, end_time, or bucket_count) is absent. |
+| VALIDATION_ERROR | 400 | Structural validation failure — missing or invalid field (e.g. module_id or cmd_str). |
+| COMMAND_NOT_SUPPORTED | 400 | Command string not supported for the target module_type (e.g. non-RESET cmd sent to HMI module). |
+| COMMAND_REJECTED | 400 | MQTT device CMD_ACK contained `accepted: false` for the command. |
+| TIMEOUT | 504 | MQTT device did not send CMD_ACK within 1 second. |
 | INTERNAL_ERROR | 500 | Unexpected server error. |
 
 ## Open Questions

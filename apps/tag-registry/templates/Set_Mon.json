@@ -1,0 +1,47 @@
+{
+  "template_name": "Set_Mon",
+  "template_type": "parameter",
+  "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": true
+    },
+    "format": {
+      "field_type": "String",
+      "default": "#.##"
+    },
+    "unit": {
+      "field_type": "String",
+      "default": "V"
+    },
+    "eng_min": {
+      "field_type": "Numeric",
+      "default": 0
+    },
+    "eng_max": {
+      "field_type": "Numeric",
+      "default": 100
+    }
+  },
+  "children": [
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Set",
+      "fields": {
+        "format": "#",
+        "unit": "Hz",
+        "eng_min": 1,
+        "eng_max": 500
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Mon",
+      "fields": {
+        "format": "#",
+        "unit": "Hz",
+        "eng_max": 500
+      }
+    }
+  ]
+}

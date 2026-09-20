@@ -15,3 +15,6 @@ export type { AnalogInProps } from './AnalogIn.js';
 
 export { Timer } from './Timer.js';
 export type { TimerProps } from './Timer.js';
+
+export { SpectrumChart } from './SpectrumChart.js';
+export type { SpectrumChartProps } from './SpectrumChart.js';

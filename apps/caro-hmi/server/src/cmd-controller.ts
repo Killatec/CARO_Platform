@@ -1,6 +1,7 @@
 import type { MqttBridge, CmdAck } from './mqtt-bridge.js';
 import type { HmiTagSource } from './hmi-tag-source.js';
 import type { TagDef } from '@caro/hmi-context';
+import { upsertPendingSetpoints, getPendingSetpointsByTagIds } from '@caro/db';
 
 export type { CmdAck };
 
@@ -19,6 +20,12 @@ interface PendingCommand {
   timer: ReturnType<typeof setTimeout>;
 }
 
+interface PendingVoidCommand {
+  resolve: () => void;
+  reject:  (e: Error) => void;
+  timer:   ReturnType<typeof setTimeout>;
+}
+
 export interface CmdControllerDeps {
   mqttBridge: MqttBridge;
   hmiTagSource: HmiTagSource;
@@ -31,7 +38,8 @@ export class CmdController {
   private readonly hmiTagSource: HmiTagSource;
   private readonly tagMap: Map<number, TagDef>;
   private readonly ackTimeoutMs: number;
-  private readonly pending = new Map<string, PendingCommand>();
+  private readonly pending     = new Map<string, PendingCommand>();
+  private readonly pendingVoid = new Map<string, PendingVoidCommand>();
   private readonly moduleTypeMap: Map<string, string>;
 
   constructor(deps: CmdControllerDeps) {
@@ -46,6 +54,26 @@ export class CmdController {
     );
 
     this.mqttBridge.onCmdAck((_moduleId, ack) => {
+      const voidEntry = this.pendingVoid.get(ack.command_id);
+      if (voidEntry) {
+        clearTimeout(voidEntry.timer);
+        this.pendingVoid.delete(ack.command_id);
+        const topLevelError = ack.error;
+        const rejected = (ack.results ?? []).find(r => !r.accepted);
+        if (topLevelError) {
+          const e = new Error(`Command rejected: ${topLevelError}`) as Error & { code: string };
+          e.code = 'COMMAND_REJECTED';
+          voidEntry.reject(e);
+        } else if (rejected) {
+          const e = new Error(`Command rejected: ${rejected.rejection_code ?? 'UNKNOWN'}`) as Error & { code: string };
+          e.code = 'COMMAND_REJECTED';
+          voidEntry.reject(e);
+        } else {
+          voidEntry.resolve();
+        }
+        return;
+      }
+
       const entry = this.pending.get(ack.command_id);
       if (!entry) return;
       clearTimeout(entry.timer);
@@ -122,6 +150,42 @@ export class CmdController {
     }
   }
 
+  sendCommand(moduleId: string, cmdStr: string): Promise<void> {
+    const moduleType = this.moduleTypeMap.get(moduleId);
+
+    if (moduleType === 'MQTT') {
+      const commandId = crypto.randomUUID();
+      const command   = { command_id: commandId, command_type: cmdStr, ts_utc_ms: Date.now(), payload: {} };
+
+      return new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          this.pendingVoid.delete(commandId);
+          const e = new Error('Command timed out — no ACK received') as Error & { code: string; status: number };
+          e.code   = 'TIMEOUT';
+          e.status = 504;
+          reject(e);
+        }, this.ackTimeoutMs);
+
+        this.pendingVoid.set(commandId, { resolve, reject, timer });
+        this.mqttBridge.publishCommand(moduleId, command);
+      });
+    }
+
+    if (moduleType === 'HMI') {
+      if (cmdStr === 'RESET') {
+        this.hmiTagSource.reset();
+        return Promise.resolve();
+      }
+      const err = new Error(`Command '${cmdStr}' is not supported for HMI modules`) as Error & { code: string; status: number };
+      err.code   = 'COMMAND_NOT_SUPPORTED';
+      err.status = 400;
+      return Promise.reject(err);
+    }
+
+    // Other module types — no-op
+    return Promise.resolve();
+  }
+
   private sendToMqttModule(
     moduleId: string,
     moduleValues: Array<{ tag_id: number; value: number | boolean }>,
@@ -147,7 +211,20 @@ export class CmdController {
       }, this.ackTimeoutMs);
 
       this.pending.set(commandId, {
-        resolve: (results) => resolve({ module_id: moduleId, command_id: commandId, results }),
+        resolve: (results) => {
+          const accepted = results
+            .filter(r => r.accepted)
+            .flatMap(r => {
+              const v = moduleValues.find(mv => mv.tag_id === r.tag_id);
+              return v ? [{ tag_id: r.tag_id, value: v.value }] : [];
+            });
+          if (accepted.length > 0) {
+            upsertPendingSetpoints(accepted).catch((err: unknown) =>
+              console.error('[CmdController] pending setpoint upsert failed:', (err as Error).message),
+            );
+          }
+          resolve({ module_id: moduleId, command_id: commandId, results });
+        },
         timer,
       });
 
@@ -167,5 +244,33 @@ export class CmdController {
       command_id: '',
       results:    moduleValues.map(v => ({ tag_id: v.tag_id, accepted: true })),
     });
+  }
+
+  /**
+   * Reads pending setpoints for the given MQTT module from the DB and
+   * re-publishes them as a SET_VALUES command (fire-and-forget, no ACK
+   * tracking). Called on startup and on STALLED→OK watchdog transition.
+   */
+  async restorePendingSetpoints(moduleId: string): Promise<void> {
+    const moduleType = this.moduleTypeMap.get(moduleId);
+    if (moduleType !== 'MQTT') return;
+
+    const tagIds = [...this.tagMap.entries()]
+      .filter(([, t]) => t.module_id === moduleId && t.is_setpoint)
+      .map(([tagId]) => tagId);
+
+    if (tagIds.length === 0) return;
+
+    const rows = await getPendingSetpointsByTagIds(tagIds);
+    if (rows.length === 0) return;
+
+    this.mqttBridge.publishCommand(moduleId, {
+      command_id:   crypto.randomUUID(),
+      command_type: 'SET_VALUES',
+      ts_utc_ms:    Date.now(),
+      payload:      { values: rows.map(r => ({ tag_id: r.tag_id, value: r.value as number | boolean })) },
+    });
+
+    console.log(`[CmdController] restored ${rows.length} pending setpoint(s) to ${moduleId}`);
   }
 }

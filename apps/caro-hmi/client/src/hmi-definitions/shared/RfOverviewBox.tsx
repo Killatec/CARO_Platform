@@ -7,7 +7,7 @@ export function RfOverviewBox() {
       <h2 style={MODULE_TITLE}>RF Overview</h2>
       <div style={ANALOG_IN_STACK}>
         <AnalogIn assetPath="RF_control.Freq" label="Freq" showHeader={true} />
-        <BooleanSet assetPath="RF_control.Auto" label="Auto" />
+        <BooleanSet assetPath="RF_control.Freq_Auto" label="Auto" />
       </div>
     </div>
   );

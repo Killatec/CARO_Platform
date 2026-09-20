@@ -10,7 +10,7 @@ export const COL = {
   /** Value column */
   value: 'w-[70px] shrink-0',
   /** Unit column */
-  unit: 'w-[30px] shrink-0',
+  unit: 'w-[48px] shrink-0',
 } as const;
 
 /** Shared outer container */
@@ -20,7 +20,7 @@ export const ROW_CONTAINER = 'inline-flex flex-row items-center gap-3 px-2 py-1.
 export const LABEL_CLASS = `${COL.label} text-xs text-gray-900 font-medium tracking-wide truncate`;
 
 /** Shared unit class — fixed width, centered */
-export const UNIT_CLASS = `${COL.unit} min-w-[2rem] text-xs text-gray-900 text-left`;
+export const UNIT_CLASS = `${COL.unit} min-w-[3rem] text-xs text-gray-900 text-left`;
 
 /** Shared value class (normal quality — read-only) */
 export const VALUE_CLASS = `${COL.value} font-mono text-sm text-gray-900 text-right`;

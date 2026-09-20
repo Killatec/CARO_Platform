@@ -39,6 +39,7 @@ export class TelemetryIntake {
   private readonly dutyTracker: DutyTracker;
 
   private trendDeltaListener: ((moduleTs: number, moduleId: string) => void) | null = null;
+  private moduleRecoveredHandler: ((moduleId: string) => void) | null = null;
 
   private trendSnapshotPending = new Set<string>();
 
@@ -114,6 +115,10 @@ export class TelemetryIntake {
     this.trendDeltaListener = fn;
   }
 
+  setModuleRecoveredHandler(fn: ((moduleId: string) => void) | null): void {
+    this.moduleRecoveredHandler = fn;
+  }
+
   markTrendSnapshotPending(moduleId: string): void {
     this.trendSnapshotPending.add(moduleId);
   }
@@ -159,6 +164,10 @@ export class TelemetryIntake {
           // Latch the watchdog indicator (survives comms resumption until manual reset)
           this.watchdogLatched.add(moduleId);
         } else {
+          if (this.timedOutModules.has(moduleId)) {
+            // STALLED → OK transition: request a snapshot so LKV is repopulated immediately
+            this.moduleRecoveredHandler?.(moduleId);
+          }
           // Comms are live — auto-clear the real-time stall flag
           this.timedOutModules.delete(moduleId);
         }

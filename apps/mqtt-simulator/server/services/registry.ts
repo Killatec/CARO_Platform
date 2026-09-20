@@ -20,10 +20,20 @@ export interface SimTag {
 export async function loadTagRegistry(): Promise<SimTag[]> {
   const rows = await getActiveTags();
 
-  const mqttRows = rows.filter(row => row.module_type === 'MQTT');
+  const excluded = new Set(
+    (process.env.SIMULATOR_EXCLUDE_MODULES ?? '').split(',').map(s => s.trim()).filter(Boolean)
+  );
+
+  const mqttRows = rows.filter(
+    row => row.module_type === 'MQTT' && !excluded.has(row.module ?? 'unknown')
+  );
 
   if (mqttRows.length === 0) {
     throw new Error('tag_registry returned no active MQTT tags — apply a registry revision first.');
+  }
+
+  if (excluded.size > 0) {
+    console.log(`[Registry] Excluding modules: ${[...excluded].join(', ')}`);
   }
 
   return mqttRows.map(row => ({

@@ -21,7 +21,8 @@
       "fields": {
         "Trends": true,
         "format": "#",
-        "data_type": "i16"
+        "data_type": "i16",
+        "eng_max": 1000
       }
     },
     {

@@ -5,6 +5,7 @@ import { Beam1Page } from './pages/Beam1Page.js';
 import { RfControlPage } from './pages/RfControlPage.js';
 import { PowerPage } from './pages/PowerPage.js';
 import { CoolingPage } from './pages/CoolingPage.js';
+import { PolePage } from './pages/PolePage.js';
 import { TrendsPerfTestPage } from './pages/TrendsPerfTestPage.js';
 import { TrendViewerTestPage } from './pages/TrendViewerTestPage.js';
 
@@ -33,6 +34,11 @@ export const tree: TreeNode[] = [
     id: 'cooling',
     label: 'Cooling',
     page: CoolingPage,
+  },
+  {
+    id: 'pole',
+    label: 'Pole',
+    page: PolePage,
   },
   {
     id: 'summary',

@@ -7,6 +7,7 @@ export interface CmdAck {
   command_id:   string;
   command_type: string;
   ts_utc_ms:    number;
+  error?:       string;
   results?:     Array<{ tag_id: number; accepted: boolean; rejection_code?: string }>;
 }
 

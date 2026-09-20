@@ -18,7 +18,8 @@
       "PowerShell(Set-Location c:\\\\KillaTec\\\\CARO_Platform; npm run build --workspace=packages/db 2>&1 | Select-Object -Last 5; Write-Host \"db build: $LASTEXITCODE\")",
       "PowerShell(Set-Location c:\\\\KillaTec\\\\CARO_Platform; npm run build --workspace=packages/trend-chart 2>&1 | Select-Object -Last 5; Write-Host \"trend-chart build: $LASTEXITCODE\")",
       "PowerShell(cd c:\\\\KillaTec\\\\CARO_Platform; \\(Get-Content packages/trend-chart/package.json | ConvertFrom-Json\\).scripts)",
-      "PowerShell(cd c:\\\\KillaTec\\\\CARO_Platform; $pkg = Get-Content packages/trend-chart/package.json | ConvertFrom-Json; $pkg.scripts | ConvertTo-Json)"
+      "PowerShell(cd c:\\\\KillaTec\\\\CARO_Platform; $pkg = Get-Content packages/trend-chart/package.json | ConvertFrom-Json; $pkg.scripts | ConvertTo-Json)",
+      "Bash(npx tsc *)"
     ]
   }
 }

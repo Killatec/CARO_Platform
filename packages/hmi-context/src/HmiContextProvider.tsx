@@ -203,6 +203,12 @@ export function HmiContextProvider({ children, apiUrl, wsUrl }: HmiContextProvid
       };
 
       const onDisconnect = () => {
+        // Null out all live values — widgets show bad-quality until the reconnect SNAPSHOT arrives.
+        const nullLv: LiveValue = { value: null };
+        for (const [tagId, subs] of subscribersRef.current) {
+          valuesRef.current.set(tagId, nullLv);
+          subs.forEach(cb => cb(nullLv));
+        }
         // Server connection lost — it forgets all subscriptions.
         // Leave desiredRef/trendDesiredRef intact; next onopen reconciles from them.
         serverRef.current.clear();
@@ -326,6 +332,23 @@ export function HmiContextProvider({ children, apiUrl, wsUrl }: HmiContextProvid
     [scheduleFlush]
   );
 
+  const sendCommand = useCallback(
+    async (moduleId: string, cmdStr: string): Promise<void> => {
+      const res = await fetch(`${apiUrl}/commands`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ module_id: moduleId, cmd_str: cmdStr }),
+      });
+      const json = (await res.json()) as { ok: boolean; error?: { code: string; message: string } };
+      if (!json.ok) {
+        const err = new Error(json.error?.message ?? 'Command failed') as Error & { code?: string };
+        err.code = json.error?.code;
+        throw err;
+      }
+    },
+    [apiUrl]
+  );
+
   const writeTag = useCallback(
     async (tagId: number, value: number | boolean | string): Promise<void> => {
       const res = await fetch(`${apiUrl}/tags/write`, {
@@ -366,8 +389,8 @@ export function HmiContextProvider({ children, apiUrl, wsUrl }: HmiContextProvid
   // getLiveValue/subscribeLiveValue/writeTag are stable refs (useCallback with stable deps).
   // wsStats is intentionally NOT here — it lives in its own context to avoid churn.
   const dataValue = useMemo<HmiDataContextValue>(
-    () => ({ tagMap: tagMapRef.current, tagPathIndex: tagPathIndexRef.current, getLiveValue, subscribeLiveValue, subscribeTrend, writeTag }),
-    [tagMapLoaded, getLiveValue, subscribeLiveValue, subscribeTrend, writeTag] // eslint-disable-line react-hooks/exhaustive-deps
+    () => ({ tagMap: tagMapRef.current, tagPathIndex: tagPathIndexRef.current, getLiveValue, subscribeLiveValue, subscribeTrend, writeTag, sendCommand }),
+    [tagMapLoaded, getLiveValue, subscribeLiveValue, subscribeTrend, writeTag, sendCommand] // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   if (!tagMapLoaded) return null;

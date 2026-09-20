@@ -15,4 +15,6 @@ export { PSMainTxBox } from './PSMainTxBox.js';
 export { PSHvSwitchBox } from './PSHvSwitchBox.js';
 export { PSPulserBox } from './PSPulserBox.js';
 export { CoolingLoopBox } from './CoolingLoopBox.js';
+export { PoleBox } from './PoleBox.js';
+export { SpecABox } from './SpecABox.js';
 export * from './styles.js';

@@ -197,7 +197,7 @@ Every widget reflects the quality of its tag value. Quality is determined by che
 | State | Visual Treatment |
 |---|---|
 | value !== null | Normal display. No indicator shown. |
-| value === null | Value display shows a dash (`---`) instead of the value. Widget background or border tinted with a subtle red (`bg-red-500/10` or `border-red-400`). Tooltip: 'No signal — device not connected or value not yet received.' |
+| value === null | Value display shows a dash (`---`) or neutral indicator instead of the value. Red text styling applied to signal no live value. Setpoint widgets remain interactive — null quality does not block writes. Null is the normal initial state for any tag that has not yet received telemetry; it also occurs when the watchdog fires on a stalled module. Write validation and range enforcement are server concerns. |
 
 > *NOTE: `value === null` is the initial state for all tags before the first telemetry snapshot is received from the device. Widgets must handle this gracefully — never show undefined or NaN. The "uncertain" quality state has been removed; values are either present (non-null) or absent (null).*
 
@@ -286,7 +286,7 @@ Editable numeric setpoint widget for f32 tags. Displays the confirmed device val
 - **ArrowUp / ArrowDown:** Prevented via `e.preventDefault()` on keydown.
 - **No client-side range validation.** The server validates all writes before publishing MQTT commands. Server-side rejections surface through `useTagWriter.error()` and display as inline error text below the widget.
 - **Write error:** Displayed below the widget as red text whenever `useTagWriter.error(tag.tag_id)` is non-null, regardless of whether the input is focused or idle.
-- value === null: input displays `---`, is disabled, red styling applied. Cannot edit.
+- value === null: input displays `---` in red. Still editable — null reflects no live value yet, not an offline guard. Write validation is server-side.
 - Write in progress (`useWriteGuard.isWriting`): input is read-only (not disabled) to prevent double-submits while retaining focus. Enter handler returns early if isWriting is true.
 
 **Usage Example**
@@ -350,7 +350,7 @@ Toggleable boolean setpoint. Displays the confirmed state and allows Supervisors
 - Displays a toggle switch (28×14px). Track color follows trueColor/falseColor props. Uses role='switch' and aria-checked.
 - On click: if `requireConfirm=true`, opens a confirmation dialog. On confirm (or immediately if `requireConfirm=false`), calls `write(tag.tag_id, !currentValue)` from useTagWriter.
 - Write-in-flight state is managed by `useWriteGuard` — toggle is disabled while `isWriting` is true. Write errors surface through `useTagWriter.error(tag.tag_id)` and display as inline red text below the widget.
-- value === null: toggle is disabled with tooltip 'Cannot write — device not connected.'
+- value === null: toggle renders in the OFF position (null treated as false). Still interactive — clicking writes `true` (the inverse of null/false). Null quality does not block writes. Write validation is server-side.
 
 **Usage Example**
 

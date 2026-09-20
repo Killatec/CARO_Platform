@@ -33,9 +33,9 @@ export function ToggleSwitch({
     backgroundColor: trackColor,
     position: 'relative',
     transition: 'background-color 0.2s ease',
-    cursor: badQuality ? 'not-allowed' : 'pointer',
-    opacity: badQuality ? 0.5 : 1,
-    border: badQuality ? '1px dashed #f87171' : 'none',
+    cursor: 'pointer',
+    opacity: 1,
+    border: badQuality ? '2px dashed #f87171' : 'none',
     flexShrink: 0,
   };
 
@@ -46,7 +46,7 @@ export function ToggleSwitch({
     backgroundColor: '#fff',
     position: 'absolute',
     top: 2,
-    left: !badQuality && isTrue ? 16 : 2,
+    left: isTrue ? 16 : 2,
     transition: 'left 0.2s ease',
     boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
   };
@@ -55,7 +55,7 @@ export function ToggleSwitch({
     <button
       type="button"
       onClick={onClick}
-      disabled={badQuality || isWriting}
+      disabled={isWriting}
       className="flex items-center bg-transparent border-none p-0"
       data-testid="toggle-button"
       role="switch"

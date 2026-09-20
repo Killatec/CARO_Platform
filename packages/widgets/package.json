@@ -8,6 +8,9 @@
     ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" }
   },
   "scripts": { "build": "tsc", "test": "vitest run" },
+  "dependencies": {
+    "uplot": "^1.6.31"
+  },
   "peerDependencies": {
     "react": "^18.0.0",
     "@caro/hmi-context": "^1.0.0",

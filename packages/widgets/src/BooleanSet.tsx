@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useLiveValue, useTagWriter } from '@caro/hmi-context';
-import { Button, Modal, Tooltip } from '@caro/ui';
+import { Button, Modal } from '@caro/ui';
 import { useSingleTag } from './shared/useSingleTag.js';
 import { resolveLabel } from './shared/utils.js';
 import { ROW_CONTAINER, LABEL_CLASS, COL } from './shared/widgetStyles.js';
@@ -44,7 +44,7 @@ function BooleanSetInner({
   const [pendingNewValue, setPendingNewValue] = useState<boolean | null>(null);
 
   function handleToggle() {
-    if (badQuality || isWriting) return;
+    if (isWriting) return;
     const newValue = !(lv.value as boolean);
     if (requireConfirm) {
       setPendingNewValue(newValue);
@@ -74,17 +74,15 @@ function BooleanSetInner({
       <div className={ROW_CONTAINER}>
         <span className={LABEL_CLASS}>{displayLabel}</span>
         <div className={`${COL.value} flex justify-end`}>
-          <Tooltip content={badQuality ? 'Cannot write — device not connected' : undefined}>
-            <ToggleSwitch
-              isTrue={isTrue}
-              badQuality={badQuality}
-              isWriting={isWriting}
-              onClick={handleToggle}
-              trueColor={trueColor}
-              falseColor={falseColor}
-              ariaLabel={`Toggle ${displayLabel}. Current: ${isTrue ? trueLabel : falseLabel}. Click to set ${nextLabel}`}
-            />
-          </Tooltip>
+          <ToggleSwitch
+            isTrue={isTrue}
+            badQuality={badQuality}
+            isWriting={isWriting}
+            onClick={handleToggle}
+            trueColor={trueColor}
+            falseColor={falseColor}
+            ariaLabel={`Toggle ${displayLabel}. Current: ${isTrue ? trueLabel : falseLabel}. Click to set ${nextLabel}`}
+          />
         </div>
       </div>
 

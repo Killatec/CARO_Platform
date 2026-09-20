@@ -112,6 +112,7 @@ describe('useLiveValue', () => {
           subscribeLiveValue,
           subscribeTrend,
           writeTag,
+          sendCommand: async () => {},
         }),
         [getLiveValue, subscribeLiveValue, subscribeTrend, writeTag]
       );

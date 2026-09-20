@@ -53,6 +53,7 @@ export interface HmiDataContextValue {
     callback: (moduleTs: number, value: number | boolean | string | null) => void,
   ) => () => void;
   writeTag: (tagId: number, value: number | boolean | string) => Promise<void>;
+  sendCommand: (moduleId: string, cmdStr: string) => Promise<void>;
 }
 
 /** Shape of the context value shared between provider and hooks. */
