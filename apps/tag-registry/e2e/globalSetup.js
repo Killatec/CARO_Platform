@@ -1,30 +1,15 @@
 import { spawn, execSync } from 'child_process';
-import { readFileSync } from 'fs';
 import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
+import dotenv from 'dotenv';
+import { findWorkspaceRoot } from '@caro/server/env';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const serverDir = path.resolve(__dirname, '../server');
 const clientDir = path.resolve(__dirname, '../client');
 const envTestPath = path.join(serverDir, '.env.test');
-
-/**
- * Parse a .env file into a plain object. Ignores blank lines and # comments.
- */
-function parseEnvFile(filePath) {
-  const content = readFileSync(filePath, 'utf8');
-  const env = {};
-  for (const line of content.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const idx = trimmed.indexOf('=');
-    if (idx === -1) continue;
-    env[trimmed.slice(0, idx).trim()] = trimmed.slice(idx + 1).trim();
-  }
-  return env;
-}
 
 /**
  * Throws if the given TCP port is already bound. Resolves silently if free.
@@ -62,24 +47,59 @@ async function waitForReady(url, label, timeoutMs = 30000, intervalMs = 500) {
 }
 
 export default async function globalSetup() {
-  const testEnv = parseEnvFile(envTestPath);
+  // Same precedence @caro/server/env's loadEnv() applies for every running
+  // server, resolved the same way dotenv resolves it there: app-local
+  // (.env.test) first, root .env filling in whatever is still unset — one
+  // dotenv.config() call with an array `path`, earlier entries winning.
+  // Reusing findWorkspaceRoot() (rather than re-deriving the root path) is
+  // what keeps this resolution and loadEnv()'s from ever drifting apart.
+  //
+  // globalSetup itself never calls loadEnv() (it isn't a server, and it needs
+  // these values as a plain object to build pgEnv/serverEnv from, not to
+  // mutate its own process.env) — `processEnv` points dotenv at a throwaway
+  // object instead of the real process.env, so this resolves POSTGRES_PASSWORD
+  // and the other now-root-only keys with the exact same precedence, without
+  // duplicating it by hand.
+  const workspaceRoot = findWorkspaceRoot(__dirname);
+  const rootEnvPath = workspaceRoot === null ? null : path.join(workspaceRoot, '.env');
+  const fileEnv = {};
+  dotenv.config({
+    path: rootEnvPath === null ? [envTestPath] : [envTestPath, rootEnvPath],
+    processEnv: fileEnv,
+  });
 
   // TARGET_DB controls which database the test server connects to.
   // Defaults to caro_test (safe isolated clone). Set to caro_dev to skip
   // the clone step and run against the live development database.
   const targetDb = process.env.TARGET_DB ?? 'caro_test';
 
-  // Env for pg cli tools — PGPASSWORD is the native PostgreSQL CLI convention
+  // The clone source is whatever project database is currently live.
+  // Precedence: an ambient POSTGRES_DATABASE (injected by a parent process)
+  // beats the file-configured value, which beats the caro_dev default —
+  // matching loadEnv()'s own precedence. Falling back to caro_dev keeps
+  // behaviour unchanged when nothing is configured; reading the file-based
+  // value (not just the ambient environment) means this still works now that
+  // POSTGRES_DATABASE normally lives in the root .env rather than a shell var.
+  const dumpSourceDb = process.env.POSTGRES_DATABASE ?? fileEnv.POSTGRES_DATABASE ?? 'caro_dev';
+
+  // Env for pg cli tools — PGPASSWORD is the native PostgreSQL CLI convention.
+  // Same precedence: ambient wins, then the file-resolved value, then empty.
+  // Decided deliberately: .env.test no longer carries its own POSTGRES_PASSWORD
+  // (moved to root, like every app's own .env), so this reads the root value
+  // via the same dotenv.config() call above rather than keeping a second copy
+  // in .env.test that could drift from it.
   const pgEnv = {
     ...process.env,
-    PGPASSWORD: testEnv.POSTGRES_PASSWORD ?? process.env.POSTGRES_PASSWORD ?? '',
+    PGPASSWORD: process.env.POSTGRES_PASSWORD ?? fileEnv.POSTGRES_PASSWORD ?? '',
   };
 
-  // ── Step 1: Clone caro_dev → targetDb (skipped when targeting caro_dev) ─────
+  // ── Step 1: Clone dumpSourceDb → targetDb (skipped when targeting it directly) ──
 
-  if (targetDb === 'caro_dev') {
-    console.log('[globalSetup] TARGET_DB=caro_dev — skipping DB clone, using live database.');
+  if (targetDb === dumpSourceDb) {
+    console.log(`[globalSetup] TARGET_DB=${targetDb} — skipping DB clone, using live database.`);
   } else {
+    console.log(`[globalSetup] Seeding ${targetDb} from ${dumpSourceDb} (resolved from: ${process.env.POSTGRES_DATABASE ? 'ambient env' : fileEnv.POSTGRES_DATABASE ? 'root .env' : 'default'})`);
+
     const dumpPath = path.join(os.tmpdir(), 'caro_test_clone.dump').replace(/\\/g, '/');
 
     console.log(`[globalSetup] Dropping and recreating ${targetDb}...`);
@@ -92,8 +112,8 @@ export default async function globalSetup() {
       stdio: 'inherit',
     });
 
-    console.log(`[globalSetup] Dumping caro_dev → ${dumpPath} ...`);
-    execSync(`pg_dump -U postgres -Fc caro_dev -f "${dumpPath}"`, {
+    console.log(`[globalSetup] Dumping ${dumpSourceDb} → ${dumpPath} ...`);
+    execSync(`pg_dump -U postgres -Fc ${dumpSourceDb} -f "${dumpPath}"`, {
       env: pgEnv,
       stdio: 'inherit',
     });
@@ -111,8 +131,15 @@ export default async function globalSetup() {
   console.log(`[globalSetup] Starting Express test server on port 3099 (db: ${targetDb})...`);
 
   // POSTGRES_DATABASE in serverEnv is overridden by targetDb, taking precedence over
-  // whatever is set in .env.test.
-  const serverEnv = { ...process.env, ...testEnv, NODE_ENV: 'test', POSTGRES_DATABASE: targetDb };
+  // the file-resolved value. PROJECT_ROOT is forced to '*' so the apply-gate
+  // (server-side rootName check) doesn't reject the dynamically-named roots the
+  // e2e suite creates per test. Spreading fileEnv (built from .env.test, not the
+  // spawned server's real .env) here is what carries .env.test's own overrides
+  // (e.g. PORT=3099) into the child — the spawned server's own loadEnv() call
+  // reads its real app-local .env, never .env.test, so it wouldn't see those on
+  // its own; the root-only keys (POSTGRES_*, etc.) would resolve either way,
+  // since the child independently loads the same root .env at its own startup.
+  const serverEnv = { ...process.env, ...fileEnv, NODE_ENV: 'test', POSTGRES_DATABASE: targetDb, PROJECT_ROOT: '*' };
 
   const serverProc = spawn('npx', ['tsx', 'src/index.ts'], {
     cwd: serverDir,

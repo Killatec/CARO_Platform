@@ -1,7 +1,7 @@
-import 'dotenv/config';
 import http from 'http';
 import os from 'os';
 import { ping, runMigrations, getActiveTags, pingTimescale, runTimescaleMigrations } from '@caro/db';
+import { loadEnv } from '@caro/server/env';
 import { config } from './config.js';
 import { loadTagMap } from './tag-map.js';
 import { LkvCache } from './lkv.js';
@@ -32,10 +32,23 @@ function getLocalIPs(): string[] {
 }
 
 async function start(): Promise<void> {
+  // -1. Load env: app-local .env first, then the monorepo root .env filling in
+  // whatever is still unset (see @caro/server/env). Called explicitly here
+  // rather than as an import side effect — note this runs after this file's
+  // own top-level imports (including ./config.js) have already been
+  // evaluated. ./config.js protects its own module-scope env reads with its
+  // own `import 'dotenv/config'` (app-local only); nothing else in this app
+  // reads process.env at module scope (see the env-consolidation summary).
+  const envResult = loadEnv();
+
   // 0. Verify DB connectivity and run migrations
   try {
     await ping();
     console.log(`[HMI] Connected to PostgreSQL`);
+    console.log(
+      `[env] app-local: ${envResult.appEnvLoaded ? 'loaded' : 'NOT FOUND'} (${envResult.appEnvPath}) | ` +
+      `root: ${envResult.rootEnvPath === null ? 'workspace root not located' : `${envResult.rootEnvLoaded ? 'loaded' : 'NOT FOUND'} (${envResult.rootEnvPath})`}`,
+    );
   } catch (err) {
     console.error('[HMI] Failed to connect to PostgreSQL:', (err as Error).message);
     process.exit(1);

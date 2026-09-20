@@ -1,11 +1,12 @@
-import dotenv from 'dotenv';
 import os from 'os';
 import { createApp } from './app.js';
 import { initializeIndex } from './services/templateService.js';
 import { ping, runMigrations } from '@caro/db';
+import { loadEnv } from '@caro/server/env';
 
-// Load environment variables
-dotenv.config();
+// Load environment variables: app-local .env first, then the monorepo root
+// .env filling in whatever is still unset (see @caro/server/env).
+const envResult = loadEnv();
 
 // Validate required environment variables
 const REQUIRED_ENV_VARS = ['TEMPLATES_DIR'];
@@ -26,6 +27,10 @@ async function start(): Promise<void> {
     try {
       await ping();
       console.log(`[db] Connected to PostgreSQL (${process.env.POSTGRES_DATABASE ?? 'caro_dev'})`);
+      console.log(
+        `[env] app-local: ${envResult.appEnvLoaded ? 'loaded' : 'NOT FOUND'} (${envResult.appEnvPath}) | ` +
+        `root: ${envResult.rootEnvPath === null ? 'workspace root not located' : `${envResult.rootEnvLoaded ? 'loaded' : 'NOT FOUND'} (${envResult.rootEnvPath})`}`,
+      );
     } catch (err) {
       console.error('[db] Failed to connect to PostgreSQL:', (err as Error).message);
       process.exit(1);

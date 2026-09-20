@@ -16,10 +16,17 @@
     "./errorHandler": {
       "types": "./dist/errorHandler.d.ts",
       "default": "./dist/errorHandler.js"
+    },
+    "./env": {
+      "types": "./dist/env.d.ts",
+      "default": "./dist/env.js"
     }
   },
   "scripts": {
     "build": "tsc"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.6"

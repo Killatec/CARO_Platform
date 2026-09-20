@@ -1,4 +1,14 @@
-import 'dotenv/config';
+import { loadEnv } from '@caro/server/env';
+
+// Module-scope singleton, so its own env load must run before the object
+// literal below does. Only imported by index.ts (nothing else in this app,
+// no test, reaches this file), and index.ts's own loadEnv() call inside
+// start() runs after this module has already evaluated — so this call is
+// load-bearing, not redundant, and makes root .env visible here too (this
+// file previously only ever saw app-local values via its own bare
+// `import 'dotenv/config'`). dotenv.config() is idempotent, so index.ts's
+// later loadEnv() call is a harmless no-op for anything already set here.
+loadEnv();
 
 export const config = {
   hmiPort: parseInt(process.env.HMI_PORT ?? '3003', 10),

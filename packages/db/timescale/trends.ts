@@ -1,6 +1,14 @@
 import { timescaleQuery } from './pool.js';
 
-const LOG_TILE_QUERIES = process.env.TIMESCALE_LOG_TILE_QUERIES === '1';
+// Deferred read, not a module-scope const: this file is reached transitively by
+// any `import ... from '@caro/db'` (re-exports force evaluation of every
+// submodule), which can happen before an app's own env-loading call runs —
+// caching this at import time would silently freeze it at whatever
+// TIMESCALE_LOG_TILE_QUERIES happened to be (usually unset) regardless of
+// what's actually configured.
+function logTileQueriesEnabled(): boolean {
+  return process.env.TIMESCALE_LOG_TILE_QUERIES === '1';
+}
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -322,7 +330,7 @@ async function queryRaw(
   startTime: bigint,
   endTime: bigint,
 ): Promise<Omit<RawTrendTile, 'committedThroughTs'>> {
-  const t0 = LOG_TILE_QUERIES ? performance.now() : 0;
+  const t0 = logTileQueriesEnabled() ? performance.now() : 0;
 
   // Single query: in-window samples + bounded-prev (one per tag, [startTime-5min, startTime))
   // unified via UNION ALL with is_in_window discriminant. One connection per tile.
@@ -376,7 +384,7 @@ async function queryRaw(
     }
   }
 
-  if (LOG_TILE_QUERIES) {
+  if (logTileQueriesEnabled()) {
     console.log(
       `[trends] source=raw tag_count=${tagIds.length} bucket_s=0` +
       ` start=${startTime} end=${endTime} bucket_count=n/a` +
@@ -515,7 +523,7 @@ async function querySegment(
   const rows = await timescaleQuery<AggRow>(sql, [bucketSMs, startTime, endTime, tagIds]);
   const dbElapsedMs = performance.now() - t0;
 
-  if (LOG_TILE_QUERIES) {
+  if (logTileQueriesEnabled()) {
     console.log(
       `[trends] source=${sourceDisplayName(source)} tag_count=${tagIds.length}` +
       ` bucket_s=${bucketSMs / 1000} start=${startTime} end=${endTime}` +
@@ -850,7 +858,7 @@ export async function getTrendTile(
       totalDbElapsedMs: dbElapsedMs,
       rows:             rowCount,
     };
-    if (LOG_TILE_QUERIES) {
+    if (logTileQueriesEnabled()) {
       console.info(
         `[db] getTrendTile start=${startTime} end=${endTime} bucket_count=${bucketCount}` +
         ` source=${meta.finalSource} tag_count=${tagIds.length} rows=${meta.rows}` +
@@ -943,7 +951,7 @@ export async function getTrendTile(
     rows:             metaSegments.reduce((a, s) => a + s.rowCount, 0),
   };
 
-  if (LOG_TILE_QUERIES) {
+  if (logTileQueriesEnabled()) {
     console.info(
       `[db] getTrendTile start=${startTime} end=${endTime} bucket_count=${bucketCount}` +
       ` source=${meta.finalSource} tag_count=${tagIds.length} rows=${meta.rows}` +

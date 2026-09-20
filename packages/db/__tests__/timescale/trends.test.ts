@@ -1626,11 +1626,13 @@ describe.skipIf(!HAVE_TIMESCALE)(
 
 // ── D1 structured perf log — TIMESCALE_LOG_TILE_QUERIES gate ─────────────────
 //
-// LOG_TILE_QUERIES is a module-level const in trends.ts captured at import time
-// from process.env.TIMESCALE_LOG_TILE_QUERIES === '1'. The test checks the same
-// env var at file evaluation time; when the gate is off the test returns early
-// and counts as a silent pass. timescalePool.query is mocked so no real
-// TimescaleDB connection is required.
+// trends.ts reads process.env.TIMESCALE_LOG_TILE_QUERIES lazily via
+// logTileQueriesEnabled() (not a module-scope const — the const form used to
+// get captured at import time, before an app's own env-loading call had run,
+// since this file is reached transitively by any `import ... from '@caro/db'`).
+// This test checks the same env var at file evaluation time; when the gate is
+// off the test returns early and counts as a silent pass. timescalePool.query
+// is mocked so no real TimescaleDB connection is required.
 
 const LOG_TILE_QUERIES_ENABLED = process.env.TIMESCALE_LOG_TILE_QUERIES === '1';
 

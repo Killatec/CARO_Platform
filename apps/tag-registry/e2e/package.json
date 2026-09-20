@@ -13,6 +13,10 @@
     "test:chromium:dev": "cross-env TARGET_DB=caro_dev playwright test --project=chromium",
     "test:dev": "cross-env TARGET_DB=caro_dev playwright test"
   },
+  "dependencies": {
+    "@caro/server": "*",
+    "dotenv": "^16.4.0"
+  },
   "devDependencies": {
     "@playwright/test": "^1.51.0",
     "cross-env": "^10.1.0",
