@@ -23,6 +23,19 @@ function getNodeRow(systemTree, name) {
 }
 
 /**
+ * Expands a node's row if it's currently collapsed (▶). No-ops if already
+ * expanded — expand state persists across reloads via useTreeExpandStore's
+ * localStorage backing, so a blind click can toggle an already-open node shut.
+ */
+async function ensureExpanded(systemTree, name) {
+  const row = getNodeRow(systemTree, name);
+  const btn = row.locator('button').first();
+  if (await btn.count() === 0) return;
+  const label = (await btn.textContent()).trim();
+  if (label === '▶') await btn.click();
+}
+
+/**
  * Clicks Save and waits for the save bar to disappear, confirming a cascade
  * modal if one appears first (e.g. when upstream parents are affected).
  */
@@ -169,7 +182,7 @@ test.describe('Tree Reorder', () => {
   });
 
   // ── Test 4 ───────────────────────────────────────────────────────────────
-  test('cross-parent drag is rejected: child stays under original parent', async ({ page }) => {
+  test('cross-parent drag reparents the child as a sibling under the new parent', async ({ page }) => {
     const ts = Date.now();
     const [cc1, p1, p2, root] = [
       `cc1_cp_${ts}`, `p1_cp_${ts}`, `p2_cp_${ts}`, `root_cp_${ts}`,
@@ -191,21 +204,147 @@ test.describe('Tree Reorder', () => {
     // cc1 is visible nested under p1
     await expect(po.systemTree).toContainText(cc1);
 
-    // Attempt cross-parent drag: cc1 (parent=p1) → top zone of p2 (parent=root)
-    // The drop should be silently rejected (different parentTemplateName)
+    // Cross-parent drag: cc1 (parent=p1) → top zone of p2 (parent=root).
+    // cc1 should reparent to root, landing as a sibling before p2.
     const cc1Row = getNodeRow(po.systemTree, cc1);
     const p2Row  = getNodeRow(po.systemTree, p2);
 
     await cc1Row.dragTo(p2Row, {
       targetPosition: { x: 50, y: 3 },
-    }).catch(() => { /* drop may time out when browser rejects it */ });
+    });
 
-    // Tree must be unchanged: cc1 still nested under p1, before p2 in DOM order
+    // cc1 is no longer nested under p1 — it now sits at root level, before p2.
+    const treeText1 = await po.systemTree.textContent();
+    expect(treeText1.indexOf(p1)).toBeLessThan(treeText1.indexOf(cc1));
+    expect(treeText1.indexOf(cc1)).toBeLessThan(treeText1.indexOf(p2));
+
+    // Dirty state — both p1 (lost a child) and root (gained one) changed.
+    await expect(po.saveButton).toBeVisible();
+
+    // Save and reload; the reparent must persist.
+    await saveAndConfirm(po);
+    await po.selectRoot(root);
+
+    const treeText2 = await po.systemTree.textContent();
+    expect(treeText2.indexOf(p1)).toBeLessThan(treeText2.indexOf(cc1));
+    expect(treeText2.indexOf(cc1)).toBeLessThan(treeText2.indexOf(p2));
+  });
+
+  // ── Test 4a ──────────────────────────────────────────────────────────────
+  test('body-dropping a node onto a sibling nests it as that sibling\'s child', async ({ page }) => {
+    const ts = Date.now();
+    const [cc1, p1, p2, root] = [
+      `cc1_sib_${ts}`, `p1_sib_${ts}`, `p2_sib_${ts}`, `root_sib_${ts}`,
+    ];
+    created.push(cc1, p1, p2, root);
+
+    // root → [p1 -> [cc1], p2]  (p1 and p2 are SIBLINGS under root)
+    await createStructuralTemplate(cc1, 'parameter');
+    await createStructuralTemplate(p2, 'parameter');
+    await createStructuralTemplate(p1, 'parameter', [childRef(cc1)]);
+    await createStructuralTemplate(root, 'system', [childRef(p1), childRef(p2)]);
+
+    await po.selectRoot(root);
+
+    // Body-drop p1 (a sibling of p2 under root) onto p2's own body — this
+    // must nest p1 as a new child of p2, not merely reorder it among root's
+    // children. Reproduces the case where a sibling was previously
+    // impossible to use as a body-drop nesting target at all.
+    const p1Row = getNodeRow(po.systemTree, p1);
+    const p2Row = getNodeRow(po.systemTree, p2);
+    const p2Box = await p2Row.boundingBox();
+
+    await p1Row.dragTo(p2Row, {
+      targetPosition: { x: Math.floor(p2Box.width / 2), y: Math.floor(p2Box.height / 2) },
+    });
+
+    // p2 must now be expandable and show p1 nested beneath it.
+    await ensureExpanded(po.systemTree, p2);
+    await expect(po.systemTree).toContainText(p1);
+
+    const treeText = await po.systemTree.textContent();
+    expect(treeText.indexOf(p2)).toBeLessThan(treeText.indexOf(p1));
+
+    await expect(po.saveButton).toBeVisible();
+
+    await saveAndConfirm(po);
+    await po.selectRoot(root);
+    await ensureExpanded(po.systemTree, p2);
+    await expect(po.systemTree).toContainText(p1);
+  });
+
+  // ── Test 4c ──────────────────────────────────────────────────────────────
+  test('body-dropping a child onto its own current parent is a no-op', async ({ page }) => {
+    const ts = Date.now();
+    const [cc1, cc2, p1, root] = [
+      `cc1_np_${ts}`, `cc2_np_${ts}`, `p1_np_${ts}`, `root_np_${ts}`,
+    ];
+    created.push(cc1, cc2, p1, root);
+
+    // root → [p1 → [cc1, cc2]]
+    await createStructuralTemplate(cc1, 'parameter');
+    await createStructuralTemplate(cc2, 'parameter');
+    await createStructuralTemplate(p1, 'parameter', [childRef(cc1), childRef(cc2)]);
+    await createStructuralTemplate(root, 'system', [childRef(p1)]);
+
+    await po.selectRoot(root);
+
+    const p1Row = getNodeRow(po.systemTree, p1);
+    await p1Row.locator('button').first().click();
+    await expect(po.systemTree).toContainText(cc1);
+
+    // Drag cc1 onto the BODY (dead center) of p1 — its own current parent.
+    // cc1 is already p1's child, so this must not do anything.
+    const cc1Row = getNodeRow(po.systemTree, cc1);
+    const p1Box = await p1Row.boundingBox();
+
+    await cc1Row.dragTo(p1Row, {
+      targetPosition: { x: Math.floor(p1Box.width / 2), y: Math.floor(p1Box.height / 2) },
+    });
+
+    // No dirty state — the drop must be a no-op.
+    await expect(po.saveButton).not.toBeVisible();
+
+    // cc1 and cc2 are still both children of p1, in their original order.
     const treeText = await po.systemTree.textContent();
     expect(treeText.indexOf(p1)).toBeLessThan(treeText.indexOf(cc1));
-    expect(treeText.indexOf(cc1)).toBeLessThan(treeText.indexOf(p2));
+    expect(treeText.indexOf(cc1)).toBeLessThan(treeText.indexOf(cc2));
+  });
 
-    // No dirty state — save bar must not appear
+  // ── Test 4b ──────────────────────────────────────────────────────────────
+  test('reparenting onto own descendant is rejected (cycle prevention)', async ({ page }) => {
+    const ts = Date.now();
+    const [gc1, p1, root] = [
+      `gc1_cyc_${ts}`, `p1_cyc_${ts}`, `root_cyc_${ts}`,
+    ];
+    created.push(gc1, p1, root);
+
+    // root → [p1 → [gc1]]
+    await createStructuralTemplate(gc1, 'parameter');
+    await createStructuralTemplate(p1, 'parameter', [childRef(gc1)]);
+    await createStructuralTemplate(root, 'system', [childRef(p1)]);
+
+    await po.selectRoot(root);
+
+    // Expand p1 to reveal gc1.
+    const p1Row = getNodeRow(po.systemTree, p1);
+    await p1Row.locator('button').first().click();
+    await expect(po.systemTree).toContainText(gc1);
+
+    // Attempt to drop p1 onto its own child gc1 (body zone) — this would make
+    // p1 a child of gc1 while gc1 remains a child of p1, a cycle.
+    const gc1Row = getNodeRow(po.systemTree, gc1);
+    const gc1Box = await gc1Row.boundingBox();
+
+    await p1Row.dragTo(gc1Row, {
+      targetPosition: { x: Math.floor(gc1Box.width / 2), y: Math.floor(gc1Box.height / 2) },
+    }).catch(() => { /* drop may time out when the browser rejects it */ });
+
+    // Tree must be unchanged: gc1 still nested under p1.
+    const treeText = await po.systemTree.textContent();
+    expect(treeText.indexOf(p1)).toBeLessThan(treeText.indexOf(gc1));
+
+    // No dirty state — the drop must have been rejected before it mutated anything.
     await expect(po.saveButton).not.toBeVisible();
   });
 

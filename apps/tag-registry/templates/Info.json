@@ -15,6 +15,43 @@
         "format": "#",
         "data_type": "i16"
       }
+    },
+    {
+      "template_name": "string_mon",
+      "asset_name": "Status",
+      "fields": {}
+    },
+    {
+      "template_name": "string_mon",
+      "asset_name": "IP",
+      "fields": {}
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Time",
+      "fields": {
+        "data_type": "i16",
+        "unit": "s",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Set_CRC",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "Sets_Ok",
+      "fields": {
+        "Trends": false
+      }
     }
   ]
 }

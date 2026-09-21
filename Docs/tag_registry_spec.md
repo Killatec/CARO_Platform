@@ -465,17 +465,23 @@ Non-root nodes have a trash icon (always visible). Clicking it removes the child
 
 Every non-root tree node is **draggable**. Drop targets use a three-zone model determined by cursor position within the target row:
 
-- **Top band (8 px):** Insert the dragged item before this sibling (relative to its parent template's `children` array).
-- **Body (middle area):** Add the dragged item as a new child of this node — non-`tag` nodes only (existing behaviour).
-- **Bottom band (8 px):** Insert the dragged item after this sibling.
+- **Top band (8 px):** Insert the dragged item as a sibling before this node, within this node's own parent's `children` array.
+- **Body (middle area):** Nest the dragged item as a new child of this node — non-`tag` nodes only (tags cannot have children).
+- **Bottom band (8 px):** Insert the dragged item as a sibling after this node, within this node's own parent's `children` array.
 
 Root nodes expose only the body zone (they have no parent to insert into). Tag nodes expose only top and bottom zones (tags cannot have children).
 
 **Visual feedback:** top and bottom zones display a 2 px blue horizontal line at the corresponding edge of the row. The body zone displays a blue dashed border.
 
-**Drag-and-drop reordering** — A non-root node can be dragged to a different position within the same parent to reorder its siblings. The node is spliced out of its original position and inserted at the drop position. This modifies the parent template's `children` array and enters the normal pending-edit / Save flow.
+**Drag-and-drop reordering and reparenting** — the same three-zone model applies whether or not the hovered node currently shares the dragged item's parent:
+- **Top/bottom bands** always insert the dragged item as a sibling within the *hovered node's own parent*. When that parent happens to be the dragged item's current parent, this is a same-array reorder (splice out, splice back in); otherwise it's a cross-parent sibling insert.
+- **Body zone** always nests the dragged item as a new child of the *hovered node itself* — including when the hovered node is currently a sibling of the dragged item. Whether nesting is available never depends on the current sibling relationship, only on the two restrictions below.
 
-**Cross-parent reparenting is not supported.** Dropping a node onto a zone that belongs to a different parent is silently rejected — no visual indicator is shown and the tree is unchanged. This restriction is intentional: reparenting changes `tag_path` values, which retires existing `tag_id`s and creates new ones, breaking downstream references to those identifiers.
+Two things block a drop regardless of zone:
+- **Cycle prevention:** a node cannot be dropped where it would create a cycle — the target cannot be the dragged template itself or any of its own descendants (computed from the template graph via a DFS from the dragged template, not from tree position, so it correctly accounts for templates referenced from more than one place in the graph).
+- **No-op suppression:** a same-array reorder that wouldn't change the array (top/bottom over an adjacent position) is suppressed, and a body drop onto the dragged item's own current parent is excluded from the body zone entirely (it would be a no-op — the item is already there) — so no misleading "droppable" highlight appears in either case.
+
+**Tag continuity is not preserved across a reparent.** Reparenting changes the node's `tag_path` (and everything beneath it), which retires the existing `tag_id`(s) and issues new ones on the next registry apply — this is an accepted, known consequence, not a bug. Preserving `tag_id` continuity across a reparent would require rename/move tracking, which is not built (see `platform_todo.md` / handoff "What Is Not Built").
 
 ### 16.3 Editor Page Layout
 

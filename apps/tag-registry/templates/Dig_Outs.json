@@ -1,0 +1,42 @@
+{
+  "template_name": "Dig_Outs",
+  "template_type": "Group",
+  "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": false
+    }
+  },
+  "children": [
+    {
+      "template_name": "boolean_set",
+      "asset_name": "Test_Digital",
+      "fields": {}
+    },
+    {
+      "template_name": "boolean_set",
+      "asset_name": "Force_WatchDog",
+      "fields": {}
+    },
+    {
+      "template_name": "boolean_set",
+      "asset_name": "Force_SCR",
+      "fields": {}
+    },
+    {
+      "template_name": "boolean_set",
+      "asset_name": "Amp_Intk",
+      "fields": {}
+    },
+    {
+      "template_name": "boolean_set",
+      "asset_name": "COM_1_TX",
+      "fields": {}
+    },
+    {
+      "template_name": "boolean_set",
+      "asset_name": "COM_2_TX",
+      "fields": {}
+    }
+  ]
+}

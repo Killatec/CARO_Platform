@@ -1,0 +1,62 @@
+{
+  "template_name": "PhPower",
+  "template_type": "Group",
+  "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": false
+    }
+  },
+  "children": [
+    {
+      "template_name": "Analog_In",
+      "asset_name": "Power",
+      "fields": {}
+    },
+    {
+      "template_name": "Power_PID",
+      "asset_name": "Power_PID",
+      "fields": {}
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "SIM_A",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "SIM_B",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Power_Set_1",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Power_Set_2",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    }
+  ]
+}

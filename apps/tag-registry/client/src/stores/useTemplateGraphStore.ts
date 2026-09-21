@@ -37,6 +37,7 @@ export interface TemplateGraphState {
   discard: () => Promise<void>;
   reorderChild: (parentTemplateName: string, fromIndex: number, toIndex: number) => void;
   insertChild: (parentTemplateName: string, child: ChildRef, atIndex: number) => void;
+  moveChild: (fromParentTemplateName: string, fromIndex: number, toParentTemplateName: string, toIndex: number) => void;
   setValidationState: (state: ValidationState) => void;
 }
 
@@ -374,6 +375,26 @@ export const useTemplateGraphStore = create<TemplateGraphState>((set, get) => ({
     children.splice(clampedIndex, 0, child);
 
     updateTemplate(parentTemplateName, { children });
+  },
+
+  moveChild: (fromParentTemplateName, fromIndex, toParentTemplateName, toIndex) => {
+    if (fromParentTemplateName === toParentTemplateName) return; // same-parent moves go through reorderChild
+
+    const { templateMap, updateTemplate } = get();
+    const fromParent = templateMap.get(fromParentTemplateName)?.template;
+    const toParent   = templateMap.get(toParentTemplateName)?.template;
+    if (!fromParent || !toParent) return;
+
+    const fromChildren = [...(fromParent.children ?? [])];
+    if (fromIndex < 0 || fromIndex >= fromChildren.length) return;
+    const [moved] = fromChildren.splice(fromIndex, 1);
+
+    const toChildren = [...(toParent.children ?? [])];
+    const clampedIndex = Math.max(0, Math.min(toIndex, toChildren.length));
+    toChildren.splice(clampedIndex, 0, moved);
+
+    updateTemplate(fromParentTemplateName, { children: fromChildren });
+    updateTemplate(toParentTemplateName, { children: toChildren });
   },
 
   // ── Utility actions ───────────────────────────────────────────────────────

@@ -1,0 +1,96 @@
+{
+  "template_name": "Dig_Ins",
+  "template_type": "Group",
+  "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": false
+    }
+  },
+  "children": [
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "All_Intks_Ok",
+      "fields": {
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "Intks_Active",
+      "fields": {
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "Spare_DI",
+      "fields": {
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "COM_1_RX",
+      "fields": {
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "COM_2_RX",
+      "fields": {
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "SCR_Enable",
+      "fields": {
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "SC_Status",
+      "fields": {
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "SC_Mag_1_On",
+      "fields": {
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "SC_Mag_2_On",
+      "fields": {
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "Mag_On",
+      "fields": {
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "Remote_Start",
+      "fields": {
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "boolean_mon",
+      "asset_name": "Remote_Stop",
+      "fields": {
+        "Trends": false
+      }
+    }
+  ]
+}

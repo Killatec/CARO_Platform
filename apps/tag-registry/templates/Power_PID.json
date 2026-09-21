@@ -1,0 +1,67 @@
+{
+  "template_name": "Power_PID",
+  "template_type": "Group",
+  "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": false
+    }
+  },
+  "children": [
+    {
+      "template_name": "boolean_set",
+      "asset_name": "Enable",
+      "fields": {}
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "KP",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "KI1",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "KI2",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "KD",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "D_Fil",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    }
+  ]
+}

@@ -5,11 +5,15 @@ import { Modal } from '@caro/ui/primitives';
 import { useTemplateGraphStore } from '../stores/useTemplateGraphStore.js';
 import { useRegistryStore } from '../stores/useRegistryStore.js';
 import { useUIStore } from '../stores/useUIStore.js';
+import { useTagTypesStore } from '../stores/useTagTypesStore.js';
+import { useModuleTypesStore } from '../stores/useModuleTypesStore.js';
 import { useValidation } from '../hooks/useValidation.js';
 import { resolveRegistry } from '@caro/tag-registry-shared';
 import { fetchRegistry, applyRegistry } from '../api/registry.js';
 import { diffRegistry } from '../utils/diffRegistry.js';
 import type { DiffRow } from '../utils/diffRegistry.js';
+import { resolveDisplayRows, sortRegistryRows } from '../utils/registryRows.js';
+import { buildRegistryCsv } from '../utils/exportRegistryCsv.js';
 import type { ActiveTag } from '@caro/db';
 
 type DiffSummary = Record<string, number>;
@@ -21,9 +25,14 @@ export function RegistryPage(): React.ReactElement {
   const templateMap = useTemplateGraphStore(state => state.templateMap);
   const rootTemplateName = useTemplateGraphStore(state => state.rootTemplateName);
   const isDirty = useTemplateGraphStore(state => state.dirtySet.size > 0 || state.pendingDeletions.size > 0);
+  const tags = useRegistryStore(state => state.tags);
   const setTags = useRegistryStore(state => state.setTags);
+  const sortField = useRegistryStore(state => state.sortField);
+  const sortDirection = useRegistryStore(state => state.sortDirection);
   const databaseName = useUIStore(state => state.validationConfig.databaseName);
   const projectRoot = useUIStore(state => state.validationConfig.projectRoot);
+  const dataTypeLabels = useTagTypesStore(state => state.displayNameMap);
+  const moduleTypeLabels = useModuleTypesStore(state => state.displayNameMap);
 
   const { messages, isValid } = useValidation(templateMap, rootTemplateName);
 
@@ -92,6 +101,19 @@ export function RegistryPage(): React.ReactElement {
     setModalOpen(false);
     setApplyComment('');
     setApplyError(null);
+  }
+
+  function handleExportCsv() {
+    if (!rootTemplateName) return;
+    const displayRows = sortRegistryRows(resolveDisplayRows(diffRows, tags), sortField, sortDirection);
+    const csv = buildRegistryCsv(displayRows, dataTypeLabels, moduleTypeLabels);
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${rootTemplateName}_registry.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   async function handleConfirmApply() {
@@ -206,10 +228,17 @@ export function RegistryPage(): React.ReactElement {
                 )}
               </div>
               <button
+                onClick={handleExportCsv}
+                title="Export the current table as CSV"
+                className="ml-auto px-3 py-1 text-sm rounded font-medium transition-colors bg-gray-100 text-gray-700 hover:bg-gray-200"
+              >
+                Export to CSV
+              </button>
+              <button
                 onClick={openModal}
                 disabled={!hasChanges}
                 title={updateDbTitle}
-                className={`ml-auto px-3 py-1 text-sm rounded font-medium transition-colors ${
+                className={`px-3 py-1 text-sm rounded font-medium transition-colors ${
                   hasChanges
                     ? 'bg-blue-600 text-white hover:bg-blue-700'
                     : 'bg-gray-200 text-gray-400 cursor-not-allowed'

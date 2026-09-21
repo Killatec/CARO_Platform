@@ -11,8 +11,10 @@ import type { TreeNodeData } from '../../utils/resolveTree.js';
 import {
   parseDragData,
   getActiveDragData,
+  getActiveDragUnsafeTargets,
   setActiveDragData,
   clearActiveDragData,
+  collectDescendantTemplateNames,
 } from '../../utils/dragTypes.js';
 
 // ── Drop zone ─────────────────────────────────────────────────────────────────
@@ -24,6 +26,13 @@ import {
 //
 // Root nodes expose only the body zone (they have no parent to insert into).
 // Tag nodes expose only top/bottom (tags cannot have children).
+//
+// System-tree drags reorder within the same parent (mid-point split, no body
+// zone — there's nowhere else to put it) or reparent across parents (8 px
+// top/bottom bands + body, same convention as template-panel drops). Reparent
+// targets are checked against the dragged template's own descendant set
+// (see dragTypes.ts) to block drops that would create a cycle in the template
+// graph, including dropping a node onto itself.
 
 type DropZone = 'none' | 'top' | 'body' | 'bottom';
 
@@ -59,6 +68,7 @@ export function TreeNode({
   const updateTemplate      = useTemplateGraphStore(state => state.updateTemplate);
   const reorderChild        = useTemplateGraphStore(state => state.reorderChild);
   const insertChild         = useTemplateGraphStore(state => state.insertChild);
+  const moveChild           = useTemplateGraphStore(state => state.moveChild);
 
   if (!node) return null;
 
@@ -95,19 +105,50 @@ export function TreeNode({
     const y    = e.clientY - rect.top;
 
     if (data.source === 'system-tree') {
-      // Only allow reorder within the same parent.
-      if (isRoot || childIndex === null) return 'none';
-      if (data.parentTemplateName !== parentTemplateName) return 'none';
+      // Can't drop a node onto its own row.
+      if (parentTemplateName === data.parentTemplateName && childIndex === data.childIndex) {
+        return 'none';
+      }
 
-      // Split at mid-point: top half → insert before, bottom half → insert after.
-      const zone: DropZone = y < rect.height / 2 ? 'top' : 'bottom';
+      // Nesting as a child (body zone) is available on ANY hovered node,
+      // sibling or not — whether the hovered node currently shares the
+      // dragged item's parent has no bearing on whether nesting into IT is
+      // valid. Only two things ever block a body drop: a cycle (the target
+      // is the dragged template itself or one of its own descendants) and a
+      // no-op (the target is already the dragged item's current parent).
+      const unsafeTargets = getActiveDragUnsafeTargets();
+      const isOwnCurrentParent = template_name === data.parentTemplateName;
+      const bodyAvailable = isBodyDropTarget && !isOwnCurrentParent && !unsafeTargets?.has(template_name);
 
-      // No-op guard: would this reorder actually change anything?
-      const rawToIndex  = zone === 'top' ? childIndex : childIndex + 1;
-      const adjustedTo  = rawToIndex > data.childIndex ? rawToIndex - 1 : rawToIndex;
-      if (adjustedTo === data.childIndex) return 'none';
+      if (isRoot) {
+        return bodyAvailable ? 'body' : 'none';
+      }
 
-      return zone;
+      // Sibling-insert (top/bottom) targets the HOVERED node's own parent.
+      // When that parent is the dragged item's current parent, it's a
+      // same-array reorder; otherwise it's a cross-parent sibling insert.
+      // Either way it's blocked if that parent is inside the dragged
+      // template's own subtree (cycle).
+      const siblingInsertAvailable =
+        parentTemplateName !== null && !unsafeTargets?.has(parentTemplateName);
+
+      if (y < 8 || y > rect.height - 8) {
+        if (!siblingInsertAvailable) return bodyAvailable ? 'body' : 'none';
+        const zone: DropZone = y < 8 ? 'top' : 'bottom';
+
+        // No-op guard only applies to a same-array reorder (would this
+        // actually change the array?) — a cross-parent sibling insert is
+        // never a no-op.
+        if (parentTemplateName === data.parentTemplateName && childIndex !== null) {
+          const rawToIndex = zone === 'top' ? childIndex : childIndex + 1;
+          const adjustedTo = rawToIndex > data.childIndex ? rawToIndex - 1 : rawToIndex;
+          if (adjustedTo === data.childIndex) return bodyAvailable ? 'body' : 'none';
+        }
+
+        return zone;
+      }
+
+      return bodyAvailable ? 'body' : 'none';
     }
 
     if (data.source === 'template-panel') {
@@ -148,7 +189,7 @@ export function TreeNode({
     e.dataTransfer.setData('application/json', JSON.stringify(data));
     e.dataTransfer.setData('text/plain', template_name);
     e.dataTransfer.effectAllowed = 'move';
-    setActiveDragData(data);
+    setActiveDragData(data, collectDescendantTemplateNames(template_name, templateMap));
   };
 
   const handleDropEvent = async (e: React.DragEvent<HTMLDivElement>) => {
@@ -161,14 +202,27 @@ export function TreeNode({
 
     if (!data || zone === 'none') return;
 
-    // ── System-tree reorder ──────────────────────────────────────────────
+    // ── System-tree reorder / reparent ───────────────────────────────────
     if (data.source === 'system-tree') {
-      if (isRoot || childIndex === null || parentTemplateName === null) return;
-      if (data.parentTemplateName !== parentTemplateName) return; // cross-parent: ignore
+      if (zone === 'body') {
+        // Nest as a new child of this node — always a cross-parent move
+        // (computeDropZone already excludes the dragged item's own current
+        // parent from the body zone).
+        const fresh = useTemplateGraphStore.getState().templateMap.get(template_name)?.template;
+        if (!fresh) return;
+        moveChild(data.parentTemplateName, data.childIndex, template_name, (fresh.children ?? []).length);
+        return;
+      }
 
-      const fromIndex = data.childIndex;
-      const toIndex   = zone === 'top' ? childIndex : childIndex + 1;
-      reorderChild(parentTemplateName, fromIndex, toIndex);
+      // Sibling insert (top/bottom), within THIS node's own parent.
+      if (parentTemplateName === null || childIndex === null) return;
+      const atIndex = zone === 'top' ? childIndex : childIndex + 1;
+
+      if (parentTemplateName === data.parentTemplateName) {
+        reorderChild(parentTemplateName, data.childIndex, atIndex);
+      } else {
+        moveChild(data.parentTemplateName, data.childIndex, parentTemplateName, atIndex);
+      }
       return;
     }
 

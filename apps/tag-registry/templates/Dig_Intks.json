@@ -1,0 +1,63 @@
+{
+  "template_name": "Dig_Intks",
+  "template_type": "Group",
+  "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": false
+    }
+  },
+  "children": [
+    {
+      "template_name": "DI_Intk",
+      "asset_name": "Amtek_Intk",
+      "fields": {
+        "In_Tag_Name": true
+      }
+    },
+    {
+      "template_name": "DI_Intk",
+      "asset_name": "HPS_WD_Intk",
+      "fields": {
+        "In_Tag_Name": true
+      }
+    },
+    {
+      "template_name": "DI_Intk",
+      "asset_name": "SC_Status_Intk",
+      "fields": {
+        "In_Tag_Name": true
+      }
+    },
+    {
+      "template_name": "DI_Intk",
+      "asset_name": "Spec_Intk",
+      "fields": {
+        "In_Tag_Name": true
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Spec_Intk_Delay_Set",
+      "fields": {
+        "data_type": "i16",
+        "unit": "s",
+        "format": "#.#",
+        "eng_min": 0,
+        "eng_max": 32.767,
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Spec_Intk_Delay_Mon",
+      "fields": {
+        "unit": "s",
+        "format": "#.#",
+        "eng_min": 0,
+        "eng_max": 32.767,
+        "Trends": false
+      }
+    }
+  ]
+}

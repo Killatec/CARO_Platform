@@ -130,4 +130,29 @@ test.describe('Registry Page', () => {
     const tagNameCell = row.locator('td').nth(2); // tag_name is 3rd column (index 2)
     await expect(tagNameCell).toContainText('setpoint');
   });
+
+  // ── Test 7 ─────────────────────────────────────────────────────────────────
+  test('Export to CSV button downloads a CSV of the current table', async ({ page }) => {
+    await expect(page.locator('table')).toBeVisible({ timeout: 15000 });
+
+    const exportButton = page.getByRole('button', { name: 'Export to CSV' });
+    await expect(exportButton).toBeVisible();
+
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      exportButton.click(),
+    ]);
+
+    expect(download.suggestedFilename()).toBe(`${sysName}_registry.csv`);
+
+    const csvPath = await download.path();
+    const fs = await import('fs');
+    const csv = fs.readFileSync(csvPath, 'utf-8');
+    const lines = csv.split('\r\n');
+
+    expect(lines[0]).toBe('tag_id,tag_path,tag_name,module,module_type,data_type,is_setpoint,trends,unit,format,eng_min,eng_max,status');
+    const tagPath = `${sysName}.${modMName}.Chan1.setpoint`;
+    expect(csv).toContain(tagPath);
+    expect(csv).toContain('new,'); // not yet applied — row is 'added'
+  });
 });

@@ -1,0 +1,119 @@
+{
+  "template_name": "Phase",
+  "template_type": "Group",
+  "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": false
+    }
+  },
+  "children": [
+    {
+      "template_name": "Analog_In",
+      "asset_name": "Phase",
+      "fields": {
+        "In_Tag_Name": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Set_1",
+      "fields": {
+        "unit": "deg",
+        "format": "#.##",
+        "eng_min": -180,
+        "eng_max": 180
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Set_2",
+      "fields": {
+        "unit": "deg",
+        "format": "#.##",
+        "eng_min": -180,
+        "eng_max": 180
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "X_Offset",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Y_Offset",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Filter_K",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Spread",
+      "fields": {
+        "unit": "deg",
+        "format": "#.#",
+        "eng_min": -180,
+        "eng_max": 180
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Shifter_Set",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "eng_min": -32768,
+        "eng_max": 32767,
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Shifter_CMD",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#"
+      }
+    },
+    {
+      "template_name": "Phase_PID",
+      "asset_name": "PID",
+      "fields": {
+        "In_Tag_Name": true
+      }
+    },
+    {
+      "template_name": "Phase_XY",
+      "asset_name": "Phase_XY",
+      "fields": {
+        "In_Tag_Name": true
+      }
+    },
+    {
+      "template_name": "PhPower",
+      "asset_name": "PhPower",
+      "fields": {}
+    }
+  ]
+}

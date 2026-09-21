@@ -1,0 +1,41 @@
+{
+  "template_name": "Source",
+  "template_type": "Group",
+  "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": false
+    }
+  },
+  "children": [
+    {
+      "template_name": "Analog_In",
+      "asset_name": "Freq",
+      "fields": {
+        "In_Tag_Name": true,
+        "unit": "MHz",
+        "RSS.unit": "MHz/s",
+        "format": "#.###",
+        "eng_min": 900,
+        "eng_max": 930
+      }
+    },
+    {
+      "template_name": "boolean_set",
+      "asset_name": "RF_Enable",
+      "fields": {}
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "PLL_Mux_Out",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "eng_min": 0,
+        "eng_max": 32767,
+        "Trends": false
+      }
+    }
+  ]
+}

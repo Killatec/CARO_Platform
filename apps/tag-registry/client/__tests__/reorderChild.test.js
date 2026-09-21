@@ -59,6 +59,23 @@ function preloadParent(name, children, hash = 'aabbcc') {
   });
 }
 
+/**
+ * Load two independent parent templates into the store at once, for
+ * cross-parent (moveChild) tests.
+ */
+function preloadParents(entries) {
+  const templateMap = new Map();
+  const originalTemplateMap = new Map();
+  const hashes = new Map();
+  for (const [name, children, hash] of entries) {
+    const entry = makeEntry(makeStruct(name, 'parameter', children), hash ?? 'aabbcc');
+    templateMap.set(name, entry);
+    originalTemplateMap.set(name, structuredClone(entry));
+    hashes.set(name, hash ?? 'aabbcc');
+  }
+  useTemplateGraphStore.setState({ templateMap, originalTemplateMap, hashes });
+}
+
 // ── reorderChild ─────────────────────────────────────────────────────────────
 
 describe('reorderChild — move forward (index 0 → after index 2)', () => {
@@ -198,6 +215,75 @@ describe('insertChild — at children.length (end, same as append)', () => {
 
     const result = useTemplateGraphStore.getState().templateMap.get('P').template.children;
     expect(result.map(c => c.asset_name)).toEqual(['child_a', 'child_b', 'child_c', 'NEW']);
+  });
+});
+
+// ── moveChild (cross-parent reparent) ─────────────────────────────────────────
+
+describe('moveChild — reparents a child from one parent to another', () => {
+  it('removes the child from the source parent and inserts it in the target', () => {
+    preloadParents([
+      ['A', [makeChildRef('T1', 'child_a'), makeChildRef('T2', 'child_b')]],
+      ['B', [makeChildRef('T3', 'child_c')]],
+    ]);
+
+    useTemplateGraphStore.getState().moveChild('A', 0, 'B', 1);
+
+    const a = useTemplateGraphStore.getState().templateMap.get('A').template.children;
+    const b = useTemplateGraphStore.getState().templateMap.get('B').template.children;
+    expect(a.map(c => c.asset_name)).toEqual(['child_b']);
+    expect(b.map(c => c.asset_name)).toEqual(['child_c', 'child_a']);
+  });
+
+  it('marks both source and target parents dirty', () => {
+    preloadParents([
+      ['A', [makeChildRef('T1', 'child_a')]],
+      ['B', []],
+    ]);
+
+    useTemplateGraphStore.getState().moveChild('A', 0, 'B', 0);
+
+    const dirtySet = useTemplateGraphStore.getState().dirtySet;
+    expect(dirtySet.has('A')).toBe(true);
+    expect(dirtySet.has('B')).toBe(true);
+  });
+
+  it('appends at the end when toIndex === target children.length (body drop)', () => {
+    preloadParents([
+      ['A', [makeChildRef('T1', 'child_a')]],
+      ['B', [makeChildRef('T2', 'child_b'), makeChildRef('T3', 'child_c')]],
+    ]);
+
+    useTemplateGraphStore.getState().moveChild('A', 0, 'B', 2);
+
+    const b = useTemplateGraphStore.getState().templateMap.get('B').template.children;
+    expect(b.map(c => c.asset_name)).toEqual(['child_b', 'child_c', 'child_a']);
+  });
+
+  it('is a no-op when fromParent and toParent are the same', () => {
+    preloadParents([
+      ['A', [makeChildRef('T1', 'child_a'), makeChildRef('T2', 'child_b')]],
+    ]);
+
+    useTemplateGraphStore.getState().moveChild('A', 0, 'A', 1);
+
+    const a = useTemplateGraphStore.getState().templateMap.get('A').template.children;
+    expect(a.map(c => c.asset_name)).toEqual(['child_a', 'child_b']);
+    expect(useTemplateGraphStore.getState().dirtySet.has('A')).toBe(false);
+  });
+
+  it('is a no-op when fromIndex is out of range', () => {
+    preloadParents([
+      ['A', [makeChildRef('T1', 'child_a')]],
+      ['B', []],
+    ]);
+
+    useTemplateGraphStore.getState().moveChild('A', 5, 'B', 0);
+
+    const a = useTemplateGraphStore.getState().templateMap.get('A').template.children;
+    const b = useTemplateGraphStore.getState().templateMap.get('B').template.children;
+    expect(a.map(c => c.asset_name)).toEqual(['child_a']);
+    expect(b).toEqual([]);
   });
 });
 

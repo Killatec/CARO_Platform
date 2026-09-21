@@ -1,0 +1,55 @@
+{
+  "template_name": "Pwr_Mon",
+  "template_type": "Group",
+  "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": false
+    }
+  },
+  "children": [
+    {
+      "template_name": "Coupler2",
+      "asset_name": "Mag_1",
+      "fields": {
+        "In_Tag_Name": true
+      }
+    },
+    {
+      "template_name": "Coupler2",
+      "asset_name": "Mag_2",
+      "fields": {
+        "In_Tag_Name": true
+      }
+    },
+    {
+      "template_name": "Coupler2",
+      "asset_name": "Comb",
+      "fields": {
+        "In_Tag_Name": true
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Pwr_Filter_K",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Intk_Mask_Delay",
+      "fields": {
+        "data_type": "i16",
+        "unit": "ms",
+        "format": "#",
+        "eng_min": 0,
+        "eng_max": 32767,
+        "Trends": false
+      }
+    }
+  ]
+}

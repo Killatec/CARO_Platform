@@ -1,0 +1,86 @@
+{
+  "template_name": "Phase_PID",
+  "template_type": "Group",
+  "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": false
+    }
+  },
+  "children": [
+    {
+      "template_name": "boolean_set",
+      "asset_name": "Enable",
+      "fields": {}
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "KP",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "KI",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "KD",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "KFF",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Mon_Delay",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Step_Mask",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_mon",
+      "asset_name": "Phase_Error",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#"
+      }
+    }
+  ]
+}

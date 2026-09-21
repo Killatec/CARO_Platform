@@ -1,0 +1,90 @@
+{
+  "template_name": "Display",
+  "template_type": "Group",
+  "fields": {
+    "In_Tag_Name": {
+      "field_type": "Boolean",
+      "default": false
+    }
+  },
+  "children": [
+    {
+      "template_name": "numeric_set",
+      "asset_name": "An_Display_1",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "eng_min": 0,
+        "eng_max": 32767,
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "An_Display_2",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "eng_min": 0,
+        "eng_max": 32767,
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Dig_Display_1",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "eng_min": 0,
+        "eng_max": 32767,
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Dig_Display_2",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "eng_min": 0,
+        "eng_max": 32767,
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Display_1_Offset",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Display_2_Offset",
+      "fields": {
+        "data_type": "i16",
+        "unit": "#",
+        "format": "#",
+        "Trends": false
+      }
+    },
+    {
+      "template_name": "boolean_set",
+      "asset_name": "GPIO033_Value",
+      "fields": {}
+    },
+    {
+      "template_name": "boolean_set",
+      "asset_name": "GPIO033_Clk_En",
+      "fields": {}
+    }
+  ]
+}
