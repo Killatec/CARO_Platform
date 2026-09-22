@@ -7,6 +7,8 @@ export interface UseSessionPersistenceOptions {
   /** When undefined, persistence is off entirely — no localStorage reads or writes, initial
    *  values come from propTagIds + defaults, callbacks are undefined. */
   persistKey: string | undefined;
+  /** Namespaces the localStorage key by system — see sessionPersistence.ts's sessionKey. */
+  storageScope: string;
   /** Used when there is no saved session, or when saved tagIds filter to empty. */
   propTagIds: number[];
   /** Current trendable tag map. Read at first render for hydration-time filtering. */
@@ -52,6 +54,7 @@ function buildInitialModeState(session: TrendViewerSessionV1): ModeState {
 
 export function useSessionPersistence({
   persistKey,
+  storageScope,
   propTagIds,
   tagMap,
 }: UseSessionPersistenceOptions): UseSessionPersistenceResult {
@@ -65,7 +68,7 @@ export function useSessionPersistence({
   } | null>(null);
 
   if (initRef.current === null) {
-    const session = persistKey ? loadSession(persistKey) : null;
+    const session = persistKey ? loadSession(storageScope, persistKey) : null;
 
     if (session) {
       const trendableIds = new Set(
@@ -99,9 +102,12 @@ export function useSessionPersistence({
     initialYScaleOverrides,
   } = initRef.current;
 
-  // persistKeyRef — always reflects the latest persistKey without causing re-renders.
+  // persistKeyRef / storageScopeRef — always reflect the latest prop values without
+  // causing re-renders.
   const persistKeyRef = useRef(persistKey);
   persistKeyRef.current = persistKey;
+  const storageScopeRef = useRef(storageScope);
+  storageScopeRef.current = storageScope;
 
   // latestSaveDataRef — holds the snapshot the next debounced write will persist.
   // Updated synchronously by scheduleSave (tagIds/modeState) and the two callbacks
@@ -131,7 +137,7 @@ export function useSessionPersistence({
       const { tagIds, modeState, selectedTagId, yScaleOverrides } = latestSaveDataRef.current;
       if (!modeState) return; // nothing committed yet (unmounts before first effect)
       const toMs = modeState.mode !== 'live-trailing' ? String(modeState.to) : null;
-      saveSession(key, {
+      saveSession(storageScopeRef.current, key, {
         version: 1,
         tagIds,
         selectedTagId,
@@ -155,7 +161,7 @@ export function useSessionPersistence({
         const { tagIds, modeState, selectedTagId, yScaleOverrides } = latestSaveDataRef.current;
         if (!modeState) return;
         const toMs = modeState.mode !== 'live-trailing' ? String(modeState.to) : null;
-        saveSession(key, {
+        saveSession(storageScopeRef.current, key, {
           version: 1,
           tagIds,
           selectedTagId,

@@ -4,7 +4,15 @@
  * so Safari private-browsing, quota limits, and parse errors are silent.
  */
 
-const SESSION_KEY_PREFIX = 'caro.trend-viewer.session.';
+/**
+ * Builds the localStorage key: `caro.<scope>.trend-viewer.session.<persistKey>`.
+ * `scope` namespaces the key by system (PROJECT_ROOT) — see @caro/hmi-context's
+ * scopedKey. This module stays platform-ignorant: it takes the scope string as
+ * given, never resolving PROJECT_ROOT itself.
+ */
+function sessionKey(scope: string, persistKey: string): string {
+  return `caro.${scope}.trend-viewer.session.${persistKey}`;
+}
 
 export interface TrendViewerSessionV1 {
   version: 1;
@@ -95,9 +103,9 @@ export function parseSession(raw: string): TrendViewerSessionV1 | null {
 
 // ── Storage helpers ───────────────────────────────────────────────────────────
 
-export function loadSession(persistKey: string): TrendViewerSessionV1 | null {
+export function loadSession(scope: string, persistKey: string): TrendViewerSessionV1 | null {
   try {
-    const raw = localStorage.getItem(SESSION_KEY_PREFIX + persistKey);
+    const raw = localStorage.getItem(sessionKey(scope, persistKey));
     if (!raw) return null;
     const session = parseSession(raw);
     if (session === null) {
@@ -110,17 +118,17 @@ export function loadSession(persistKey: string): TrendViewerSessionV1 | null {
   }
 }
 
-export function saveSession(persistKey: string, session: TrendViewerSessionV1): void {
+export function saveSession(scope: string, persistKey: string, session: TrendViewerSessionV1): void {
   try {
-    localStorage.setItem(SESSION_KEY_PREFIX + persistKey, serialiseSession(session));
+    localStorage.setItem(sessionKey(scope, persistKey), serialiseSession(session));
   } catch (e) {
     console.warn('[TrendViewer] Failed to save session to localStorage:', e);
   }
 }
 
-export function clearSession(persistKey: string): void {
+export function clearSession(scope: string, persistKey: string): void {
   try {
-    localStorage.removeItem(SESSION_KEY_PREFIX + persistKey);
+    localStorage.removeItem(sessionKey(scope, persistKey));
   } catch (e) {
     console.warn('[TrendViewer] Failed to clear session from localStorage:', e);
   }

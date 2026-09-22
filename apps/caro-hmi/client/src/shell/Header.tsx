@@ -1,4 +1,5 @@
 import type { CSSProperties } from 'react';
+import { useProjectRoot } from '@caro/hmi-context';
 import { resetAll } from '../api/reset.js';
 
 const HEADER_STYLE: CSSProperties = {
@@ -30,6 +31,8 @@ function handleReset() {
 }
 
 export function Header() {
+  const projectRoot = useProjectRoot();
+
   return (
     <header style={HEADER_STYLE}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -54,7 +57,7 @@ export function Header() {
           </svg>
         </button>
       </div>
-      <span style={BADGE_STYLE}>Phase 3 — No Auth</span>
+      <span style={BADGE_STYLE}>{projectRoot ?? 'No system configured'} · Phase 3 — No Auth</span>
     </header>
   );
 }

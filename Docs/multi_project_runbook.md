@@ -160,6 +160,16 @@ Verify the switch took by reading the indicator on the Tag Registry's **Registry
 **History** tab — it shows `DB: <database> · PROJECT_ROOT: <root>`. Do not trust the
 `.env` you just edited; trust what the running server reports.
 
+Switching `PROJECT_ROOT` now switches the HMI client's UI too, not just the Tag
+Registry's indicator. The HMI header badge shows the resolved `projectRoot` (from
+`GET /api/v1/config`), and the page tree/nav switches with it: a registered root (see
+`client/src/hmi-definitions/registry.ts`) loads that system's page tree; an
+unregistered root — or `PROJECT_ROOT` unset — shows the NavTree's "No machine config
+loaded" empty state, never a silent fallback to the `demo` tree. Session-persisted
+trend-viewer state (tagIds, span, mode, Y-scale overrides) is namespaced per system
+too, so switching projects never shows one system's saved trend session over another's
+live data.
+
 ---
 
 ## 5. Troubleshooting — observed errors and their causes

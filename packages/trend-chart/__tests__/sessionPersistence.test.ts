@@ -4,6 +4,7 @@ import {
   parseSession,
   loadSession,
   saveSession,
+  clearSession,
 } from '../src/sessionPersistence.js';
 import type { TrendViewerSessionV1 } from '../src/sessionPersistence.js';
 
@@ -166,20 +167,21 @@ describe('serialiseSession / parseSession', () => {
 
 // ── localStorage wrappers ─────────────────────────────────────────────────────
 
-const LS_PREFIX = 'caro.trend-viewer.session.';
+const SCOPE = 'Narya1';
+const LS_PREFIX = `caro.${SCOPE}.trend-viewer.session.`;
 
 describe('loadSession', () => {
   beforeEach(() => localStorage.clear());
   afterEach(() => localStorage.clear());
 
   it('returns null when key not present', () => {
-    expect(loadSession('missing')).toBeNull();
+    expect(loadSession(SCOPE, 'missing')).toBeNull();
   });
 
   it('returns the session when key is present and valid', () => {
     const session = makeSession();
     localStorage.setItem(LS_PREFIX + 'key1', serialiseSession(session));
-    const result = loadSession('key1');
+    const result = loadSession(SCOPE, 'key1');
     expect(result).not.toBeNull();
     expect(result!.tagIds).toEqual([1, 2, 3]);
   });
@@ -187,7 +189,7 @@ describe('loadSession', () => {
   it('returns null and warns when JSON is invalid', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     localStorage.setItem(LS_PREFIX + 'bad', 'not-json');
-    const result = loadSession('bad');
+    const result = loadSession(SCOPE, 'bad');
     expect(result).toBeNull();
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
@@ -196,7 +198,7 @@ describe('loadSession', () => {
   it('returns null and warns when session schema is invalid (version mismatch)', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     localStorage.setItem(LS_PREFIX + 'ver', JSON.stringify({ ...makeSession(), version: 99 }));
-    const result = loadSession('ver');
+    const result = loadSession(SCOPE, 'ver');
     expect(result).toBeNull();
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
@@ -207,11 +209,18 @@ describe('loadSession', () => {
     const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
       throw new Error('QuotaExceededError');
     });
-    const result = loadSession('crash');
+    const result = loadSession(SCOPE, 'crash');
     expect(result).toBeNull();
     expect(warn).toHaveBeenCalled();
     getItem.mockRestore();
     warn.mockRestore();
+  });
+
+  it('two systems (scopes) with the same persistKey do not collide', () => {
+    localStorage.setItem(LS_PREFIX + 'shared', serialiseSession(makeSession({ tagIds: [1] })));
+    localStorage.setItem(`caro.Narya2.trend-viewer.session.shared`, serialiseSession(makeSession({ tagIds: [2] })));
+    expect(loadSession('Narya1', 'shared')!.tagIds).toEqual([1]);
+    expect(loadSession('Narya2', 'shared')!.tagIds).toEqual([2]);
   });
 });
 
@@ -221,7 +230,7 @@ describe('saveSession', () => {
 
   it('writes a parseable value to localStorage', () => {
     const session = makeSession();
-    saveSession('k', session);
+    saveSession(SCOPE, 'k', session);
     const raw = localStorage.getItem(LS_PREFIX + 'k');
     expect(raw).not.toBeNull();
     const parsed = parseSession(raw!);
@@ -234,9 +243,22 @@ describe('saveSession', () => {
     const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new DOMException('QuotaExceededError');
     });
-    expect(() => saveSession('q', makeSession())).not.toThrow();
+    expect(() => saveSession(SCOPE, 'q', makeSession())).not.toThrow();
     expect(warn).toHaveBeenCalled();
     setItem.mockRestore();
     warn.mockRestore();
+  });
+});
+
+describe('clearSession', () => {
+  beforeEach(() => localStorage.clear());
+  afterEach(() => localStorage.clear());
+
+  it('removes the session for the given scope and persistKey only', () => {
+    saveSession(SCOPE, 'k', makeSession());
+    saveSession('Narya2', 'k', makeSession());
+    clearSession(SCOPE, 'k');
+    expect(loadSession(SCOPE, 'k')).toBeNull();
+    expect(loadSession('Narya2', 'k')).not.toBeNull();
   });
 });

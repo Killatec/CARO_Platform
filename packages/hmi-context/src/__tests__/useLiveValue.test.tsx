@@ -108,6 +108,7 @@ describe('useLiveValue', () => {
         () => ({
           tagMap: new Map(),
           tagPathIndex: buildTagPathIndex([]),
+          projectRoot: 'test',
           getLiveValue,
           subscribeLiveValue,
           subscribeTrend,

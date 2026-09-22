@@ -9,6 +9,7 @@ import { useHmiContext } from '../hooks/useHmiContext.js';
 import { useTagMap } from '../hooks/useTagMap.js';
 import { useTagWriter } from '../hooks/useTagWriter.js';
 import { useWsStats } from '../hooks/useWsStats.js';
+import { useProjectRoot } from '../hooks/useProjectRoot.js';
 import { buildTagPathIndex } from '../tagPathIndex.js';
 import type { HmiDataContextValue, WsStats } from '../types.js';
 import { mockTag, mockReadbackTag } from './fixtures.js';
@@ -61,12 +62,33 @@ class MockWebSocket {
 const API_URL = 'http://localhost:3003/api/v1';
 const WS_URL  = 'ws://localhost:3003/ws';
 
-function makeWrapper(tags = [mockTag]) {
-  // Reset fetch mock so each wrapper creation starts with tag fetch response
-  (globalThis.fetch as ReturnType<typeof vi.fn>)
-    .mockResolvedValue({
-      json: () => Promise.resolve({ ok: true, data: { tags } }),
-    });
+/**
+ * Routes the fetch mock by URL so /tags and /config get independent
+ * responses — HmiContextProvider now issues both in parallel on mount.
+ * `configOk: false` simulates a /config fetch rejection (network error,
+ * non-JSON body, etc.) to exercise the catch-and-continue path.
+ *
+ * Returns a plain implementation function (not a vi.fn wrapper) — callers
+ * install it via `.mockImplementation(...)` on the *existing* fetch mock so
+ * a `const mockFetch = globalThis.fetch` captured earlier in a test still
+ * observes calls made after this runs.
+ */
+function mockFetchByUrl(
+  tags: typeof mockTag[] = [mockTag],
+  projectRoot: string | null = null,
+  configOk = true,
+) {
+  return (url: RequestInfo | URL) => {
+    if (String(url).includes('/config')) {
+      if (!configOk) return Promise.reject(new Error('config fetch failed'));
+      return Promise.resolve({ json: () => Promise.resolve({ ok: true, data: { projectRoot } }) });
+    }
+    return Promise.resolve({ json: () => Promise.resolve({ ok: true, data: { tags } }) });
+  };
+}
+
+function makeWrapper(tags = [mockTag], projectRoot: string | null = null) {
+  (globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementation(mockFetchByUrl(tags, projectRoot));
 
   return function Wrapper({ children }: { children: ReactNode }) {
     return (
@@ -93,9 +115,7 @@ async function openWs(ws: MockWebSocket) {
 beforeEach(() => {
   MockWebSocket.reset();
   globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
-  globalThis.fetch = vi.fn().mockResolvedValue({
-    json: () => Promise.resolve({ ok: true, data: { tags: [mockTag] } }),
-  });
+  globalThis.fetch = vi.fn(mockFetchByUrl()) as unknown as typeof fetch;
 });
 
 afterEach(() => {
@@ -326,6 +346,40 @@ describe('HmiContextProvider', () => {
       comment: 'HMI write',
     });
   });
+
+  // 11. projectRoot fetched from /config alongside /tags
+  it('fetches config on mount and exposes projectRoot via useProjectRoot', async () => {
+    const wrapper = makeWrapper([mockTag], 'Narya1');
+    const { result } = renderHook(() => useProjectRoot(), { wrapper });
+
+    await waitFor(() => expect(result.current).toBe('Narya1'));
+  });
+
+  // 12. projectRoot null when PROJECT_ROOT is unset server-side
+  it('exposes projectRoot as null when /config returns null', async () => {
+    const wrapper = makeWrapper([mockTag], null);
+    const { result } = renderHook(() => useProjectRoot(), { wrapper });
+
+    const ws = await getWsInstance();
+    await openWs(ws);
+
+    expect(result.current).toBeNull();
+  });
+
+  // 13. /config failure — catch-and-continue: app still renders, projectRoot null
+  it('still loads tagMap and renders when the config fetch fails', async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementation(mockFetchByUrl([mockTag], null, false));
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <HmiContextProvider apiUrl={API_URL} wsUrl={WS_URL}>{children}</HmiContextProvider>
+    );
+    const { result } = renderHook(
+      () => ({ tagMap: useTagMap(), projectRoot: useProjectRoot() }),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.tagMap.size).toBe(1));
+    expect(result.current.projectRoot).toBeNull();
+  });
 });
 
 // ─── Context-split regression tests ─────────────────────────────────────────
@@ -346,6 +400,7 @@ function makeStableDataValue(
   return {
     tagMap: new Map(),
     tagPathIndex: buildTagPathIndex([]),
+    projectRoot: 'test',
     getLiveValue: () => ({ value: null }),
     subscribeLiveValue: subscribeSpy as HmiDataContextValue['subscribeLiveValue'],
     subscribeTrend: () => () => {},

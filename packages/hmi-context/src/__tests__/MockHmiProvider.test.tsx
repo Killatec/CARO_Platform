@@ -4,6 +4,7 @@ import { MockHmiProvider } from '../MockHmiProvider.js';
 import { useLiveValue } from '../hooks/useLiveValue.js';
 import { useTagMap } from '../hooks/useTagMap.js';
 import { useTagWriter } from '../hooks/useTagWriter.js';
+import { useProjectRoot } from '../hooks/useProjectRoot.js';
 import { mockTag } from './fixtures.js';
 
 describe('MockHmiProvider', () => {
@@ -65,5 +66,28 @@ describe('MockHmiProvider', () => {
       ),
     });
     expect(result.current.get(1001)).toBe(mockTag);
+  });
+
+  it('defaults projectRoot to "test"', () => {
+    const { result } = renderHook(() => useProjectRoot(), {
+      wrapper: ({ children }) => <MockHmiProvider>{children}</MockHmiProvider>,
+    });
+    expect(result.current).toBe('test');
+  });
+
+  it('honors an explicit projectRoot override, including null', () => {
+    const { result: narya } = renderHook(() => useProjectRoot(), {
+      wrapper: ({ children }) => (
+        <MockHmiProvider projectRoot="Narya1">{children}</MockHmiProvider>
+      ),
+    });
+    expect(narya.current).toBe('Narya1');
+
+    const { result: unset } = renderHook(() => useProjectRoot(), {
+      wrapper: ({ children }) => (
+        <MockHmiProvider projectRoot={null}>{children}</MockHmiProvider>
+      ),
+    });
+    expect(unset.current).toBeNull();
   });
 });

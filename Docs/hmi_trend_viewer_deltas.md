@@ -4,6 +4,8 @@
 
 ---
 
+**Last cleared:** 2026-09-22. Session persistence storage scoping propagated → spec §13.6 storage-key paragraph updated (`caro.${storageScope}.trend-viewer.session.${persistKey}`) + new `storageScope` explanatory paragraph; revision history bumped to v2.6. `platform_handoff.md` `@caro/trend-chart` row updated (session-persistence sentence). `apps/caro-hmi/CLAUDE.md` gained a Key Design Decisions bullet on per-system session namespacing.
+
 **Last cleared:** 2026-05-28. Wheel-zoom one-tick-stale fix propagated: `onXWheel` reads new range from `userScaleRef.current` (synchronously updated by `zoomXScale`) instead of `u.scales['x']` (uPlot's `setScale` defers `.min`/`.max` to the next animation frame). Fix + test-mock `clientWidth` corollary propagated to handoff §10 Gotcha (new entry) and §10 Divergence 41. Single sentence added to spec §9.2 Implementation note. Spec bumped to v2.5.
 
 **Last cleared:** 2026-05-17. Audit remediation pass closure — M1 (signature change + meta + singleton removal), D1 (top-level summary log), F5 (per-tag outbox cap), TG-7 follow-up (`commitAndDrain` fix), and TG-1 (chunk-pruning regression test) propagated to spec §4.1 / §4.4 / §14.7 and handoff §1 / §10. `Docs/Update_plan.md` deleted; audit history in git: commits through 2026-05-17.

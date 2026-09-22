@@ -1364,7 +1364,8 @@ describe('TrendChartContainer', () => {
 // Tests for the persistKey prop: session hydration (tagIds, mode, sizeMs),
 // live-fixed→live-trailing reconciliation, trendable filtering, and debounced writes.
 
-const LS_PREFIX = 'caro.trend-viewer.session.';
+// TrendChartContainer defaults storageScope to 'default' when no prop is passed.
+const LS_PREFIX = 'caro.default.trend-viewer.session.';
 const TEST_KEY = 'test-persist';
 
 function makeValidSession(overrides: Partial<TrendViewerSessionV1> = {}): TrendViewerSessionV1 {
@@ -1520,6 +1521,60 @@ describe('TrendChartContainer — session persistence', () => {
       opts.tagIds.length === 2 && opts.tagIds[0] === 1 && opts.tagIds[1] === 2,
     );
     expect(found).toBe(true);
+  });
+
+  // ── storageScope ──────────────────────────────────────────────────────────
+
+  it('reads from the storageScope-prefixed key, not the default scope', () => {
+    // Seed under a custom scope's key directly (bypassing the LS_PREFIX default).
+    localStorage.setItem(
+      `caro.Narya1.trend-viewer.session.${TEST_KEY}`,
+      serialiseSession(makeValidSession({ tagIds: [1] })),
+    );
+    mockUseTrendData.mockReturnValue(makeResult([1]));
+    render(
+      <MockHmiProvider tagDefs={TAG_DEFS}>
+        <TrendChartContainer
+          tagIds={[]}
+          siteTimezone="UTC"
+          height={400}
+          persistKey={TEST_KEY}
+          storageScope="Narya1"
+        />
+      </MockHmiProvider>,
+    );
+    const found = mockUseTrendData.mock.calls.some(([opts]) =>
+      opts.tagIds.length === 1 && opts.tagIds[0] === 1,
+    );
+    expect(found).toBe(true);
+  });
+
+  it('two systems with the same persistKey do not read each other\'s session', () => {
+    seedSession(makeValidSession({ tagIds: [1] })); // default scope
+    localStorage.setItem(
+      `caro.Narya1.trend-viewer.session.${TEST_KEY}`,
+      serialiseSession(makeValidSession({ tagIds: [2] })),
+    );
+    mockUseTrendData.mockReturnValue(makeResult([2]));
+    render(
+      <MockHmiProvider tagDefs={TAG_DEFS}>
+        <TrendChartContainer
+          tagIds={[]}
+          siteTimezone="UTC"
+          height={400}
+          persistKey={TEST_KEY}
+          storageScope="Narya1"
+        />
+      </MockHmiProvider>,
+    );
+    const hasNarya1Tags = mockUseTrendData.mock.calls.some(([opts]) =>
+      opts.tagIds.length === 1 && opts.tagIds[0] === 2,
+    );
+    const hasDefaultTags = mockUseTrendData.mock.calls.some(([opts]) =>
+      opts.tagIds.includes(1),
+    );
+    expect(hasNarya1Tags).toBe(true);
+    expect(hasDefaultTags).toBe(false);
   });
 
   // ── No persistKey → no localStorage writes ────────────────────────────────

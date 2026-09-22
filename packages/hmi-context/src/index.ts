@@ -8,6 +8,8 @@ export { useTagMap } from './hooks/useTagMap.js';
 export { useTagSubtree } from './hooks/useTagSubtree.js';
 export { useResolveAssetPath } from './hooks/useResolveAssetPath.js';
 export { useWsStats } from './hooks/useWsStats.js';
+export { useProjectRoot } from './hooks/useProjectRoot.js';
+export { scopedKey, useScopedKey } from './scopedStorage.js';
 export type {
   TagDef,
   MetaLevel,

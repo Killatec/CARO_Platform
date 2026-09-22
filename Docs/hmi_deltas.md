@@ -4,6 +4,8 @@
 
 ---
 
+**Last cleared:** 2026-09-22. Multi-system UI selection work (Steps 1–4) propagated: `GET /api/v1/config` → new §5.2 `hmi_API_spec.md` (v2.0) + revision history row. `@caro/hmi-context` `projectRoot`/`useProjectRoot()`/`scopedStorage.ts` propagated to `platform_handoff.md` package row. `@caro/trend-chart` `storageScope` propagated to `platform_handoff.md` package row (session-persistence sentence). HMI client registry/Narya1-tree/Shell/Header work propagated to `apps/caro-hmi/CLAUDE.md` (Client Architecture: Shell, HMI Definitions, Narya1 Tree rows; two new Key Design Decisions bullets) and `platform_handoff.md` (CARO HMI apps row, Multi-Project Model bullet list — now three items). `Docs/multi_project_runbook.md` §4 updated: switching `PROJECT_ROOT` now switches the HMI client UI too. Test counts refreshed throughout: 801 @caro/trend-chart, 80 @caro/hmi-context, 286 server, 45 client. Step 5 (machine-specific boxes out of `shared/` into `Narya1/boxes/`) remains deferred per the task — `shared/` untouched.
+
 **Last cleared:** 2026-05-27. TagDef.trendable boolean propagated to platform_handoff (@caro/hmi-context packages row + Platform Rules TagDef field list). Tailwind @source requirement propagated to apps/caro-hmi/CLAUDE.md Key Design Decisions.
 
 **Last cleared:** 2026-06-06. WS disconnect null-out + Pole Page widget/button list (Speed_RSS as NumericSet, Go_To_Pos_1_B/2_B) propagated to `apps/caro-hmi/CLAUDE.md` Key Design Decisions (new WS disconnect bullet) + Client Architecture (Pole Page row).

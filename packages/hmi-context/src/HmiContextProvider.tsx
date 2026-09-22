@@ -15,6 +15,7 @@ export function HmiContextProvider({ children, apiUrl, wsUrl }: HmiContextProvid
   // Tag map loaded from REST once on mount
   const tagMapRef = useRef<Map<number, TagDef>>(new Map());
   const tagPathIndexRef = useRef<TagPathIndex>(buildTagPathIndex([]));
+  const projectRootRef = useRef<string | null>(null);
   const [tagMapLoaded, setTagMapLoaded] = useState(false);
 
   // Live values by tag_id
@@ -53,12 +54,18 @@ export function HmiContextProvider({ children, apiUrl, wsUrl }: HmiContextProvid
     subscribedCount: 0,
   });
 
-  // ─── A. Fetch tag map on mount ───────────────────────────────────────────────
+  // ─── A. Fetch tag map + config on mount ──────────────────────────────────────
+  //
+  // Both fetches run in parallel and each catches its own failure so one
+  // endpoint being down never blocks the other. tagMapLoaded flips exactly
+  // once, after both have settled — it is the sole gate for the memo below
+  // and for the WS-connect effect, so no consumer ever observes a partially
+  // loaded state.
 
   useEffect(() => {
     let cancelled = false;
 
-    fetch(`${apiUrl}/tags`)
+    const tagsPromise = fetch(`${apiUrl}/tags`)
       .then(r => r.json())
       .then((res: unknown) => {
         if (cancelled) return;
@@ -71,12 +78,27 @@ export function HmiContextProvider({ children, apiUrl, wsUrl }: HmiContextProvid
           tagMapRef.current = map;
           tagPathIndexRef.current = buildTagPathIndex(map.values());
         }
-        setTagMapLoaded(true);
       })
       .catch(err => {
         console.error('[HmiContextProvider] Failed to fetch tags:', err);
-        setTagMapLoaded(true);
       });
+
+    const configPromise = fetch(`${apiUrl}/config`)
+      .then(r => r.json())
+      .then((res: unknown) => {
+        if (cancelled) return;
+        const response = res as { ok: boolean; data?: { projectRoot: string | null } };
+        if (response.ok && response.data) {
+          projectRootRef.current = response.data.projectRoot ?? null;
+        }
+      })
+      .catch(err => {
+        console.error('[HmiContextProvider] Failed to fetch config:', err);
+      });
+
+    Promise.all([tagsPromise, configPromise]).then(() => {
+      if (!cancelled) setTagMapLoaded(true);
+    });
 
     return () => { cancelled = true; };
   }, [apiUrl]);
@@ -396,7 +418,7 @@ export function HmiContextProvider({ children, apiUrl, wsUrl }: HmiContextProvid
   // getLiveValue/subscribeLiveValue/writeTag are stable refs (useCallback with stable deps).
   // wsStats is intentionally NOT here — it lives in its own context to avoid churn.
   const dataValue = useMemo<HmiDataContextValue>(
-    () => ({ tagMap: tagMapRef.current, tagPathIndex: tagPathIndexRef.current, getLiveValue, subscribeLiveValue, subscribeTrend, writeTag, sendCommand }),
+    () => ({ tagMap: tagMapRef.current, tagPathIndex: tagPathIndexRef.current, projectRoot: projectRootRef.current, getLiveValue, subscribeLiveValue, subscribeTrend, writeTag, sendCommand }),
     [tagMapLoaded, getLiveValue, subscribeLiveValue, subscribeTrend, writeTag, sendCommand] // eslint-disable-line react-hooks/exhaustive-deps
   );
 

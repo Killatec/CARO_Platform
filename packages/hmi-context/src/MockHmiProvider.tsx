@@ -8,6 +8,7 @@ interface MockHmiProviderProps {
   children: ReactNode;
   tagValues?: Record<number, LiveValue>;
   tagDefs?: Record<number, TagDef>;
+  projectRoot?: string | null;
   onWrite?: (tagId: number, value: number | boolean | string) => Promise<void>;
   onSendCommand?: (moduleId: string, cmdStr: string) => Promise<void>;
 }
@@ -16,6 +17,7 @@ export function MockHmiProvider({
   children,
   tagValues = {},
   tagDefs = {},
+  projectRoot = 'test',
   onWrite,
   onSendCommand,
 }: MockHmiProviderProps) {
@@ -114,8 +116,8 @@ export function MockHmiProvider({
   );
 
   const dataValue = useMemo<HmiDataContextValue>(
-    () => ({ tagMap, tagPathIndex, getLiveValue, subscribeLiveValue, subscribeTrend, writeTag, sendCommand }),
-    [tagMap, tagPathIndex, getLiveValue, subscribeLiveValue, subscribeTrend, writeTag, sendCommand]
+    () => ({ tagMap, tagPathIndex, projectRoot, getLiveValue, subscribeLiveValue, subscribeTrend, writeTag, sendCommand }),
+    [tagMap, tagPathIndex, projectRoot, getLiveValue, subscribeLiveValue, subscribeTrend, writeTag, sendCommand]
   );
 
   return (

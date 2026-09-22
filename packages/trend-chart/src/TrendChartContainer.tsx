@@ -36,6 +36,12 @@ export interface TrendChartContainerProps {
    * next mount. When undefined, persistence is off entirely.
    */
   persistKey?: string;
+  /**
+   * Namespaces the persisted localStorage key by system, e.g. the caller's
+   * PROJECT_ROOT. This package stays platform-ignorant — it never resolves
+   * PROJECT_ROOT itself, just threads this string through to sessionPersistence.
+   */
+  storageScope?: string;
 }
 
 const FOOTER: CSSProperties = {
@@ -77,6 +83,7 @@ export function TrendChartContainer({
   siteTimezone,
   height = 420,
   persistKey,
+  storageScope = 'default',
 }: TrendChartContainerProps) {
 
   // ── Tag map (needed by useSessionPersistence for hydration-time filtering) ──
@@ -87,6 +94,7 @@ export function TrendChartContainer({
   // debounced-save / snapshot-callback functions.
   const persistence = useSessionPersistence({
     persistKey,
+    storageScope,
     propTagIds: initialTagIds,
     tagMap,
   });

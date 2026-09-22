@@ -16,6 +16,7 @@ hmi_functional_spec | CARO_MQTT_Spec | Tag Registry Functional Spec | CARO_DB_Sp
 | 1.3 | 2026-03-26 | PM / Claude | Rate limiting defaults added: 100 req/min read, 20 req/min write, both configurable (OI-02 closed). Idempotency note added: write retries are safe — telemetry loop resolves ambiguity. command_id correlation via WebSocket not required — out-of-sync detection handles outcome visibility. |
 | 1.4 | 2026-03-28 | PM / Claude | Audit log endpoint updated: tag.write split into tag.write.request and tag.write.outcome (two-row pattern with shared command_id); tag.sync.lost and tag.sync.reset added; comment no longer required on tag writes (mode save only). Sync reset endpoint added: POST /api/v1/tags/{tag_id}/sync-reset. PENDING_TABLE_EMPTY error code updated: no longer references cmd_status. |
 | 1.5 | 2026-04-14 | PM / Claude | POST /tags/write: `comment` field changed from required to optional for individual tag writes. The HMI client sends a default value but the field is not validated as required. `comment` remains required only for mode save operations (Section 8, POST /modes/{mode_id}/save). |
+| 2.0 | 2026-09-22 | PM / Claude | Section 5.2 added: GET /api/v1/config — runtime `projectRoot` for multi-system client page-tree selection and localStorage namespacing. No auth check; `databaseName` deliberately omitted (unlike Tag Registry's `/config`). |
 | 1.9 | 2026-06-02 | PM / Claude | Section 5.1 added: POST /api/v1/commands — module-type-agnostic command send. MQTT dispatches with CMD_ACK await (1s timeout). HMI dispatches RESET only; other cmd_str values return 400. Error codes added: VALIDATION_ERROR, COMMAND_NOT_SUPPORTED, COMMAND_REJECTED, TIMEOUT. |
 | 1.8 | 2026-05-26 | PM / Claude | Section 7 tile response: `responseTailTs` renamed `committedThroughTs` on both raw and aggregate responses. Field now carries the `DbPipeline` monotonic watermark rather than a wall-clock timestamp; client uses it directly as the ring trim threshold (no −1000 ms offset). |
 | 1.7 | 2026-05-11 | PM / Claude | Section 11 WebSocket: added SUBSCRIBE_TREND, UNSUBSCRIBE_TREND, TREND_DELTA message types (Step 11 live tail). Section 7 tile response: added `responseTailTs` field to aggregate response. Added TREND_FLUSH_HZ env var note. |
@@ -322,6 +323,25 @@ Error responses:
 { "ok": false, "error": { "code": "COMMAND_REJECTED",       "message": "Command rejected: UNKNOWN" } }
 { "ok": false, "error": { "code": "TIMEOUT",                "message": "Command timed out — no ACK received" } }
 ```
+
+---
+
+## 5.2 System Config
+
+Runtime identity of the system this server is serving. The client uses `projectRoot` to select its page tree (`client/src/hmi-definitions/<PROJECT_ROOT>/`) and to namespace localStorage so two systems viewed from the same browser never read each other's saved state (see `Docs/multi_project_runbook.md` §4).
+
+### GET /api/v1/config
+
+*No role required — no auth check.*
+
+Success response:
+```json
+{ "ok": true, "data": { "projectRoot": "Narya1" } }
+```
+
+`projectRoot` is `PROJECT_ROOT` from the root `.env`, trimmed, or `null` if unset/empty. Fields are hand-picked, never spread from `process.env`.
+
+Unlike Tag Registry's `/config`, this endpoint deliberately serves `projectRoot` only — no `databaseName`. HMI auth is stubbed, so this endpoint is reachable by anything that can reach the HMI port, and nothing in the client needs the database name.
 
 ---
 

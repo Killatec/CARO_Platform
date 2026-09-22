@@ -8,6 +8,7 @@ import { createTagsRouter } from './routes/tags.js';
 import { createResetRouter } from './routes/reset.js';
 import { createCommandsRouter } from './routes/commands.js';
 import { createTrendsRouter } from './routes/trends.js';
+import { createConfigRouter } from './routes/config.js';
 import { authStub } from './middleware/auth-stub.js';
 import type { CmdController } from './cmd-controller.js';
 import type { ResetBus } from './reset-bus.js';
@@ -33,6 +34,7 @@ export function createApp(
   app.use(express.json());
   app.use(authStub);
 
+  app.use('/api/v1/config', createConfigRouter());
   app.use('/api/v1/tags', createTagsRouter(tagMap, cmdController, trendableTagIds));
   app.use('/api/v1/reset', createResetRouter(resetBus));
   app.use('/api/v1/commands', createCommandsRouter(cmdController));

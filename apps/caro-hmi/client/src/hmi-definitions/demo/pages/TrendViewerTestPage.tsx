@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { TrendChartContainer } from '@caro/trend-chart';
+import { useProjectRoot } from '@caro/hmi-context';
 
 // ── Layout ────────────────────────────────────────────────────────────────────
 
@@ -19,6 +20,7 @@ async function fetchTrendableTags(): Promise<void> {
 export function TrendViewerTestPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const projectRoot = useProjectRoot();
 
   useEffect(() => {
     fetchTrendableTags()
@@ -36,6 +38,7 @@ export function TrendViewerTestPage() {
         siteTimezone="America/New_York"
         height={420}
         persistKey="trend-viewer-test"
+        storageScope={projectRoot ?? 'unknown'}
       />
     </div>
   );

@@ -46,6 +46,11 @@ export interface WsStats {
 export interface HmiDataContextValue {
   tagMap: Map<number, TagDef>;
   tagPathIndex: TagPathIndex;
+  // Runtime system identity, from GET /api/v1/config. null before the fetch
+  // resolves is impossible by construction (tagMapLoaded gates one Promise.all
+  // over both /tags and /config); null after resolution means /config either
+  // returned no PROJECT_ROOT or the fetch failed (catch-and-continue).
+  projectRoot: string | null;
   getLiveValue: (tagId: number) => LiveValue;
   // tagId may be undefined — an unresolved (but legitimately optional) asset path.
   // Implementations must treat undefined as a non-event: no subscriber registered,
