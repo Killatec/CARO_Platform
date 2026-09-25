@@ -107,13 +107,15 @@
       "template_name": "Phase_XY",
       "asset_name": "Phase_XY",
       "fields": {
-        "In_Tag_Name": true
+        "In_Tag_Name": false
       }
     },
     {
       "template_name": "PhPower",
       "asset_name": "PhPower",
-      "fields": {}
+      "fields": {
+        "In_Tag_Name": true
+      }
     }
   ]
 }

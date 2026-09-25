@@ -41,7 +41,7 @@
     },
     {
       "template_name": "Module_Info",
-      "asset_name": "Info",
+      "asset_name": "Module_Info",
       "fields": {
         "In_Tag_Name": true
       }

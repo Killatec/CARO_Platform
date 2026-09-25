@@ -10,6 +10,16 @@
 
 - [ ] Add NULL `prev` rate monitoring per `DB_Config_Usage_And_Perf.md` §8.1 — daily sample at 1-min bound; non-zero rate signals writer-cadence drift
 
+### New `@caro/widgets` components — needed for Narya1's RF1 page
+
+Surfaced auditing the reference "RF Control" / "RF Phase" / "RF SpecA" screenshots against the Narya1 registry (`Narya1_registry.csv`). `Rf1PhaseXYBox`, `Rf1SpecABox`, and `Rf1DisplayBox` in `apps/caro-hmi/client/src/hmi-definitions/Narya1/boxes/` render the underlying tags as plain numeric fields in the meantime.
+
+- [ ] **Phase X-Y scatter widget.** Plots two live numeric tags (`RF1.Phase.Phase_XY.{X,Y}`) as a point/trail on an X-Y plane. No existing widget covers this — `SpectrumChart` is a single-series line chart against bin index, not a two-tag scatter plot.
+- [ ] **Frequency-mapped spectrum chart.** `SpectrumChart` is bin-index-only by design (`axes: [{ label: 'Bin', ... }]`) — the reference UI plots an MHz X-axis derived from `Center_Freq`/`LO`/`Bin_Size`. Needs either a new widget or an extension to `SpectrumChart`'s axis contract.
+- [ ] **Label-lookup numeric widget (needs a decision first).** `RF1.Display.{An_Display_1/2,Dig_Display_1/2}` are plain Int16 setpoints in the registry, but the reference UI shows resolved text labels (e.g. "Phase_Set") instead of the raw number. Unclear whether that's a firmware-side convention worth replicating or a display artifact — resolve before building.
+- [ ] **String-value display widget.** `NumericMon` assumes a numeric value (`value.toFixed()` internally) and throws on a string. `RF1.Module_Info.IP` and `.Status` are `String`-type registry tags with no widget able to render them — `Rf1ModuleInfoBox` omits both. Needs a `StringMon`-equivalent (read-only, no formatting).
+- [ ] **RF1 module commands (Close_App, Reboot) — needs the cmd_str contract first.** The reference "RF Control" page has Close_App/Reboot buttons wired the same way `PoleBox`'s `CommandButton` pattern (`useCommandSender` + `@caro/ui` `Button`) already works for MQTT modules. Not a widget gap — `Button`/`useCommandSender` both exist — but RF1's actual `cmd_str` values for these two commands aren't confirmed anywhere in the registry export or specs, so `RF1Page` doesn't render them yet. Confirm the accepted `cmd_str` strings (device firmware or MQTT spec), then wire two `CommandButton`s in `Rf1SourceBox` or a small new "RF1 App" box.
+
 ### Trend Viewer — Deferred / Possible Future Improvements
 
 - [ ] **Dead-tag detection / "stale tag" UI indicator.** With the LOCF cutoff query removed (was paying 814ms of planning time per CAG request at production scale), LOCF carries the last known value forward through all empty trailing buckets — a recently-stopped tag shows a flat line extending to the right edge of the requested window. See `hmi_trend_viewer_handoff.md` "Dead-tag detection" section for context and three replacement options under consideration: (1) per-tag freshness lookup alongside tile response; (2) watchdog contract guarantee (continuous NULL writes while telemetry silent); (3) per-tag freshness tag (`Trend_Info`-style). Likely combination of (2) + (1). Deferred until a user-facing complaint surfaces.

@@ -10,14 +10,12 @@ import {
   TrendStatusBox,
   ModuleStatusBox,
   PAGE_STYLE,
-  HEADING_STYLE,
   MODULES_CONTAINER,
 } from '../../shared/index.js';
 
 export function SystemOverviewPage() {
   return (
     <div style={PAGE_STYLE}>
-      
       <div style={MODULES_CONTAINER}>
         <div style={{ flexBasis: '100%', display: 'flex' }}>
           <HmiStatusBox />

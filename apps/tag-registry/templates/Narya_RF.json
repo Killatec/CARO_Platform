@@ -14,7 +14,7 @@
   "children": [
     {
       "template_name": "Info",
-      "asset_name": "Info",
+      "asset_name": "Module_Info",
       "fields": {}
     },
     {
@@ -25,7 +25,9 @@
     {
       "template_name": "Phase",
       "asset_name": "Phase",
-      "fields": {}
+      "fields": {
+        "In_Tag_Name": true
+      }
     },
     {
       "template_name": "Pwr_Mon",

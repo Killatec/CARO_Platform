@@ -11,11 +11,13 @@
     {
       "template_name": "Analog_In",
       "asset_name": "Power",
-      "fields": {}
+      "fields": {
+        "In_Tag_Name": false
+      }
     },
     {
       "template_name": "Power_PID",
-      "asset_name": "Power_PID",
+      "asset_name": "PID",
       "fields": {}
     },
     {

@@ -320,16 +320,6 @@
         "eng_min": 512,
         "eng_max": 32768
       }
-    },
-    {
-      "template_name": "numeric_mon",
-      "asset_name": "Rate_Mon",
-      "fields": {
-        "unit": "Hz",
-        "format": "#",
-        "eng_min": 1,
-        "eng_max": 500
-      }
     }
   ]
 }
