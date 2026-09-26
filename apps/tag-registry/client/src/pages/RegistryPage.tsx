@@ -10,6 +10,7 @@ import { useModuleTypesStore } from '../stores/useModuleTypesStore.js';
 import { useValidation } from '../hooks/useValidation.js';
 import { resolveRegistry } from '@caro/tag-registry-shared';
 import { fetchRegistry, applyRegistry } from '../api/registry.js';
+import { downloadTagDefs } from '../api/tagDefs.js';
 import { diffRegistry } from '../utils/diffRegistry.js';
 import type { DiffRow } from '../utils/diffRegistry.js';
 import { resolveDisplayRows, sortRegistryRows } from '../utils/registryRows.js';
@@ -44,6 +45,9 @@ export function RegistryPage(): React.ReactElement {
   const [applyComment, setApplyComment] = useState('');
   const [applying, setApplying] = useState(false);
   const [applyError, setApplyError] = useState<string | null>(null);
+
+  const [generatingTagDefs, setGeneratingTagDefs] = useState(false);
+  const [tagDefsError, setTagDefsError] = useState<string | null>(null);
 
   const [successRev, setSuccessRev] = useState<number | null>(null);
   const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -114,6 +118,19 @@ export function RegistryPage(): React.ReactElement {
     a.download = `${rootTemplateName}_registry.csv`;
     a.click();
     URL.revokeObjectURL(url);
+  }
+
+  async function handleGenerateTagDefs() {
+    if (!rootTemplateName) return;
+    setGeneratingTagDefs(true);
+    setTagDefsError(null);
+    try {
+      await downloadTagDefs(rootTemplateName);
+    } catch (err) {
+      setTagDefsError((err as Error).message || 'Failed to generate Tag Defs');
+    } finally {
+      setGeneratingTagDefs(false);
+    }
   }
 
   async function handleConfirmApply() {
@@ -200,6 +217,12 @@ export function RegistryPage(): React.ReactElement {
             </div>
           )}
 
+          {tagDefsError && (
+            <div data-testid="tag-defs-error" className="mx-4 mt-4 bg-red-50 border border-red-200 rounded p-3 text-sm text-red-700">
+              Generate Tag Defs failed: {tagDefsError}
+            </div>
+          )}
+
           {successRev !== null && (
             <div className="mx-4 mt-4 bg-green-50 border border-green-300 rounded p-3 text-sm text-green-800">
               Registry updated to revision {successRev}
@@ -233,6 +256,20 @@ export function RegistryPage(): React.ReactElement {
                 className="ml-auto px-3 py-1 text-sm rounded font-medium transition-colors bg-gray-100 text-gray-700 hover:bg-gray-200"
               >
                 Export to CSV
+              </button>
+              <button
+                onClick={handleGenerateTagDefs}
+                disabled={isDirty || generatingTagDefs}
+                title={isDirty
+                  ? 'Save or discard changes before generating Tag Defs — the export reads saved templates'
+                  : 'Download a ZIP with one JSON per MQTT module template (tag_path, direction, data_type)'}
+                className={`px-3 py-1 text-sm rounded font-medium transition-colors ${
+                  isDirty || generatingTagDefs
+                    ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                {generatingTagDefs ? 'Generating…' : 'Generate Tag Defs'}
               </button>
               <button
                 onClick={openModal}

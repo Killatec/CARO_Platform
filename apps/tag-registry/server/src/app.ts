@@ -5,6 +5,7 @@ import registryRouter from './routes/registry.js';
 import configRouter from './routes/config.js';
 import tagTypesRouter from './routes/tagTypes.js';
 import moduleTypesRouter from './routes/moduleTypes.js';
+import tagDefsRouter from './routes/tagDefs.js';
 import { errorHandler } from '@caro/server/errorHandler';
 
 /**
@@ -23,6 +24,7 @@ export function createApp(): Application {
   app.use('/api/v1/config', configRouter);
   app.use('/api/v1/tag-types', tagTypesRouter);
   app.use('/api/v1/module-types', moduleTypesRouter);
+  app.use('/api/v1/tag-defs', tagDefsRouter);
 
   // Error handler (must be last)
   app.use(errorHandler);

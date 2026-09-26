@@ -5,6 +5,8 @@
 
 export const DEFAULT_DATA_TYPE = 'f32';
 export const DEFAULT_MODULE_TYPE = 'HMI';
+/** module_types.type_name for modules addressed over MQTT (vs 'HMI', produced in-process by the HMI server). */
+export const MQTT_MODULE_TYPE = 'MQTT';
 
 export const ERROR_CODES = {
   // Template errors
@@ -36,6 +38,9 @@ export const ERROR_CODES = {
 
   // Multi-project
   PROJECT_ROOT_MISMATCH: 'PROJECT_ROOT_MISMATCH',
+
+  // Tag Defs export
+  NO_MQTT_MODULES: 'NO_MQTT_MODULES',
 } as const;
 
 export const MAX_TAG_PATH_LENGTH = 100;

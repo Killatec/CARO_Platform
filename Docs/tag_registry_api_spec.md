@@ -33,6 +33,8 @@ The root template is selected via a global dropdown in the client. On selection,
 
 HTTP status codes: 200 OK, 201 Created, 400 Bad Request, 404 Not Found, 409 Conflict, 422 Unprocessable Entity, 500 Internal Server Error.
 
+**Exception — file downloads.** `GET /api/v1/tag-defs` (§7) returns a binary `application/zip` body on success instead of the envelope. Its error responses still use the envelope.
+
 ### 2.3 Validation Errors
 
 ```json
@@ -485,7 +487,57 @@ Returns 404 if no rows exist for the given revision number.
 
 ---
 
-## 7. Error Code Reference
+## 7. Tag Defs Export
+
+### 7.1 GET /api/v1/tag-defs
+
+Downloads the template-level Tag Defs export (functional spec §12.1; design decision RF_Control `Docs/CARO_MIGRATION.md` D32). The export reads saved templates from disk and never touches the database. It is not gated by `PROJECT_ROOT`.
+
+**Query parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| root | string | Yes | Template whose reachable graph scopes the export (the Registry page's selected root). |
+
+**Server processing:**
+
+1. `loadRoot(root)` loads every template reachable from `root`.
+2. `validateGraph` runs on that set. Any error → 422 `VALIDATION_ERROR` with the messages in `details`. `resolveRegistry` skips broken references silently, so the server refuses rather than emit a file with tags quietly missing.
+3. `listMqttModuleTemplates` selects `template_type: "module"` templates whose own `Module_Type` default is `MQTT`. None → 422 `NO_MQTT_MODULES`.
+4. `buildTagDefsFile` runs for each selected template, and the results are zipped (`fflate`).
+
+**Success response (HTTP 200):**
+
+- `Content-Type: application/zip`
+- `Content-Disposition: attachment; filename="TagDefs_YYYY-MM-DD_HHmmss.zip"` (server local time)
+- Body: a ZIP with one `<template_name>.json` per MQTT module template, flat at the root, no subfolders. Each file:
+
+```json
+{
+  "_generated": "GENERATED FILE - DO NOT EDIT. Produced by the CARO Tag Registry \"Generate Tag Defs\" export (template-level, no instance data). Regenerate instead of editing. content_hash is SHA-256 of the canonical JSON of \"tags\" (keys sorted, no whitespace, entries sorted by tag_path).",
+  "template_name": "Narya_RF",
+  "content_hash": "sha256:2df501c059bddd719520de8d8981b74f00273101a6d81f046430275a7b103c5d",
+  "tags": [
+    { "tag_path": "Pwr_Mon.Mag_1.Fwd.Gain", "direction": "Set", "data_type": "f32" },
+    { "tag_path": "Pwr_Mon.Mag_1.Fwd.kW",   "direction": "Mon", "data_type": "f32" }
+  ]
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `tag_path` | Relative to the module (TAG_LIST's truncated form, `CARO_MQTT_Spec.md` §7.4). |
+| `direction` | `"Set"` if resolved `is_setpoint` is true, else `"Mon"`. |
+| `data_type` | Resolved `data_type` (`tag_types.type_name`). |
+| `content_hash` | `"sha256:"` + hex SHA-256 of canonical JSON of `tags` (same canonicalisation as §2.4's template hash: keys sorted, no whitespace). `tags` is sorted by `tag_path` in code-unit order. |
+
+Only these tag fields are emitted. `tag_id`, `unit`, `eng_min`, `eng_max`, `trends`, `scale`, `offset`, `format` and `is_setpoint` are excluded by design (D32). The files carry no timestamp, so an unchanged template regenerates byte-identically.
+
+**Errors:** 400 `VALIDATION_ERROR` (`root` missing or empty), 404 `TEMPLATE_NOT_FOUND`, 422 `VALIDATION_ERROR` (graph errors in `details`), 422 `NO_MQTT_MODULES`.
+
+---
+
+## 8. Error Code Reference
 
 | Code | HTTP Status | Description |
 |------|-------------|-------------|
@@ -508,6 +560,7 @@ Returns 404 if no rows exist for the given revision number.
 | TAG_NAME_TOO_LONG | 422 | A resolved `tag_name` exceeds `MAX_TAG_NAME_LENGTH` (40 characters). Emitted by `validateResolvedTags`; surfaces on registry apply and template save. |
 | DUPLICATE_TAG_NAME | 422 | Two or more resolved tags share the same `tag_name` (case-insensitive comparison, entire-registry scope). One error emitted per offending tag. Enforced in-app by `validateResolvedTags` — no DB UNIQUE constraint. Surfaces on registry apply and template save. |
 | VALIDATION_ERROR | 422 | One or more validation rules failed. See details array. Graph validation errors from batchSave (INVALID_REFERENCE, CIRCULAR_REFERENCE) are returned as VALIDATION_ERROR with specific codes in the details array — not as top-level error codes. |
+| NO_MQTT_MODULES | 422 | `GET /api/v1/tag-defs` (§7): no `module` template with `Module_Type: "MQTT"` is reachable from `root`. |
 | PROJECT_ROOT_MISMATCH | 403 | `POST /api/v1/registry/apply`'s `rootName` doesn't match the server's configured `PROJECT_ROOT` (§2.6, §5.3) — including when `PROJECT_ROOT` is unset/empty, which refuses every apply. |
 
 ---

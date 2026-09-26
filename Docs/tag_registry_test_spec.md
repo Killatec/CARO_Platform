@@ -892,6 +892,23 @@ Per-package/per-file breakdown above (§9.1–9.5) predates a lot of unrelated g
 | **Combined total** | **541** |
 | Failed | 0 |
 
+### 9.7 Baseline (2026-09-26) — Generate Tag Defs export
+
+Starting point was the `apps/tag-registry/CLAUDE.md` baseline of 490 unit (shared 210, client 170, server 110) + 90 E2E = 580. This entry records what the Tag Defs export (functional spec §12.1, API spec §7) moved:
+
+- `shared/__tests__/tagDefs.test.ts`: new, 14 (`listMqttModuleTemplates` MQTT-only/HMI-excluded/code-unit sort/record input; `buildTagDefs` relative paths, exactly three keys, independence from instancing; `buildTagDefsFile` banner, hash reproducible from the documented canonical form, stability, changes on data_type/direction/rename, unchanged on unit/format/eng_max edits)
+- `shared/__tests__/hashTemplate.test.js`: +3 (`hashTagDefs` — 64-char hex, key-order independence, entry-order sensitivity)
+- `server/__tests__/tagDefs.test.js`: new, 8 (missing `root` → 400, 404 passthrough, zip content-type + timestamped attachment name, one flat file per MQTT template type with HMI excluded, file shape, `NO_MQTT_MODULES`, graph `VALIDATION_ERROR`, `tagDefsZipName` padding)
+- `client/src/api/tagDefs.test.ts`: new, 3 (`parseAttachmentFileName`)
+- `e2e/tests/tag-defs.spec.js`: new, 2 (download filename + ZIP magic for an MQTT system; error banner for an HMI-only system)
+
+| Metric | Value |
+|---|---|
+| Unit total (shared 227 + client 173 + server 118) | 518 |
+| E2E (Chromium) | 92 |
+| **Combined total** | **610** |
+| Failed | 0 |
+
 ---
 
 ## 10. Unit Test Suite

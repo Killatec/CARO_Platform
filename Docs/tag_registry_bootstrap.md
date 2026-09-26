@@ -1,5 +1,5 @@
 # Tag Registry Admin Tool — Bootstrap
-**Updated:** 2026-04-07
+**Updated:** 2026-09-26
 Companion docs: `tag_registry_spec.md` | `tag_registry_api_spec.md` | `tag_registry_test_spec.md`
 
 ---
@@ -21,7 +21,8 @@ apps/tag-registry/
     validateParentTypes.ts
     resolveRegistry.ts
     constants.ts
-    hashTemplate.ts
+    hashTemplate.ts              hashTemplate (6-char SHA-1), hashTagDefs (SHA-256) — one canonicalJSON
+    tagDefs.ts                   Tag Defs export builders (listMqttModuleTemplates, buildTagDefs, buildTagDefsFile)
     utils.ts                     deepEqual, deepNotEqual
   server/
     package.json
@@ -32,9 +33,11 @@ apps/tag-registry/
       routes/
         templates.ts
         registry.ts              GET /registry, POST /apply, GET /revisions
+        tagDefs.ts               GET /tag-defs?root= — Tag Defs ZIP download
       services/
         templateService.ts
         registryService.ts
+        tagDefsService.ts        builds the Tag Defs ZIP (fflate) from saved templates
   client/
     package.json
     tailwind.config.js           extends @caro/ui/tailwind.config.js
@@ -47,6 +50,7 @@ apps/tag-registry/
         client.ts
         templates.ts
         registry.ts
+        tagDefs.ts               downloadTagDefs (raw fetch — binary body) + parseAttachmentFileName
       stores/
         useTemplateGraphStore.ts
         useRegistryStore.ts
@@ -176,6 +180,12 @@ Returns `[{ tag_path, tag_name, module, module_type, data_type, is_setpoint, tre
 
 **`hashTemplate(template)`**
 Returns 6-character hex SHA-1 string.
+
+**`hashTagDefs(tags)`**
+Returns full 64-character hex SHA-256 over the same canonical JSON as `hashTemplate` (keys sorted, no whitespace). Array order is significant — callers pass entries already sorted by `tag_path`. SHA-256 rather than truncated SHA-1 because the hash leaves the app for firmware-side comparison.
+
+**`listMqttModuleTemplates(templateMap)`** / **`buildTagDefs(templateMap, moduleTemplateName)`** / **`buildTagDefsFile(templateMap, moduleTemplateName)`** — `tagDefs.ts`
+Tag Defs export (spec §12.1). `listMqttModuleTemplates` returns `template_type: "module"` templates whose own `Module_Type` default is `MQTT_MODULE_TYPE`, code-unit sorted. `buildTagDefs` resolves the module template on its own via `resolveRegistry` (module as root) and returns `{ tag_path, direction: 'Set' | 'Mon', data_type }[]` with `tag_path` relative to the module, sorted by `tag_path` in code-unit order. `buildTagDefsFile` wraps that as `{ _generated: TAG_DEFS_BANNER, template_name, content_hash: "sha256:<hashTagDefs(tags)>", tags }`.
 
 **`validateResolvedTags(resolvedTags)`**
 Returns `{ valid, errors, warnings }`. Post-resolution cross-field rules: `trends: true` only on `f32`, `i16`, `bool`; `is_setpoint: true` only on scalar types; `TAG_NAME_EMPTY` (empty `tag_name`); `TAG_NAME_TOO_LONG` (>40 chars); `DUPLICATE_TAG_NAME` (case-insensitive duplicate within entire registry, one error per offending tag, empty names excluded). Called by `useValidation` after each `resolveRegistry` and by the server on batch save.

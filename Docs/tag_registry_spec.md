@@ -84,6 +84,8 @@ The shared module exports:
 - `ModuleStatus` / `ModuleStatusLabels` — const enum (`UNKNOWN=0`, `OK=1`, `WARNING=2`, `FAULT=3`, `STALLED=4`) and display-label map. Shared between producer and widget.
 - `constants` — error codes, `DEFAULT_DATA_TYPE`, `MAX_TAG_PATH_LENGTH` default.
 - `deepEqual(a, b)` / `deepNotEqual(a, b)` — JSON-serialization-based deep equality utilities (`utils.js`).
+- `hashTagDefs(tags)` — SHA-256 (full hex) over the same canonical JSON as `hashTemplate`. Used for the Tag Defs `content_hash` (§12.1).
+- `listMqttModuleTemplates(templateMap)` / `buildTagDefs(templateMap, moduleTemplateName)` / `buildTagDefsFile(templateMap, moduleTemplateName)` — Tag Defs export builders (§12.1).
 
 ### 4.3 Client-Side Template Graph
 
@@ -357,6 +359,33 @@ Selecting and authoring any root in the dropdown stays unrestricted regardless o
 
 Both the Registry and History pages also show a quiet, always-visible connection indicator (`DB: <databaseName>` / `PROJECT_ROOT: <projectRoot>`, or `(not configured)` when unset) sourced from the same `GET /api/v1/config` response. On the Registry page this sits above the root-selection/validation-error states, not inside them, so it shows regardless of whether a root is selected or valid.
 
+### 12.1 Generate Tag Defs
+
+A **Generate Tag Defs** button on the Registry page, beside **Export to CSV**, downloads a template-level tag definition export for firmware builds (design decision: RF_Control `Docs/CARO_MIGRATION.md` D32). It calls `GET /api/v1/tag-defs?root=<selected root>` (API spec §7).
+
+**Scope.** One file per **MQTT module template** reachable from the selected root — module *types*, not instances. A system that instances one module template twice (RF1, RF2) produces one file. A template qualifies when `template_type` is `module` and its own `Module_Type` default is `MQTT`. `HMI`-type modules are excluded: their tags are produced in-process by the HMI server (`HmiTagSource`) and never cross MQTT. As of 2026-09-26 every module template in `templates/` is either `MQTT` (`Beam_Control`, `Cooling`, `Narya_RF`, `Pole`, `Power_Control`, `RF_Control`) or `HMI` (`HMI`). No instance overrides `Module_Type`.
+
+**Output.** A ZIP named `TagDefs_YYYY-MM-DD_HHmmss.zip` (server local time), containing one `<template_name>.json` per qualifying template, flat at the ZIP root:
+
+```json
+{
+  "_generated": "GENERATED FILE - DO NOT EDIT. ...",
+  "template_name": "Narya_RF",
+  "content_hash": "sha256:2df501c0…",
+  "tags": [
+    { "tag_path": "Pwr_Mon.Mag_1.Fwd.Gain", "direction": "Set", "data_type": "f32" }
+  ]
+}
+```
+
+- `tag_path` is relative to the module: the truncated below-module form that TAG_LIST carries (`CARO_MQTT_Spec.md` §7.4). The template is resolved on its own with `resolveRegistry`, using the module template as root, so nothing above the module can affect the output.
+- `direction` is `"Set"` when the resolved `is_setpoint` is true, and `"Mon"` otherwise. `data_type` is the resolved `data_type`.
+- **Only these three fields.** `tag_id`, `unit`, `eng_min`, `eng_max`, `trends`, `scale`, `offset`, `format` and `is_setpoint` are deliberately excluded (D32 records why for each). Do not add them. The file has no instance dependency, so commissioning an instance or editing display metadata never changes it.
+- `tags` is sorted by `tag_path` in code-unit order (reproducible with `strcmp`). `content_hash` is SHA-256 of the canonical JSON of `tags`, using the same canonicalisation as `hashTemplate` (keys sorted, no whitespace). A consumer can recompute it from the file to detect a stale or hand-edited copy.
+- No generation timestamp goes inside the files. The timestamp is in the ZIP name only, so regenerating an unchanged template yields a byte-identical file and no diff churn in the consuming repo.
+
+**Gating.** The export reads **saved** templates from disk, not the client's in-memory graph. The button is therefore disabled while `isDirty`, with the tooltip "Save or discard changes before generating Tag Defs — the export reads saved templates". The export is not gated by `PROJECT_ROOT`, because it is read-only and never touches the database. Server errors, such as `NO_MQTT_MODULES` or a graph `VALIDATION_ERROR`, show in a red banner above the table.
+
 ---
 
 ## 13. Revision Control
@@ -625,4 +654,5 @@ The RegistryTable includes a `tag_name` column (3rd column, index 2, between `ta
 | Revision history | `registry_revisions` table + History page |
 | Retired tags | Detected during apply; shown in diff as red rows |
 | Stale conflict on save | Re-fetch full root, discard local changes (merge not supported) |
+| Tag Defs export | `GET /api/v1/tag-defs?root=` → ZIP of one JSON per MQTT module template (`tag_path`, `direction`, `data_type` + banner + SHA-256 `content_hash`); Registry page "Generate Tag Defs" button (§12.1) |
 
