@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createHash } from 'crypto';
-import { listMqttModuleTemplates, buildTagDefs, buildTagDefsFile, TAG_DEFS_BANNER } from '../tagDefs.js';
+import { listMqttModuleTemplates, buildTagDefs, buildTagDefsFile, validateTagDefs, TAG_DEFS_BANNER } from '../tagDefs.js';
 import type { Template } from '../types.js';
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -13,6 +13,7 @@ function tag(name: string, data_type: string, is_setpoint: boolean, extra: Templ
       data_type:   { field_type: 'TagType', default: data_type },
       is_setpoint: { field_type: 'Boolean', default: is_setpoint },
       Trends:      { field_type: 'Boolean', default: false },
+      In_Tag_Name: { field_type: 'Boolean', default: true },
       ...extra,
     },
     children: [],
@@ -29,17 +30,25 @@ function makeMap(): Map<string, Template> {
     tag('numeric_mon', 'f32', false),
     tag('boolean_set', 'bool', true),
     {
-      template_name: 'RF_Pwr', template_type: 'RF', fields: {},
+      template_name: 'RF_Pwr', template_type: 'RF', fields: { In_Tag_Name: { field_type: 'Boolean', default: false } },
       children: [
         { template_name: 'numeric_set', asset_name: 'Gain', fields: {} },
         { template_name: 'numeric_mon', asset_name: 'kW',   fields: { data_type: 'i16' } },
       ],
     },
     {
+      // Organizational grouping — In_Tag_Name false, so it never appears in names.
+      template_name: 'Pwr_Mon', template_type: 'Group', fields: { In_Tag_Name: { field_type: 'Boolean', default: false } },
+      children: [{ template_name: 'RF_Pwr', asset_name: 'Mag_1', fields: { In_Tag_Name: true } }],
+    },
+    {
       template_name: 'RF_Mod', template_type: 'module',
-      fields: { Module_Type: { field_type: 'ModuleType', default: 'MQTT' } },
+      fields: {
+        Module_Type: { field_type: 'ModuleType', default: 'MQTT' },
+        In_Tag_Name: { field_type: 'Boolean', default: false },
+      },
       children: [
-        { template_name: 'RF_Pwr',      asset_name: 'Mag_1',  fields: {} },
+        { template_name: 'Pwr_Mon',     asset_name: 'Pwr_Mon', fields: {} },
         { template_name: 'boolean_set', asset_name: 'Enable', fields: {} },
       ],
     },
@@ -52,7 +61,7 @@ function makeMap(): Map<string, Template> {
       template_name: 'Sys', template_type: 'system', fields: {},
       children: [
         { template_name: 'HMI',    asset_name: 'HMI', fields: {} },
-        { template_name: 'RF_Mod', asset_name: 'RF1', fields: {} },
+        { template_name: 'RF_Mod', asset_name: 'RF1', fields: { In_Tag_Name: true } },
       ],
     },
   ];
@@ -90,7 +99,7 @@ describe('listMqttModuleTemplates', () => {
 // ── buildTagDefs ──────────────────────────────────────────────────────────────
 
 describe('buildTagDefs', () => {
-  it('emits paths relative to the module, sorted by tag_path', () => {
+  it('emits module-relative tag_names (In_Tag_Name levels only), sorted', () => {
     expect(buildTagDefs(makeMap(), 'RF_Mod')).toEqual([
       { tag_path: 'Enable',     direction: 'Set', data_type: 'bool' },
       { tag_path: 'Mag_1.Gain', direction: 'Set', data_type: 'f32' },
@@ -109,6 +118,45 @@ describe('buildTagDefs', () => {
     const sys = map.get('Sys')!;
     map.set('Sys', { ...sys, children: [...sys.children, { template_name: 'RF_Mod', asset_name: 'RF2', fields: {} }] });
     expect(buildTagDefs(map, 'RF_Mod')).toEqual(buildTagDefs(makeMap(), 'RF_Mod'));
+  });
+
+  it('skips organizational levels whose In_Tag_Name is false', () => {
+    const paths = buildTagDefs(makeMap(), 'RF_Mod').map(e => e.tag_path);
+    expect(paths.some(p => p.includes('Pwr_Mon'))).toBe(false);
+  });
+
+  it('never includes the module level, even if the module template sets In_Tag_Name true', () => {
+    const map = makeMap();
+    const mod = map.get('RF_Mod')!;
+    map.set('RF_Mod', { ...mod, fields: { ...mod.fields, In_Tag_Name: { field_type: 'Boolean', default: true } } });
+    expect(buildTagDefs(map, 'RF_Mod')).toEqual(buildTagDefs(makeMap(), 'RF_Mod'));
+  });
+});
+
+// ── validateTagDefs ───────────────────────────────────────────────────────────
+
+describe('validateTagDefs', () => {
+  it('returns no errors for a well-formed module', () => {
+    expect(validateTagDefs(makeMap(), 'RF_Mod')).toEqual([]);
+  });
+
+  it('reports TAG_NAME_EMPTY when no level below the module has In_Tag_Name', () => {
+    const map = makeMap();
+    map.set('boolean_set', tag('boolean_set', 'bool', true, { In_Tag_Name: { field_type: 'Boolean', default: false } }));
+    const errors = validateTagDefs(map, 'RF_Mod');
+    expect(errors).toHaveLength(1);
+    expect(errors[0].code).toBe('TAG_NAME_EMPTY');
+    expect(errors[0].ref).toEqual({ template_name: 'RF_Mod', tag_path: 'RF_Mod.Enable' });
+  });
+
+  it('reports DUPLICATE_TAG_NAME (case-insensitive) once per colliding tag', () => {
+    const map = makeMap();
+    const mod = map.get('RF_Mod')!;
+    // Second Pwr_Mon-style group whose Mag_1 collides with the first (group names are hidden).
+    map.set('RF_Mod', { ...mod, children: [...mod.children, { template_name: 'Pwr_Mon', asset_name: 'Pwr_Mon_2', fields: {} }] });
+    const errors = validateTagDefs(map, 'RF_Mod');
+    expect(errors.every(e => e.code === 'DUPLICATE_TAG_NAME')).toBe(true);
+    expect(errors).toHaveLength(4); // Mag_1.Gain ×2, Mag_1.kW ×2
   });
 });
 

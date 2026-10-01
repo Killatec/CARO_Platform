@@ -8,6 +8,7 @@ import type { Zippable } from 'fflate';
 import {
   buildTagDefsFile,
   listMqttModuleTemplates,
+  validateTagDefs,
   validateGraph,
   ERROR_CODES,
 } from '@caro/tag-registry-shared';
@@ -53,6 +54,17 @@ export async function generateTagDefsZip(rootName: string, now: Date = new Date(
     const err = new Error(`No MQTT module templates are reachable from "${rootName}"`) as CaroError;
     err.status = 422;
     err.code = ERROR_CODES.NO_MQTT_MODULES;
+    throw err;
+  }
+
+  // Module-relative names are the firmware's identifiers — empty or colliding
+  // ones would make an unusable file even when system-level validation passes.
+  const nameErrors = templateNames.flatMap(name => validateTagDefs(templateMap, name));
+  if (nameErrors.length > 0) {
+    const err = new Error(`Module-relative tag names are empty or not unique in ${[...new Set(nameErrors.map(e => e.ref?.template_name))].join(', ')}`) as CaroError;
+    err.status = 422;
+    err.code = ERROR_CODES.VALIDATION_ERROR;
+    err.details = nameErrors;
     throw err;
   }
 

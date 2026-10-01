@@ -85,7 +85,7 @@ The shared module exports:
 - `constants` — error codes, `DEFAULT_DATA_TYPE`, `MAX_TAG_PATH_LENGTH` default.
 - `deepEqual(a, b)` / `deepNotEqual(a, b)` — JSON-serialization-based deep equality utilities (`utils.js`).
 - `hashTagDefs(tags)` — SHA-256 (full hex) over the same canonical JSON as `hashTemplate`. Used for the Tag Defs `content_hash` (§12.1).
-- `listMqttModuleTemplates(templateMap)` / `buildTagDefs(templateMap, moduleTemplateName)` / `buildTagDefsFile(templateMap, moduleTemplateName)` — Tag Defs export builders (§12.1).
+- `listMqttModuleTemplates(templateMap)` / `buildTagDefs(templateMap, moduleTemplateName)` / `buildTagDefsFile(templateMap, moduleTemplateName)` / `validateTagDefs(templateMap, moduleTemplateName)` — Tag Defs export builders and module-relative name validation (§12.1).
 
 ### 4.3 Client-Side Template Graph
 
@@ -371,14 +371,15 @@ A **Generate Tag Defs** button on the Registry page, beside **Export to CSV**, d
 {
   "_generated": "GENERATED FILE - DO NOT EDIT. ...",
   "template_name": "Narya_RF",
-  "content_hash": "sha256:2df501c0…",
+  "content_hash": "sha256:941793bb…",
   "tags": [
-    { "tag_path": "Pwr_Mon.Mag_1.Fwd.Gain", "direction": "Set", "data_type": "f32" }
+    { "tag_path": "Mag_1.Fwd.Gain", "direction": "Set", "data_type": "f32" }
   ]
 }
 ```
 
-- `tag_path` is relative to the module: the truncated below-module form that TAG_LIST carries (`CARO_MQTT_Spec.md` §7.4). The template is resolved on its own with `resolveRegistry`, using the module template as root, so nothing above the module can affect the output.
+- `tag_path` is the **module-relative `tag_name`**: the dot-joined `asset_name`s of levels *below* the module whose `In_Tag_Name` is true (§16.11). It is not the full asset path, so organizational groupings such as `Pwr_Mon` drop out. For example, `Narya1.RF1.Pwr_Mon.Mag_1.Fwd.Gain` with system `tag_name` `RF1.Mag_1.Fwd.Gain` exports as `Mag_1.Fwd.Gain`. The module level itself is always skipped, even when an instance sets `In_Tag_Name` on it (as `Narya1` does for `RF1`), because whether the instance name is shown is an instance decision. The template is resolved on its own with `resolveRegistry`, using the module template as root, so nothing above the module can affect the output.
+- **Name validation.** Each module-relative name must be non-empty and unique within its template, compared case-insensitively. Violations reject the export with `VALIDATION_ERROR`, carrying `TAG_NAME_EMPTY` / `DUPLICATE_TAG_NAME` details from `validateTagDefs`. This is checked separately because system-level `tag_name` validation can pass while module-relative names collide: the instance-name prefix may be the only thing that disambiguates.
 - `direction` is `"Set"` when the resolved `is_setpoint` is true, and `"Mon"` otherwise. `data_type` is the resolved `data_type`.
 - **Only these three fields.** `tag_id`, `unit`, `eng_min`, `eng_max`, `trends`, `scale`, `offset`, `format` and `is_setpoint` are deliberately excluded (D32 records why for each). Do not add them. The file has no instance dependency, so commissioning an instance or editing display metadata never changes it.
 - `tags` is sorted by `tag_path` in code-unit order (reproducible with `strcmp`). `content_hash` is SHA-256 of the canonical JSON of `tags`, using the same canonicalisation as `hashTemplate` (keys sorted, no whitespace). A consumer can recompute it from the file to detect a stale or hand-edited copy.

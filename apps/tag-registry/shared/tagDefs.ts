@@ -1,7 +1,7 @@
-import { MQTT_MODULE_TYPE } from './constants.js';
+import { MQTT_MODULE_TYPE, IN_TAG_NAME_FIELD, ERROR_CODES } from './constants.js';
 import { hashTagDefs } from './hashTemplate.js';
 import { resolveRegistry } from './resolveRegistry.js';
-import type { Template, TemplateEntry } from './types.js';
+import type { Template, TemplateEntry, ValidationMessage } from './types.js';
 import { extractTemplate } from './types.js';
 
 /**
@@ -17,7 +17,7 @@ import { extractTemplate } from './types.js';
 export type TagDirection = 'Set' | 'Mon';
 
 export interface TagDefEntry {
-  /** Path below the module level — the truncated form TAG_LIST carries (CARO_MQTT_Spec §7.4). */
+  /** Module-relative tag_name: dot-joined asset_names of levels below the module with In_Tag_Name true. */
   tag_path: string;
   direction: TagDirection;
   data_type: string;
@@ -59,19 +59,82 @@ export function listMqttModuleTemplates(templateMap: TemplateMapInput): string[]
     .sort(compareCodeUnits);
 }
 
+interface ResolvedTagDef {
+  entry: TagDefEntry;
+  /** Full asset path from the module root — for error messages only, never exported. */
+  sourcePath: string;
+}
+
 /**
- * Resolves a module template on its own (as if it were the root) and returns
- * its tags with paths relative to the module, sorted by tag_path.
+ * Resolves a module template on its own (as if it were the root). The exported
+ * tag_path is the module-relative tag_name: asset_names of levels *below* the
+ * module whose In_Tag_Name is true. The module level itself (meta[0]) is always
+ * skipped — whether an instance carries its name (e.g. "RF1") is an instance
+ * decision, and this export has no instance dependency.
  */
-export function buildTagDefs(templateMap: TemplateMapInput, moduleTemplateName: string): TagDefEntry[] {
-  const prefixLength = moduleTemplateName.length + 1;
+function resolveTagDefs(templateMap: TemplateMapInput, moduleTemplateName: string): ResolvedTagDef[] {
   return resolveRegistry(templateMap, moduleTemplateName)
-    .map((tag): TagDefEntry => ({
-      tag_path: tag.tag_path.slice(prefixLength),
-      direction: tag.is_setpoint ? 'Set' : 'Mon',
-      data_type: tag.data_type,
+    .map(tag => ({
+      entry: {
+        tag_path: tag.meta
+          .slice(1)
+          .filter(level => level.fields?.[IN_TAG_NAME_FIELD] === true)
+          .map(level => level.name)
+          .join('.'),
+        direction: tag.is_setpoint ? 'Set' : 'Mon',
+        data_type: tag.data_type,
+      } satisfies TagDefEntry,
+      sourcePath: tag.tag_path,
     }))
-    .sort((a, b) => compareCodeUnits(a.tag_path, b.tag_path));
+    .sort((a, b) => compareCodeUnits(a.entry.tag_path, b.entry.tag_path));
+}
+
+/** Module-relative tag defs, sorted by tag_path in code-unit order. */
+export function buildTagDefs(templateMap: TemplateMapInput, moduleTemplateName: string): TagDefEntry[] {
+  return resolveTagDefs(templateMap, moduleTemplateName).map(r => r.entry);
+}
+
+/**
+ * Module-relative names must be usable as identifiers on their own: non-empty
+ * and unique (case-insensitive, matching the registry's DUPLICATE_TAG_NAME
+ * rule). A system-level validation can pass while these fail, because the
+ * module instance's own name (e.g. "RF1.") may be what disambiguates there.
+ */
+export function validateTagDefs(templateMap: TemplateMapInput, moduleTemplateName: string): ValidationMessage[] {
+  const resolved = resolveTagDefs(templateMap, moduleTemplateName);
+  const errors: ValidationMessage[] = [];
+
+  for (const r of resolved) {
+    if (r.entry.tag_path === '') {
+      errors.push({
+        severity: 'error',
+        code: ERROR_CODES.TAG_NAME_EMPTY,
+        message: `"${r.sourcePath}": no level below module "${moduleTemplateName}" has ${IN_TAG_NAME_FIELD} set to true`,
+        ref: { template_name: moduleTemplateName, tag_path: r.sourcePath },
+      });
+    }
+  }
+
+  const groups = new Map<string, ResolvedTagDef[]>();
+  for (const r of resolved) {
+    if (r.entry.tag_path === '') continue;
+    const key = r.entry.tag_path.toLowerCase();
+    groups.set(key, [...(groups.get(key) ?? []), r]);
+  }
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const sources = group.map(r => r.sourcePath).join(', ');
+    for (const r of group) {
+      errors.push({
+        severity: 'error',
+        code: ERROR_CODES.DUPLICATE_TAG_NAME,
+        message: `module-relative tag_name "${r.entry.tag_path}" in "${moduleTemplateName}" is not unique — resolved by: ${sources}`,
+        ref: { template_name: moduleTemplateName, tag_path: r.sourcePath },
+      });
+    }
+  }
+
+  return errors;
 }
 
 export function buildTagDefsFile(templateMap: TemplateMapInput, moduleTemplateName: string): TagDefsFile {

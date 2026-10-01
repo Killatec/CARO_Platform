@@ -47,6 +47,7 @@ function tag(name, data_type, is_setpoint) {
       data_type:   { field_type: 'TagType', default: data_type },
       is_setpoint: { field_type: 'Boolean', default: is_setpoint },
       Trends:      { field_type: 'Boolean', default: false },
+      In_Tag_Name: { field_type: 'Boolean', default: true },
       unit:        { field_type: 'String',  default: 'kW' },
     },
   };
@@ -157,6 +158,24 @@ describe('GET /api/v1/tag-defs', () => {
     expect(status).toBe(422);
     expect(body.error.code).toBe(ERROR_CODES.VALIDATION_ERROR);
     expect(body.error.details.some(d => d.code === ERROR_CODES.INVALID_REFERENCE)).toBe(true);
+  });
+});
+
+describe('GET /api/v1/tag-defs — module-relative names', () => {
+  it('returns 422 VALIDATION_ERROR with DUPLICATE_TAG_NAME details when names collide below the module', async () => {
+    const group = {
+      template_name: 'Grp', template_type: 'Group', children: [{ template_name: 'numeric_mon', asset_name: 'kW', fields: {} }],
+      fields: { In_Tag_Name: { field_type: 'Boolean', default: false } },
+    };
+    const mod = module('RF_Mod', 'MQTT', [
+      { template_name: 'Grp', asset_name: 'A', fields: {} },
+      { template_name: 'Grp', asset_name: 'B', fields: {} },
+    ]);
+    templateService.loadRoot.mockResolvedValue(loadRootResult([tag('numeric_mon', 'f32', false), group, mod]));
+    const { status, body } = await getJson('/tag-defs?root=RF_Mod');
+    expect(status).toBe(422);
+    expect(body.error.code).toBe(ERROR_CODES.VALIDATION_ERROR);
+    expect(body.error.details.map(d => d.code)).toEqual([ERROR_CODES.DUPLICATE_TAG_NAME, ERROR_CODES.DUPLICATE_TAG_NAME]);
   });
 });
 

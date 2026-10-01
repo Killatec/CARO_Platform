@@ -13,7 +13,7 @@ export { applyFieldCascade } from './applyFieldCascade.js';
 export { validateParentTypes } from './validateParentTypes.js';
 export { resolveRegistry } from './resolveRegistry.js';
 export { hashTemplate, hashTagDefs } from './hashTemplate.js';
-export { listMqttModuleTemplates, buildTagDefs, buildTagDefsFile, TAG_DEFS_BANNER } from './tagDefs.js';
+export { listMqttModuleTemplates, buildTagDefs, buildTagDefsFile, validateTagDefs, TAG_DEFS_BANNER } from './tagDefs.js';
 export type { TagDirection, TagDefEntry, TagDefsFile } from './tagDefs.js';
 export { deepEqual, deepNotEqual } from './utils.js';
 export { getModuleNames } from './moduleOrder.js';

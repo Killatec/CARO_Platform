@@ -909,6 +909,19 @@ Starting point was the `apps/tag-registry/CLAUDE.md` baseline of 490 unit (share
 | **Combined total** | **610** |
 | Failed | 0 |
 
+### 9.8 Baseline (2026-10-01) — Tag Defs `tag_path` switched to module-relative `tag_name`
+
+- `shared/__tests__/tagDefs.test.ts`: 14 → 19. The fixture gained `In_Tag_Name` and a `Pwr_Mon`-style grouping level. New tests: grouping levels skipped; the module level never included, even when its template sets `In_Tag_Name: true`; `validateTagDefs` clean / `TAG_NAME_EMPTY` / `DUPLICATE_TAG_NAME`.
+- `server/__tests__/tagDefs.test.js`: 8 → 9. The fixture gained `In_Tag_Name`. New: 422 `VALIDATION_ERROR` with `DUPLICATE_TAG_NAME` details when names collide below the module.
+- client and E2E: unchanged.
+
+| Metric | Value |
+|---|---|
+| Unit total (shared 232 + client 173 + server 119) | 524 |
+| E2E (Chromium) | 92 |
+| **Combined total** | **616** |
+| Failed | 0 |
+
 ---
 
 ## 10. Unit Test Suite

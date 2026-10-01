@@ -504,7 +504,8 @@ Downloads the template-level Tag Defs export (functional spec §12.1; design dec
 1. `loadRoot(root)` loads every template reachable from `root`.
 2. `validateGraph` runs on that set. Any error → 422 `VALIDATION_ERROR` with the messages in `details`. `resolveRegistry` skips broken references silently, so the server refuses rather than emit a file with tags quietly missing.
 3. `listMqttModuleTemplates` selects `template_type: "module"` templates whose own `Module_Type` default is `MQTT`. None → 422 `NO_MQTT_MODULES`.
-4. `buildTagDefsFile` runs for each selected template, and the results are zipped (`fflate`).
+4. `validateTagDefs` runs per selected template. An empty or case-insensitively duplicated module-relative name → 422 `VALIDATION_ERROR` with `TAG_NAME_EMPTY` / `DUPLICATE_TAG_NAME` messages in `details`.
+5. `buildTagDefsFile` runs for each selected template, and the results are zipped (`fflate`).
 
 **Success response (HTTP 200):**
 
@@ -516,24 +517,24 @@ Downloads the template-level Tag Defs export (functional spec §12.1; design dec
 {
   "_generated": "GENERATED FILE - DO NOT EDIT. Produced by the CARO Tag Registry \"Generate Tag Defs\" export (template-level, no instance data). Regenerate instead of editing. content_hash is SHA-256 of the canonical JSON of \"tags\" (keys sorted, no whitespace, entries sorted by tag_path).",
   "template_name": "Narya_RF",
-  "content_hash": "sha256:2df501c059bddd719520de8d8981b74f00273101a6d81f046430275a7b103c5d",
+  "content_hash": "sha256:941793bb490b2f2ef509b3624acbf305cd2fc68e952f7243698b6de957109e44",
   "tags": [
-    { "tag_path": "Pwr_Mon.Mag_1.Fwd.Gain", "direction": "Set", "data_type": "f32" },
-    { "tag_path": "Pwr_Mon.Mag_1.Fwd.kW",   "direction": "Mon", "data_type": "f32" }
+    { "tag_path": "Mag_1.Fwd.Gain", "direction": "Set", "data_type": "f32" },
+    { "tag_path": "Mag_1.Fwd.kW",   "direction": "Mon", "data_type": "f32" }
   ]
 }
 ```
 
 | Field | Description |
 |-------|-------------|
-| `tag_path` | Relative to the module (TAG_LIST's truncated form, `CARO_MQTT_Spec.md` §7.4). |
+| `tag_path` | Module-relative `tag_name`: `asset_name`s of levels below the module with `In_Tag_Name: true`, dot-joined. The module level is always excluded, and organizational levels with `In_Tag_Name: false` drop out (functional spec §12.1). |
 | `direction` | `"Set"` if resolved `is_setpoint` is true, else `"Mon"`. |
 | `data_type` | Resolved `data_type` (`tag_types.type_name`). |
 | `content_hash` | `"sha256:"` + hex SHA-256 of canonical JSON of `tags` (same canonicalisation as §2.4's template hash: keys sorted, no whitespace). `tags` is sorted by `tag_path` in code-unit order. |
 
 Only these tag fields are emitted. `tag_id`, `unit`, `eng_min`, `eng_max`, `trends`, `scale`, `offset`, `format` and `is_setpoint` are excluded by design (D32). The files carry no timestamp, so an unchanged template regenerates byte-identically.
 
-**Errors:** 400 `VALIDATION_ERROR` (`root` missing or empty), 404 `TEMPLATE_NOT_FOUND`, 422 `VALIDATION_ERROR` (graph errors in `details`), 422 `NO_MQTT_MODULES`.
+**Errors:** 400 `VALIDATION_ERROR` (`root` missing or empty), 404 `TEMPLATE_NOT_FOUND`, 422 `VALIDATION_ERROR` (graph errors, or module-relative name errors, in `details`), 422 `NO_MQTT_MODULES`.
 
 ---
 
