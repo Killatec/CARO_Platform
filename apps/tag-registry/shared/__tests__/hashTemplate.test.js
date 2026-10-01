@@ -49,18 +49,18 @@ describe('hashTemplate', () => {
 
 describe('hashTagDefs', () => {
   it('returns a 64-character lowercase hex SHA-256', () => {
-    expect(hashTagDefs([{ tag_path: 'A', direction: 'Set', data_type: 'f32' }])).toMatch(/^[0-9a-f]{64}$/);
+    expect(hashTagDefs([{ tag_name: 'A', direction: 'Set', data_type: 'f32' }])).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it('key order within entries does not affect the hash', () => {
-    const a = hashTagDefs([{ tag_path: 'A', direction: 'Set', data_type: 'f32' }]);
-    const b = hashTagDefs([{ data_type: 'f32', direction: 'Set', tag_path: 'A' }]);
+    const a = hashTagDefs([{ tag_name: 'A', direction: 'Set', data_type: 'f32' }]);
+    const b = hashTagDefs([{ data_type: 'f32', direction: 'Set', tag_name: 'A' }]);
     expect(a).toBe(b);
   });
 
   it('entry order affects the hash (callers own sorting)', () => {
-    const x = { tag_path: 'A', direction: 'Set', data_type: 'f32' };
-    const y = { tag_path: 'B', direction: 'Mon', data_type: 'bool' };
+    const x = { tag_name: 'A', direction: 'Set', data_type: 'f32' };
+    const y = { tag_name: 'B', direction: 'Mon', data_type: 'bool' };
     expect(hashTagDefs([x, y])).not.toBe(hashTagDefs([y, x]));
   });
 });

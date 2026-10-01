@@ -17,7 +17,7 @@ export function hashTemplate(template: object): string {
  * D27/D32) — so it must not collide by accident.
  *
  * Array order is significant: callers must pass entries already sorted by
- * tag_path (buildTagDefs does this).
+ * tag_name (buildTagDefs does this).
  */
 export function hashTagDefs(tags: readonly object[]): string {
   return crypto.createHash('sha256').update(canonicalJSON(tags)).digest('hex');

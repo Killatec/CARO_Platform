@@ -515,22 +515,22 @@ Downloads the template-level Tag Defs export (functional spec §12.1; design dec
 
 ```json
 {
-  "_generated": "GENERATED FILE - DO NOT EDIT. Produced by the CARO Tag Registry \"Generate Tag Defs\" export (template-level, no instance data). Regenerate instead of editing. content_hash is SHA-256 of the canonical JSON of \"tags\" (keys sorted, no whitespace, entries sorted by tag_path).",
+  "_generated": "GENERATED FILE - DO NOT EDIT. Produced by the CARO Tag Registry \"Generate Tag Defs\" export (template-level, no instance data). Regenerate instead of editing. content_hash is SHA-256 of the canonical JSON of \"tags\" (keys sorted, no whitespace, entries sorted by tag_name).",
   "template_name": "Narya_RF",
-  "content_hash": "sha256:941793bb490b2f2ef509b3624acbf305cd2fc68e952f7243698b6de957109e44",
+  "content_hash": "sha256:dcac00fe73f0f072d84367d77144bec698a0d3ed0bb189049ce8674ebb5a0e05",
   "tags": [
-    { "tag_path": "Mag_1.Fwd.Gain", "direction": "Set", "data_type": "f32" },
-    { "tag_path": "Mag_1.Fwd.kW",   "direction": "Mon", "data_type": "f32" }
+    { "tag_name": "Mag_1.Fwd.Gain", "direction": "Set", "data_type": "f32" },
+    { "tag_name": "Mag_1.Fwd.kW",   "direction": "Mon", "data_type": "f32" }
   ]
 }
 ```
 
 | Field | Description |
 |-------|-------------|
-| `tag_path` | Module-relative `tag_name`: `asset_name`s of levels below the module with `In_Tag_Name: true`, dot-joined. The module level is always excluded, and organizational levels with `In_Tag_Name: false` drop out (functional spec §12.1). |
+| `tag_name` | Module-relative `tag_name`: `asset_name`s of levels below the module with `In_Tag_Name: true`, dot-joined. The module level is always excluded, and organizational levels with `In_Tag_Name: false` drop out (functional spec §12.1). |
 | `direction` | `"Set"` if resolved `is_setpoint` is true, else `"Mon"`. |
 | `data_type` | Resolved `data_type` (`tag_types.type_name`). |
-| `content_hash` | `"sha256:"` + hex SHA-256 of canonical JSON of `tags` (same canonicalisation as §2.4's template hash: keys sorted, no whitespace). `tags` is sorted by `tag_path` in code-unit order. |
+| `content_hash` | `"sha256:"` + hex SHA-256 of canonical JSON of `tags` (same canonicalisation as §2.4's template hash: keys sorted, no whitespace). `tags` is sorted by `tag_name` in code-unit order. |
 
 Only these tag fields are emitted. `tag_id`, `unit`, `eng_min`, `eng_max`, `trends`, `scale`, `offset`, `format` and `is_setpoint` are excluded by design (D32). The files carry no timestamp, so an unchanged template regenerates byte-identically.
 

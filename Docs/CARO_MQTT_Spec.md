@@ -2,7 +2,7 @@
 
 MQTT Interface Specification
 
-Date: 2026-03-27
+Date: 2026-10-01
 
 **Companion Documents**
 
@@ -30,6 +30,7 @@ hmi_functional_spec \| hmi_API_spec \| CARO_DB_Spec
   1.7           2026-03-27   PM / Claude   EXPIRED rejection code corrected: evaluated by embedded module from cmd ts_utc_ms. MQTT connection policy added (Section 2.1). Time synchronization requirement added (Section 2.2). Reconnect and handshake sequence policy added. TAG_LIST and CONFIRM message examples added. LWT recommendation added. Duplicate command_id handling note added. Telemetry publish rate guidance added.
 
   1.8           2026-03-27   PM / Claude   Status/heartbeat topic row removed from Section 3 topic table. Section 5.3 (Status/Heartbeat) removed; backend heartbeat moved to new Section 5.3 (Backend Heartbeat). LWT references removed. Section 5.1 JSON format updated: status field added (ONLINE \| FAULT). Section 5.2 Protobuf format updated: legacy wrapper/DELTA language removed; payload described as directly mirroring JSON structure encoded per Protobuf schema.
+  1.9           2026-10-01   PM / Claude   Handshake identifies tags by module-relative tag_name instead of truncated tag_path: TAG_LIST entries are { tag_id, tag_name }; Section 7.4 rewritten (tag_name derivation, uniqueness). Matches the Tag Registry "Generate Tag Defs" export the module's definitions are generated from.
   ------------- ------------ ------------- ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 **1. Purpose**
@@ -261,7 +262,7 @@ Handshake topics:
   ---------- ------------------ ------------------ --------------------------------------------------------------------------------------------------------------------------------------
   **Step**   **Direction**      **message_type**   **Content**
 
-  1          Backend → Module   TAG_LIST           List of { tag_id (uint32), tag_path (string, truncated below module level) } for all tags belonging to this module instance.
+  1          Backend → Module   TAG_LIST           List of { tag_id (uint32), tag_name (string, module-relative --- see 7.4) } for all tags belonging to this module instance.
 
   2          Module → Backend   CONFIRM            { fw_hash, tag_config_hash } --- both computed from the module\'s own compiled firmware definitions, not from the received tag list.
   ---------- ------------------ ------------------ --------------------------------------------------------------------------------------------------------------------------------------
@@ -292,11 +293,11 @@ TAG_LIST example (Step 1 --- Backend → Module):
 
 \"tags\": \[
 
-{ \"tag_id\": 1001, \"tag_path\": \"RF_Fwd.setpoint\" },
+{ \"tag_id\": 1001, \"tag_name\": \"RF_Fwd.setpoint\" },
 
-{ \"tag_id\": 1002, \"tag_path\": \"RF_Fwd.readback\" },
+{ \"tag_id\": 1002, \"tag_name\": \"RF_Fwd.readback\" },
 
-{ \"tag_id\": 1003, \"tag_path\": \"RF_Rfl.readback\" }
+{ \"tag_id\": 1003, \"tag_name\": \"RF_Rfl.readback\" }
 
 \]
 
@@ -334,11 +335,13 @@ During module commissioning, the received hashes are stored as the expected base
 
 ***NOTE:** Both hashes are computed entirely on the module from its compiled firmware definitions. The backend does not independently compute or verify these hashes --- it only compares the received values against the stored baseline.*
 
-**7.4 tag_path Truncation**
+**7.4 Module-Relative tag_name**
 
-The tag_path delivered in the TAG_LIST message is truncated to remove the root-to-module prefix. Only the path below the module level is included.
+Each TAG_LIST entry identifies its tag by a module-relative tag_name, not by tag_path. The tag_name is the dot-joined asset_names of the levels below the module level whose In_Tag_Name field is true. The module level itself is never included, even when the module instance's In_Tag_Name is true. Organizational levels with In_Tag_Name false are omitted.
 
-Example: a tag with full path Plant1_System_A.RFPowerModule.RF_Fwd.setpoint is delivered to the RFPowerModule module as RF_Fwd.setpoint. The module uses tag_id for all wire communication; tag_path is used for local logging and diagnostics only.
+Example: a tag with full path Narya1.RF1.Pwr_Mon.Mag_1.Fwd.Gain, where Pwr_Mon has In_Tag_Name false, has registry tag_name RF1.Mag_1.Fwd.Gain. It is delivered to the RF1 module as Mag_1.Fwd.Gain.
+
+This is the same string the Tag Registry's "Generate Tag Defs" export emits per module template (tag_registry_spec §12.1), which is what the module's compiled definitions are generated from. The module matches each received tag_name against those definitions to learn its tag_id. Module-relative tag_names are therefore non-empty and unique within a module, compared case-insensitively. The Tag Registry export refuses a template that violates this. The module uses tag_id for all wire communication; tag_name is used only to bind ids during the handshake, and for local logging and diagnostics.
 
 
 **Appendix A: Protobuf Schema Reference**

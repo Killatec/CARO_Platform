@@ -101,15 +101,15 @@ describe('listMqttModuleTemplates', () => {
 describe('buildTagDefs', () => {
   it('emits module-relative tag_names (In_Tag_Name levels only), sorted', () => {
     expect(buildTagDefs(makeMap(), 'RF_Mod')).toEqual([
-      { tag_path: 'Enable',     direction: 'Set', data_type: 'bool' },
-      { tag_path: 'Mag_1.Gain', direction: 'Set', data_type: 'f32' },
-      { tag_path: 'Mag_1.kW',   direction: 'Mon', data_type: 'i16' },
+      { tag_name: 'Enable',     direction: 'Set', data_type: 'bool' },
+      { tag_name: 'Mag_1.Gain', direction: 'Set', data_type: 'f32' },
+      { tag_name: 'Mag_1.kW',   direction: 'Mon', data_type: 'i16' },
     ]);
   });
 
-  it('carries exactly tag_path, direction and data_type — no excluded fields', () => {
+  it('carries exactly tag_name, direction and data_type — no excluded fields', () => {
     for (const entry of buildTagDefs(makeMap(), 'RF_Mod')) {
-      expect(Object.keys(entry).sort()).toEqual(['data_type', 'direction', 'tag_path']);
+      expect(Object.keys(entry).sort()).toEqual(['data_type', 'direction', 'tag_name']);
     }
   });
 
@@ -121,7 +121,7 @@ describe('buildTagDefs', () => {
   });
 
   it('skips organizational levels whose In_Tag_Name is false', () => {
-    const paths = buildTagDefs(makeMap(), 'RF_Mod').map(e => e.tag_path);
+    const paths = buildTagDefs(makeMap(), 'RF_Mod').map(e => e.tag_name);
     expect(paths.some(p => p.includes('Pwr_Mon'))).toBe(false);
   });
 
@@ -173,7 +173,7 @@ describe('buildTagDefsFile', () => {
   it('content_hash is reproducible from the documented canonical form of tags', () => {
     const file = buildTagDefsFile(makeMap(), 'RF_Mod');
     const canonical = '[' + file.tags
-      .map(t => `{"data_type":${JSON.stringify(t.data_type)},"direction":${JSON.stringify(t.direction)},"tag_path":${JSON.stringify(t.tag_path)}}`)
+      .map(t => `{"data_type":${JSON.stringify(t.data_type)},"direction":${JSON.stringify(t.direction)},"tag_name":${JSON.stringify(t.tag_name)}}`)
       .join(',') + ']';
     const expected = createHash('sha256').update(canonical).digest('hex');
     expect(file.content_hash).toBe(`sha256:${expected}`);

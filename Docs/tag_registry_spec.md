@@ -371,18 +371,19 @@ A **Generate Tag Defs** button on the Registry page, beside **Export to CSV**, d
 {
   "_generated": "GENERATED FILE - DO NOT EDIT. ...",
   "template_name": "Narya_RF",
-  "content_hash": "sha256:941793bb…",
+  "content_hash": "sha256:dcac00fe…",
   "tags": [
-    { "tag_path": "Mag_1.Fwd.Gain", "direction": "Set", "data_type": "f32" }
+    { "tag_name": "Mag_1.Fwd.Gain", "direction": "Set", "data_type": "f32" }
   ]
 }
 ```
 
-- `tag_path` is the **module-relative `tag_name`**: the dot-joined `asset_name`s of levels *below* the module whose `In_Tag_Name` is true (§16.11). It is not the full asset path, so organizational groupings such as `Pwr_Mon` drop out. For example, `Narya1.RF1.Pwr_Mon.Mag_1.Fwd.Gain` with system `tag_name` `RF1.Mag_1.Fwd.Gain` exports as `Mag_1.Fwd.Gain`. The module level itself is always skipped, even when an instance sets `In_Tag_Name` on it (as `Narya1` does for `RF1`), because whether the instance name is shown is an instance decision. The template is resolved on its own with `resolveRegistry`, using the module template as root, so nothing above the module can affect the output.
+- `tag_name` is **module-relative**. It was named `tag_path` until 2026-10-01 and was renamed because the value is a name, not an asset path. It holds the dot-joined `asset_name`s of levels *below* the module whose `In_Tag_Name` is true (§16.11). It is not the full asset path, so organizational groupings such as `Pwr_Mon` drop out. For example, `Narya1.RF1.Pwr_Mon.Mag_1.Fwd.Gain` with system `tag_name` `RF1.Mag_1.Fwd.Gain` exports as `Mag_1.Fwd.Gain`. The module level itself is always skipped, even when an instance sets `In_Tag_Name` on it (as `Narya1` does for `RF1`), because whether the instance name is shown is an instance decision. The template is resolved on its own with `resolveRegistry`, using the module template as root, so nothing above the module can affect the output.
 - **Name validation.** Each module-relative name must be non-empty and unique within its template, compared case-insensitively. Violations reject the export with `VALIDATION_ERROR`, carrying `TAG_NAME_EMPTY` / `DUPLICATE_TAG_NAME` details from `validateTagDefs`. This is checked separately because system-level `tag_name` validation can pass while module-relative names collide: the instance-name prefix may be the only thing that disambiguates.
+- **Handshake contract.** The MQTT handshake's `TAG_LIST` identifies tags by this same module-relative `tag_name` (`CARO_MQTT_Spec.md` §7.1, §7.4, v1.9). A module built from this export binds ids by exact string match, so the export and the backend's `TAG_LIST` assembly must derive the name by the same rule.
 - `direction` is `"Set"` when the resolved `is_setpoint` is true, and `"Mon"` otherwise. `data_type` is the resolved `data_type`.
 - **Only these three fields.** `tag_id`, `unit`, `eng_min`, `eng_max`, `trends`, `scale`, `offset`, `format` and `is_setpoint` are deliberately excluded (D32 records why for each). Do not add them. The file has no instance dependency, so commissioning an instance or editing display metadata never changes it.
-- `tags` is sorted by `tag_path` in code-unit order (reproducible with `strcmp`). `content_hash` is SHA-256 of the canonical JSON of `tags`, using the same canonicalisation as `hashTemplate` (keys sorted, no whitespace). A consumer can recompute it from the file to detect a stale or hand-edited copy.
+- `tags` is sorted by `tag_name` in code-unit order (reproducible with `strcmp`). `content_hash` is SHA-256 of the canonical JSON of `tags`, using the same canonicalisation as `hashTemplate` (keys sorted, no whitespace). A consumer can recompute it from the file to detect a stale or hand-edited copy.
 - No generation timestamp goes inside the files. The timestamp is in the ZIP name only, so regenerating an unchanged template yields a byte-identical file and no diff churn in the consuming repo.
 
 **Gating.** The export reads **saved** templates from disk, not the client's in-memory graph. The button is therefore disabled while `isDirty`, with the tooltip "Save or discard changes before generating Tag Defs — the export reads saved templates". The export is not gated by `PROJECT_ROOT`, because it is read-only and never touches the database. Server errors, such as `NO_MQTT_MODULES` or a graph `VALIDATION_ERROR`, show in a red banner above the table.
@@ -655,5 +656,5 @@ The RegistryTable includes a `tag_name` column (3rd column, index 2, between `ta
 | Revision history | `registry_revisions` table + History page |
 | Retired tags | Detected during apply; shown in diff as red rows |
 | Stale conflict on save | Re-fetch full root, discard local changes (merge not supported) |
-| Tag Defs export | `GET /api/v1/tag-defs?root=` → ZIP of one JSON per MQTT module template (`tag_path`, `direction`, `data_type` + banner + SHA-256 `content_hash`); Registry page "Generate Tag Defs" button (§12.1) |
+| Tag Defs export | `GET /api/v1/tag-defs?root=` → ZIP of one JSON per MQTT module template (`tag_name`, `direction`, `data_type` + banner + SHA-256 `content_hash`); Registry page "Generate Tag Defs" button (§12.1) |
 

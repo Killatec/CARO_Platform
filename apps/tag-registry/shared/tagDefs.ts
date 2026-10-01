@@ -8,7 +8,7 @@ import { extractTemplate } from './types.js';
  * Template-level "Tag Defs" export — one file per MQTT module template.
  * Spec: RF_Control Docs/CARO_MIGRATION.md D32.
  *
- * Deliberately carries only tag_path, direction and data_type. tag_id, unit,
+ * Deliberately carries only tag_name, direction and data_type. tag_id, unit,
  * eng_min/eng_max, trendable, scale/offset, format and is_setpoint are excluded
  * by decision (see D32's table), not by omission — do not add them here.
  * Nothing in this file depends on any instance of the template.
@@ -18,7 +18,7 @@ export type TagDirection = 'Set' | 'Mon';
 
 export interface TagDefEntry {
   /** Module-relative tag_name: dot-joined asset_names of levels below the module with In_Tag_Name true. */
-  tag_path: string;
+  tag_name: string;
   direction: TagDirection;
   data_type: string;
 }
@@ -34,7 +34,7 @@ export interface TagDefsFile {
 export const TAG_DEFS_BANNER =
   'GENERATED FILE - DO NOT EDIT. Produced by the CARO Tag Registry "Generate Tag Defs" export ' +
   '(template-level, no instance data). Regenerate instead of editing. content_hash is SHA-256 of ' +
-  'the canonical JSON of "tags" (keys sorted, no whitespace, entries sorted by tag_path).';
+  'the canonical JSON of "tags" (keys sorted, no whitespace, entries sorted by tag_name).';
 
 type TemplateMapInput =
   | Map<string, Template | TemplateEntry>
@@ -67,7 +67,7 @@ interface ResolvedTagDef {
 
 /**
  * Resolves a module template on its own (as if it were the root). The exported
- * tag_path is the module-relative tag_name: asset_names of levels *below* the
+ * tag_name is the module-relative tag_name: asset_names of levels *below* the
  * module whose In_Tag_Name is true. The module level itself (meta[0]) is always
  * skipped — whether an instance carries its name (e.g. "RF1") is an instance
  * decision, and this export has no instance dependency.
@@ -76,7 +76,7 @@ function resolveTagDefs(templateMap: TemplateMapInput, moduleTemplateName: strin
   return resolveRegistry(templateMap, moduleTemplateName)
     .map(tag => ({
       entry: {
-        tag_path: tag.meta
+        tag_name: tag.meta
           .slice(1)
           .filter(level => level.fields?.[IN_TAG_NAME_FIELD] === true)
           .map(level => level.name)
@@ -86,10 +86,10 @@ function resolveTagDefs(templateMap: TemplateMapInput, moduleTemplateName: strin
       } satisfies TagDefEntry,
       sourcePath: tag.tag_path,
     }))
-    .sort((a, b) => compareCodeUnits(a.entry.tag_path, b.entry.tag_path));
+    .sort((a, b) => compareCodeUnits(a.entry.tag_name, b.entry.tag_name));
 }
 
-/** Module-relative tag defs, sorted by tag_path in code-unit order. */
+/** Module-relative tag defs, sorted by tag_name in code-unit order. */
 export function buildTagDefs(templateMap: TemplateMapInput, moduleTemplateName: string): TagDefEntry[] {
   return resolveTagDefs(templateMap, moduleTemplateName).map(r => r.entry);
 }
@@ -105,7 +105,7 @@ export function validateTagDefs(templateMap: TemplateMapInput, moduleTemplateNam
   const errors: ValidationMessage[] = [];
 
   for (const r of resolved) {
-    if (r.entry.tag_path === '') {
+    if (r.entry.tag_name === '') {
       errors.push({
         severity: 'error',
         code: ERROR_CODES.TAG_NAME_EMPTY,
@@ -117,8 +117,8 @@ export function validateTagDefs(templateMap: TemplateMapInput, moduleTemplateNam
 
   const groups = new Map<string, ResolvedTagDef[]>();
   for (const r of resolved) {
-    if (r.entry.tag_path === '') continue;
-    const key = r.entry.tag_path.toLowerCase();
+    if (r.entry.tag_name === '') continue;
+    const key = r.entry.tag_name.toLowerCase();
     groups.set(key, [...(groups.get(key) ?? []), r]);
   }
   for (const group of groups.values()) {
@@ -128,7 +128,7 @@ export function validateTagDefs(templateMap: TemplateMapInput, moduleTemplateNam
       errors.push({
         severity: 'error',
         code: ERROR_CODES.DUPLICATE_TAG_NAME,
-        message: `module-relative tag_name "${r.entry.tag_path}" in "${moduleTemplateName}" is not unique — resolved by: ${sources}`,
+        message: `module-relative tag_name "${r.entry.tag_name}" in "${moduleTemplateName}" is not unique — resolved by: ${sources}`,
         ref: { template_name: moduleTemplateName, tag_path: r.sourcePath },
       });
     }

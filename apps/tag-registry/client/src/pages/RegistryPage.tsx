@@ -262,7 +262,7 @@ export function RegistryPage(): React.ReactElement {
                 disabled={isDirty || generatingTagDefs}
                 title={isDirty
                   ? 'Save or discard changes before generating Tag Defs — the export reads saved templates'
-                  : 'Download a ZIP with one JSON per MQTT module template (tag_path, direction, data_type)'}
+                  : 'Download a ZIP with one JSON per MQTT module template (tag_name, direction, data_type)'}
                 className={`px-3 py-1 text-sm rounded font-medium transition-colors ${
                   isDirty || generatingTagDefs
                     ? 'bg-gray-200 text-gray-400 cursor-not-allowed'

@@ -139,8 +139,8 @@ describe('GET /api/v1/tag-defs', () => {
     expect(file.template_name).toBe('RF_Mod');
     expect(file.content_hash).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(file.tags).toEqual([
-      { tag_path: 'Gain', direction: 'Set', data_type: 'f32' },
-      { tag_path: 'kW',   direction: 'Mon', data_type: 'f32' },
+      { tag_name: 'Gain', direction: 'Set', data_type: 'f32' },
+      { tag_name: 'kW',   direction: 'Mon', data_type: 'f32' },
     ]);
   });
 
