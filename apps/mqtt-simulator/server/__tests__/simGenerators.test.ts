@@ -3,6 +3,9 @@ import {
   initBoolValue,
   advanceBoolValue,
   advanceF32Value,
+  advanceIntValue,
+  I16_RANGE,
+  I32_RANGE,
   SINE_PERIOD_MS,
 } from '../services/simGenerators.js';
 
@@ -83,5 +86,25 @@ describe('randomization', () => {
     }
     expect(trueCount).toBeGreaterThanOrEqual(400);
     expect(trueCount).toBeLessThanOrEqual(600);
+  });
+});
+
+// ── integer tags ──────────────────────────────────────────────────────────────
+
+describe('advanceIntValue', () => {
+  it('produces an integer on the sine wave for i16 and i32', () => {
+    for (const range of [I16_RANGE, I32_RANGE]) {
+      const { value, simT } = advanceIntValue(0, 100, range);
+      expect(Number.isInteger(value)).toBe(true);
+      expect(value).toBe(Math.round(50 + 25 * Math.sin((2 * Math.PI * 100) / SINE_PERIOD_MS)));
+      expect(simT).toBe(100);
+    }
+  });
+
+  it('clamps to the supplied range', () => {
+    const narrow = { min: 0, max: 10 };
+    expect(advanceIntValue(0, 0, narrow).value).toBe(10);
+    expect(I32_RANGE).toEqual({ min: -2147483648, max: 2147483647 });
+    expect(I16_RANGE).toEqual({ min: -32768, max: 32767 });
   });
 });

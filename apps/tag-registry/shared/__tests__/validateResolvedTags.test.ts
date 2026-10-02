@@ -98,6 +98,13 @@ describe('validateResolvedTags — trends rule', () => {
     expect(result.valid).toBe(true);
   });
 
+  it('accepts trends:true on i32', () => {
+    const tags = resolveWithOverride('i32', true, false);
+    expect(tags[0].data_type).toBe('i32');
+    const result = validateResolvedTags(tags);
+    expect(result.valid).toBe(true);
+  });
+
   it('accepts trends:false on f32[] (no trends, no problem)', () => {
     const tags = resolveWithOverride('f32', false, false, { data_type: 'f32[]' });
     const result = validateResolvedTags(tags);
@@ -124,6 +131,12 @@ describe('validateResolvedTags — is_setpoint rule', () => {
     const result = validateResolvedTags(tags);
     expect(result.valid).toBe(false);
     expect(result.errors[0].ref?.tag_path).toBe('SYS.Tag1');
+  });
+
+  it('accepts is_setpoint:true on i32', () => {
+    const tags = resolveWithOverride('i32', false, true);
+    const result = validateResolvedTags(tags);
+    expect(result.valid).toBe(true);
   });
 
   it('accepts is_setpoint:true on f32 scalar', () => {

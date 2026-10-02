@@ -20,9 +20,16 @@ export function advanceF32Value(simT: number, deltaMs: number): { value: number;
   return { value: 50 + 25 * Math.sin((2 * Math.PI * newT) / SINE_PERIOD_MS), simT: newT };
 }
 
-/** Advance an i16 tag along the sine wave (rounded and clamped). */
-export function advanceI16Value(simT: number, deltaMs: number): { value: number; simT: number } {
+export const I16_RANGE = { min: -32768, max: 32767 } as const;
+export const I32_RANGE = { min: -2147483648, max: 2147483647 } as const;
+
+/** Advance an integer tag (i16 / i32) along the sine wave, rounded and clamped to `range`. */
+export function advanceIntValue(
+  simT: number,
+  deltaMs: number,
+  range: { min: number; max: number },
+): { value: number; simT: number } {
   const newT = simT + deltaMs;
   const raw = 50 + 25 * Math.sin((2 * Math.PI * newT) / SINE_PERIOD_MS);
-  return { value: Math.max(-32768, Math.min(32767, Math.round(raw))), simT: newT };
+  return { value: Math.max(range.min, Math.min(range.max, Math.round(raw))), simT: newT };
 }

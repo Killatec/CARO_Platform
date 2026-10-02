@@ -28,6 +28,7 @@ export function encodeProto(_moduleId: string, tags: ProtoTag[], status: string)
       if (t.data_type === 'f32')    value.float_value       = t.simValue;
       if (t.data_type === 'bool')   value.bool_value        = t.simValue;
       if (t.data_type === 'i16')    value.int_value         = t.simValue;
+      if (t.data_type === 'i32')    value.int_value         = t.simValue;
       if (t.data_type === 'string') value.string_value      = t.simValue;
       if (t.data_type === 'f32[]')  value.float_array_value = { values: t.simValue };
       if (t.data_type === 'i16[]')  value.int_array_value   = { values: t.simValue };

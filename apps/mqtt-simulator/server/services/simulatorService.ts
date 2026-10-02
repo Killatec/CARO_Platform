@@ -5,7 +5,7 @@
 import { connect, getClient } from './mqttClient.js';
 import { loadTagRegistry, SimTag } from './registry.js';
 import { loadProto, encodeProto, ProtoTag } from './protobuf.js';
-import { initBoolValue, advanceBoolValue, advanceF32Value, advanceI16Value } from './simGenerators.js';
+import { initBoolValue, advanceBoolValue, advanceF32Value, advanceIntValue, I16_RANGE, I32_RANGE } from './simGenerators.js';
 
 // ---------------------------------------------------------------------------
 // Log buffer
@@ -118,9 +118,9 @@ function initSimState(): void {
       const { value } = advanceF32Value(simT, 0);
       simState.set(tag.tag_id, { simValue: value, simT, lastPublishedValue: undefined, previousValue: undefined });
       continue;
-    } else if (tag.data_type === 'i16') {
+    } else if (tag.data_type === 'i16' || tag.data_type === 'i32') {
       const simT = Math.random() * 30_000;
-      const { value } = advanceI16Value(simT, 0);
+      const { value } = advanceIntValue(simT, 0, tag.data_type === 'i16' ? I16_RANGE : I32_RANGE);
       simState.set(tag.tag_id, { simValue: value, simT, lastPublishedValue: undefined, previousValue: undefined });
       continue;
     } else {
@@ -144,8 +144,9 @@ export function advanceTag(tag: SimTag, state: SimTagState, deltaMs: number): vo
       state.simValue = result.value;
       break;
     }
-    case 'i16': {
-      const result = advanceI16Value(state.simT, deltaMs);
+    case 'i16':
+    case 'i32': {
+      const result = advanceIntValue(state.simT, deltaMs, tag.data_type === 'i16' ? I16_RANGE : I32_RANGE);
       state.simT    = result.simT;
       state.simValue = result.value;
       break;
@@ -550,7 +551,8 @@ export function injectSetValues(moduleId: string): void {
     let value: number | boolean;
     switch (tag.data_type) {
       case 'bool': value = Math.random() > 0.5; break;
-      case 'i16':  value = Math.round(Math.random() * 200 - 100); break;
+      case 'i16':
+      case 'i32':  value = Math.round(Math.random() * 200 - 100); break;
       default:     value = Math.round(Math.random() * 10000) / 100; break; // f32
     }
     return { tag_id: tag.tag_id, value };
