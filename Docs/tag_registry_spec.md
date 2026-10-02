@@ -84,8 +84,8 @@ The shared module exports:
 - `ModuleStatus` / `ModuleStatusLabels` — const enum (`UNKNOWN=0`, `OK=1`, `WARNING=2`, `FAULT=3`, `STALLED=4`) and display-label map. Shared between producer and widget.
 - `constants` — error codes, `DEFAULT_DATA_TYPE`, `MAX_TAG_PATH_LENGTH` default.
 - `deepEqual(a, b)` / `deepNotEqual(a, b)` — JSON-serialization-based deep equality utilities (`utils.js`).
-- `hashTagDefs(tags)` — SHA-256 (full hex) over the same canonical JSON as `hashTemplate`. Used for the Tag Defs `content_hash` (§12.1).
-- `listMqttModuleTemplates(templateMap)` / `buildTagDefs(templateMap, moduleTemplateName)` / `buildTagDefsFile(templateMap, moduleTemplateName)` / `validateTagDefs(templateMap, moduleTemplateName)` — Tag Defs export builders and module-relative name validation (§12.1).
+- `hashTagDefs(tags)` — SHA-256 (full hex) over the same canonical JSON as `hashTemplate`, applied to the nested `tags` tree. Used for the Tag Defs `content_hash` (§12.1).
+- `listMqttModuleTemplates(templateMap)` / `buildTagDefs(templateMap, moduleTemplateName)` / `buildTagDefsFile(templateMap, moduleTemplateName)` / `validateTagDefs(templateMap, moduleTemplateName)` — Tag Defs export builders (nested `tags` tree) and module-relative name validation (§12.1).
 
 ### 4.3 Client-Side Template Graph
 
@@ -371,19 +371,25 @@ A **Generate Tag Defs** button on the Registry page, beside **Export to CSV**, d
 {
   "_generated": "GENERATED FILE - DO NOT EDIT. ...",
   "template_name": "Narya_RF",
-  "content_hash": "sha256:dcac00fe…",
-  "tags": [
-    { "tag_name": "Mag_1.Fwd.Gain", "direction": "Set", "data_type": "f32" }
-  ]
+  "content_hash": "sha256:372b1e3c…",
+  "tags": {
+    "Mag_1": { "Fwd": {
+      "Gain": { "data_type": "f32" },
+      "kW":   { "data_type": "f32" }
+    } },
+    "RF_Enable": { "data_type": "bool" }
+  }
 }
 ```
 
+- **`tags` is a tree nested by `tag_name` segment** (since 2026-10-01; previously a flat array of `{ tag_name, direction, data_type }`). The tag `Mag_1.Fwd.Gain` becomes `tags.Mag_1.Fwd.Gain`. A node is a **leaf iff it has a `data_type` key**, and a group node otherwise. The consumer generates a C++ struct from it for compile-time, name-addressed access (`Mag_1.Fwd.Gain`, not a string lookup).
+
 - `tag_name` is **module-relative**. It was named `tag_path` until 2026-10-01 and was renamed because the value is a name, not an asset path. It holds the dot-joined `asset_name`s of levels *below* the module whose `In_Tag_Name` is true (§16.11). It is not the full asset path, so organizational groupings such as `Pwr_Mon` drop out. For example, `Narya1.RF1.Pwr_Mon.Mag_1.Fwd.Gain` with system `tag_name` `RF1.Mag_1.Fwd.Gain` exports as `Mag_1.Fwd.Gain`. The module level itself is always skipped, even when an instance sets `In_Tag_Name` on it (as `Narya1` does for `RF1`), because whether the instance name is shown is an instance decision. The template is resolved on its own with `resolveRegistry`, using the module template as root, so nothing above the module can affect the output.
-- **Name validation.** Each module-relative name must be non-empty and unique within its template, compared case-insensitively. Violations reject the export with `VALIDATION_ERROR`, carrying `TAG_NAME_EMPTY` / `DUPLICATE_TAG_NAME` details from `validateTagDefs`. This is checked separately because system-level `tag_name` validation can pass while module-relative names collide: the instance-name prefix may be the only thing that disambiguates.
+- **Name validation.** Each module-relative name must be non-empty and unique within its template, compared case-insensitively. Two further rules come from the tree shape. No name may also be the parent of another (`Comb.Fwd` beside `Comb.Fwd.Gain`), compared case-insensitively, because that node would have to be leaf and group at once (`TAG_NAME_LEAF_AND_GROUP`). No segment may be `data_type`, the leaf key, because a group would then read as a leaf (`TAG_NAME_RESERVED_SEGMENT`). Violations reject the export with `VALIDATION_ERROR`, carrying `TAG_NAME_EMPTY` / `DUPLICATE_TAG_NAME` / `TAG_NAME_LEAF_AND_GROUP` / `TAG_NAME_RESERVED_SEGMENT` details from `validateTagDefs`. As of 2026-10-01, `Narya_RF`, `Cooling`, `Pole`, `Power_Control` and `RF_Control` pass. `Beam_Control` fails `TAG_NAME_LEAF_AND_GROUP` twice (`Scanning`, `Scanning.X`): `Scan.Enable` has `In_Tag_Name: false`, so it takes its parent's name while that parent's children sit below it. The `Beam` system's export is therefore refused until that template changes. This is checked separately because system-level `tag_name` validation can pass while module-relative names collide: the instance-name prefix may be the only thing that disambiguates.
 - **Handshake contract.** The MQTT handshake's `TAG_LIST` identifies tags by this same module-relative `tag_name` (`CARO_MQTT_Spec.md` §7.1, §7.4, v1.9). A module built from this export binds ids by exact string match, so the export and the backend's `TAG_LIST` assembly must derive the name by the same rule.
-- `direction` is `"Set"` when the resolved `is_setpoint` is true, and `"Mon"` otherwise. `data_type` is the resolved `data_type`.
-- **Only these three fields.** `tag_id`, `unit`, `eng_min`, `eng_max`, `trends`, `scale`, `offset`, `format` and `is_setpoint` are deliberately excluded (D32 records why for each). Do not add them. The file has no instance dependency, so commissioning an instance or editing display metadata never changes it.
-- `tags` is sorted by `tag_name` in code-unit order (reproducible with `strcmp`). `content_hash` is SHA-256 of the canonical JSON of `tags`, using the same canonicalisation as `hashTemplate` (keys sorted, no whitespace). A consumer can recompute it from the file to detect a stale or hand-edited copy.
+- Each leaf's `data_type` is the resolved `data_type`.
+- **Only `data_type` per leaf.** `direction` (Set/Mon) was dropped on 2026-10-01: compile-time name addressing does not need it. It remains in the registry's own data model as `is_setpoint`. `tag_id`, `unit`, `eng_min`, `eng_max`, `trends`, `scale`, `offset`, `format` and `is_setpoint` are deliberately excluded (D32 records why for each). Do not add them. The file has no instance dependency, so commissioning an instance or editing display metadata never changes it.
+- `content_hash` is SHA-256 of the canonical JSON of the `tags` tree, using the same canonicalisation as `hashTemplate`: keys sorted at every level in code-unit order (reproducible with `strcmp`), no whitespace. There is no separate entry order to define; a tree's canonical order is its per-level key sort. The written file also lists keys in that order, except that integer-like keys (none today) would print first, as JS objects enumerate them that way. This affects layout only, not the hash. A consumer can recompute it from the file to detect a stale or hand-edited copy.
 - No generation timestamp goes inside the files. The timestamp is in the ZIP name only, so regenerating an unchanged template yields a byte-identical file and no diff churn in the consuming repo.
 
 **Gating.** The export reads **saved** templates from disk, not the client's in-memory graph. The button is therefore disabled while `isDirty`, with the tooltip "Save or discard changes before generating Tag Defs — the export reads saved templates". The export is not gated by `PROJECT_ROOT`, because it is read-only and never touches the database. Server errors, such as `NO_MQTT_MODULES` or a graph `VALIDATION_ERROR`, show in a red banner above the table.
@@ -656,5 +662,5 @@ The RegistryTable includes a `tag_name` column (3rd column, index 2, between `ta
 | Revision history | `registry_revisions` table + History page |
 | Retired tags | Detected during apply; shown in diff as red rows |
 | Stale conflict on save | Re-fetch full root, discard local changes (merge not supported) |
-| Tag Defs export | `GET /api/v1/tag-defs?root=` → ZIP of one JSON per MQTT module template (`tag_name`, `direction`, `data_type` + banner + SHA-256 `content_hash`); Registry page "Generate Tag Defs" button (§12.1) |
+| Tag Defs export | `GET /api/v1/tag-defs?root=` → ZIP of one JSON per MQTT module template (`tags` tree nested by `tag_name` segment, leaves `{ data_type }` + banner + SHA-256 `content_hash`); Registry page "Generate Tag Defs" button (§12.1) |
 

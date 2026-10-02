@@ -6,35 +6,45 @@ import { extractTemplate } from './types.js';
 
 /**
  * Template-level "Tag Defs" export — one file per MQTT module template.
- * Spec: RF_Control Docs/CARO_MIGRATION.md D32.
+ * Spec: RF_Control Docs/CARO_MIGRATION.md D32; tag_registry_spec.md §12.1.
  *
- * Deliberately carries only tag_name, direction and data_type. tag_id, unit,
- * eng_min/eng_max, trendable, scale/offset, format and is_setpoint are excluded
- * by decision (see D32's table), not by omission — do not add them here.
+ * `tags` is a tree nested by tag_name segment: `Comb.Fwd.Gain` becomes
+ * tags.Comb.Fwd.Gain = { data_type }. A node is a leaf iff it has a
+ * `data_type` key. The consumer generates a C++ struct from it for
+ * compile-time, name-addressed tag access.
+ *
+ * Each leaf carries only data_type. tag_id, direction/is_setpoint, unit,
+ * eng_min/eng_max, trendable, scale/offset and format are excluded by
+ * decision (see D32), not by omission — do not add them here.
  * Nothing in this file depends on any instance of the template.
  */
 
-export type TagDirection = 'Set' | 'Mon';
+/** The key that marks a tree node as a leaf. Reserved — no tag_name segment may use it. */
+export const TAG_DEF_LEAF_KEY = 'data_type';
 
-export interface TagDefEntry {
-  /** Module-relative tag_name: dot-joined asset_names of levels below the module with In_Tag_Name true. */
-  tag_name: string;
-  direction: TagDirection;
+export interface TagDefLeaf {
   data_type: string;
 }
+
+export interface TagDefGroup {
+  [segment: string]: TagDefNode;
+}
+
+export type TagDefNode = TagDefLeaf | TagDefGroup;
 
 export interface TagDefsFile {
   _generated: string;
   template_name: string;
   /** "sha256:<hex>" over the canonical JSON of `tags`. */
   content_hash: string;
-  tags: TagDefEntry[];
+  tags: TagDefGroup;
 }
 
 export const TAG_DEFS_BANNER =
   'GENERATED FILE - DO NOT EDIT. Produced by the CARO Tag Registry "Generate Tag Defs" export ' +
-  '(template-level, no instance data). Regenerate instead of editing. content_hash is SHA-256 of ' +
-  'the canonical JSON of "tags" (keys sorted, no whitespace, entries sorted by tag_name).';
+  '(template-level, no instance data). Regenerate instead of editing. "tags" is nested by ' +
+  'tag_name segment; a node with a "data_type" key is a leaf. content_hash is SHA-256 of the ' +
+  'canonical JSON of "tags" (keys sorted at every level, no whitespace).';
 
 type TemplateMapInput =
   | Map<string, Template | TemplateEntry>
@@ -60,7 +70,9 @@ export function listMqttModuleTemplates(templateMap: TemplateMapInput): string[]
 }
 
 interface ResolvedTagDef {
-  entry: TagDefEntry;
+  /** Module-relative tag_name: dot-joined asset_names of levels below the module with In_Tag_Name true. */
+  tagName: string;
+  dataType: string;
   /** Full asset path from the module root — for error messages only, never exported. */
   sourcePath: string;
 }
@@ -75,50 +87,90 @@ interface ResolvedTagDef {
 function resolveTagDefs(templateMap: TemplateMapInput, moduleTemplateName: string): ResolvedTagDef[] {
   return resolveRegistry(templateMap, moduleTemplateName)
     .map(tag => ({
-      entry: {
-        tag_name: tag.meta
-          .slice(1)
-          .filter(level => level.fields?.[IN_TAG_NAME_FIELD] === true)
-          .map(level => level.name)
-          .join('.'),
-        direction: tag.is_setpoint ? 'Set' : 'Mon',
-        data_type: tag.data_type,
-      } satisfies TagDefEntry,
+      tagName: tag.meta
+        .slice(1)
+        .filter(level => level.fields?.[IN_TAG_NAME_FIELD] === true)
+        .map(level => level.name)
+        .join('.'),
+      dataType: tag.data_type,
       sourcePath: tag.tag_path,
     }))
-    .sort((a, b) => compareCodeUnits(a.entry.tag_name, b.entry.tag_name));
-}
-
-/** Module-relative tag defs, sorted by tag_name in code-unit order. */
-export function buildTagDefs(templateMap: TemplateMapInput, moduleTemplateName: string): TagDefEntry[] {
-  return resolveTagDefs(templateMap, moduleTemplateName).map(r => r.entry);
+    .sort((a, b) => compareCodeUnits(a.tagName, b.tagName));
 }
 
 /**
- * Module-relative names must be usable as identifiers on their own: non-empty
- * and unique (case-insensitive, matching the registry's DUPLICATE_TAG_NAME
- * rule). A system-level validation can pass while these fail, because the
- * module instance's own name (e.g. "RF1.") may be what disambiguates there.
+ * Module-relative tag defs as a tree nested by tag_name segment. Keys are
+ * inserted in code-unit order so the written file reads in canonical order
+ * (except integer-like keys, which JS objects always enumerate first — the
+ * hash sorts explicitly, so this affects file layout only).
+ *
+ * Throws if a name is both a leaf and an ancestor of another name, or uses
+ * the reserved leaf key as a segment — validateTagDefs reports both first.
+ */
+export function buildTagDefs(templateMap: TemplateMapInput, moduleTemplateName: string): TagDefGroup {
+  // Prototype-less nodes: asset_names only forbid dots, so a segment such as
+  // "__proto__" or "constructor" must land as an ordinary own key.
+  const newGroup = (): TagDefGroup => Object.create(null) as TagDefGroup;
+  const root = newGroup();
+  for (const { tagName, dataType } of resolveTagDefs(templateMap, moduleTemplateName)) {
+    const segments = tagName.split('.');
+    const leafName = segments.pop()!;
+    let group = root;
+    for (const segment of segments) {
+      const next = (group[segment] ??= newGroup());
+      if (TAG_DEF_LEAF_KEY in next) {
+        throw new Error(`Tag Defs "${moduleTemplateName}": "${tagName}" is below leaf "${segment}"`);
+      }
+      group = next as TagDefGroup;
+    }
+    if (leafName in group || segments.includes(TAG_DEF_LEAF_KEY) || leafName === TAG_DEF_LEAF_KEY) {
+      throw new Error(`Tag Defs "${moduleTemplateName}": "${tagName}" cannot be placed as a leaf`);
+    }
+    group[leafName] = { data_type: dataType };
+  }
+  return root;
+}
+
+/**
+ * Module-relative names must be usable as identifiers on their own and fit the
+ * nested shape:
+ * - non-empty (TAG_NAME_EMPTY);
+ * - unique, case-insensitive, matching the registry's DUPLICATE_TAG_NAME rule
+ *   (DUPLICATE_TAG_NAME). A system-level validation can pass while this fails,
+ *   because the module instance's own name (e.g. "RF1.") may disambiguate there;
+ * - no name is a strict prefix of another, e.g. `Comb.Fwd` beside
+ *   `Comb.Fwd.Gain` — the node would have to be leaf and group at once
+ *   (TAG_NAME_LEAF_AND_GROUP). Case-insensitive, like the duplicate rule;
+ * - no segment equals the leaf key `data_type`, which would make a group node
+ *   indistinguishable from a leaf (TAG_NAME_RESERVED_SEGMENT).
  */
 export function validateTagDefs(templateMap: TemplateMapInput, moduleTemplateName: string): ValidationMessage[] {
   const resolved = resolveTagDefs(templateMap, moduleTemplateName);
   const errors: ValidationMessage[] = [];
+  const ref = (r: ResolvedTagDef) => ({ template_name: moduleTemplateName, tag_path: r.sourcePath });
 
   for (const r of resolved) {
-    if (r.entry.tag_name === '') {
+    if (r.tagName === '') {
       errors.push({
         severity: 'error',
         code: ERROR_CODES.TAG_NAME_EMPTY,
         message: `"${r.sourcePath}": no level below module "${moduleTemplateName}" has ${IN_TAG_NAME_FIELD} set to true`,
-        ref: { template_name: moduleTemplateName, tag_path: r.sourcePath },
+        ref: ref(r),
+      });
+    } else if (r.tagName.split('.').includes(TAG_DEF_LEAF_KEY)) {
+      errors.push({
+        severity: 'error',
+        code: ERROR_CODES.TAG_NAME_RESERVED_SEGMENT,
+        message: `tag_name "${r.tagName}" in "${moduleTemplateName}" uses the reserved segment "${TAG_DEF_LEAF_KEY}" — resolved by: ${r.sourcePath}`,
+        ref: ref(r),
       });
     }
   }
 
+  const named = resolved.filter(r => r.tagName !== '');
   const groups = new Map<string, ResolvedTagDef[]>();
-  for (const r of resolved) {
-    if (r.entry.tag_name === '') continue;
-    const key = r.entry.tag_name.toLowerCase();
+  for (const r of named) {
+    const key = r.tagName.toLowerCase();
     groups.set(key, [...(groups.get(key) ?? []), r]);
   }
   for (const group of groups.values()) {
@@ -128,8 +180,24 @@ export function validateTagDefs(templateMap: TemplateMapInput, moduleTemplateNam
       errors.push({
         severity: 'error',
         code: ERROR_CODES.DUPLICATE_TAG_NAME,
-        message: `module-relative tag_name "${r.entry.tag_name}" in "${moduleTemplateName}" is not unique — resolved by: ${sources}`,
-        ref: { template_name: moduleTemplateName, tag_path: r.sourcePath },
+        message: `module-relative tag_name "${r.tagName}" in "${moduleTemplateName}" is not unique — resolved by: ${sources}`,
+        ref: ref(r),
+      });
+    }
+  }
+
+  // One error per leaf that is also an ancestor, listing the names below it.
+  for (const [key, leaves] of groups) {
+    const below = named.filter(r => r.tagName.toLowerCase().startsWith(`${key}.`));
+    if (below.length === 0) continue;
+    const shown = below.slice(0, 3).map(r => r.tagName).join(', ');
+    const names = below.length > 3 ? `${shown} and ${below.length - 3} more` : shown;
+    for (const r of leaves) {
+      errors.push({
+        severity: 'error',
+        code: ERROR_CODES.TAG_NAME_LEAF_AND_GROUP,
+        message: `tag_name "${r.tagName}" in "${moduleTemplateName}" is a tag and also the parent of ${names} — the nested export cannot express a node that is both`,
+        ref: ref(r),
       });
     }
   }

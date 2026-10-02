@@ -11,15 +11,15 @@ export function hashTemplate(template: object): string {
 }
 
 /**
- * Full-length hex SHA-256 of a Tag Defs entry list, using the same canonical
+ * Full-length hex SHA-256 of a Tag Defs `tags` tree, using the same canonical
  * JSON as hashTemplate. SHA-256 rather than truncated SHA-1 because this hash
  * leaves the app — a firmware build compares it (RF_Control CARO_MIGRATION.md
  * D27/D32) — so it must not collide by accident.
  *
- * Array order is significant: callers must pass entries already sorted by
- * tag_name (buildTagDefs does this).
+ * Input is the nested `tags` tree; canonicalJSON sorts keys at every level
+ * (code-unit order), so insertion order does not affect the hash.
  */
-export function hashTagDefs(tags: readonly object[]): string {
+export function hashTagDefs(tags: object): string {
   return crypto.createHash('sha256').update(canonicalJSON(tags)).digest('hex');
 }
 

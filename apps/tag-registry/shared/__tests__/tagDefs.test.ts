@@ -99,18 +99,40 @@ describe('listMqttModuleTemplates', () => {
 // ── buildTagDefs ──────────────────────────────────────────────────────────────
 
 describe('buildTagDefs', () => {
-  it('emits module-relative tag_names (In_Tag_Name levels only), sorted', () => {
-    expect(buildTagDefs(makeMap(), 'RF_Mod')).toEqual([
-      { tag_name: 'Enable',     direction: 'Set', data_type: 'bool' },
-      { tag_name: 'Mag_1.Gain', direction: 'Set', data_type: 'f32' },
-      { tag_name: 'Mag_1.kW',   direction: 'Mon', data_type: 'i16' },
-    ]);
+  it('nests module-relative tag_names (In_Tag_Name levels only) by segment', () => {
+    expect(buildTagDefs(makeMap(), 'RF_Mod')).toEqual({
+      Enable: { data_type: 'bool' },
+      Mag_1:  { Gain: { data_type: 'f32' }, kW: { data_type: 'i16' } },
+    });
   });
 
-  it('carries exactly tag_name, direction and data_type — no excluded fields', () => {
-    for (const entry of buildTagDefs(makeMap(), 'RF_Mod')) {
-      expect(Object.keys(entry).sort()).toEqual(['data_type', 'direction', 'tag_name']);
+  it('leaves carry exactly data_type — no direction or other excluded fields', () => {
+    const tags = buildTagDefs(makeMap(), 'RF_Mod');
+    for (const leaf of [tags.Enable, (tags.Mag_1 as Record<string, object>).Gain, (tags.Mag_1 as Record<string, object>).kW]) {
+      expect(Object.keys(leaf)).toEqual(['data_type']);
     }
+  });
+
+  it('inserts keys in code-unit order at every level', () => {
+    const tags = buildTagDefs(makeMap(), 'RF_Mod');
+    expect(Object.keys(tags)).toEqual(['Enable', 'Mag_1']);
+    expect(Object.keys(tags.Mag_1)).toEqual(['Gain', 'kW']);
+  });
+
+  it('places a "__proto__" segment as an ordinary key', () => {
+    const map = makeMap();
+    const mod = map.get('RF_Mod')!;
+    map.set('RF_Mod', { ...mod, children: [...mod.children, { template_name: 'boolean_set', asset_name: '__proto__', fields: {} }] });
+    const tags = buildTagDefs(map, 'RF_Mod');
+    expect(Object.keys(tags)).toContain('__proto__');
+    expect(JSON.stringify(tags)).toContain('"__proto__":{"data_type":"bool"}');
+  });
+
+  it('throws if a name is both a leaf and a group (validateTagDefs reports it first)', () => {
+    const map = makeMap();
+    const mod = map.get('RF_Mod')!;
+    map.set('RF_Mod', { ...mod, children: [...mod.children, { template_name: 'numeric_mon', asset_name: 'Mag_1', fields: {} }] });
+    expect(() => buildTagDefs(map, 'RF_Mod')).toThrow(/Mag_1/);
   });
 
   it('is independent of how the module is instanced by a system', () => {
@@ -121,8 +143,7 @@ describe('buildTagDefs', () => {
   });
 
   it('skips organizational levels whose In_Tag_Name is false', () => {
-    const paths = buildTagDefs(makeMap(), 'RF_Mod').map(e => e.tag_name);
-    expect(paths.some(p => p.includes('Pwr_Mon'))).toBe(false);
+    expect(JSON.stringify(buildTagDefs(makeMap(), 'RF_Mod'))).not.toContain('Pwr_Mon');
   });
 
   it('never includes the module level, even if the module template sets In_Tag_Name true', () => {
@@ -158,6 +179,40 @@ describe('validateTagDefs', () => {
     expect(errors.every(e => e.code === 'DUPLICATE_TAG_NAME')).toBe(true);
     expect(errors).toHaveLength(4); // Mag_1.Gain ×2, Mag_1.kW ×2
   });
+
+  it('reports TAG_NAME_LEAF_AND_GROUP when a tag name is also the parent of other names', () => {
+    const map = makeMap();
+    const mod = map.get('RF_Mod')!;
+    map.set('RF_Mod', { ...mod, children: [...mod.children, { template_name: 'numeric_mon', asset_name: 'Mag_1', fields: {} }] });
+    const errors = validateTagDefs(map, 'RF_Mod');
+    expect(errors).toHaveLength(1);
+    expect(errors[0].code).toBe('TAG_NAME_LEAF_AND_GROUP');
+    expect(errors[0].ref).toEqual({ template_name: 'RF_Mod', tag_path: 'RF_Mod.Mag_1' });
+    expect(errors[0].message).toContain('Mag_1.Gain, Mag_1.kW');
+  });
+
+  it('TAG_NAME_LEAF_AND_GROUP is case-insensitive, like DUPLICATE_TAG_NAME', () => {
+    const map = makeMap();
+    const mod = map.get('RF_Mod')!;
+    map.set('RF_Mod', { ...mod, children: [...mod.children, { template_name: 'numeric_mon', asset_name: 'MAG_1', fields: {} }] });
+    expect(validateTagDefs(map, 'RF_Mod').map(e => e.code)).toEqual(['TAG_NAME_LEAF_AND_GROUP']);
+  });
+
+  it('does not treat a shared name prefix without a dot as leaf-and-group', () => {
+    const map = makeMap();
+    const mod = map.get('RF_Mod')!;
+    map.set('RF_Mod', { ...mod, children: [...mod.children, { template_name: 'numeric_mon', asset_name: 'Mag', fields: {} }] });
+    expect(validateTagDefs(map, 'RF_Mod')).toEqual([]);
+  });
+
+  it('reports TAG_NAME_RESERVED_SEGMENT for a segment named data_type', () => {
+    const map = makeMap();
+    const mod = map.get('RF_Mod')!;
+    map.set('RF_Mod', { ...mod, children: [mod.children[0], { ...mod.children[1], asset_name: 'data_type' }] });
+    const errors = validateTagDefs(map, 'RF_Mod');
+    expect(errors.map(e => e.code)).toEqual(['TAG_NAME_RESERVED_SEGMENT']);
+    expect(errors[0].ref).toEqual({ template_name: 'RF_Mod', tag_path: 'RF_Mod.data_type' });
+  });
 });
 
 // ── buildTagDefsFile ──────────────────────────────────────────────────────────
@@ -172,9 +227,9 @@ describe('buildTagDefsFile', () => {
 
   it('content_hash is reproducible from the documented canonical form of tags', () => {
     const file = buildTagDefsFile(makeMap(), 'RF_Mod');
-    const canonical = '[' + file.tags
-      .map(t => `{"data_type":${JSON.stringify(t.data_type)},"direction":${JSON.stringify(t.direction)},"tag_name":${JSON.stringify(t.tag_name)}}`)
-      .join(',') + ']';
+    // Keys sorted at every level (code-unit order: uppercase "G" before lowercase "k"), no whitespace.
+    const canonical =
+      '{"Enable":{"data_type":"bool"},"Mag_1":{"Gain":{"data_type":"f32"},"kW":{"data_type":"i16"}}}';
     const expected = createHash('sha256').update(canonical).digest('hex');
     expect(file.content_hash).toBe(`sha256:${expected}`);
   });
@@ -190,11 +245,11 @@ describe('buildTagDefsFile', () => {
       .not.toBe(buildTagDefsFile(makeMap(), 'RF_Mod').content_hash);
   });
 
-  it('hash changes when a direction changes', () => {
+  it('hash does not change when only Set/Mon direction changes (direction is not exported)', () => {
     const map = makeMap();
     map.set('boolean_set', tag('boolean_set', 'bool', false));
     expect(buildTagDefsFile(map, 'RF_Mod').content_hash)
-      .not.toBe(buildTagDefsFile(makeMap(), 'RF_Mod').content_hash);
+      .toBe(buildTagDefsFile(makeMap(), 'RF_Mod').content_hash);
   });
 
   it('hash changes when a tag is renamed', () => {

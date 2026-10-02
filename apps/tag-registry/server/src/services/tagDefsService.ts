@@ -57,11 +57,12 @@ export async function generateTagDefsZip(rootName: string, now: Date = new Date(
     throw err;
   }
 
-  // Module-relative names are the firmware's identifiers — empty or colliding
-  // ones would make an unusable file even when system-level validation passes.
+  // Module-relative names are the firmware's identifiers and the tree's keys — empty,
+  // colliding, leaf-and-group or reserved ones would make an unusable file even
+  // when system-level validation passes.
   const nameErrors = templateNames.flatMap(name => validateTagDefs(templateMap, name));
   if (nameErrors.length > 0) {
-    const err = new Error(`Module-relative tag names are empty or not unique in ${[...new Set(nameErrors.map(e => e.ref?.template_name))].join(', ')}`) as CaroError;
+    const err = new Error(`Module-relative tag names do not fit the Tag Defs shape (empty, duplicated, leaf-and-group or reserved) in ${[...new Set(nameErrors.map(e => e.ref?.template_name))].join(', ')}`) as CaroError;
     err.status = 422;
     err.code = ERROR_CODES.VALIDATION_ERROR;
     err.details = nameErrors;

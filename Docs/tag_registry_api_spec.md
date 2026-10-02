@@ -504,7 +504,11 @@ Downloads the template-level Tag Defs export (functional spec §12.1; design dec
 1. `loadRoot(root)` loads every template reachable from `root`.
 2. `validateGraph` runs on that set. Any error → 422 `VALIDATION_ERROR` with the messages in `details`. `resolveRegistry` skips broken references silently, so the server refuses rather than emit a file with tags quietly missing.
 3. `listMqttModuleTemplates` selects `template_type: "module"` templates whose own `Module_Type` default is `MQTT`. None → 422 `NO_MQTT_MODULES`.
-4. `validateTagDefs` runs per selected template. An empty or case-insensitively duplicated module-relative name → 422 `VALIDATION_ERROR` with `TAG_NAME_EMPTY` / `DUPLICATE_TAG_NAME` messages in `details`.
+4. `validateTagDefs` runs per selected template. Any of the following → 422 `VALIDATION_ERROR`, with `TAG_NAME_EMPTY` / `DUPLICATE_TAG_NAME` / `TAG_NAME_LEAF_AND_GROUP` / `TAG_NAME_RESERVED_SEGMENT` messages in `details`:
+   - an empty module-relative name;
+   - a case-insensitively duplicated name;
+   - a name that is also the parent of another name;
+   - a segment equal to `data_type`.
 5. `buildTagDefsFile` runs for each selected template, and the results are zipped (`fflate`).
 
 **Success response (HTTP 200):**
@@ -515,24 +519,26 @@ Downloads the template-level Tag Defs export (functional spec §12.1; design dec
 
 ```json
 {
-  "_generated": "GENERATED FILE - DO NOT EDIT. Produced by the CARO Tag Registry \"Generate Tag Defs\" export (template-level, no instance data). Regenerate instead of editing. content_hash is SHA-256 of the canonical JSON of \"tags\" (keys sorted, no whitespace, entries sorted by tag_name).",
+  "_generated": "GENERATED FILE - DO NOT EDIT. Produced by the CARO Tag Registry \"Generate Tag Defs\" export (template-level, no instance data). Regenerate instead of editing. \"tags\" is nested by tag_name segment; a node with a \"data_type\" key is a leaf. content_hash is SHA-256 of the canonical JSON of \"tags\" (keys sorted at every level, no whitespace).",
   "template_name": "Narya_RF",
-  "content_hash": "sha256:dcac00fe73f0f072d84367d77144bec698a0d3ed0bb189049ce8674ebb5a0e05",
-  "tags": [
-    { "tag_name": "Mag_1.Fwd.Gain", "direction": "Set", "data_type": "f32" },
-    { "tag_name": "Mag_1.Fwd.kW",   "direction": "Mon", "data_type": "f32" }
-  ]
+  "content_hash": "sha256:372b1e3c493d922c0f03dde97ff7b675dbfe743e94e7aa18bcfd215c195e8d63",
+  "tags": {
+    "Mag_1": { "Fwd": {
+      "Gain": { "data_type": "f32" },
+      "kW":   { "data_type": "f32" }
+    } },
+    "RF_Enable": { "data_type": "bool" }
+  }
 }
 ```
 
 | Field | Description |
 |-------|-------------|
-| `tag_name` | Module-relative `tag_name`: `asset_name`s of levels below the module with `In_Tag_Name: true`, dot-joined. The module level is always excluded, and organizational levels with `In_Tag_Name: false` drop out (functional spec §12.1). |
-| `direction` | `"Set"` if resolved `is_setpoint` is true, else `"Mon"`. |
-| `data_type` | Resolved `data_type` (`tag_types.type_name`). |
-| `content_hash` | `"sha256:"` + hex SHA-256 of canonical JSON of `tags` (same canonicalisation as §2.4's template hash: keys sorted, no whitespace). `tags` is sorted by `tag_name` in code-unit order. |
+| `tags` | Tree nested by module-relative `tag_name` segment (`Mag_1.Fwd.Gain` → `tags.Mag_1.Fwd.Gain`). A node with a `data_type` key is a leaf; any other node is a group. Names are the `asset_name`s of levels below the module with `In_Tag_Name: true`; the module level is always excluded, and organizational levels with `In_Tag_Name: false` drop out (functional spec §12.1). |
+| leaf `data_type` | Resolved `data_type` (`tag_types.type_name`). The leaf's only key. |
+| `content_hash` | `"sha256:"` + hex SHA-256 of canonical JSON of the `tags` tree (same canonicalisation as §2.4's template hash: keys sorted at every level in code-unit order, no whitespace). |
 
-Only these tag fields are emitted. `tag_id`, `unit`, `eng_min`, `eng_max`, `trends`, `scale`, `offset`, `format` and `is_setpoint` are excluded by design (D32). The files carry no timestamp, so an unchanged template regenerates byte-identically.
+Only `data_type` is emitted per tag. `direction` was removed on 2026-10-01; it was a flat-array field `{ tag_name, direction, data_type }` before then. `tag_id`, `unit`, `eng_min`, `eng_max`, `trends`, `scale`, `offset`, `format` and `is_setpoint` are excluded by design (D32). The files carry no timestamp, so an unchanged template regenerates byte-identically.
 
 **Errors:** 400 `VALIDATION_ERROR` (`root` missing or empty), 404 `TEMPLATE_NOT_FOUND`, 422 `VALIDATION_ERROR` (graph errors, or module-relative name errors, in `details`), 422 `NO_MQTT_MODULES`.
 
@@ -562,6 +568,8 @@ Only these tag fields are emitted. `tag_id`, `unit`, `eng_min`, `eng_max`, `tren
 | DUPLICATE_TAG_NAME | 422 | Two or more resolved tags share the same `tag_name` (case-insensitive comparison, entire-registry scope). One error emitted per offending tag. Enforced in-app by `validateResolvedTags` — no DB UNIQUE constraint. Surfaces on registry apply and template save. |
 | VALIDATION_ERROR | 422 | One or more validation rules failed. See details array. Graph validation errors from batchSave (INVALID_REFERENCE, CIRCULAR_REFERENCE) are returned as VALIDATION_ERROR with specific codes in the details array — not as top-level error codes. |
 | NO_MQTT_MODULES | 422 | `GET /api/v1/tag-defs` (§7): no `module` template with `Module_Type: "MQTT"` is reachable from `root`. |
+| TAG_NAME_LEAF_AND_GROUP | — | `details` entry under 422 `VALIDATION_ERROR` from `GET /api/v1/tag-defs` (§7): a module-relative name is also the parent of another name (case-insensitive). |
+| TAG_NAME_RESERVED_SEGMENT | — | `details` entry under 422 `VALIDATION_ERROR` from `GET /api/v1/tag-defs` (§7): a module-relative name has a segment equal to `data_type`, the leaf key. |
 | PROJECT_ROOT_MISMATCH | 403 | `POST /api/v1/registry/apply`'s `rootName` doesn't match the server's configured `PROJECT_ROOT` (§2.6, §5.3) — including when `PROJECT_ROOT` is unset/empty, which refuses every apply. |
 
 ---

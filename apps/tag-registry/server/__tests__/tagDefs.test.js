@@ -130,7 +130,7 @@ describe('GET /api/v1/tag-defs', () => {
     expect(Object.keys(entries).sort()).toEqual(['Pole.json', 'RF_Mod.json']);
   });
 
-  it('each file carries banner, hash and module-relative tags with only the three D32 fields', async () => {
+  it('each file carries banner, hash and module-relative tags nested by segment, data_type only', async () => {
     templateService.loadRoot.mockResolvedValue(loadRootResult(SYS_TEMPLATES));
     const res = await fetch(`${base}/tag-defs?root=Sys`);
     const entries = unzipSync(new Uint8Array(await res.arrayBuffer()));
@@ -138,10 +138,10 @@ describe('GET /api/v1/tag-defs', () => {
     expect(file._generated).toBe(TAG_DEFS_BANNER);
     expect(file.template_name).toBe('RF_Mod');
     expect(file.content_hash).toMatch(/^sha256:[0-9a-f]{64}$/);
-    expect(file.tags).toEqual([
-      { tag_name: 'Gain', direction: 'Set', data_type: 'f32' },
-      { tag_name: 'kW',   direction: 'Mon', data_type: 'f32' },
-    ]);
+    expect(file.tags).toEqual({
+      Gain: { data_type: 'f32' },
+      kW:   { data_type: 'f32' },
+    });
   });
 
   it('returns 422 NO_MQTT_MODULES when no MQTT module is reachable', async () => {
@@ -162,6 +162,27 @@ describe('GET /api/v1/tag-defs', () => {
 });
 
 describe('GET /api/v1/tag-defs — module-relative names', () => {
+  it('returns 422 VALIDATION_ERROR with TAG_NAME_LEAF_AND_GROUP details when a tag name is also a parent', async () => {
+    const group = {
+      template_name: 'Fwd', template_type: 'Group', children: [{ template_name: 'numeric_mon', asset_name: 'Gain', fields: {} }],
+      fields: { In_Tag_Name: { field_type: 'Boolean', default: true } },
+    };
+    // Hidden grouping (In_Tag_Name false) so the leaf "Fwd" is not a sibling of the group "Fwd".
+    const hidden = {
+      template_name: 'Hidden', template_type: 'Group', children: [{ template_name: 'numeric_mon', asset_name: 'Fwd', fields: {} }],
+      fields: { In_Tag_Name: { field_type: 'Boolean', default: false } },
+    };
+    const mod = module('RF_Mod', 'MQTT', [
+      { template_name: 'Fwd',    asset_name: 'Fwd',    fields: {} },
+      { template_name: 'Hidden', asset_name: 'Hidden', fields: {} },
+    ]);
+    templateService.loadRoot.mockResolvedValue(loadRootResult([tag('numeric_mon', 'f32', false), group, hidden, mod]));
+    const { status, body } = await getJson('/tag-defs?root=RF_Mod');
+    expect(status).toBe(422);
+    expect(body.error.code).toBe(ERROR_CODES.VALIDATION_ERROR);
+    expect(body.error.details.map(d => d.code)).toEqual([ERROR_CODES.TAG_NAME_LEAF_AND_GROUP]);
+  });
+
   it('returns 422 VALIDATION_ERROR with DUPLICATE_TAG_NAME details when names collide below the module', async () => {
     const group = {
       template_name: 'Grp', template_type: 'Group', children: [{ template_name: 'numeric_mon', asset_name: 'kW', fields: {} }],

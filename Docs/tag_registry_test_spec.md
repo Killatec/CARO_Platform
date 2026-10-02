@@ -922,6 +922,20 @@ Starting point was the `apps/tag-registry/CLAUDE.md` baseline of 490 unit (share
 | **Combined total** | **616** |
 | Failed | 0 |
 
+### 9.9 Baseline (2026-10-01) — `i32` data type; Tag Defs nested by segment, `direction` dropped
+
+- `shared/__tests__/validateResolvedTags.test.ts`: +2 (`i32` accepts `trends: true`; `i32` accepts `is_setpoint: true`).
+- `shared/__tests__/tagDefs.test.ts`: 19 → 26. `buildTagDefs` now asserts the nested tree and that leaves carry exactly `data_type`. New tests: code-unit key insertion order; a `__proto__` segment is placed as an ordinary key; `buildTagDefs` throws on leaf-and-group; `validateTagDefs` `TAG_NAME_LEAF_AND_GROUP` (exact and case-insensitive), no false positive for a shared prefix without a dot (`Mag` beside `Mag_1.*`), and `TAG_NAME_RESERVED_SEGMENT`. The hash-reproducibility test now spells out the canonical nested JSON. The "hash changes when direction changes" test is inverted: direction is no longer exported, so the hash must not change.
+- `server/__tests__/tagDefs.test.js`: 9 → 10. The file-shape test expects the nested tree. New: 422 `VALIDATION_ERROR` with `TAG_NAME_LEAF_AND_GROUP` details.
+- client and E2E: unchanged (E2E `tag-defs.spec.js` asserts only the filename and ZIP magic). E2E was not re-run.
+
+| Metric | Value |
+|---|---|
+| Unit total (shared 241 + client 173 + server 120) | 534 |
+| E2E (Chromium) | 92 |
+| **Combined total** | **626** |
+| Failed | 0 |
+
 ---
 
 ## 10. Unit Test Suite
