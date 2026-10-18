@@ -285,7 +285,7 @@ Success response. The request resolves once every module has ACKed or timed out 
 - `results` is the module's CMD_ACK results array, passed through. With no ACK within 1 second every tag is `accepted: false, rejection_code: "TIMEOUT"`. A module's rejection is therefore reported here, with `ok: true` — check each result.
 - HMI-module tags are written to `HmiTagSource` directly: `command_id` is `""` and every result is accepted.
 - Tags of a module whose `module_type` is neither MQTT nor HMI get `rejection_code: "MODULE_TYPE_NOT_SUPPORTED"`.
-- Accepted values are stored in `pending_setpoint_values` for re-delivery (CARO_MQTT_Spec §6.3).
+- Accepted values, and every value of a module that timed out, are stored in `commanded_setpoints`; the module gets them in its next post-handshake Set push (CARO_MQTT_Spec §6.3). Accepted values also go to `pending_setpoint_values`. A rejected value is not stored.
 
 **Value validation as built:** a value must be a number, a boolean, or a string that parses as a number (it is then sent as a number). The tag's `data_type` is not checked, and entries with a non-numeric `tag_id` are skipped silently. A `values` array that is missing or empty returns 400 `VALIDATION_ERROR`.
 
@@ -777,7 +777,7 @@ Validate a commissioned module instance
 
 *Required role: AD*
 
-Sets `validated = true` and captures pending hashes as expected baseline. Device must be online and have completed the handshake. Comment is required.
+Sets `validated = true` and captures the pending identity (`fw_hash`, template) reported in the module's HANDSHAKE_REQUEST as the expected baseline (CARO_MQTT_Spec §7.3). Device must be online and have completed the handshake. Comment is required.
 
 Request body:
 ```json

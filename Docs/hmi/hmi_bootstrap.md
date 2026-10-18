@@ -255,7 +255,7 @@ A null live value does not block writes — see the anchor's Key Design Decision
 ## Known Limitations
 
 - **Auth is stubbed.** All WebSocket connections and API requests are accepted without authentication.
-- **Most HMI database tables are not migrated.** Only `pending_setpoint_values` (016) exists; `users`, `sessions`, `audit_log` and the rest are specified in `Docs/db/CARO_DB_Spec.md` but not built.
+- **Most HMI database tables are not migrated.** Only `pending_setpoint_values` (016) and `commanded_setpoints` (018) exist; `users`, `sessions`, `audit_log` and the rest are specified in `Docs/db/CARO_DB_Spec.md` but not built.
 - **No UI signal when the historian is down.** On `NullDbWriter` the HMI looks healthy while discarding samples — see `Docs/platform/multi_project_runbook.md` § 6.1.
 - **JSON WebSocket messages.** Protobuf encoding is planned (Phase 6).
 

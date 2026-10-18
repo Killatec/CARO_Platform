@@ -62,6 +62,14 @@ hmi_API_spec*
                                           convention; uniqueness enforced in-app by
                                           validateResolvedTags (no DB UNIQUE
                                           constraint). Migration 015.
+
+  1.7           2026-10-18   PM / Claude  Added commanded_setpoints (§7.2): the
+                                          last commanded value of every Set,
+                                          read by the handshake's post-CONFIRM
+                                          Set push. Migration 018.
+                                          pending_setpoint_values is no longer
+                                          read (§7.1). §5.1 notes the module
+                                          now reports template + revision.
   ------------- ------------ ------------ ------------------------------------------
 
 **1. Purpose**
@@ -81,7 +89,7 @@ The CARO_Platform uses two database systems:
 
 **1.1 Implementation Status (as of 2026-10-17)**
 
-Built (migrated): `tag_registry`, `registry_revisions`, `tag_types`, `module_types` (§3), `pending_setpoint_values` (§7, with differences noted there), `schema_migrations`, and the TimescaleDB objects (§9). **Not migrated:** `users`, `sessions` (§4), `commissioned_modules` (§5), `operation_modes`, `mode_revisions`, `setpoint_values` (§6), `system_settings` (§8), `audit_log` (§10), and the electronic-signature columns (§11).
+Built (migrated): `tag_registry`, `registry_revisions`, `tag_types`, `module_types` (§3), `pending_setpoint_values` (§7.1, with differences noted there), `commanded_setpoints` (§7.2), `schema_migrations`, and the TimescaleDB objects (§9). **Not migrated:** `users`, `sessions` (§4), `commissioned_modules` (§5), `operation_modes`, `mode_revisions`, `setpoint_values` (§6), `system_settings` (§8), `audit_log` (§10), and the electronic-signature columns (§11).
 
 **2. Conventions**
 
@@ -97,8 +105,8 @@ Instead, tag_id integrity is enforced at the application layer: the
 backend validates tag_id against the active in-memory tag map (built
 from the latest non-retired tag_registry rows) before any write is
 accepted. (As built: `POST /tags/write` checks the tag map before a
-SET_VALUES; `pending_setpoint_values` rows are only written for tags
-that passed that check. Historian rows are written for tag_ids from
+SET_VALUES; `pending_setpoint_values` and `commanded_setpoints` rows
+are only written for tags that passed that check. Historian rows are written for tag_ids from
 the tag map only.)
 
 **2.2 Append-Only Tables**
@@ -149,6 +157,7 @@ Current migrations:
 -   015_add_tag_name_column.sql
 -   016_create_pending_setpoint_values.sql
 -   017_add_i32_tag_type.sql
+-   018_create_commanded_setpoints.sql
 
 > *NOTE: The schema_migrations table (`filename` PK, `applied_at`) is created
 > programmatically by `packages/db/migrations.ts` (`CREATE TABLE IF NOT
@@ -389,6 +398,8 @@ per active session.
 
 **5.1 commissioned_modules**
 
+> *NOTE: The module handshake as built (CARO_MQTT_Spec v2.1 §7) has the module report `fw_hash`, `tag_registry_template` and `tag_registry_rev` in its HANDSHAKE_REQUEST and no longer sends a `tag_config_hash`. When this table is migrated, `expected_tag_config_hash` is to be replaced by the expected template (and, once the Tag Registry has a per-template revision, the expected revision) — CARO_MQTT_Spec §7.3 and Open Questions.*
+
 One row per module instance as defined in the Tag Registry. Created
 automatically when a new module instance appears in the tag registry.
 Validated manually by an Administrator.
@@ -554,7 +565,7 @@ audit_log (Section 10).
 
 **As built (migration 016):** `tag_id INTEGER PRIMARY KEY`, `value JSONB NOT NULL`, `set_by VARCHAR(255)` **nullable, no FK** (no users table yet, never written), `set_at TIMESTAMPTZ NOT NULL DEFAULT now()`.
 
-`upsertPendingSetpoints()` (`packages/db/setpoints.ts`) upserts **every** accepted SET_VALUES value, setting `set_at = now()`. There is no comparison against a mode revision, rows are never deleted, and nothing clears the table (modes do not exist yet). `getPendingSetpointsByTagIds()` reads the rows back for setpoint re-delivery on startup and watchdog recovery (CARO_MQTT_Spec §6.3).
+`upsertPendingSetpoints()` (`packages/db/setpoints.ts`) upserts **every** accepted SET_VALUES value, setting `set_at = now()`. There is no comparison against a mode revision, rows are never deleted, and nothing clears the table (modes do not exist yet). **Nothing reads the table**: the handshake's Set push reads `commanded_setpoints` (§7.2), and there is no re-delivery from this table.
 
 > *Target-design notes (the epsilon comparison, mode-activation clear and save-dialog display below are not built):*
 >
@@ -575,6 +586,30 @@ audit_log (Section 10).
 > *NOTE: set_by and set_at are displayed in the frontend save dialog so
 > the Supervisor can see who set each pending value and when before
 > promoting to a mode revision.*
+
+**7.2 commanded_setpoints**
+
+*Migrated (018). Not part of the mode design above: it is the store the module handshake's post-CONFIRM Set push reads (CARO_MQTT_Spec §6.3).*
+
+The last commanded value of every Set, one row per tag. A Set with no row, or with a NULL `value`, is unpopulated. Unlike `pending_setpoint_values`, it is never cleared or pruned: every value stays until something overwrites it.
+
+| Column | Type | Description |
+|---|---|---|
+| tag_id | INTEGER (PK) | uint32 tag identifier. No FK — validated at the application layer. |
+| value | JSONB NULL | Last commanded value. SQL NULL = unpopulated (never JSON `null`). |
+| ack_status | VARCHAR(16) NOT NULL, CHECK in ('accepted', 'timeout') | `accepted`: a module ACKed this value. `timeout`: the SET_VALUES got no ACK in time; the value may or may not be applied. |
+| set_by | VARCHAR(255) NULL | Who or what set the value. NULL for an operator write (no users table yet); a bulk load names its source, e.g. `import:RF1_Sets.json`, `default:unpopulated`. |
+| set_at | TIMESTAMPTZ NOT NULL DEFAULT now() | When the row was last written. |
+
+Writes (`upsertCommandedSetpoints()`, `packages/db/setpoints.ts`):
+
+- An operator SET_VALUES (`POST /tags/write`) upserts each accepted value as `accepted`, and every value of a command that timed out as `timeout`; a rejected value leaves its row unchanged. `set_by` is written as NULL, so an operator write replaces a bulk load's label.
+- The Set push's ACK only upgrades a `timeout` row it confirmed to `accepted`, keeping its `set_by`.
+- A one-off bulk load: `scripts/import-rf1-sets.js` (RF_Control's legacy `RF1_Sets.json`, through the reviewed key map `scripts/data/rf1-sets-map.json`; dry run unless `--apply`).
+
+Reads: `getCommandedSetpointsByTagIds()` — the Set push asks for every Set of the module and treats a missing row as unpopulated.
+
+Migration 018 seeded the table once from `pending_setpoint_values` (as `accepted`, `ON CONFLICT DO NOTHING`).
 
 **8. System Settings**
 

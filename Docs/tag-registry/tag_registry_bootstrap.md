@@ -1,5 +1,5 @@
 # Tag Registry Admin Tool — Bootstrap
-**Updated:** 2026-10-17 (reconciled with the code)
+**Updated:** 2026-10-18
 Companion docs: `tag_registry_spec.md` | `tag_registry_api_spec.md` | `tag_registry_test_spec.md`
 
 ---
@@ -20,7 +20,7 @@ apps/tag-registry/
     simulateCascade.ts
     applyFieldCascade.ts
     hashTemplate.ts              hashTemplate (6-char SHA-1), hashTagDefs (SHA-256) — one canonicalJSON
-    tagDefs.ts                   Tag Defs export builders (listMqttModuleTemplates, buildTagDefs, buildTagDefsFile, validateTagDefs)
+    tagDefs.ts                   Tag Defs export builders (listMqttModuleTemplates, buildTagDefs, buildTagDefsFile, validateTagDefs) and moduleRelativeTagName
     moduleOrder.ts               getModuleNames
     bitPacking.ts                packedBit / setPackedBit
     enums/moduleStatus.ts(.json) ModuleStatus / ModuleStatusLabels
@@ -169,7 +169,10 @@ Returns 6-character hex SHA-1 string.
 Returns full 64-character hex SHA-256 over the same canonical JSON as `hashTemplate` (keys sorted at every level, no whitespace). Input is the nested `tags` tree, so insertion order does not affect it. SHA-256 rather than truncated SHA-1 because the hash leaves the app for firmware-side comparison.
 
 **`listMqttModuleTemplates(templateMap)`** / **`buildTagDefs(templateMap, moduleTemplateName)`** / **`buildTagDefsFile(templateMap, moduleTemplateName)`** — `tagDefs.ts`
-Tag Defs export (spec §12.1). `listMqttModuleTemplates` returns `template_type: "module"` templates whose own `Module_Type` default is `MQTT_MODULE_TYPE`, code-unit sorted. `buildTagDefs` resolves the module template on its own via `resolveRegistry` (module as root) and returns a `TagDefGroup` tree nested by the module-relative name's segments (`meta.slice(1)` levels with `In_Tag_Name === true` — the module level is always skipped). Leaves are `{ data_type }` (`TAG_DEF_LEAF_KEY`), and nodes are prototype-less so a `__proto__` segment is an ordinary key. Keys are inserted in code-unit order, and it throws on a leaf-and-group or reserved-segment name. `validateTagDefs(templateMap, moduleTemplateName)` returns `TAG_NAME_EMPTY` / `DUPLICATE_TAG_NAME` / `TAG_NAME_LEAF_AND_GROUP` (both case-insensitive) / `TAG_NAME_RESERVED_SEGMENT` messages for those names; the server refuses the export on any. `buildTagDefsFile` wraps that as `{ _generated: TAG_DEFS_BANNER, template_name, content_hash: "sha256:<hashTagDefs(tags)>", tags }`.
+Tag Defs export (spec §12.1). `listMqttModuleTemplates` returns `template_type: "module"` templates whose own `Module_Type` default is `MQTT_MODULE_TYPE`, code-unit sorted. `buildTagDefs` resolves the module template on its own via `resolveRegistry` (module as root) and returns a `TagDefGroup` tree nested by the module-relative name's segments (from `moduleRelativeTagName`, below). Leaves are `{ data_type }` (`TAG_DEF_LEAF_KEY`), and nodes are prototype-less so a `__proto__` segment is an ordinary key. Keys are inserted in code-unit order, and it throws on a leaf-and-group or reserved-segment name. `validateTagDefs(templateMap, moduleTemplateName)` returns `TAG_NAME_EMPTY` / `DUPLICATE_TAG_NAME` / `TAG_NAME_LEAF_AND_GROUP` (both case-insensitive) / `TAG_NAME_RESERVED_SEGMENT` messages for those names; the server refuses the export on any. `buildTagDefsFile` wraps that as `{ _generated: TAG_DEFS_BANNER, template_name, content_hash: "sha256:<hashTagDefs(tags)>", tags }`.
+
+**`moduleRelativeTagName(meta): string | null`** — `tagDefs.ts`
+The dot-joined `name`s of the `meta` levels below the first `type: 'module'` level whose `In_Tag_Name` is true; the module level itself is never included. `null` when `meta` has no module level. Shared by the Tag Defs export (where `meta[0]` is the module) and the CARO HMI's handshake TAG_LIST (`apps/caro-hmi/server/src/tag-list.ts`, registry rows whose `meta` starts at the system root), so the names a module is compiled with and the names it is bound by cannot drift apart.
 
 **`validateResolvedTags(resolvedTags)`**
 Returns `{ valid, errors, warnings }`. Post-resolution cross-field rules: `trends: true` only on `f32`, `i16`, `i32`, `bool`; `is_setpoint: true` only on scalar types; `TAG_NAME_EMPTY` (empty `tag_name`); `TAG_NAME_TOO_LONG` (>40 chars); `DUPLICATE_TAG_NAME` (case-insensitive duplicate within entire registry, one error per offending tag, empty names excluded). Called by `useValidation` after each `resolveRegistry`, by the server on registry apply, and by `POST /templates/validate`. Not called on batch save.

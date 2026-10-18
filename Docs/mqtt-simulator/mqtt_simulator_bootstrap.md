@@ -1,5 +1,5 @@
 # MQTT Simulator — Bootstrap
-**Updated:** 2026-10-17 (reconciled with the code)
+**Updated:** 2026-10-18
 Companion docs: `CARO_MQTT_Spec.md` | `CARO_DB_Spec.md`
 
 ---
@@ -230,6 +230,8 @@ Processing:
 A message without `command_type` is dropped with a warning and no ACK.
 
 `command_id` deduplication: 60-second rolling TTL Set. Duplicate commands within the window are dropped with a warning and **no CMD_ACK**; `CARO_MQTT_Spec` §6.2 expects a `DUPLICATE` rejection instead. A command without `command_id` is processed normally. The simulator does not subscribe to `caro/+/beat` and does not evaluate `EXPIRED`.
+
+**No handshake.** The simulator does not implement the module side of the handshake (`CARO_MQTT_Spec` §7): it neither subscribes to `caro/+/handshake_backend` nor publishes a HANDSHAKE_REQUEST, and it uses the registry's tag_ids directly. Since 2026-10-18 the HMI sends Sets and REQUEST_SNAPSHOT only after a bind (plus REQUEST_SNAPSHOT on watchdog recovery), so a simulated module gets no Set push after an HMI restart. Its telemetry is still ingested, and operator writes and commands still reach it. Tracked in `Docs/platform/platform_todo.md`.
 
 ---
 

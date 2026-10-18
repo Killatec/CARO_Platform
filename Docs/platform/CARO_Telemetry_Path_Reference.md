@@ -1,7 +1,8 @@
 # CARO_Platform — Telemetry Path Reference
 
 **From telemetry producer to screen pixel.**
-**Version:** 3.0 — 2026-10-17
+**Version:** 3.1 — 2026-10-18
+*v3.1: Module handshake (§3.4): the bridge subscribes `caro/+/handshake_module`, sends REHANDSHAKE on connect instead of REQUEST_SNAPSHOT; Sets reach a module only in the post-CONFIRM push from `commanded_setpoints`; startup and recovery re-delivery removed (§3.3, §4.2).*
 *v3.0: Reconciled line by line against the implementation. Corrected the intake (FAULT no longer short-circuits; trend listener is per ingest, not per changed tag), the trend WS channel (per-ingest snapshots, no server-side boolean coercion, outbox cap), the MQTT bridge (connect behaviour, JSON-only decoding), client reconnect/PING behaviour, the trend client hook (ring of 20, `drainBuffers`) and widget field resolution (registry columns, never `meta`). Added stall/recovery handling, the trend snapshot scheduler, the outbound MQTT path, a full configuration table and §12 Known Gaps.*
 *v2.2: Stage 5 (DB Pipeline) rewritten for the shipped TimescaleDB writer.*
 *v2.1: trend WS channel (Step 11) coverage added.*
@@ -23,7 +24,7 @@ Stages 1a and 1b are alternative producers; both feed Stage 3.
 |-----|-----------------------------|-------------------------------|--------------|
 | 1a  | MQTT publish                | module firmware / `mqtt-simulator` | JSON telemetry published to `caro/{module_id}/telemetry`, typically 10 Hz |
 | 1b  | HMI-internal publish        | `hmi-tag-source.ts`           | Proxy-based producer for `module_type='HMI'` tags; emits a full `TelemetryMessage` every 250 ms |
-| 2   | MQTT receive (transport)    | `mqtt-bridge.ts`              | Subscribes `caro/+/telemetry` and `caro/+/cmd_ack`; `JSON.parse`s telemetry and hands it to `TelemetryIntake.ingest()` |
+| 2   | MQTT receive (transport)    | `mqtt-bridge.ts`              | Subscribes `caro/+/telemetry`, `caro/+/cmd_ack` and `caro/+/handshake_module`; `JSON.parse`s telemetry and hands it to `TelemetryIntake.ingest()` |
 | 3   | Universal ingestion         | `telemetry-intake.ts`         | LKV writes, FAULT handling, watchdog, rate tracking, historian enqueue, trend-listener call |
 | 4   | LKV cache                   | `lkv.ts`                      | In-memory `Map<tag_id, { value, generation }>`; generation bumps only on value change |
 | 5   | DB pipeline                 | `db-pipeline.ts`              | Module-timestamped queue, batch-flushed to TimescaleDB |
@@ -79,7 +80,7 @@ External producers publish JSON to `caro/{module_id}/telemetry`, QoS 0, retain f
 
 ### 2.1 Scope
 
-The HMI server treats a module as an MQTT module when its tags have `tag_registry.module_type = 'MQTT'`. The list is computed at startup in `index.ts` and used for heartbeats, REQUEST_SNAPSHOT and setpoint re-delivery:
+The HMI server treats a module as an MQTT module when its tags have `tag_registry.module_type = 'MQTT'`. The list is computed at startup in `index.ts` and used for heartbeats and the REHANDSHAKE sent on connect:
 
 ```ts
 const mqttModuleIds = [...new Set(
@@ -154,6 +155,7 @@ this.client = mqtt.connect(this.config.mqttUrl);
 this.client.on('connect', () => {
   this.client!.subscribe('caro/+/telemetry', () => {});
   this.client!.subscribe('caro/+/cmd_ack', () => {});
+  this.client!.subscribe('caro/+/handshake_module', () => {});
 
   this.heartbeatTimer = setInterval(
     () => this.heartbeatTick(),
@@ -161,7 +163,7 @@ this.client.on('connect', () => {
   );
 
   for (const moduleId of this.moduleIds) {
-    this.sendRequestSnapshot(moduleId);
+    this.sendRehandshake(moduleId);
   }
 
   resolve();
@@ -169,7 +171,7 @@ this.client.on('connect', () => {
 ```
 
 - The connection uses mqtt.js defaults: MQTT 3.1.1, clean session, anonymous, no TLS, automatic reconnect.
-- The `connect` handler runs again on every automatic reconnect, so subscriptions and REQUEST_SNAPSHOT are re-sent each time. The heartbeat timer is also re-created without clearing the previous one (§12).
+- The `connect` handler runs again on every automatic reconnect, so subscriptions and REHANDSHAKE are re-sent each time. Beats are never withheld, so REHANDSHAKE is how a module learns of a backend restart shorter than its beat timeout; each bound module then re-binds (§3.4). The heartbeat timer is also re-created without clearing the previous one (§12).
 - `start()` resolves on the first connect. If it rejects, `index.ts` logs "MQTT broker unavailable" and the server keeps running on REST and WS without live telemetry.
 
 ### 3.2 Inbound
@@ -208,20 +210,32 @@ private handleMessage(topic: string, payload: Buffer): void {
 }
 ```
 
-Unparseable payloads on either channel are dropped silently. Only the JSON *syntax* is checked: a payload that parses but has no `tags` array throws inside `ingest()` (§12). Telemetry handling is duty-tracked so its cost shows in `Telemetry_CPU`. CMD_ACKs go to `CmdController` (§3.3).
+A third branch handles `handshake_module`: the parsed message goes, unvalidated, to the handler `HandshakeController` registers with `onHandshake()` (§3.4).
+
+Unparseable payloads on any channel are dropped silently. Only the JSON *syntax* is checked: a payload that parses but has no `tags` array throws inside `ingest()` (§12). Telemetry handling is duty-tracked so its cost shows in `Telemetry_CPU`. CMD_ACKs go to `CmdController` (§3.3).
 
 ### 3.3 Outbound
 
 | Topic | Payload | QoS | When |
 |---|---|---|---|
 | `caro/{module_id}/beat` | `{ ts_utc_ms }` | 0 | Every `HEARTBEAT_INTERVAL_MS` (default 1000 ms), to each MQTT module |
-| `caro/{module_id}/cmd` | REQUEST_SNAPSHOT | 1 | On every broker connect (all MQTT modules); on watchdog recovery (one module) |
-| `caro/{module_id}/cmd` | SET_VALUES | 1 | `POST /api/v1/tags/write`; setpoint re-delivery on startup and recovery |
+| `caro/{module_id}/cmd` | REQUEST_SNAPSHOT | 1 | Right after each post-CONFIRM Set push; on watchdog recovery |
+| `caro/{module_id}/cmd` | SET_VALUES | 1 | `POST /api/v1/tags/write`; the post-CONFIRM Set push (every Set, nulls included) |
 | `caro/{module_id}/cmd` | RESET or custom `command_type` | 1 | `POST /api/v1/reset` (RESET to every module); `POST /api/v1/commands` |
+| `caro/{module_id}/handshake_backend` | REHANDSHAKE | 1 | On every broker connect (all MQTT modules); after a Set push with no ACK (max 3 in a row) |
+| `caro/{module_id}/handshake_backend` | TAG_LIST | 1 | In answer to each HANDSHAKE_REQUEST |
 
 Every command carries a fresh `crypto.randomUUID()` `command_id`, `ts_utc_ms = Date.now()` and a `payload` (`{ values }` for SET_VALUES, `{}` otherwise).
 
-`CmdController` (`cmd-controller.ts`) owns the command lifecycle. It waits 1 s for a CMD_ACK on SET_VALUES and on `POST /api/v1/commands`, and is fire-and-forget for the rest. Accepted SET_VALUES values are stored in `pending_setpoint_values` for re-delivery. The full ACK contract is in `CARO_MQTT_Spec.md` §6.2–§6.3; the REST side is in `Docs/hmi/hmi_API_spec.md` §5–§5.1.
+`CmdController` (`cmd-controller.ts`) owns the command lifecycle. It waits 1 s for a CMD_ACK on SET_VALUES and on `POST /api/v1/commands`, and is fire-and-forget for the rest. An operator SET_VALUES stores its accepted values, and every value if it times out, in `commanded_setpoints`, the store the post-CONFIRM push reads; accepted values also go to `pending_setpoint_values`, which nothing reads yet. The full ACK contract is in `CARO_MQTT_Spec.md` §6.2–§6.3; the REST side is in `Docs/hmi/hmi_API_spec.md` §5–§5.1.
+
+### 3.4 Module handshake
+
+`HandshakeController` (`handshake-controller.ts`) is the backend side of `CARO_MQTT_Spec.md` §7; §7.5 there is the authoritative description. In outline:
+
+- **HANDSHAKE_REQUEST** → a TAG_LIST from `buildTagList(tagMap, moduleId)` (`tag-list.ts`): the module's tags from the startup tag map, as `{ tag_id, tag_name, is_setpoint }` ordered by tag_id. `tag_name` is module-relative, from `moduleRelativeTagName()` in `@caro/tag-registry-shared`, the same function the Tag Defs export uses. Every request is answered (identity is not checked yet: `verifyModuleIdentity()` is a placeholder), except a payload `module_id` that differs from the topic, a module that is not MQTT-type in the registry, or a module with no tags.
+- **CONFIRM** (only after a TAG_LIST to that module) → `missing_ids`, `unknown_tags` and `truncated` are logged; `CmdController.getModuleSetpoints()` reads every Set of the module from `commanded_setpoints` (`null` where nothing is stored); `pushSetpoints()` publishes them as one SET_VALUES with its ACK tracked; REQUEST_SNAPSHOT follows at once. An ACK changes the store only by upgrading values stored as `timeout` to `accepted` (keeping `set_by`). No ACK in time → REHANDSHAKE, at most 3 times in a row.
+- State is in memory per module (TAG_LIST outstanding, push-timeout count); CONFIRM results are logged, not shown in the HMI.
 
 ---
 
@@ -327,7 +341,7 @@ watchdogTick(): void {
 - The tick interval is `min(watchdogTimeoutMs, 500)`, so detection never lags the timeout by more than ~500 ms.
 - The watchdog covers every module in the registry, including the HMI module and any `'unknown'` module group. A module never heard from counts as stalled from startup.
 - **On stall**, `enqueueWatchdogStallSentinel` writes one historian row of `null` per trendable tag (`moduleTs = Date.now()`), so trends show a gap instead of a flat line.
-- **On recovery**, `moduleRecoveredHandler` (wired in `index.ts`) calls `cmdController.requestSnapshot(moduleId)` (REQUEST_SNAPSHOT for MQTT, `publishNow()` for HMI), then `cmdController.restorePendingSetpoints(moduleId)` (SET_VALUES re-delivery, MQTT only).
+- **On recovery**, `moduleRecoveredHandler` (wired in `index.ts`) calls `cmdController.requestSnapshot(moduleId)` (REQUEST_SNAPSHOT for MQTT, `publishNow()` for HMI), so tags that do not change, which change-only telemetry never re-sends, leave the null the stall wrote. Sets are not re-sent here: a module that lost its connection re-binds and gets the post-CONFIRM push (§3.4).
 - `resetWatchdog(moduleId)` and `resetAllWatchdogs()` clear the latch only for modules heard from within the timeout, so a reset can't clear a still-silent module.
 
 ### 4.3 Rate tracking and module stats
@@ -827,7 +841,7 @@ Each synchronous callback runs to completion before the next one starts. That is
 
 The async operations are:
 - `ws.send()` and `mqtt.publish()` — both buffer internally and return synchronously;
-- historian writes and pending-setpoint reads and writes (Postgres/TimescaleDB);
+- historian writes and setpoint-store reads and writes (Postgres/TimescaleDB);
 - the startup DB calls, which finish before any telemetry is processed.
 
 No async operation sits between an LKV read and a `ws.send()` in `WsServer.tick()`.
@@ -853,7 +867,7 @@ HMI server settings live in `apps/caro-hmi/server/.env` (see `.env.example`) and
 | `TIMESCALE_DB_QUEUE_MAX`, `TIMESCALE_DB_MAX_ENTRIES_PER_FLUSH`, `TIMESCALE_RECONNECT_MS`, `TIMESCALE_SIZE_POLL_MS` | `5000`, `500`, `30000`, `30000` | historian | See `apps/caro-hmi/CLAUDE.md` § Environment. |
 | `POSTGRES_*`, `TIMESCALE_*` connection vars | — | `@caro/db` | Root `.env`; see `Docs/db/db_handoff.md`. |
 
-Constants that are not configurable: CMD_ACK timeout 1000 ms (`cmd-controller.ts`); trend outbox cap 500 per tag (`ws-server.ts`); client PING 5 s and reconnect backoff 1 s → 30 s (`HmiContextProvider.tsx`).
+Constants that are not configurable: CMD_ACK timeout 1000 ms (`cmd-controller.ts`), which also bounds the post-CONFIRM Set push; REHANDSHAKE retries after an unacknowledged push, 3 in a row (`MAX_PUSH_RETRIES`, `handshake-controller.ts`); trend outbox cap 500 per tag (`ws-server.ts`); client PING 5 s and reconnect backoff 1 s → 30 s (`HmiContextProvider.tsx`).
 
 ---
 
@@ -869,7 +883,8 @@ Behaviour a reader could reasonably assume but the implementation does not provi
 | Telemetry timestamp not validated | `telemetry-intake.ts` | Tracked in `platform_todo.md`. |
 | Tag ownership not checked | `telemetry-intake.ts` | A module can update any registry tag by publishing its tag_id. |
 | No MQTT TLS or auth, no WS auth | `mqtt-bridge.ts`, `ws-server.ts` | See `CARO_MQTT_Spec.md` §1.1 and `hmi_API_spec.md` §11. |
-| Module handshake not built | — | See `CARO_MQTT_Spec.md` §7. |
+| Module identity not verified | `handshake-controller.ts` `verifyModuleIdentity()` | Every HANDSHAKE_REQUEST from an MQTT-type registry module is answered, whatever its `fw_hash` or template. See `CARO_MQTT_Spec.md` §7.3. |
+| Modules that don't handshake get no Sets or snapshot | `handshake-controller.ts`, `mqtt-bridge.ts` | Sets and REQUEST_SNAPSHOT follow a bind only (watchdog recovery still sends REQUEST_SNAPSHOT). Today this affects the MQTT Simulator (`platform_todo.md`). |
 
 ---
 

@@ -1,5 +1,5 @@
 # MQTT Simulator — Handoff
-**Updated:** 2026-10-17 (reconciled with the code) | **Root:** `apps/mqtt-simulator/` | **API:** 3002 | **UI:** 5174
+**Updated:** 2026-10-18 | **Root:** `apps/mqtt-simulator/` | **API:** 3002 | **UI:** 5174
 ⚠ Dev/test tool only — never deploy to production.
 
 ---
@@ -25,6 +25,7 @@
 - `DUPLICATE` rejection — a repeated `command_id` within 60 s is dropped with no CMD_ACK (`CARO_MQTT_Spec` §6.2 expects a `DUPLICATE` result).
 - `/beat` handling and `EXPIRED` evaluation — the simulator neither subscribes to `caro/+/beat` nor checks command age.
 - Range checks — SET_VALUES never returns `OUT_OF_RANGE`.
+- Module handshake — no HANDSHAKE_REQUEST / TAG_LIST / CONFIRM (`CARO_MQTT_Spec` §7). The HMI pushes Sets and requests a snapshot only after a bind, so a simulated module gets no Sets after an HMI restart (bootstrap §7, TODO item).
 - Broad test coverage — intentional. The simulator is a dev/test tool. Only the pure value generators (`server/services/simGenerators.ts`) are unit-tested: `cd apps/mqtt-simulator/server && npm test`.
 
 ---

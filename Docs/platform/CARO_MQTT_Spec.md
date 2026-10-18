@@ -2,7 +2,7 @@
 
 MQTT Interface Specification
 
-Date: 2026-10-17
+Date: 2026-10-18
 
 **Companion Documents**
 
@@ -31,6 +31,7 @@ hmi_functional_spec \| hmi_API_spec \| CARO_DB_Spec
 
   1.8           2026-03-27   PM / Claude   Status/heartbeat topic row removed from Section 3 topic table. Section 5.3 (Status/Heartbeat) removed; backend heartbeat moved to new Section 5.3 (Backend Heartbeat). LWT references removed. Section 5.1 JSON format updated: status field added (ONLINE \| FAULT). Section 5.2 Protobuf format updated: legacy wrapper/DELTA language removed; payload described as directly mirroring JSON structure encoded per Protobuf schema.
   1.9           2026-10-01   PM / Claude   Handshake identifies tags by module-relative tag_name instead of truncated tag_path: TAG_LIST entries are { tag_id, tag_name }; Section 7.4 rewritten (tag_name derivation, uniqueness). Matches the Tag Registry "Generate Tag Defs" export the module's definitions are generated from.
+  2.1           2026-10-18   PM / Claude   Module handshake implemented to the module-side contract (CARO_MQTT_Interface): topics renamed by publisher (handshake_backend / handshake_module); module-initiated HANDSHAKE_REQUEST carrying identity; TAG_LIST entries gain is_setpoint; CONFIRM carries missing_ids / unknown_tags / truncated instead of hashes; new REHANDSHAKE. Section 6.3 rewritten: the only Set delivery is the post-CONFIRM push from commanded_setpoints; startup and recovery re-delivery removed. REQUEST_SNAPSHOT now follows each CONFIRM and watchdog recovery, not the broker connect. Section 7 rewritten as built; identity verification still target.
   2.0           2026-10-17   PM / Claude   Reconciled against the implementation. New Section 1.1 Implementation Status. Sections 4/5: the backend currently decodes JSON telemetry only; backend handling of each telemetry field and REQUEST_SNAPSHOT triggers stated as built. Section 6: custom command types, optional top-level CMD_ACK error field, backend ACK handling (1 s timeout), backend-generated rejection codes (TIMEOUT, MODULE_TYPE_NOT_SUPPORTED), DUPLICATE marked module-evaluated. New Section 6.3 Setpoint Re-delivery. Section 7 marked not yet implemented. Open Questions updated.
   ------------- ------------ ------------- ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
@@ -42,26 +43,26 @@ The CARO_HMI backend is the sole MQTT client on the broker side --- it subscribe
 
 For HMI system architecture, user roles, tag data model, WebSocket API, and REST API --- see hmi_functional_spec. For what the backend does with each message once received (Last-Known-Value cache, watchdog, historian, WebSocket), see `Docs/platform/CARO_Telemetry_Path_Reference.md`.
 
-**1.1 Implementation Status (as of 2026-10-17)**
+**1.1 Implementation Status (as of 2026-10-18)**
 
 This document is the target contract, and not all of it is built yet. Firmware written today must work with what the current backend (`apps/caro-hmi/server`) actually does:
 
 | Area | Spec section | Backend (caro-hmi) | MQTT Simulator |
 |---|---|---|---|
 | Broker TLS, client certificates, ACLs, anonymous rejection | 2 | **Not implemented.** Plain `mqtt://` from `MQTT_URL`, anonymous, no TLS options. | Same — anonymous `mqtt://`. |
-| cleanSession, no retained messages | 2.1 | mqtt.js defaults (clean session, MQTT 3.1.1); never sets `retain`. On every reconnect it re-subscribes and re-sends REQUEST_SNAPSHOT. | `clean: true`, `retain: false`, reconnect every 2 s. |
+| cleanSession, no retained messages | 2.1 | mqtt.js defaults (clean session, MQTT 3.1.1); never sets `retain`. On every connect, including each automatic reconnect, it re-subscribes and sends REHANDSHAKE to every MQTT-type module. | `clean: true`, `retain: false`, reconnect every 2 s. |
 | Telemetry, JSON encoding | 5.1 | **Implemented — the only encoding the backend accepts.** | Default. |
 | Telemetry, Protobuf encoding | 4, 5.2 | **Not implemented.** The bridge only `JSON.parse`s telemetry; a Protobuf payload fails to parse and is silently dropped. | Encodes per `tag.proto` (per-module toggle), but the HMI cannot read it. |
-| Backend heartbeat `/beat` | 5.3 | Implemented: `{ ts_utc_ms }`, QoS0, every `HEARTBEAT_INTERVAL_MS` (default 1000 ms), to MQTT-type modules only. | Not subscribed. |
+| Backend heartbeat `/beat` | 5.3 | Implemented: `{ ts_utc_ms }`, QoS0, every `HEARTBEAT_INTERVAL_MS` (default 1000 ms), to MQTT-type modules only. Never withheld. | Not subscribed. |
 | Watchdog | 5 | Implemented: `WATCHDOG_TIMEOUT_MS` (default 1000 ms), checked every `min(timeout, 500)` ms. | n/a |
-| REQUEST_SNAPSHOT | 5, 6.1 | Implemented; ACK not awaited. | Publishes a full snapshot immediately. |
+| REQUEST_SNAPSHOT | 5, 6.1 | Implemented: after every CONFIRM and on watchdog recovery; ACK not awaited. | Publishes a full snapshot immediately. |
 | SET_VALUES + per-tag CMD_ACK results | 6.1, 6.2 | Implemented, 1 s ACK timeout. | Implemented. |
 | RESET | 6.1 | Sent to every module by `POST /api/v1/reset`, or to one module by `POST /api/v1/commands`. | Increments the module's `Reset_Count` tag. |
 | Custom command types | 6.1 | Implemented via `POST /api/v1/commands` (e.g. `Stop_App`, `Home`). | ACKed with empty results; no other effect. |
-| Setpoint re-delivery | 6.3 | Implemented. | Accepts it like any SET_VALUES. |
+| Set push after CONFIRM | 6.3 | Implemented: every Set from `commanded_setpoints`, nulls included, ACK awaited. | n/a (no handshake). |
 | DUPLICATE rejection | 6.2 | n/a — the backend never re-sends a command_id. | Duplicates within 60 s are **dropped without an ACK**. |
 | EXPIRED evaluation | 6.2 | n/a (module-side). | Not implemented. |
-| Handshake (TAG_LIST / CONFIRM), hash validation | 7 | **Not implemented.** No handshake topic is published or subscribed. | Not implemented. |
+| Handshake (HANDSHAKE_REQUEST / TAG_LIST / CONFIRM / REHANDSHAKE) | 7 | **Implemented** (Section 7.5), except identity verification (7.3): every request from an MQTT-type registry module is answered. | **Not implemented**: the simulator never binds, so it receives neither a Set push nor a REQUEST_SNAPSHOT from the backend. |
 
 **2. Broker Deployment**
 
@@ -85,7 +86,7 @@ All MQTT clients (backend and modules) must connect with the following settings:
 
 -   The broker must be configured to reject retained message publication.
 
-***NOTE:** Because cleanSession=true is required, modules must re-subscribe to all relevant topics on every reconnect. The backend will re-execute the full handshake sequence after every reconnect --- see Section 7.*
+***NOTE:** Because cleanSession=true is required, modules must re-subscribe to all relevant topics on every reconnect, and a module requests a new handshake after every reconnect. On its own (re)connect the backend sends REHANDSHAKE to every MQTT-type module --- see Section 7.*
 
 **2.2 Time Synchronization**
 
@@ -105,21 +106,14 @@ All topics follow the pattern: caro/{module_id}/{channel}
 
 module_id is the module asset_name as defined in the Tag Registry --- it must match exactly.
 
-  --------------------------- -------------------------------- --------------- ---------------- --------- ---------
-  **Purpose**                 **Topic**                        **Publisher**   **Subscriber**   **QoS**   **TLS**
-
-  Telemetry                   caro/{module_id}/telemetry       Module          Backend          QoS0      No
-
-  Backend heartbeat           caro/{module_id}/beat            Backend         Module           QoS0      No
-
-  Command                     caro/{module_id}/cmd             Backend         Module           QoS1      Yes
-
-  Command acknowledgement     caro/{module_id}/cmd_ack         Module          Backend          QoS1      Yes
-
-  Handshake                   caro/{module_id}/handshake       Backend         Module           QoS1      Yes
-
-  Handshake acknowledgement   caro/{module_id}/handshake_ack   Module          Backend          QoS1      Yes
-  --------------------------- -------------------------------- --------------- ---------------- --------- ---------
+| Purpose | Topic | Publisher | Subscriber | QoS | TLS |
+|---|---|---|---|---|---|
+| Telemetry | caro/{module_id}/telemetry | Module | Backend | QoS0 | No |
+| Backend heartbeat | caro/{module_id}/beat | Backend | Module | QoS0 | No |
+| Command | caro/{module_id}/cmd | Backend | Module | QoS1 | Yes |
+| Command acknowledgement | caro/{module_id}/cmd_ack | Module | Backend | QoS1 | Yes |
+| Handshake, backend → module (TAG_LIST, REHANDSHAKE) | caro/{module_id}/handshake_backend | Backend | Module | QoS1 | Yes |
+| Handshake, module → backend (HANDSHAKE_REQUEST, CONFIRM) | caro/{module_id}/handshake_module | Module | Backend | QoS1 | Yes |
 
 **4. Payload Encoding**
 
@@ -140,17 +134,19 @@ The single telemetry topic caro/{module_id}/telemetry carries module-to-backend 
   -------------------- ------------------------------------------------------------------------------------------------- ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
   **Mode**             **Trigger**                                                                                       **Content**
 
-  Full snapshot        Module receives REQUEST_SNAPSHOT command from backend (on backend startup or module reconnect).   Module publishes all its current tag values. The backend uses these to fully populate the Last-Known-Value cache and transition all tags for this module to quality=good.
+  Full snapshot        Module receives REQUEST_SNAPSHOT command from backend (after each handshake CONFIRM, or when the watchdog sees the module recover).   Module publishes all its current tag values. The backend uses these to fully populate the Last-Known-Value cache and transition all tags for this module to quality=good.
 
   Change-only update   Normal operation at module publish rate.                                                          Module publishes only tag values that have changed since the last publish cycle. If no tags have changed, the module still publishes a message with the current timestamp and an empty tags array.
   -------------------- ------------------------------------------------------------------------------------------------- ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 ***NOTE:** There is no separate MQTT topic for full snapshots vs change-only updates. The message structure is identical in both modes, and the backend processes every telemetry message the same way: each tag value is written to the Last-Known-Value cache, so a full snapshot simply refreshes every tag. The backend does not track whether a REQUEST_SNAPSHOT is outstanding.*
 
-The backend sends REQUEST_SNAPSHOT to MQTT-type modules (modules whose tags have `module_type = 'MQTT'` in the Tag Registry):
+The backend sends REQUEST_SNAPSHOT to an MQTT-type module (a module whose tags have `module_type = 'MQTT'` in the Tag Registry):
 
--   to every MQTT-type module on every broker connect, including each automatic reconnect;
--   to one module when the watchdog sees it recover (stalled, then receiving telemetry again), followed by a setpoint re-delivery (Section 6.3).
+-   right after the Set push that answers each handshake CONFIRM (Section 6.3) --- a module binding never triggers a full publish on its own;
+-   when the watchdog sees it recover (stalled, then receiving telemetry again). Telemetry is change-only, so without it tags that do not change would stay null in the Last-Known-Value cache.
+
+It is not sent on broker connect: the REHANDSHAKE sent then leads to a bind, which is followed by one.
 
 **Backend handling of telemetry fields (as built):**
 
@@ -200,7 +196,7 @@ The backend publishes a heartbeat to each module on caro/{module_id}/beat at a r
 
 }
 
-***NOTE:** Backend heartbeat format is timestamp-only. The backend publishes it at QoS0 every `HEARTBEAT_INTERVAL_MS` (default 1000 ms) to every MQTT-type module, starting on broker connect.*
+***NOTE:** Backend heartbeat format is timestamp-only. The backend publishes it at QoS0 every `HEARTBEAT_INTERVAL_MS` (default 1000 ms) to every MQTT-type module, starting on broker connect, and never withholds it. A bound module that misses beats for its own beat timeout (RF_Control: 5000 ms) requests a new handshake and keeps its binding meanwhile (Section 7.5). Modules do not parse the payload.*
 
 **6. Command Channel**
 
@@ -233,9 +229,9 @@ The backend publishes commands to caro/{module_id}/cmd (QoS1, TLS). All commands
   ------------------ ------------------------------------------------------------------------------ ------------------------------------------------------------------------------------------------------------------------------------------------
   **command_type**   **payload contents**                                                           **Description**
 
-  REQUEST_SNAPSHOT   {}                                                                             Backend requests module to publish all current tag values via the telemetry channel. Sent on backend startup and module reconnect.
+  REQUEST_SNAPSHOT   {}                                                                             Backend requests module to publish all current tag values via the telemetry channel. Sent right after the Set push that answers each handshake CONFIRM, and when the watchdog sees the module recover (Section 5).
 
-  SET_VALUES         { \"values\": \[ { \"tag_id\": \<uint32\>, \"value\": \<typed\> }, \... \] }   Write one or more setpoint values. Always an array --- single writes are a batch of one. The backend sends only tags belonging to this module.
+  SET_VALUES         { \"values\": \[ { \"tag_id\": \<uint32\>, \"value\": \<typed\> }, \... \] }   Write one or more setpoint values. Always an array --- single writes are a batch of one. The backend sends only tags belonging to this module. A `null` value means unpopulated: the post-CONFIRM Set push (Section 6.3) sends one for every Set with no stored value, and the module ACKs it `accepted: true`.
 
   RESET              {}                                                                             Request module soft reset. Exact behavior is firmware-defined.
 
@@ -268,9 +264,10 @@ Modules publish a CMD_ACK to caro/{module_id}/cmd_ack (QoS1) for every command r
 
 **Backend ACK handling (as built).** The backend waits 1 second for a CMD_ACK with the matching command_id:
 
--   SET_VALUES: the per-tag results are returned to the caller. With no ACK in time, every tag is reported `accepted: false, rejection_code: "TIMEOUT"`. Accepted values are stored for re-delivery (Section 6.3).
+-   SET_VALUES from `POST /api/v1/tags/write`: the per-tag results are returned to the caller. With no ACK in time, every tag is reported `accepted: false, rejection_code: "TIMEOUT"`. Accepted values, and every value of a command that timed out, are stored in `commanded_setpoints` for the post-CONFIRM Set push (Section 6.3); a rejected value is not stored.
+-   The post-CONFIRM Set push: ACK awaited for 1 second; no ACK in time makes the backend send REHANDSHAKE (Section 7.5).
 -   RESET and custom commands sent through `POST /api/v1/commands`: no ACK in time gives `TIMEOUT` (HTTP 504); an `error` field or any `accepted: false` result gives `COMMAND_REJECTED`.
--   REQUEST_SNAPSHOT, the broadcast RESET from `POST /api/v1/reset`, and setpoint re-delivery are fire-and-forget; their ACKs are ignored.
+-   REQUEST_SNAPSHOT and the broadcast RESET from `POST /api/v1/reset` are fire-and-forget; their ACKs are ignored.
 -   A CMD_ACK whose command_id is not being awaited is ignored.
 
 ***NOTE:** Modules must track command_id for the lifetime of the connection and reject duplicate commands with rejection_code: DUPLICATE. The command_id tracking table may be cleared on reconnect. The backend never re-sends a command_id, so QoS1 redelivery is the only source of duplicates. (The MQTT Simulator currently drops duplicates without an ACK instead.)*
@@ -295,104 +292,89 @@ Modules publish a CMD_ACK to caro/{module_id}/cmd_ack (QoS1) for every command r
   MODULE_TYPE_NOT_SUPPORTED Backend       The tag's module has a module_type other than MQTT or HMI (never sent to module).
   -------------------- ------------------ ----------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-**6.3 Setpoint Re-delivery**
+**6.3 Set Push after CONFIRM**
 
-Every SET_VALUES value a module accepts is stored by the backend in `pending_setpoint_values` (one row per tag). The backend re-publishes the stored values for a module as one SET_VALUES command, without awaiting its ACK:
+The backend keeps the last commanded value of every Set in `commanded_setpoints` (one row per tag; CARO_DB_Spec §7.2). A value is stored when a module ACKs it `accepted: true`, or when its SET_VALUES times out (the module may have applied it, and it remains the operator's intent); a rejected value is not stored. A Set with no row, or with a `null` row, is unpopulated.
 
--   on backend startup, once connected to the broker, for every MQTT-type module;
--   when the watchdog sees a stalled module recover.
+After every CONFIRM (Section 7) the backend sends the module **every** one of its Sets as one SET_VALUES --- `null` for an unpopulated one --- waits 1 second for the ACK, and sends REQUEST_SNAPSHOT immediately after the SET_VALUES. This is the only way the backend delivers stored values: there is no re-delivery on backend startup or on watchdog recovery. A module that restarted or lost power gets its last commanded values from the handshake it requests on reconnect.
 
-This returns a module that restarted or lost power to its last commanded values. Modules must therefore accept a SET_VALUES at any time after connecting, including one that repeats values they already hold.
+Modules must accept a SET_VALUES at any time after binding, including one that repeats values they already hold and one that carries `null`.
 
 **7. Module Handshake**
 
-***NOTE:** Not yet implemented --- the backend neither publishes TAG_LIST nor subscribes to handshake_ack, and the `commissioned_modules` table does not exist yet. Modules currently use the tag_ids from their generated definitions directly. This section is the target design.*
+***NOTE:** Implemented (Section 7.5) except module identity verification (Section 7.3): the `commissioned_modules` table does not exist yet, so every request from an MQTT-type registry module is answered. The MQTT Simulator does not implement the module side (`Docs/platform/platform_todo.md`).*
 
-The handshake is executed by the backend for each commissioned module instance on backend startup and on every module reconnect. On every reconnect (including after broker loss), the backend will re-execute the full handshake sequence before sending any commands. The module shall treat each handshake as the authoritative source of its current tag_id mapping and must be prepared to receive a new TAG_LIST on any reconnect.
+Every bind starts with the module. A module requests a handshake on start-up, after every reconnect, when the backend heartbeat stops (Section 5.3), and when the backend sends REHANDSHAKE. The backend never sends a TAG_LIST unprompted. The module treats each TAG_LIST as the authoritative tag_id mapping, keeps its previous binding (and keeps publishing on the previous ids) until a new TAG_LIST arrives, and accepts a TAG_LIST at any time.
 
-Handshake topics:
+Handshake topics, each named for its publisher:
 
--   caro/{module_id}/handshake --- backend → module (QoS1, TLS)
+-   caro/{module_id}/handshake_backend --- backend → module: TAG_LIST, REHANDSHAKE (QoS1, TLS)
 
--   caro/{module_id}/handshake_ack --- module → backend (QoS1, TLS)
+-   caro/{module_id}/handshake_module --- module → backend: HANDSHAKE_REQUEST, CONFIRM (QoS1, TLS)
 
 **7.1 Handshake Sequence**
 
-  ---------- ------------------ ------------------ --------------------------------------------------------------------------------------------------------------------------------------
-  **Step**   **Direction**      **message_type**   **Content**
+| Step | Direction | message_type | Content |
+|---|---|---|---|
+| 1 | Module → Backend | HANDSHAKE_REQUEST | Module identity: `module_id`, `instance_id`, `ip`, `fw_hash`, `tag_registry_template`, `tag_registry_rev`. Repeated about every 1 s until a TAG_LIST arrives. |
+| 2 | Backend → Module | TAG_LIST | Every tag of this module instance as { tag_id (uint32), tag_name (module-relative, 7.4), is_setpoint (bool) }, in one message. |
+| 3 | Module → Backend | CONFIRM | The binding result: `missing_ids` and `unknown_tags` (arrays of names), optional `truncated`. |
+| 4 | Backend → Module | SET_VALUES, then REQUEST_SNAPSHOT | Every Set from the store, `null` for unpopulated (Section 6.3); then a full snapshot. |
 
-  1          Backend → Module   TAG_LIST           List of { tag_id (uint32), tag_name (string, module-relative --- see 7.4) } for all tags belonging to this module instance.
-
-  2          Module → Backend   CONFIRM            { fw_hash, tag_config_hash } --- both computed from the module\'s own compiled firmware definitions, not from the received tag list.
-  ---------- ------------------ ------------------ --------------------------------------------------------------------------------------------------------------------------------------
+Each TAG_LIST produces one CONFIRM. A TAG_LIST the module rejects (malformed, an entry missing `is_setpoint`, or larger than its receive buffer) produces no CONFIRM and leaves the previous binding in place.
 
 **7.2 Handshake Message Envelope and Examples**
 
-All handshake messages share the following envelope:
+All handshake messages share the envelope `{ "message_type", "ts_utc_ms", "payload" }`. `ts_utc_ms` is an integer (0 from a module whose clock is not synced); a handshake message does not expire.
 
-{
+HANDSHAKE_REQUEST (Step 1, module → backend):
 
-\"message_type\": \"TAG_LIST\" \| \"CONFIRM\",
+```json
+{ "message_type": "HANDSHAKE_REQUEST", "ts_utc_ms": 1792298629792,
+  "payload": { "module_id": "RF1", "instance_id": "66:1e:98:49:6d:87", "ip": "10.0.0.133",
+               "fw_hash": "sha256:6e48e7f3…", "tag_registry_template": "Narya_RF", "tag_registry_rev": 3 } }
+```
 
-\"ts_utc_ms\": \<timestamp\>,
+`fw_hash` is `sha256:` plus 64 lowercase hex digits of the running image, or `"Firmware_Hash_Not_Available"`. `tag_registry_template` and `tag_registry_rev` name the Tag Registry template and revision the module's tag definitions were generated from. `instance_id` and `ip` are opaque host strings (RF_Control derives `instance_id` from a MAC address that is random per boot). Strings are at most 127 bytes.
 
-\"payload\": { \... }
+TAG_LIST (Step 2, backend → module):
 
-}
+```json
+{ "message_type": "TAG_LIST", "ts_utc_ms": 1743073812000,
+  "payload": { "tags": [ { "tag_id": 1023, "tag_name": "Freq.Set", "is_setpoint": true },
+                         { "tag_id": 1024, "tag_name": "Freq.Mon", "is_setpoint": false } ] } }
+```
 
-TAG_LIST example (Step 1 --- Backend → Module):
+`is_setpoint` is required: it is the module's only run-time source for whether a tag is a Set. A list takes about 65 bytes per tag (RF1's 225 tags are 14 402 bytes), and the whole list must fit the module's MQTT receive buffer and inbound queue (RF_Control: 32 KB each). The module matches each `tag_name` case-insensitively against its compiled names; a name over 63 bytes matches nothing.
 
-{
+CONFIRM (Step 3, module → backend):
 
-\"message_type\": \"TAG_LIST\",
+```json
+{ "message_type": "CONFIRM", "ts_utc_ms": 1743073812150,
+  "payload": { "unknown_tags": [ "Legacy.Phase_Gain" ], "missing_ids": [ "Phase.Step_Mask" ], "truncated": true } }
+```
 
-\"ts_utc_ms\": 1743073812000,
+-   `missing_ids`: names of firmware tags absent from the list. Fatal on the module: it never becomes ready while any is missing.
+-   `unknown_tags`: names in the list that the firmware lacks, plus the later entry of a duplicate tag_id or name. Reported only.
+-   `truncated: true` appears only when the arrays did not fit the module's transmit buffer.
 
-\"payload\": {
+A well-formed list that matches no firmware tag still gets a CONFIRM; the module is then bound, not ready, and publishes empty telemetry.
 
-\"tags\": \[
+REHANDSHAKE (backend → module):
 
-{ \"tag_id\": 1001, \"tag_name\": \"RF_Fwd.setpoint\" },
+```json
+{ "message_type": "REHANDSHAKE", "ts_utc_ms": 1743073812000 }
+```
 
-{ \"tag_id\": 1002, \"tag_name\": \"RF_Fwd.readback\" },
+A bound module answers it with a HANDSHAKE_REQUEST and keeps its binding meanwhile; an unbound module ignores it, since it is requesting already. There is no other acknowledgement.
 
-{ \"tag_id\": 1003, \"tag_name\": \"RF_Rfl.readback\" }
+**7.3 Identity Verification**
 
-\]
+***NOTE:** Not yet implemented: the backend accepts every request. Target design below.*
 
-}
+On a HANDSHAKE_REQUEST the backend compares the request's `fw_hash` and `tag_registry_template` with what the `commissioned_modules` table expects for the module, before sending a TAG_LIST. `tag_registry_rev` is reserved for a later verification step, because the Tag Registry has no per-template revision yet (Open Questions). During commissioning the received identity is stored as the expected baseline; on later requests a mismatch raises a System Alarm and the module is not bound normally (Open Questions: withhold the TAG_LIST, or only the Set push).
 
-}
-
-CONFIRM example (Step 2 --- Module → Backend):
-
-{
-
-\"message_type\": \"CONFIRM\",
-
-\"ts_utc_ms\": 1743073812150,
-
-\"payload\": {
-
-\"fw_hash\": \"a3f8c2d1e9b047\...\",
-
-\"tag_config_hash\": \"7b14e8f3c2a091\...\"
-
-}
-
-}
-
-**7.3 Hash Validation**
-
-On receipt of the CONFIRM message the backend compares:
-
--   fw_hash --- received from module vs expected_fw_hash stored in the commissioned_modules table.
-
--   tag_config_hash --- received from module vs tag_config_hash stored in the commissioned_modules table.
-
-During module commissioning, the received hashes are stored as the expected baseline in the commissioned_modules table. On all subsequent connections, hashes are compared against the stored baseline. A mismatch raises a System Alarm.
-
-***NOTE:** Both hashes are computed entirely on the module from its compiled firmware definitions. The backend does not independently compute or verify these hashes --- it only compares the received values against the stored baseline.*
+The backend does not compute these values; it only compares what the module reports with the stored baseline.
 
 **7.4 Module-Relative tag_name**
 
@@ -400,7 +382,17 @@ Each TAG_LIST entry identifies its tag by a module-relative tag_name, not by tag
 
 Example: a tag with full path Narya1.RF1.Pwr_Mon.Mag_1.Fwd.Gain, where Pwr_Mon has In_Tag_Name false, has registry tag_name RF1.Mag_1.Fwd.Gain. It is delivered to the RF1 module as Mag_1.Fwd.Gain.
 
-This is the same string the Tag Registry's "Generate Tag Defs" export emits per module template (tag_registry_spec §12.1), which is what the module's compiled definitions are generated from. The module matches each received tag_name against those definitions to learn its tag_id. Module-relative tag_names are therefore non-empty and unique within a module, compared case-insensitively. The Tag Registry export refuses a template that violates this. The module uses tag_id for all wire communication; tag_name is used only to bind ids during the handshake, and for local logging and diagnostics.
+This is the same string the Tag Registry's "Generate Tag Defs" export emits per module template (tag_registry_spec §12.1), which is what the module's compiled definitions are generated from. Both use one function, `moduleRelativeTagName()` in `@caro/tag-registry-shared`, so the two cannot drift apart. Module-relative tag_names are therefore non-empty and unique within a module, compared case-insensitively. The Tag Registry export refuses a template that violates this. The module uses tag_id for all wire communication; tag_name is used only to bind ids during the handshake, and for local logging and diagnostics.
+
+**7.5 Backend Behaviour (as built)**
+
+-   **Answering requests.** The backend subscribes to `caro/+/handshake_module` and answers every HANDSHAKE_REQUEST, repeats included, with a TAG_LIST built from the Tag Registry as loaded at backend startup: the module's tags, ordered by tag_id. It ignores, logging once per module, a request whose payload `module_id` differs from the topic, one from a module that is not an MQTT-type module in the registry, and one from a module with no tags (an empty list would bind the module with nothing).
+-   **CONFIRM.** Accepted only after a TAG_LIST was sent to that module; it answers that TAG_LIST, so a second CONFIRM needs a new request. The backend logs `missing_ids`, `unknown_tags` and `truncated`, then performs Step 4.
+-   **Heartbeat.** Sent to every MQTT-type module from broker connect and never withheld. A backend restart shorter than a module's beat timeout would go unnoticed by the module, so on every broker connect the backend sends REHANDSHAKE to every MQTT-type module.
+-   **Push timeout.** A Set push with no ACK within 1 second makes the backend send REHANDSHAKE, at most 3 times in a row per module; an acknowledged push resets the count.
+-   **Registry changes.** The Tag Registry is read at backend startup only, so a registry change takes effect after a controlled backend restart, which re-binds every module through the REHANDSHAKE sent on connect.
+
+Module behaviour the backend relies on: an unbound module publishes no telemetry and rejects every SET_VALUES id as `UNKNOWN_TAG`; telemetry is change-only and binding never triggers a full publish (hence the REQUEST_SNAPSHOT in Step 4); a Set keeps its populated state across a re-bind only if it keeps the same tag_id.
 
 
 **Appendix A: Protobuf Schema Reference**
@@ -427,8 +419,10 @@ The schema is hardcoded in module firmware. It is not delivered over the wire du
 ## Open Questions
 
 - What is the final heartbeat interval and watchdog timeout value? (Current defaults: 1000 ms each --- `HEARTBEAT_INTERVAL_MS`, `WATCHDOG_TIMEOUT_MS`.)
-- What hash algorithm and canonical serialization format should be used for `fw_hash` and `tag_config_hash`? Must be agreed between firmware and backend teams.
-- What is the correct behavior when a hash mismatch is detected — device blocked or degraded mode? Requires HSE input.
+- What does the backend compare `fw_hash`, `tag_registry_template` and `tag_registry_rev` against, and when is `tag_registry_rev` verified? The Tag Registry has no per-template revision yet, and the database `registry_rev` changes on any apply and is numbered per database.
+- What is the correct behavior on an identity mismatch — withhold the TAG_LIST, or bind but withhold the Set push? Requires HSE input.
+- `OUT_OF_RANGE` is listed as evaluated by the module (Section 6.2), but the module library never range-checks. Which side owns range checks?
+- There is no rejection code for a SET_VALUES value of the wrong JSON kind; the module library uses `UNKNOWN_TAG`. Add a code?
 - What is the MQTT topic ACL policy and per-module credential provisioning strategy? Requires IT Security and firmware engineering input.
 - When will the backend decode Protobuf telemetry, and how does it tell the encodings apart (per-module setting, payload sniffing, or a separate topic)?
 - What additional fields beyond timestamp should the backend heartbeat include?

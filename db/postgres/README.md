@@ -37,8 +37,9 @@ startup against whatever database they're configured for.
 | `013_add_display_columns.sql` | Adds `unit`, `format`, `eng_min`, `eng_max` |
 | `014_add_array_tag_types.sql` | Adds `string`, `f32[]`, `i16[]` to `tag_types` |
 | `015_add_tag_name_column.sql` | Adds `tag_name` column |
-| `016_create_pending_setpoint_values.sql` | `pending_setpoint_values` table — setpoint restore-on-reconnect |
+| `016_create_pending_setpoint_values.sql` | `pending_setpoint_values` table — accepted operator setpoints (written, not read until operation modes exist) |
 | `017_add_i32_tag_type.sql` | Adds `i32` (Int 32) to `tag_types` |
+| `018_create_commanded_setpoints.sql` | `commanded_setpoints` table — last commanded value per Set, read by the handshake's Set push; seeded from `pending_setpoint_values` |
 
 Note: the table jumps from `004` to `006` — there is no `005` file on disk. `runMigrations()` only reads whatever `.sql` files are present and sorts by filename, so a gap in the sequence is harmless, not a missing dependency.
 

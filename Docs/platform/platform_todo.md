@@ -2,7 +2,7 @@
 
 **Purpose:** Implementation backlog only — features fully specified but not yet built. Design questions that are unresolved live in the relevant spec's Open Questions section. Remove items when complete.
 
-**Updated:** 2026-10-10
+**Updated:** 2026-10-18
 
 ---
 
@@ -17,7 +17,8 @@ Status detail: `CARO_MQTT_Spec.md` §1.1. Known defects in the built path (heart
 
 - [ ] **Protobuf telemetry decoding** (`CARO_MQTT_Spec.md` §4, §5.2). `mqtt-bridge.ts` only `JSON.parse`s telemetry. Needs a decision first on how the backend tells the encodings apart (spec Open Questions).
 - [ ] **Broker TLS, client certificates, ACLs, anonymous rejection** (`CARO_MQTT_Spec.md` §2). Backend and simulator connect anonymously over plain `mqtt://`.
-- [ ] **Module handshake and commissioning** (`CARO_MQTT_Spec.md` §7, `hmi_functional_spec.md` §9): TAG_LIST / CONFIRM, hash validation against `commissioned_modules`. Depends on the `commissioned_modules` migration below.
+- [ ] **Module identity verification and commissioning** (`CARO_MQTT_Spec.md` §7.3, `hmi_functional_spec.md` §9, `hmi_API_spec.md` §9–§10). The handshake itself is built (§7.5); `verifyModuleIdentity()` in `apps/caro-hmi/server/src/handshake-controller.ts` is a placeholder that accepts every module. Compare the HANDSHAKE_REQUEST's `fw_hash` and `tag_registry_template` against `commissioned_modules` before answering, and build the Administrator validation flow. Depends on the `commissioned_modules` migration below, with `expected_tag_config_hash` replaced by the expected template (`CARO_DB_Spec.md` §5.1 note). `tag_registry_rev` verification waits on an Open Question in `CARO_MQTT_Spec.md`.
+- [ ] **Show handshake results in the HMI.** `HandshakeController` only logs each CONFIRM's `missing_ids` / `unknown_tags` / `truncated`; the HMI should show them per module, with which Sets are unpopulated (null in `commanded_setpoints`) and the module's readiness (`Module.Ready`, RF_Control migration D23 — RF1 has no such tag yet). Source: the module-side contract, `CARO_MQTT_Interface/Docs/BACKEND_HANDSHAKE_PROMPT.md` B5.
 
 ### New `@caro/widgets` components — needed for Narya1's RF1 page
 
@@ -43,7 +44,7 @@ The Trend Viewer API and its test coverage are complete; these are operational m
 ### Cross-cutting / platform
 
 - [ ] **Re-evaluate error management platform-wide.** Current pattern across HMI routes (`tags.ts`, `trends.ts`, `reset.ts`) is bare-string error codes assigned via `err.code = 'X'`; `@caro/db` does the same in `codeError(...)` throws; `CaroError` (`@caro/server/errorHandler.ts`) carries them through to the platform envelope. The pattern is simple but has real shortcomings: no compile-time typo protection (`'INVALID_RAGNE'` compiles), no discoverability (must grep to enumerate all codes), no shared types for client-side consumers, and per-route hand-maintained HTTP-status maps (e.g., `routes/trends.ts:8-13`) that drift silently from the throwing module's actual code surface. Three improvements worth considering, in increasing scope: per-domain typed code constants (cheapest — each module exports its codes as `as const` maps); shared `throw*` helpers in `@caro/server` (reduce per-throw-site boilerplate); shared client-side error response types. The platform-wide cost is moderate (~week of refactor across HMI server + `@caro/db` + client error handling). Surfaced from `hmi_trend_viewer` audit B3#5 (2026-MM-DD).
-- [ ] Create HMI database migrations for the remaining HMI tables: `users`, `sessions`, `commissioned_modules`, `operation_modes`, `mode_revisions`, `setpoint_values`, `system_settings`, `audit_log`. (`pending_setpoint_values` done — migration 016.)
+- [ ] Create HMI database migrations for the remaining HMI tables: `users`, `sessions`, `commissioned_modules`, `operation_modes`, `mode_revisions`, `setpoint_values`, `system_settings`, `audit_log`. (`pending_setpoint_values` done — migration 016; `commanded_setpoints` — migration 018.)
 - [ ] `DbPipeline`: remove legacy `flush()` / `queueSize` public aliases (currently referenced in `telemetry-intake.test.ts`; rename or internalize in a dedicated cleanup pass)
 - [ ] User management endpoints — no user CRUD endpoints exist yet
 - [ ] Dashboard config schema and `DashboardRenderer` component
@@ -68,6 +69,7 @@ The Generate Tag Defs export (spec §12.1) is consumed by a generator that emits
 
 - [ ] RESET command — `CMD_ACK` is published but tag values are not reset to defaults
 - [ ] REST override feature — pin a tag's simulated value from the REST API. Not started: there is no endpoint and no `overridden` field in the simulator's tag or module status shapes.
+- [ ] **Module side of the handshake** (`CARO_MQTT_Spec.md` §7). Every MQTT module is now expected to handshake, and the HMI sends Sets and REQUEST_SNAPSHOT only after a bind, so a simulated module gets no Set push after an HMI restart. Per simulated module: subscribe `caro/{module_id}/handshake_backend`; publish HANDSHAKE_REQUEST (`module_id`, `instance_id`, `ip`, `fw_hash`, `tag_registry_template`, `tag_registry_rev`) about once a second while unbound, after a reconnect, on REHANDSHAKE, and when `/beat` stops; bind tag_ids from the TAG_LIST by module-relative `tag_name` and answer with a CONFIRM (`missing_ids`, `unknown_tags`); publish no telemetry while unbound; keep the binding across a reconnect until the next TAG_LIST. Reference implementation: `CARO_MQTT_Interface` (`src/caro.c`, `tests/integration/backend_harness.py`).
 
 ---
 

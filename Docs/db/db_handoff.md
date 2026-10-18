@@ -1,5 +1,5 @@
 # @caro/db — Package Handoff
-**Updated:** 2026-10-17 | **Path:** `packages/db/` | **Name:** `@caro/db`
+**Updated:** 2026-10-18 | **Path:** `packages/db/` | **Name:** `@caro/db`
 
 ---
 
@@ -24,12 +24,15 @@
 | `getRevisions()` | All `registry_revisions` rows, DESC |
 | `getTagTypes()` / `getModuleTypes()` | `tag_types` / `module_types` lookup rows, by id |
 
-**HMI setpoints (migration 016):**
+**HMI setpoints (migrations 016, 018):**
 
 | Function | Purpose |
 |---|---|
-| `upsertPendingSetpoints(entries)` | Upsert `pending_setpoint_values` rows (called on CMD_ACK `accepted=true`) |
-| `getPendingSetpointsByTagIds(tagIds)` | Read pending setpoints back for `restorePendingSetpoints` |
+| `upsertPendingSetpoints(entries)` | Upsert `pending_setpoint_values` rows (called on CMD_ACK `accepted=true`; nothing reads the table yet) |
+| `upsertCommandedSetpoints(entries)` | Upsert `commanded_setpoints` rows `{ tag_id, value (null = unpopulated, stored as SQL NULL), ack_status: 'accepted' \| 'timeout', set_by? }`. Omitted `set_by` is written as NULL. A repeated tag_id keeps the last entry. |
+| `getCommandedSetpointsByTagIds(tagIds)` | Read `commanded_setpoints` rows (with `ack_status`, `set_by`, `set_at`); a missing tag_id means unpopulated. Read by the HMI's post-CONFIRM Set push. |
+
+One-off bulk load: `scripts/import-rf1-sets.js --sets <RF1_Sets.json> [--apply]` writes RF_Control's legacy setpoint file into `commanded_setpoints` through `scripts/data/rf1-sets-map.json` (dry run without `--apply`; aborts on any unmapped key or type mismatch).
 
 **TimescaleDB (historian):**
 
@@ -65,7 +68,7 @@ Files in `db/postgres/migrations/`. Applied in filename order. Tracked in `schem
 
 - Never edit an existing migration file.
 - New behavior = new file with next sequential prefix.
-- Applied: `001`–`004`, `006`–`017` (005 skipped — do not reuse)
+- Applied: `001`–`004`, `006`–`018` (005 skipped — do not reuse)
 - `007` — create `tag_types` lookup table; migrate `tag_registry.data_type` to FK
 - `008` — revert `tag_registry.data_type` FK back to string (`tag_types.type_name`)
 - `009` — remove unused tag types; rename `f64` → `f32`
@@ -77,6 +80,7 @@ Files in `db/postgres/migrations/`. Applied in filename order. Tracked in `schem
 - `015` — add `tag_name` column to `tag_registry`
 - `016` — create `pending_setpoint_values`
 - `017` — add `i32` (Int 32) to `tag_types`
+- `018` — create `commanded_setpoints` (seeded once from `pending_setpoint_values`)
 
 ### TimescaleDB migrations
 

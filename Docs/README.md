@@ -1,5 +1,5 @@
 # CARO_Platform — Start Here
-**Updated:** 2026-10-17 | **Root:** `C:\KillaTec\CARO_Platform` | **GitHub:** `Killatec/CARO_Platform` | **Branch:** `dev`
+**Updated:** 2026-10-18 | **Root:** `C:\KillaTec\CARO_Platform` | **GitHub:** `Killatec/CARO_Platform` | **Branch:** `dev`
 
 This is the single entry point to the platform documentation. It holds the cross-app facts and rules, and tells you which detail doc to read next. App-level and subsystem detail lives in the folders listed under [Where to read next](#where-to-read-next).
 
@@ -22,7 +22,7 @@ How data gets from a module to the screen, and back as commands. These three are
 
 | Read | For |
 |---|---|
-| [platform/CARO_MQTT_Spec.md](platform/CARO_MQTT_Spec.md) | The MQTT wire contract (ICD) for module firmware: topics, telemetry and command payloads, CMD_ACK, setpoint re-delivery, handshake. **Start at §1.1 Implementation Status**: the backend currently accepts JSON telemetry only and has no TLS or handshake. |
+| [platform/CARO_MQTT_Spec.md](platform/CARO_MQTT_Spec.md) | The MQTT wire contract (ICD) for module firmware: topics, telemetry and command payloads, CMD_ACK, the post-handshake Set push, the module handshake. **Start at §1.1 Implementation Status**: the backend accepts JSON telemetry only, has no TLS, and binds every module through the handshake without verifying its identity yet. |
 | [platform/CARO_Telemetry_Path_Reference.md](platform/CARO_Telemetry_Path_Reference.md) | What the HMI server and browser do with each message, stage by stage: MQTT bridge → intake → LKV → historian queue → WebSocket → React context → widget. Includes the trend live-tail channel, the outbound command path, every config value, and §12 Known Gaps. |
 | [hmi/hmi_API_spec.md](hmi/hmi_API_spec.md) §5, §11 | Setpoint write and command REST endpoints, and the browser WebSocket messages. |
 
@@ -79,6 +79,7 @@ The hard rules in root `CLAUDE.md` apply everywhere: TypeScript only, no raw SQL
   - Project identity and cross-app-must-agree settings (`PROJECT_ROOT`, `POSTGRES_*`, `TIMESCALE_*`) live at root; each app's own settings live in its own `server/.env`.
   - Never pass `override: true`.
 - **TagDef field consumption:** consume `TagDef.{unit, eng_min, eng_max, format, tag_name, trendable}` directly. Never walk `meta` for these fields — `resolveRegistry` applies type-aware gating (e.g., suppressing unit/eng_min/eng_max on Booleans). Use `meta` only for structural data (e.g., `module_id`). This applies everywhere: `loadTagMap`, `resolveFormat`, any widget/hook reading tag metadata.
+  - **One exception:** the *module-relative* tag_name (handshake TAG_LIST, Tag Defs export) has no registry column, so it is derived from `meta` — only through `moduleRelativeTagName()` in `@caro/tag-registry-shared`, the one function both consumers share.
 
 ## Branching
 
@@ -96,11 +97,11 @@ Schema spec: [db/CARO_DB_Spec.md](db/CARO_DB_Spec.md). Package and migration det
 
 **Main PostgreSQL (port 5432):**
 - Migrations are in `db/postgres/migrations/`. Never edit an existing one; add new ones only.
-- Present: `001`–`004`, `006`–`017` (005 skipped — do not reuse).
+- Present: `001`–`004`, `006`–`018` (005 skipped — do not reuse).
 - All three servers call `runMigrations()` from `@caro/db` at startup. Advisory lock `pg_advisory_lock(1)` prevents concurrent migration races.
 - Startup sequence: `ping()` → `runMigrations()` → app init. Either step failing causes `process.exit(1)`.
 
-**HMI tables:** `pending_setpoint_values` is migrated (016), with no `set_by` FK to `users` yet (a nullable stub, since auth isn't built). `users`, `sessions`, `commissioned_modules`, `operation_modes`, `mode_revisions`, `setpoint_values`, `system_settings` and `audit_log` remain specified in DB Spec §4–§10 but not yet migrated.
+**HMI tables:** `pending_setpoint_values` (016, written but not read) and `commanded_setpoints` (018, every Set's last commanded value, read by the handshake's Set push) are migrated. Neither has a `set_by` FK to `users` yet (a nullable stub, since auth isn't built). `users`, `sessions`, `commissioned_modules`, `operation_modes`, `mode_revisions`, `setpoint_values`, `system_settings` and `audit_log` remain specified in DB Spec §4–§10 but not yet migrated.
 
 **TimescaleDB (port 5433, separate Docker container, `docker-compose.timescale.yml`):**
 - Holds the `tag_samples` hypertable (14-day retention) plus four continuous aggregates: 1s, 10s, 1min and 10min.
@@ -177,7 +178,7 @@ Apps connect to their databases at startup and never change target at runtime; t
 | [platform_todo.md](platform/platform_todo.md) | The backlog: specified but unbuilt features. |
 | [platform_deltas.md](platform/platform_deltas.md) | Open cross-app spec divergences. |
 | [multi_project_runbook.md](platform/multi_project_runbook.md) | How to create and switch projects; observed errors; known issues. |
-| [CARO_MQTT_Spec.md](platform/CARO_MQTT_Spec.md) | MQTT interface spec (ICD): topics, payloads, CMD/CMD_ACK, setpoint re-delivery, handshake; §1.1 says what is built. |
+| [CARO_MQTT_Spec.md](platform/CARO_MQTT_Spec.md) | MQTT interface spec (ICD): topics, payloads, CMD/CMD_ACK, the post-handshake Set push, the module handshake; §1.1 says what is built. |
 | [CARO_Telemetry_Path_Reference.md](platform/CARO_Telemetry_Path_Reference.md) | Telemetry path from producer to pixel, stage by stage, plus the outbound command path, config and known gaps. |
 
 **[db/](db/)** — Postgres + TimescaleDB

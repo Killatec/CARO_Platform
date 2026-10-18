@@ -15,6 +15,7 @@ Tag Registry Functional Spec | CARO_MQTT_Spec | CARO_DB_Spec | hmi_widget_spec
 | 2.6 | 2026-04-20 | PM / Claude | §10.1, §10.2: WS subscription model updated to reflect level-triggered reconciler (`desiredRef`/`serverRef`, microtask-batched flush, same-tick cancel). Matches perf commit 4977f4f. |
 | 2.7 | 2026-04-20 | PM / Claude | §2, §4, §10.2, §10.3: pre-refactor frontend-state sections rewritten to match `@caro/hmi-context` / `useLiveValue` implementation. Global-store and context-registry concepts removed. Per-tag value shape corrected to `{ value }` only — no quality, timestamp, or module_id. |
 | 2.8 | 2026-10-17 | PM / Claude | Reconciled against the implementation. New §1.1 Implementation Status; §2/§4 transport and auth status; §4.1 Header and page rendering as built; §4.2 machine configuration rewritten for `PROJECT_ROOT` + `registry.ts`; §5, §6.6, §8.4, §8.7 marked not built; §6.1–§6.5 meta order, TagDef fields and startup-only map; §8.6 no LISTEN/NOTIFY; §11 endpoint status column; §12 retention as built; §12.1 queue instead of WAL; §14 metrics panel, reconnect backoff, TLS status. MQTT/telemetry sections: §7 channel table gains a Status column (JSON-only telemetry, handshake not built, no TLS); §8.1 snapshot-on-connect and setpoint re-delivery; §8.2 historian enqueue rules; §8.8 duty-tracked list and `Module_Count` meaning corrected; §8.9 stall sentinel and recovery; §8.10 routing table covers `/commands` and REQUEST_SNAPSHOT; §9 marked not built; §10 transport (plain `ws`, no auth), 8 Hz, reconnect backoff; §10.4 validation and audit status. |
+| 2.9 | 2026-10-18 | PM / Claude | Module handshake built (CARO_MQTT_Spec v2.1 §7): §1.1, §6.4, §7 channel table (`handshake_backend` / `handshake_module`), §8.1 startup sequence, §8.9 recovery, §8.10 routing and setpoint store (`commanded_setpoints`, post-CONFIRM push; startup and recovery re-delivery removed), §9 identity instead of hashes. |
 
 ---
 
@@ -37,13 +38,14 @@ This document is the target specification. Large parts of it are not built yet; 
 | Telemetry ingest, LKV cache, watchdog, WebSocket live values | Built (§8, §10). JSON telemetry only — Protobuf is not decoded. |
 | Historian (TimescaleDB writes, CAGs, trend viewer) | Built (§8, §12; trend viewer spec). |
 | Setpoint writes (`POST /tags/write`), module commands, system reset | Built (§8.10, §8.11, §10.4) — no audit rows, no role checks. |
-| `pending_setpoint_values` and setpoint re-delivery | Built (migration 016; CARO_MQTT_Spec §6.3). |
+| Setpoint store (`commanded_setpoints`) and the post-CONFIRM Set push | Built (migration 018; CARO_MQTT_Spec §6.3). `pending_setpoint_values` (016) is written but not read. No re-delivery on startup or watchdog recovery. |
 | HMI tag source, Module_Info / Trend_Info tags, StatsBar | Built (§8.8, §14.1). |
 | Multi-system page trees by `PROJECT_ROOT` | Built (§4.2). |
 | Authentication, sessions, RBAC, WSS (§5) | **Not built** — auth is stubbed; every request runs as a dev supervisor. |
 | Operation modes, mode compliance, out-of-sync latch (§6.6, §8.4) | **Not built**. |
 | Audit log (§8.7, §13) | **Not built** — no `audit_log` table. |
-| Module commissioning and handshake (§9) | **Not built**. |
+| Module handshake (CARO_MQTT_Spec §7) | Built, except identity verification: every request from an MQTT-type registry module is answered. |
+| Module commissioning (§9: `commissioned_modules`, validation) | **Not built**. |
 | Registry change detection (§8.6) | **Not built** — the tag map is loaded once at startup; apply a registry and restart the HMI server. |
 | Telemetry write-ahead buffer, DATA LOSS RISK warning (§12.1) | **Not built** — an in-memory queue only. |
 | TLS on any channel (§14.3) | **Not built**. |
@@ -269,7 +271,7 @@ Each `meta` entry carries a `type` (template type) and `name` (asset_name), orde
 
 ### 6.4 Device-Side Tag Identity
 
-Embedded devices publish telemetry and receive commands using tag_id (uint32) directly. *Target:* devices learn their tag_ids during the module handshake (Section 9). *As built:* the handshake is not implemented; devices use the tag_ids from their generated definitions. The HMI layer operates exclusively with tag_id and has no knowledge of any device-internal addressing scheme.
+Embedded devices publish telemetry and receive commands using tag_id (uint32) directly. *Target:* devices learn their tag_ids during the module handshake (Section 9). *As built:* the handshake is implemented (CARO_MQTT_Spec §7): a device requests it and binds the tag_ids of the TAG_LIST the backend answers with, by module-relative tag_name; its compiled definitions carry names and types only, never tag_ids. The HMI layer operates exclusively with tag_id and has no knowledge of any device-internal addressing scheme.
 
 ### 6.5 Backend In-Memory Tag Map
 
@@ -329,7 +331,7 @@ Extension of the pending workflow described in Section 5.2:
 - On activation the backend sets `mode_revisions.activated_at` and `activated_by`, publishes all setpoint values in that revision to devices via SET_VALUES commands (one per device, each carrying only that device's tags), and updates `current_active_revision_id`.
 - Only one revision may be active at any time.
 
-> *NOTE: On backend startup, the LKV cache is NOT pre-populated from the active mode revision. The backend sends REQUEST_SNAPSHOT to all devices and builds the LKV from live device telemetry. The active mode revision is used only to display the current mode in the frontend — the device remains the source of truth for actual running values.*
+> *NOTE: On backend startup, the LKV cache is NOT pre-populated from the active mode revision. The backend requests a snapshot from each device once it has bound (CARO_MQTT_Spec §7) and builds the LKV from live device telemetry. The active mode revision is used only to display the current mode in the frontend — the device remains the source of truth for actual running values.*
 
 ### 6.7 useTagSubtree — Path-Based Subtree Query
 
@@ -406,8 +408,8 @@ Summary of MQTT channels used by the backend:
 | `caro/{module_id}/telemetry` | Module → Backend | Tag value updates. Change-only or full in normal operation; full snapshot in response to REQUEST_SNAPSHOT. | Built — **JSON only**; Protobuf (the spec's production target) is not decoded yet. |
 | `caro/{module_id}/cmd` | Backend → Module | Commands: REQUEST_SNAPSHOT, SET_VALUES, RESET, and module-specific custom command types. JSON envelope with payload object. | Built. |
 | `caro/{module_id}/cmd_ack` | Module → Backend | Command acknowledgement or rejection with reason code. | Built. |
-| `caro/{module_id}/handshake` | Backend → Module | Tag list (TAG_LIST). | Not built. |
-| `caro/{module_id}/handshake_ack` | Module → Backend | Firmware/tag-config hash confirmation (CONFIRM). | Not built. |
+| `caro/{module_id}/handshake_backend` | Backend → Module | TAG_LIST (answer to a request), REHANDSHAKE (ask a bound module to re-bind). | Built. |
+| `caro/{module_id}/handshake_module` | Module → Backend | HANDSHAKE_REQUEST (with module identity), CONFIRM (missing / unknown names). | Built; identity not verified. |
 | `caro/{module_id}/beat` | Backend → Module | Backend heartbeat to each MQTT module, every `HEARTBEAT_INTERVAL_MS` (default 1 s). | Built. |
 
 > *NOTE: Target design: telemetry runs unencrypted on the trusted local LAN (QoS0); command and handshake channels use TLS and QoS1. As built, commands use QoS1 but there is no TLS or broker authentication on any channel. The backend watchdog monitors telemetry continuity — loss of telemetry from a module writes null (bad quality) for all of that module's tags in the LKV cache.*
@@ -425,7 +427,7 @@ The backend maintains an in-memory last-known-value (LKV) cache keyed by tag_id 
 Startup sequence:
 
 - Backend loads tag registry from PostgreSQL — builds the full tag_id map with value=null for all tags.
-- Backend sends a REQUEST_SNAPSHOT command to every MQTT module via `caro/{module_id}/cmd` on each broker connect, including reconnects (see CARO_MQTT_Spec Section 5), then re-delivers each module's last accepted setpoints (CARO_MQTT_Spec Section 6.3).
+- On each broker connect, including reconnects, the backend sends REHANDSHAKE to every MQTT module. Each module answers with a HANDSHAKE_REQUEST and binds from the TAG_LIST; after its CONFIRM the backend pushes every Set from `commanded_setpoints` and sends REQUEST_SNAPSHOT (CARO_MQTT_Spec Sections 6.3 and 7).
 - Devices respond by publishing their current values via the telemetry channel.
 - LKV value becomes non-null for each tag as values arrive.
 - Frontend clients that connect during this window receive null values on tags not yet heard from — the correct and honest state.
@@ -488,7 +490,7 @@ OUT_OF_SYNC latches on the first good→bad transition and does not re-trigger f
 
 ### 8.5 Command Failure Handling
 
-*Target design; as built there is no audit_log and no status lifecycle — `CmdController` waits 1 s for the CMD_ACK, returns the per-tag results to the caller, and upserts accepted values into `pending_setpoint_values` (CARO_MQTT_Spec §6.2–§6.3).*
+*Target design; as built there is no audit_log and no status lifecycle — `CmdController` waits 1 s for the CMD_ACK, returns the per-tag results to the caller, and stores accepted values (and every value of a timed-out command) in `commanded_setpoints` for the post-CONFIRM Set push; accepted values also go to `pending_setpoint_values` (CARO_MQTT_Spec §6.2–§6.3).*
 
 Every setpoint write attempt is fully recorded in audit_log via two append-only rows sharing a command_id. The `pending_setpoint_values` table is a clean working-state table only — it contains no command lifecycle fields. Outcome tracking is the exclusive responsibility of audit_log.
 
@@ -502,7 +504,7 @@ Every setpoint write attempt is fully recorded in audit_log via two append-only 
 
 The SET_VALUES command timeout is 1 second (configurable in system_settings). On timeout the status is set to timeout and pending state clears. The expected value in the tag map is NOT updated on timeout. The telemetry loop will detect any resulting OUT_OF_SYNC condition naturally.
 
-On backend restart: in-flight commands have no DB state to clean up (pending_setpoint_values has no cmd_status column). The backend sends REQUEST_SNAPSHOT to all devices on reconnect. Any resulting telemetry that differs from the active mode revision will assert the out-of-sync latch per Section 8.4.
+On backend restart: in-flight commands have no DB state to clean up (pending_setpoint_values has no cmd_status column). Each device re-binds after the restart and is sent a REQUEST_SNAPSHOT (CARO_MQTT_Spec §7). Any resulting telemetry that differs from the active mode revision will assert the out-of-sync latch per Section 8.4.
 
 > *NOTE: timeout and rejected produce the same application behavior — pending state clears, expected value unchanged, no OUT_OF_SYNC raised. The distinction is for observability only: timeout means no response was received; rejected means the device explicitly declined.*
 
@@ -612,7 +614,7 @@ The backend watchdog monitors telemetry continuity per module. When a module sto
 
 **On timeout trip:** All tags for the module are written to `null` in the LKV (bad quality), `moduleStatus` is set to `'STALLED'`, and one null row per trendable tag is enqueued to the historian so trends show a gap. A module never heard from trips on the first tick after startup.
 
-**Auto-recovery:** The next telemetry message sets the module status from its `status` field and writes its values. On the following watchdog tick the module is removed from `timedOutModules` and `CmdController` sends it a REQUEST_SNAPSHOT (HMI module: an immediate publish) followed by a re-delivery of its pending setpoints. The `watchdogLatched` entry persists until manually cleared.
+**Auto-recovery:** The next telemetry message sets the module status from its `status` field and writes its values. On the following watchdog tick the module is removed from `timedOutModules` and `CmdController` sends it a REQUEST_SNAPSHOT (HMI module: an immediate publish), so tags that change-only telemetry never re-sends are refilled. Sets are not re-sent on recovery; a module that lost its connection re-binds and gets the post-CONFIRM Set push. The `watchdogLatched` entry persists until manually cleared.
 
 **Manual reset:** `POST /api/v1/reset` (see §8.11). A module's latch is cleared only if `lastSeen` is within `watchdogTimeoutMs` of the reset time — i.e., the module must have resumed communication before it can be cleared.
 
@@ -622,13 +624,13 @@ The `CmdController` is the single dispatch point for all outbound commands. It r
 
 | module_type | SET_VALUES (`POST /tags/write`) | Broadcast RESET (`POST /reset`) | Command (`POST /commands`) | REQUEST_SNAPSHOT |
 |---|---|---|---|---|
-| MQTT | Published to `caro/{module_id}/cmd`. ACK tracked, 1-second timeout (`TIMEOUT` per tag). Accepted values upserted to `pending_setpoint_values`. | Published; fire-and-forget. | Any `cmd_str` published as `command_type`; ACK tracked, 1-second timeout (`TIMEOUT` 504 / `COMMAND_REJECTED`). | On broker connect and on watchdog recovery; fire-and-forget. |
+| MQTT | Published to `caro/{module_id}/cmd`. ACK tracked, 1-second timeout (`TIMEOUT` per tag). Accepted values, and every value of a timed-out command, stored in `commanded_setpoints`; accepted values also upserted to `pending_setpoint_values`. | Published; fire-and-forget. | Any `cmd_str` published as `command_type`; ACK tracked, 1-second timeout (`TIMEOUT` 504 / `COMMAND_REJECTED`). | After each handshake CONFIRM and on watchdog recovery; fire-and-forget. |
 | HMI | Written directly to `HmiTagSource.setValue()`. Immediate accepted result. | Calls `HmiTagSource.reset()`. | `RESET` only → `HmiTagSource.reset()`; anything else `COMMAND_NOT_SUPPORTED` (400). | `HmiTagSource.publishNow()` on recovery. |
 | Other | Returns `MODULE_TYPE_NOT_SUPPORTED` rejection for all tags. | Ignored. | Resolves without doing anything. | Ignored. |
 
-`restorePendingSetpoints(moduleId)` re-publishes a MQTT module's `pending_setpoint_values` rows as one fire-and-forget SET_VALUES, on startup (after the broker connects) and on watchdog recovery.
+The only delivery of stored values is the post-CONFIRM Set push: `HandshakeController` calls `getModuleSetpoints(moduleId)` (every Set of the module from `commanded_setpoints`, `null` where nothing is stored) and `pushSetpoints()`, which publishes them as one SET_VALUES with its ACK tracked. There is no re-delivery on startup or on watchdog recovery.
 
-`MqttBridge` is scoped to MQTT-only modules — heartbeats and REQUEST_SNAPSHOT commands are never sent to the HMI module. The HMI module receives telemetry via `TelemetryIntake.ingest()` from `HmiTagSource` only.
+`MqttBridge` is scoped to MQTT-only modules — heartbeats, REHANDSHAKE and other MQTT commands are never sent to the HMI module. The HMI module receives telemetry via `TelemetryIntake.ingest()` from `HmiTagSource` only.
 
 **HmiTagSource.reset():** Increments the `Reset_Count` HMI tag (if present in the tag registry). The incremented value is published on the next HmiTagSource tick. `Reset_Count` is initialized to `0` at startup (unlike other HMI tags which start as `null`).
 
@@ -660,13 +662,13 @@ The backend maintains a `commissioned_modules` table in PostgreSQL — one row p
 ### 9.3 Commissioning Lifecycle
 
 - A new module instance in the Tag Registry triggers a `commissioned_modules` row with `validated = false`.
-- The physical device connects and the backend executes the handshake (see CARO_MQTT_Spec Section 7). The backend holds received firmware and tag-config hashes as pending.
-- An Administrator reviews the pending module in the HMI and confirms with a required comment. Validation sets `validated = true` and stores the pending hashes as the expected baseline.
-- On every subsequent connection the backend re-runs the handshake and compares received hashes against the stored baseline. A mismatch triggers an error condition.
+- The physical device connects and requests the handshake (see CARO_MQTT_Spec Section 7). The backend holds the identity it reports (`fw_hash`, `tag_registry_template`; `tag_registry_rev` reserved) as pending.
+- An Administrator reviews the pending module in the HMI and confirms with a required comment. Validation sets `validated = true` and stores the pending identity as the expected baseline.
+- On every subsequent request the backend compares the reported identity against the stored baseline before answering. A mismatch triggers an error condition (CARO_MQTT_Spec §7.3).
 
-> *NOTE: Full handshake protocol — topic names, message types, payload formats, hash validation, and module-relative tag_name rules — are defined in CARO_MQTT_Spec Section 7.*
+> *NOTE: Full handshake protocol — topic names, message types, payload formats, identity verification, and module-relative tag_name rules — are defined in CARO_MQTT_Spec Section 7.*
 
-> *NOTE: Not yet implemented. There is no `commissioned_modules` table and no handshake; the backend accepts telemetry from any module_id. This section is the target design.*
+> *NOTE: Commissioning is not yet implemented. The handshake itself is built (CARO_MQTT_Spec §7.5), but there is no `commissioned_modules` table: the backend binds every MQTT-type module in the registry without checking its identity, and accepts telemetry from any module_id. This section is the target design.*
 
 ---
 
@@ -840,5 +842,5 @@ See Section 8.7 for full audit log specification.
 - What is the cloud sync protocol — telemetry forwarding, authentication, rate limits?
 - What does the HMI warning UI look like and what is the controlled restart procedure?
 - What is the NTP provisioning strategy — local NTP server for device clock sync?
-- What is the correct behavior when a hash mismatch is detected between device and backend?
+- What is the correct behavior when a module's reported identity does not match its commissioned baseline?
 
