@@ -2,13 +2,14 @@
 
 **Purpose:** Implementation backlog only — features fully specified but not yet built. Design questions that are unresolved live in the relevant spec's Open Questions section. Remove items when complete.
 
-**Updated:** 2026-09-20
+**Updated:** 2026-10-10
 
 ---
 
 ## HMI
 
 - [ ] Add NULL `prev` rate monitoring per `DB_Config_Usage_And_Perf.md` §8.1 — daily sample at 1-min bound; non-zero rate signals writer-cadence drift
+- [ ] **Guard against bad module telemetry timestamps.** `TelemetryIntake` passes `message.timestamp` straight to `DbPipeline` (historian rows) and the trend-delta listener, with no check. A module that publishes before its UTC clock is synced (`timestamp` 0, or wildly off) writes rows at 1970 or in the future and puts points at that time on live trends. Before enqueueing, reject (or substitute server time for) any timestamp that is ≤ 0 or more than a configurable tolerance from server `Date.now()`. Count and rate-limit-log these per module. Size the default tolerance generously against the ICD's ±2 s sync requirement (`CARO_MQTT_Spec.md` §2.2), e.g. 60 s. LKV updates should still apply, so the live value stays current. Raised by RF_Control G9 (module clock roles, 2026-10-10).
 
 ### MQTT interface — specified, not built
 
@@ -37,7 +38,6 @@ Surfaced auditing the reference "RF Control" / "RF Phase" / "RF SpecA" screensho
 The Trend Viewer API and its test coverage are complete; these are operational monitoring items, not contract-level work.
 
 - [ ] **Pool sizing watchlist (spec §15):** Monitor `@caro/db` Timescale pool utilization during multi-operator perf evaluation. Current default `max = 10` has not surfaced as a bottleneck in empirical testing — perf-page testing at `tag_count=24` (12 concurrent requests/cell) showed shared DB resources, not pool capacity, as the latency driver. Bump toward 20–30 only if pool exhaustion is observed in real multi-operator load. One-line config change in `packages/db/timescale/pool.ts`; sizing methodology in `Docs/db/DB_Config_Usage_And_Perf.md §10.5`.
-- [ ] ~~**EXPLAIN-plan validation gate (spec §5.5)**~~ — superseded by `/dev/trends-perf` (perf test page provides client-observed latency across all CAG paths, the operationally meaningful gate). Bounded-prev chunk-pruning regression coverage now provided by the TG-1 plan-assertion test in `packages/db/__tests__/timescale/trends.test.ts` (added 2026-05-17 audit pass).
 - [ ] **Flaky integration tests under cumulative DB load (surfaced 2026-05-17 audit pass).** Two integration tests began intermittently failing with hook timeouts during the audit remediation: (1) `getWatermarkMs — direct catalog query > tag_samples_10min_cagg: returns finite ms timestamp within expected range` (10s hook exceeded by ~44s), and (2) `getTrendTile — integration: 10s CAG branch > dispatches to source="10s_cagg" for the 8h window` (10s hook timeout). Both look like cumulative-DB-load symptoms — test-DB chunk count and shared catalog overhead growing across runs, not real defects. Same family as the unbounded-scan slowness in `getTrendExtent` (optimized 2026-05-17 via `ORDER BY ts ASC/DESC LIMIT 1` — MergeAppend short-circuits at first row, ~10-100× faster than the prior full-table `MIN/MAX`). Worth a focused operational pass: audit other unbounded scans, consider per-test chunk-truncate or sandbox-isolation strategies for the integration suite.
 
 ### Cross-cutting / platform
@@ -54,6 +54,13 @@ The Trend Viewer API and its test coverage are complete; these are operational m
 
 - [ ] `EMPTY_BRANCH` validation code declared in `shared/constants.ts` but never emitted — implement or remove
 - [ ] `applied_by` hardcoded to `'dev'` — no authentication system; depends on HMI auth being built first
+
+### Tag Defs export — surface shape problems as validation warnings
+
+The Generate Tag Defs export (spec §12.1) is consumed by a generator that emits a C++ struct, but the template editor's validation does not flag names that will break it. Today they surface only as a 422 when the export is generated, or not at all. Add **warnings** (not errors — the registry itself is valid) to the template/registry validation shown in the UI, scoped to MQTT module templates:
+
+- [ ] **Leaf-and-group names.** Warn when a module-relative `tag_name` is also the parent of other names (case-insensitive) — the condition `validateTagDefs` reports as `TAG_NAME_LEAF_AND_GROUP`. Typical cause: a tag with `In_Tag_Name: false` takes its parent's name, as `Scan.Enable` does. That puts `Beam_Control` at `Scanning` and `Scanning.X`, which currently blocks the Tag Defs export for `CARO_1`, the system template that reaches `Beam_Control`.
+- [ ] **Non-C-identifier segments.** Warn when any segment of a module-relative `tag_name` is not a valid C/C++ identifier: not matching `^[A-Za-z_][A-Za-z0-9_]*$`, or a C++ reserved word. `asset_name` validation today only rejects empty names, dots and over-length names, so spaces, hyphens and a leading digit all pass. Decide whether the export should also refuse these, or leave sanitising to the generator.
 
 ---
 
