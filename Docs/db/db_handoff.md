@@ -23,6 +23,19 @@
 | `applyRegistryRevision(added, modified, retired, comment)` | Write registry diff in SERIALIZABLE transaction |
 | `getRevisions()` | All `registry_revisions` rows, DESC |
 
+**TimescaleDB (historian):**
+
+| Export | Purpose |
+|---|---|
+| `timescalePool`, `pingTimescale`, `runTimescaleMigrations` | Historian pool, health check, migrations |
+| `writeTagSamples` | Batch write to `tag_samples` (used by the HMI `TimescaleDbWriter`) |
+| `getTimescaleDatabaseSizeBytes` | `pg_database_size()` for `TimescaleSizeMonitor` |
+| `getTrendTile(tagIds, startTime, endTime, bucketCount, nowMs?)` | The single trend read entry point. Derives `bucketS` internally, dispatches on it across raw + four CAGs, applies watermark-aware fall-through, and nulls aggregate buckets whose `bucketStartMs > BigInt(nowMs ?? Date.now())`. Returns `Promise<{ tile, meta }>` — `tile` is a discriminated-union `TrendTile`. |
+| `getTrendExtent()` | Hypertable-wide `{ oldestMs: bigint\|null, newestMs: bigint\|null }` |
+| `MAX_BUCKET_S` | `14746` — canonical span-cap constant. Mirrored in `packages/trend-chart/src/level.ts` with a cross-reference comment, to avoid pulling pg-runtime into the browser bundle. |
+
+Integration test helpers at `packages/db/__tests__/helpers/trends-test-range.ts` (sandbox window 1970–1999, `resetTestRange`/`resetTestRangeExpectClean`/`writeTestSamples`/`refreshTestCagg`). Tests use `.ts` extensions; `vitest.config.js` include pattern is `*.test.{js,ts}`. Design and query detail: `Docs/hmi/trend-viewer/hmi_trend_viewer_spec.md` §4–§6 and `Docs/db/DB_Config_Usage_And_Perf.md`.
+
 > **Note:** `getActiveTags()` returns the flat tag rows that HMI needs directly. `resolveRegistry()` in `apps/tag-registry/shared/` is a Tag Registry Admin Tool concern — it builds the template/asset tree structure used for registry editing. HMI does not need it.
 
 ---
@@ -51,6 +64,14 @@ Files in `db/postgres/migrations/`. Applied in filename order. Tracked in `schem
 - `012` — add `i16` (Int 16) to `tag_types`
 - `013` — add nullable display columns `unit`, `format`, `eng_min`, `eng_max` to `tag_registry`
 - `014` — add `string`, `f32[]`, `i16[]` to `tag_types`
+
+### TimescaleDB migrations
+
+Separate container on port 5433, started via `docker-compose.timescale.yml` at the repo root (setup: `Docs/db/hmi_timescale_setup.md`). Development database: `caro_timescale`. Migrations in `db/timescale/migrations/` (`T00N_` prefix). The HMI server calls `pingTimescale()` → `runTimescaleMigrations()` at startup (soft-fail — falls back to `NullDbWriter` if unreachable).
+
+- `T001_create_tag_samples.sql` — `tag_samples` hypertable: DOUBLE PRECISION value, `compress_segmentby = tag_id`, `compress_orderby = ts DESC`, retain 14 days.
+- `T004_tighten_compression_policy.sql` — 1h chunks, `compress_after = 10 min`, `schedule_interval = 5 min`. Incompatible with existing 12h chunks — a `TRUNCATE tag_samples` wipe is required before first startup on any environment that ran under T001 settings.
+- `T006_replace_1s_cagg.sql`, `T007_create_10s_cagg.sql`, `T008_create_1min_cagg.sql`, `T009_create_10min_cagg.sql` — four CAGs: `tag_samples_1s_cagg` (1s buckets, 14d retention), `tag_samples_10s_cagg` (10s, 90d), `tag_samples_1min_cagg` (1min, 1y), `tag_samples_10min_cagg` (10min, indefinite). All materialize `last`, `null_count`, `min`, `max` from `tag_samples` (flat topology — each CAG reads raw directly). The 10min CAG uses `start_offset = 1 hour` (vs 15 min on the other three) to satisfy TimescaleDB's 2×bucket_width refresh-window rule.
 
 ---
 
