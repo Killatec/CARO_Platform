@@ -58,7 +58,7 @@ Config options set in `playwright.config.js`:
 | Express API (test) | `http://10.0.0.184:3099/api/v1` | Started by globalSetup, connects to `caro_test` |
 | Test database | `caro_test` | Cloned from `caro_dev` before every run |
 
-The E2E suite manages its own server lifecycle. `globalSetup.js` clones `caro_dev` into `caro_test` via `pg_dump`/`pg_restore`, spawns the Express test server on `:3099` and the Vite test client on `:5199`, and polls both until ready. `globalTeardown.js` kills both processes after the suite completes. All API calls in `helpers/api.js` and spec files route through `:3099` — no spec file hardcodes a port.
+The E2E suite manages its own server lifecycle. `globalSetup.js` clones the live project database into `caro_test` via `pg_dump`/`pg_restore` — the source is the ambient `POSTGRES_DATABASE`, else the root `.env`'s `POSTGRES_DATABASE` (same `findWorkspaceRoot()` as `loadEnv()`), else `caro_dev` — spawns the Express test server on `:3099` and the Vite test client on `:5199`, and polls both until ready. The test server is spawned with `PROJECT_ROOT: '*'` so the registry-apply gate doesn't reject the suite's dynamically-named roots. `globalTeardown.js` kills both processes after the suite completes. All API calls in `helpers/api.js` and spec files route through `:3099` — no spec file hardcodes a port.
 
 ### 2.3 Running the suite
 
@@ -84,7 +84,7 @@ The E2E suite is self-contained. `globalSetup.js` starts both servers automatica
 
 Prerequisites:
 - PostgreSQL running locally on port 5432
-- `%APPDATA%\postgresql\pgpass.conf` configured for passwordless `pg_dump`/`psql` access (see `Docs/platform/platform_deltas.md`)
+- `%APPDATA%\postgresql\pgpass.conf` configured for passwordless `pg_dump`/`psql` access
 - Ports 3099 and 5199 must be free — `globalSetup.js` will throw with a clear error if either is in use
 
 ---
@@ -596,58 +596,6 @@ test.skip(true, 'Server validates INVALID_REFERENCE — broken template cannot b
 
 The `INVALID_REFERENCE` error state in the registry is only reachable by manually corrupting template JSON files on disk after they have been written. Testing this state would require direct filesystem access from the test helper, which is out of scope for the browser E2E suite and is better covered by a server unit test.
 
-### 9.6 Baseline (2026-04-07)
-
-**Changes from prior baseline:**
-- E2E suite migrated to full test database isolation (`caro_test` cloned from `caro_dev`)
-- All inline `API_BASE` constants removed from spec files — all API calls route through `helpers/api.js`
-- `meta-modal.spec.js`: deleted 1 invalid test (modal overlay blocks background clicks by design)
-- `registry-diff.spec.js`: removed global summary assertions, scoped row assertions to own root via `getOwnRows()` helper
-- `save-cancel.spec.js`: fixed tests 6+7 — added module wrapper for valid `module → parameter → tag` hierarchy
-- `history.spec.js`: fixed webkit strict mode violation — exact revision number match via anchored regex
-- All app and shared package source files migrated to TypeScript (`strict: true`, zero `tsc` errors)
-- Unit test imports updated from `.js` to `.ts`/`.tsx`
-- `registryService.test.js` rewritten — mock targets `getActiveTags`/`getRevisions`/`getRevisionTags` directly (old mock targeted `query()` which `registryService` no longer calls after `@caro/db` TypeScript migration)
-
-**Vitest unit tests:**
-
-| Package | Tests | Passed |
-|---|---|---|
-| shared/ pure functions | 125 | 125 |
-| server/ all tests | 82 | 82 |
-| client/ all tests | 112 | 112 |
-| packages/db/ | 11 | 11 |
-| **Total** | **330** | **330** |
-
-**Playwright E2E:**
-
-| Browsers | Tests per browser | Total runs | Passed | Failed |
-|---|---|---|---|---|
-| Chromium + Firefox + WebKit | 69 | 207 | 207 | 0 |
-
-**Combined total (Phase 4):**
-
-| Metric | Value |
-|---|---|
-| Total (unit + E2E) | 537 |
-| Passing | 537 |
-| Skipped | 0 |
-| Failed | 0 |
-| Baseline date | 2026-04-07 |
-
-### 9.7 Baseline (2026-04-11)
-
-**Changes from prior baseline:**
-- New E2E spec: `module-type.spec.js` (6 tests) — covers Module_Type validation, dropdown rendering, save round-trip, registry columns, AddFieldModal
-- New unit tests: `validateTemplate.test.js` +8 module-specific tests (34→42 total), `resolveRegistry.test.js` +7 module/module_type extraction tests (26→33 total), `diffRegistry.test.js` +11 module/module_type diff tests (33→44 total), `batchSave.test.js` +6 ModuleType validation tests (15→21 total)
-- All E2E module template creation calls updated with `Module_Type` field — fixes 25 failures caused by new validation rule
-- `createTagTemplate` helper fixed: `data_type`/`is_setpoint`/`Trends` now correctly placed inside `fields` as `{field_type, default}` objects
-- `trends.spec.js` column indexes updated from `trends(4)` to `trends(6)` after `module`/`module_type` columns inserted
-- `batchSave.test.js` mock updated: `getModuleTypes` added to `@caro/db` mock alongside existing `getTagTypes`
-- Total test counts: 75 E2E (Chromium), 42 validateTemplate, 33 resolveRegistry, 44 diffRegistry, 21 batchSave
-
----
-
 ## 7. Selector Strategy
 
 ### 7.1 data-testid locators (preferred)
@@ -768,166 +716,7 @@ Fetches all registry revisions ordered by `registry_rev DESC`. Returns the revis
 
 ## 9. Results Baseline
 
-### 9.1 E2E Suite — Phase 1 Baseline (2026-03-19)
-
-| Metric | Value |
-|---|---|
-| Total runs (40 definitions × 3 browsers) | 120 |
-| Passed | 114 |
-| Skipped (intentional) | 6 |
-| Failed | 0 |
-| Runtime | ~3.7 minutes |
-| Browsers | Chromium, Firefox, WebKit |
-
-Skipped breakdown:
-- `save-cancel.spec.js` test 4 × 3 browsers — see section 6.1
-- `registry.spec.js` test 5 × 3 browsers — see section 6.2
-
-### 9.2 Unit Test Suite — Phase 1 Baseline (2026-03-19)
-
-| Package | Tests | Passed | Failed |
-|---|---|---|---|
-| shared/ pure functions | 112 | 112 | 0 |
-| server/ templateService | 42 | 42 | 0 |
-| client/ useTemplateGraphStore | 47 | 47 | 0 |
-| **Total** | **201** | **201** | **0** |
-
-### 9.3 Combined Phase 1 Baseline
-
-| Metric | Value |
-|---|---|
-| Total tests (unit + E2E runs) | 321 |
-| Passing | 315 |
-| Skipped (intentional, E2E only) | 6 |
-| Failed | 0 |
-| Baseline date | 2026-03-19 |
-
-### 9.4 Baseline (2026-03-23)
-
-**Vitest unit tests:**
-
-| Package | Tests | Passed |
-|---|---|---|
-| shared/ pure functions | 112 | 112 |
-| server/ templateService | 42 | 42 |
-| client/ useTemplateGraphStore | 47 | 47 |
-| client/ diffRegistry | 34 | 34 |
-| client/ formatDate | 22 | 22 |
-| server/ registryService | 18 | 18 |
-| server/ registry routes | 19 | 19 |
-| **Total** | **294** | **294** |
-
-**Playwright E2E:**
-
-| Spec files | Runs | Passed | Skipped |
-|---|---|---|---|
-| Phase 1 (7 files, 40 tests × 3 browsers) | 120 | 114 | 6 |
-| registry-diff.spec.js (6 tests × 3 browsers) | 18 | 18 | 0 |
-| registry-apply.spec.js (7 tests × 3 browsers) | 21 | 21 | 0 |
-| history.spec.js (5 tests × 3 browsers) | 15 | 15 | 0 |
-| meta-modal.spec.js (4 tests × 3 browsers) | 12 | 12 | 0 |
-| **New E2E runs** | **66** | **66** | **0** |
-| **Combined E2E** | **186** | **180** | **6** |
-
-**Combined total:**
-
-| Metric | Value |
-|---|---|
-| Total (unit tests + E2E runs) | 480 |
-| Passing | 474 |
-| Skipped (intentional, E2E only) | 6 |
-| Failed | 0 |
-| Baseline date | 2026-03-23 |
-
-### 9.5 Baseline (2026-04-02)
-
-**Vitest unit tests:**
-
-| Package | Tests | Passed |
-|---|---|---|
-| shared/ pure functions | 125 | 125 |
-| server/ templateService | 42 | 42 |
-| server/ registryService | 19 | 19 |
-| server/ registry routes | 17 | 17 |
-| server/ config route | 11 | 11 |
-| client/ useTemplateGraphStore | 47 | 47 |
-| client/ diffRegistry | 34 | 34 |
-| client/ formatDate | 22 | 22 |
-| client/ (other) | 9 | 9 |
-| db/ | 6 | 6 |
-| **Total** | **332** | **332** |
-
-**Playwright E2E:**
-
-| Spec files | Runs | Passed | Skipped |
-|---|---|---|---|
-| Phase 1 (7 files × 3 browsers) | 120 | 114 | 6 |
-| Phase 2 (4 files × 3 browsers) | 66 | 66 | 0 |
-| Phase 3 (2 files × 3 browsers) | 21 | 21 | 0 |
-| **Combined E2E** | **207** | **201** | **6** |
-
-**Combined total:**
-
-| Metric | Value |
-|---|---|
-| Total (unit tests + E2E runs) | 533 |
-| Passing | 527 |
-| Skipped (intentional, E2E only) | 6 |
-| Failed | 0 |
-| Baseline date | 2026-04-02 |
-
-### 9.6 Baseline (2026-09-19) — multi-project (`PROJECT_ROOT`) work
-
-Per-package/per-file breakdown above (§9.1–9.5) predates a lot of unrelated growth in `shared/` and `client/` and is not reconciled here — see `apps/tag-registry/CLAUDE.md` for the current authoritative baseline command and total. This entry records only what this session's changes moved:
-
-- `server/__tests__/registry.test.js`: 17 → 22 (+5: `PROJECT_ROOT` gate — unset, empty, mismatch, exact match, `*` — plus env fixes on the pre-existing success/not-found tests so they keep passing under the new gate)
-- `server/__tests__/config.test.js`: +7 (`databaseName` fallback/configured, `projectRoot` unset/empty/configured/`*`, `POSTGRES_PASSWORD` absence)
-- `server/` total: 98 → 110
-- `shared/`, `client/`, E2E (Chromium): unchanged at 210 / 135 / 86
-
-| Metric | Value |
-|---|---|
-| Unit total (shared 210 + client 135 + server 110) | 455 |
-| E2E (Chromium) | 86 |
-| **Combined total** | **541** |
-| Failed | 0 |
-
-### 9.7 Baseline (2026-09-26) — Generate Tag Defs export
-
-Starting point was the `apps/tag-registry/CLAUDE.md` baseline of 490 unit (shared 210, client 170, server 110) + 90 E2E = 580. This entry records what the Tag Defs export (functional spec §12.1, API spec §7) moved:
-
-- `shared/__tests__/tagDefs.test.ts`: new, 14 (`listMqttModuleTemplates` MQTT-only/HMI-excluded/code-unit sort/record input; `buildTagDefs` relative paths, exactly three keys, independence from instancing; `buildTagDefsFile` banner, hash reproducible from the documented canonical form, stability, changes on data_type/direction/rename, unchanged on unit/format/eng_max edits)
-- `shared/__tests__/hashTemplate.test.js`: +3 (`hashTagDefs` — 64-char hex, key-order independence, entry-order sensitivity)
-- `server/__tests__/tagDefs.test.js`: new, 8 (missing `root` → 400, 404 passthrough, zip content-type + timestamped attachment name, one flat file per MQTT template type with HMI excluded, file shape, `NO_MQTT_MODULES`, graph `VALIDATION_ERROR`, `tagDefsZipName` padding)
-- `client/src/api/tagDefs.test.ts`: new, 3 (`parseAttachmentFileName`)
-- `e2e/tests/tag-defs.spec.js`: new, 2 (download filename + ZIP magic for an MQTT system; error banner for an HMI-only system)
-
-| Metric | Value |
-|---|---|
-| Unit total (shared 227 + client 173 + server 118) | 518 |
-| E2E (Chromium) | 92 |
-| **Combined total** | **610** |
-| Failed | 0 |
-
-### 9.8 Baseline (2026-10-01) — Tag Defs `tag_path` switched to module-relative `tag_name`
-
-- `shared/__tests__/tagDefs.test.ts`: 14 → 19. The fixture gained `In_Tag_Name` and a `Pwr_Mon`-style grouping level. New tests: grouping levels skipped; the module level never included, even when its template sets `In_Tag_Name: true`; `validateTagDefs` clean / `TAG_NAME_EMPTY` / `DUPLICATE_TAG_NAME`.
-- `server/__tests__/tagDefs.test.js`: 8 → 9. The fixture gained `In_Tag_Name`. New: 422 `VALIDATION_ERROR` with `DUPLICATE_TAG_NAME` details when names collide below the module.
-- client and E2E: unchanged.
-
-| Metric | Value |
-|---|---|
-| Unit total (shared 232 + client 173 + server 119) | 524 |
-| E2E (Chromium) | 92 |
-| **Combined total** | **616** |
-| Failed | 0 |
-
-### 9.9 Baseline (2026-10-01) — `i32` data type; Tag Defs nested by segment, `direction` dropped
-
-- `shared/__tests__/validateResolvedTags.test.ts`: +2 (`i32` accepts `trends: true`; `i32` accepts `is_setpoint: true`).
-- `shared/__tests__/tagDefs.test.ts`: 19 → 26. `buildTagDefs` now asserts the nested tree and that leaves carry exactly `data_type`. New tests: code-unit key insertion order; a `__proto__` segment is placed as an ordinary key; `buildTagDefs` throws on leaf-and-group; `validateTagDefs` `TAG_NAME_LEAF_AND_GROUP` (exact and case-insensitive), no false positive for a shared prefix without a dot (`Mag` beside `Mag_1.*`), and `TAG_NAME_RESERVED_SEGMENT`. The hash-reproducibility test now spells out the canonical nested JSON. The "hash changes when direction changes" test is inverted: direction is no longer exported, so the hash must not change.
-- `server/__tests__/tagDefs.test.js`: 9 → 10. The file-shape test expects the nested tree. New: 422 `VALIDATION_ERROR` with `TAG_NAME_LEAF_AND_GROUP` details.
-- client and E2E: unchanged (E2E `tag-defs.spec.js` asserts only the filename and ZIP magic). E2E was not re-run.
+Current baseline (2026-10-01, after the `i32` data type and nested Tag Defs work):
 
 | Metric | Value |
 |---|---|
@@ -935,6 +724,8 @@ Starting point was the `apps/tag-registry/CLAUDE.md` baseline of 490 unit (share
 | E2E (Chromium) | 92 |
 | **Combined total** | **626** |
 | Failed | 0 |
+
+Firefox and WebKit are not run on this machine (browsers not installed); Chromium is the reliable baseline. If a run produces a different total, investigate before reporting done. `apps/tag-registry/CLAUDE.md` carries the same baseline and the commands. Earlier baselines and per-change test-count notes are in git history.
 
 ---
 

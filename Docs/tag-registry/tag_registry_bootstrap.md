@@ -438,17 +438,7 @@ All seed templates live directly in `templates/` (flat — no subdirectories).
 
 ---
 
-## 14. TypeScript Migration
-
-**Date:** 2026-04-06 — 2026-04-07. All three layers are TypeScript (`strict: true`, zero `tsc` errors).
-
-- **Server:** 7 source files renamed `.js` → `.ts`; `tsconfig.json` added; `cors.d.ts` shim added; `dev` script uses `tsx` via nodemon; all 8 `__tests__/*.test.js` imports updated to `.ts`; `registryService.test.js` mock rewritten to target `getActiveTags`/`getRevisions`/`getRevisionTags` directly (old mock targeted `query()` which `registryService` no longer calls after `@caro/db` migration); **82 unit tests passing**
-- **Client:** 35 source files renamed `.js`/`.jsx` → `.ts`/`.tsx`; `tsconfig.json` added; `vite.config.js` → `vite.config.ts`; all stores, hooks, API calls, and components fully typed using `ApiResponse<T>` from `@caro/ui`; all 7 `__tests__/*.test.js` mock paths updated; `vitest.config.js` `include` extended to `['__tests__/**/*.test.js', 'src/**/*.test.ts']` to support co-located TypeScript tests; **145 unit tests passing**
-- **Shared:** 10 source files renamed `.js` → `.ts`; `types.ts` added as centralized interface file; declaration shims (`index.d.ts`, `utils.d.ts`) deleted — replaced by compiled `dist/`; `resolve-js-to-ts` Vitest plugin added to server `vitest.config.js` — Vite does not follow NodeNext `.js`→`.ts` fallback, plugin redirects relative `.js` imports to `.ts` source when file exists; **125 unit tests passing**
-
----
-
-## 15. E2E Tests
+## 14. E2E Tests
 
 **Infrastructure (self-contained — no manual server startup required)**
 
