@@ -27,7 +27,9 @@ Prerequisites: PostgreSQL running with tag registry populated, Mosquitto on 1883
 - **Module commands** (`POST /api/v1/commands`), **multi-system UI selection** (`PROJECT_ROOT` → page tree, scoped storage) and the **Narya1 RF1 page:** see the Command Publisher, Shell, HMI Definitions and Narya1 rows below.
 - **Not built:** auth, most HMI tables, remaining CRUD endpoints — see Phase Status and `Docs/platform/platform_todo.md`.
 
-**Test baseline (2026-09-22):** 801 `@caro/trend-chart`, 80 `@caro/hmi-context`, 156 `@caro/db`, 286 server, 45 client.
+**Test baseline (verified 2026-10-17, except `@caro/db`):** 801 `@caro/trend-chart`, 80 `@caro/hmi-context`, 61 `@caro/widgets` (**1 failing**), 286 server (+22 skipped), 45 client; `@caro/db` 156 as of 2026-09-22 (needs a running historian, not re-run).
+
+Known failing test: `packages/widgets/src/__tests__/SpectrumChart.test.tsx` › "resets both axes to full range on double-click" expects the Y reset to `{ min: 0, max: 2100 }`, but `SpectrumChart`'s default `yMin` is `-1000`, so the reset gives `{ min: -1000, max: 2100 }`. Code and test disagree; nothing else in the suite fails.
 
 ## Server Architecture
 

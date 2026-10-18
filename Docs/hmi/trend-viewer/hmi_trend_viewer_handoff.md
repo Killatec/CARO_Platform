@@ -96,6 +96,14 @@ packages/trend-chart/
                                   # sticky gestureBucketSMs ONLY while lastIntent='zoom';
                                   # exports computeDragZoomViewport (pure)
 
+    # ── Session persistence ───────────────────────────────────────────────────
+    sessionPersistence.ts         # TrendViewerSessionV1 type; serialiseSession / parseSession;
+                                  # loadSession / saveSession / clearSession(scope, persistKey)
+                                  # — localStorage key caro.<scope>.trend-viewer.session.<persistKey>
+    useSessionPersistence.ts      # hook: restore on mount, schedule saves; used by
+                                  # TrendChartContainer when persistKey is set
+    css.d.ts                      # ambient *.css module declaration (uPlot CSS import)
+
     # ── Components ────────────────────────────────────────────────────────────
     TrendChart.tsx                # uPlot canvas wrapper; manages rebuild lifecycle,
                                   # X-scale preservation across rebuilds, per-trace Y-scale
@@ -190,6 +198,13 @@ packages/trend-chart/
     render/formatters.test.ts     # formatBucketS, formatValue, formatSpanMs
     render/uplotConfig.test.ts
     render/yScales.test.ts        # Y-scale defaults
+    render/bandsFromTrendData.test.ts
+    TagPickerModal.test.tsx       # picker staging, search, 16-tag cap, OK commit
+    gatedFetchTile.test.ts        # CLIENT_* sentinel gating
+    runTileFetch.test.ts          # unified fetch pipeline
+    sessionPersistence.test.ts    # V1 round-trips and schema rejection; load/save/clear per scope; storage errors
+    useZoomState.test.ts
+    testUtils.ts                  # shared assertion helpers (e.g. spy call order)
 ```
 
 ---
