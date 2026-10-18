@@ -60,7 +60,7 @@ The Trend Viewer API and its test coverage are complete; these are operational m
 ## MQTT Simulator
 
 - [ ] RESET command — `CMD_ACK` is published but tag values are not reset to defaults
-- [ ] REST override feature — `overridden: boolean` field exists in module status shape but the override endpoint is not built
+- [ ] REST override feature — pin a tag's simulated value from the REST API. Not started: there is no endpoint and no `overridden` field in the simulator's tag or module status shapes.
 
 ---
 

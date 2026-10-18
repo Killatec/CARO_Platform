@@ -22,7 +22,7 @@ Read this only if the session requires it:
 
 `cd apps/mqtt-simulator/server && npm test`
 
-Baseline: 6 tests, 0 failures. Covers `simGenerators.ts`: `initBoolValue`, `advanceBoolValue`, `advanceF32Value` — injectable RNG for deterministic phase tests.
+Baseline: 8 tests, 0 failures (verified 2026-10-17). Covers `simGenerators.ts`: `initBoolValue`, `advanceBoolValue`, boolean phase and randomization behaviour (injectable RNG), and `advanceIntValue` (integer sine values, range clamping).
 
 ## Ports
 

@@ -1,5 +1,5 @@
 # MQTT Simulator — Bootstrap
-**Updated:** 2026-10-17
+**Updated:** 2026-10-17 (reconciled with the code)
 Companion docs: `CARO_MQTT_Spec.md` | `CARO_DB_Spec.md`
 
 ---
@@ -8,30 +8,31 @@ Companion docs: `CARO_MQTT_Spec.md` | `CARO_DB_Spec.md`
 
 ```
 apps/mqtt-simulator/
-  Docs/
-  server/
-    src/
-      index.js                   entry point, env validation, auto-start, app.listen
-      app.js                     Express factory, CORS, routes mount, error handler
-      routes/
-        simulator.js             all REST endpoints
-      services/
-        mqttClient.js            connect(), disconnect(), getClient()
-        simulatorService.js      start(), stop(), getStatus(), getLogs(), tick loop, command handler
-        registry.js              loadTagRegistry() — calls @caro/db, maps rows to SimTag
-        protobuf.js              loadProto(), encodeProto()
-      __tests__/
+  CLAUDE.md, README.md
+  server/                        the real server package (mqtt-simulator-server); no src/ subfolder
+    index.ts                     entry: loadEnv, DB ping + migrations, app.listen, auto-start
+    app.ts                       Express factory, CORS, routes mount, error handler
+    routes/simulator.ts          all REST endpoints
+    services/
+      mqttClient.ts              connect(), disconnect(), getClient()
+      simulatorService.ts        start(), stop(), getStatus(), getLogs(), tick loop, command handler, module toggles
+      simGenerators.ts           pure value generators (tested)
+      registry.ts                loadTagRegistry() — calls @caro/db, filters MQTT, maps rows to SimTag
+      protobuf.ts                loadProto(), encodeProto()
+    __tests__/simGenerators.test.ts
+    types/cors.d.ts
+    .env / .env.example
   client/
+    vite.config.ts               port 5174, proxy /api → :3002
     src/
-      components/SimulatorPanel.jsx
-      stores/useSimulatorStore.js
-      api/simulator.js
-    vite.config.js               port 5174, proxy /api → :3002
-    src/index.css                @import "tailwindcss"; @source "../../../../packages/ui/src"
-  e2e/
-    tests/
-  .env.example
-  README.md
+      App.tsx, main.tsx
+      components/SimulatorPanel.tsx
+      stores/useSimulatorStore.ts
+      api/simulator.ts
+      index.css                  @import "tailwindcss"; @source "../../../../packages/ui/src"
+  package.json                   stale shell from the pre-TypeScript layout: its scripts point at src/index.js, which does not exist. Run the server from server/.
+  test_actual_encoding.js, test_proto.js   loose JavaScript scratch scripts at the app root (not part of the build or tests)
+  e2e/, public/, shared/, src/   empty except for .gitkeep
 ```
 
 ---
@@ -65,33 +66,38 @@ The tick interval and sine period are **not** env-configurable (earlier versions
 
 ## 3. Startup Sequence
 
-1. Validate `POSTGRES_PASSWORD`. Exit with clear error if missing.
-2. Connect to PostgreSQL via `@caro/db`. Call `getActiveTags()`.
-3. Filter rows to `module_type = 'MQTT'` only. If zero MQTT tags returned: log warning and exit.
-4. Build in-memory tag map: `Map<tag_id, SimTag>`. Derive `module_id` from `tag_registry.module` column (fallback `'unknown'` if null). Coerce `tag_id` to `Number`.
-5. Group tags by `module_id`: `Map<module_id, SimTag[]>`.
-6. Initialize simulated values — see Section 5.
-7. Load Protobuf schema via `protobuf.js`.
-8. Connect MQTT broker. Subscribe to `caro/+/cmd` with QoS 1.
-9. Start telemetry loop — see Section 6.
-10. **Auto-start:** `index.js` calls `start()` as floating promise inside `app.listen` callback. Startup errors caught, logged to buffer at ERROR level. Process does not exit — server remains up for frontend retry.
+`index.ts`:
+1. `loadEnv()` (two layers).
+2. `ping()` PostgreSQL — failure exits the process. (A missing `POSTGRES_PASSWORD` only produces a warning from `@caro/db`; the connection then fails here.)
+3. `runMigrations()` — failure exits the process.
+4. `app.listen(PORT)` (default 3002), then **auto-start**: `start(100)` as a floating promise. An error is written to the log buffer as `[SIM] Auto-start failed: <message>`; the process keeps running so the frontend can retry via `POST /start`.
+
+`simulatorService.start(intervalMs = 1000)`:
+1. Return with a warning if already running.
+2. `loadProto()` — failure is logged and rethrown.
+3. `loadTagRegistry()`: `getActiveTags()`, keep rows with `module_type = 'MQTT'` whose `module` is not in `SIMULATOR_EXCLUDE_MODULES`; `module_id = row.module ?? 'unknown'`. **Zero rows throws** `tag_registry returned no active MQTT tags — apply a registry revision first.` (logged as an auto-start failure — the process does not exit).
+4. Mark every module active and initialise simulated values (Section 5).
+5. `connect()` to the broker (`clean: true`, reconnect every 2 s). On connect: subscribe `caro/+/cmd` (QoS 1), attach the command handler, and start the tick timer at `intervalMs`.
 
 ---
 
 ## 4. SimTag Shape
 
-```js
-{
-  tag_id:      number,    // coerced from PostgreSQL string
-  tag_path:    string,
-  data_type:   string,    // 'f32' | 'bool'
-  is_setpoint: boolean,
-  module_id:   string,    // from meta array
-  simValue:    any,       // monitor: auto-simulated; setpoint: from SET_VALUES or type default
-  simT:        number,    // time accumulator for sine (monitor f32 only)
-  overridden:  boolean,   // true if pinned via REST override (not yet implemented)
+```ts
+// services/registry.ts
+interface SimTag {
+  tag_id:      number;   // getActiveTags() already returns it as a number
+  tag_path:    string;
+  data_type:   string;   // any tag_types value: f32, bool, i16, i32, string, f32[], i16[]
+  is_setpoint: boolean;
+  module_id:   string;   // row.module ?? 'unknown'
 }
+
+// services/simulatorService.ts — per-tag simulation state, Map<tag_id, …>
+{ simValue: number | boolean; simT: number; lastPublishedValue?: number | boolean; previousValue?: number | boolean }
 ```
+
+There is no `overridden` field; the REST override feature it was meant for is not built.
 
 `module_id` derivation:
 ```ts
@@ -278,8 +284,8 @@ Response envelope: `{ ok, data }` / `{ ok, error: { code, message } }`.
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/start` | Start simulator. Body: `{ intervalMs? }`. Returns 202 — MQTT connect async. 409 if already running. |
-| `POST` | `/stop` | Stop simulator. 409 if not running. |
+| `POST` | `/start` | Start simulator. Body: `{ intervalMs? }` (integer ≥ 50, default 1000; else 400 `VALIDATION_ERROR`). Returns 202 with the status — MQTT connect is async, so `running` may still be `false`. 409 `SIMULATOR_ALREADY_RUNNING`. A registry with no MQTT tags fails with 500. |
+| `POST` | `/stop` | Stop simulator; clears all per-module modes. 409 `SIMULATOR_NOT_RUNNING`. |
 | `GET` | `/status` | Returns `{ running, intervalMs, modules, uptime_s, tickCount }`. |
 | `GET` | `/logs` | Returns `[{ ts, level, msg }]` — rolling buffer, oldest-first. |
 | `POST` | `/telemetry/stop/:module_id` | Stop telemetry for one module. 404/409. |
@@ -294,6 +300,10 @@ Response envelope: `{ ok, data }` / `{ ok, error: { code, message } }`.
 | `POST` | `/accept-sets/:module_id/deactivate` | Disable SET_VALUES acceptance — rejects all tags with `MODULE_FAULT`. CMD_ACK still published. 404/409. |
 | `POST` | `/skip-ack/:module_id/activate` | Enable silent command drop — no parsing, no CMD_ACK published. 404/409. |
 | `POST` | `/skip-ack/:module_id/deactivate` | Disable silent command drop — CMD_ACK published normally. 404/409. |
+| `POST` | `/fault/enable/:module_id` | Publish `status: "FAULT"` in this module's telemetry. 404/409. |
+| `POST` | `/fault/disable/:module_id` | Back to `status: "ONLINE"`. 404/409. |
+
+Per-module routes return 409 `SIMULATOR_NOT_RUNNING` when the simulator is stopped and 404 `MODULE_NOT_FOUND` for an unknown module; `/inject` also returns 400 `NO_SETPOINT_TAGS`. Success bodies are `{ ok: true }`. Unlike the platform convention, these routes call `res.status(...).json(...)` directly for their own errors; only unexpected errors go through `@caro/server`'s `errorHandler`.
 
 ### `/status` Response Shape
 
@@ -312,7 +322,8 @@ Response envelope: `{ ok, data }` / `{ ok, error: { code, message } }`.
         delta:      false,
         protobuf:   false,
         acceptSets: true,
-        skipAck:    false
+        skipAck:    false,
+        fault:      false
       }
     ],
     uptime_s:  142,
@@ -325,19 +336,26 @@ Response envelope: `{ ok, data }` / `{ ok, error: { code, message } }`.
 
 ## 10. Log Buffer
 
-`log(level, msg)` helper in `simulatorService.js` appends to in-memory `logBuffer` array (max `LOG_BUFFER_SIZE` entries). All internal log calls use this helper. `GET /logs` returns buffer oldest-first.
+`log(level, msg)` in `simulatorService.ts` appends `{ ts, level, msg }` to the in-memory `logBuffer` (max 200 entries — `LOG_BUFFER_SIZE` is not read from the environment, see the handoff Gotchas) and also writes to the console. `GET /logs` returns the buffer oldest-first. Startup lines from `index.ts` (DB connect, env, listen URL) go to the console only, except the auto-start failure.
 
-| Event | Level | Format |
+Messages the simulator logs (from `simulatorService.ts`):
+
+| Event | Level | Message |
 |---|---|---|
-| Startup complete | INFO | `[SIM] Started: {N} modules, {M} tags, broker: {url}, tick: {ms}ms` |
-| SET_VALUES received | INFO | `[SIM] SET_VALUES from {module_id}: {N} tags` |
-| CMD_ACK published | INFO | `[SIM] CMD_ACK → {module_id}: {N} accepted, {R} rejected` |
-| Unknown module_id | WARN | `[SIM] Command for unknown module_id: {id} — ignored` |
-| MQTT disconnect | WARN | `[SIM] MQTT disconnected — reconnecting...` |
-| DB error on startup | ERROR | `[SIM] Failed to load tag registry: {error}` |
-| Graceful shutdown | INFO | `[SIM] Shutting down...` |
-| Telemetry stopped | INFO | `[SIM] Telemetry stopped: {module_id}` |
-| Encoding changed | INFO | `[SIM] Telemetry encoding: {protobuf\|json}` |
+| Start called while running | WARN | `[SIM] Already running.` |
+| Protobuf schema load failed | ERROR | `[SIM] Failed to load Protobuf schema: <err>` |
+| Registry load | INFO | `[SIM] Loading tag registry from database…` / `[SIM] Loaded <N> tags across modules: <ids>` |
+| Subscribed | INFO / ERROR | `[SIM] Subscribed to caro/+/cmd` / `[SIM] Failed to subscribe to cmd topics: <err>` |
+| Started / stopped | INFO | `[SIM] Started — interval: <ms>ms` / `[SIM] Stopped.` |
+| Tick while broker down | WARN | `[SIM] MQTT not connected — skipping tick` |
+| Protobuf encode failed | ERROR | `[SIM] Proto encode failed for <module>: <err>` |
+| Command dropped | INFO | `[SIM] Module <id> skip-ack enabled — dropping command (no ACK)` / `[SIM] Module <id> not transmitting — dropping command (no ACK)` |
+| Bad command | WARN | `[SIM] Unparseable command on <topic>` / `[SIM] Invalid command envelope on <topic>` / `[SIM] Duplicate command_id <id> — dropping` |
+| Command received | INFO | `[SIM] CMD <command_type> ← <module> (id: <command_id>)` |
+| SET_VALUES | INFO / WARN | `[SIM] SET_VALUES: tag_id <id> (<path>) → <value>`; rejections: `…acceptSets disabled…`, `…unknown tag_id…`, `…is not a setpoint — rejected` |
+| RESET | INFO | `[SIM] RESET for module <id> — count: <n>` |
+| Snapshot / Change Sets | INFO | `[SIM] Snapshot published → <id>` / `[SIM] Change Sets → <id>: <n> setpoint tags randomized` |
+| Auto-start failure (from `index.ts`) | ERROR | `[SIM] Auto-start failed: <err>` |
 
 ---
 
@@ -345,11 +363,11 @@ Response envelope: `{ ok, data }` / `{ ok, error: { code, message } }`.
 
 React+Vite at port 5174. Mirrors `apps/tag-registry/client/` conventions.
 
-**`useSimulatorStore`** state: `{ running, modules, error }`. Actions: `setStatus`, `setError`.
+**`useSimulatorStore`** state: `{ running, modules, intervalMs, uptime_s, tickCount, error }`. Actions: `setStatus` (spreads the status and clears `error`), `setError`.
 
 **`SimulatorPanel`** layout:
 - Header: title, RUNNING/STOPPED badge, Start/Stop button.
-- Modules table (`max-w-5xl`): Module | Tags | Bytes | Transmitting | Delta | Protobuf | Accept Sets | Skip ACK | Actions. All checkbox columns (Transmitting, Delta, Protobuf, Accept Sets, Skip ACK) are centered. Each checkbox calls the corresponding REST endpoint then re-fetches status. Actions: "Rqst Snapshot", "Change Sets" buttons per row.
+- Modules table (`max-w-5xl`): Module | Tags | Bytes | Transmitting | Delta | Protobuf | Accept Sets | Skip ACK | Fault | Actions. All checkbox columns (Transmitting, Delta, Protobuf, Accept Sets, Skip ACK, Fault) are centered. Each checkbox calls the corresponding REST endpoint then re-fetches status. Actions: "Rqst Snapshot", "Change Sets" buttons per row.
 - Logs terminal (`max-w-5xl`, `h-64`, dark bg): auto-scrolls to bottom unless user has scrolled up. Entries: `{ ts, level, msg }` with level-coloured brackets.
 
 Poll intervals: status 200ms; logs 2000ms.
@@ -360,26 +378,20 @@ Poll intervals: status 200ms; logs 2000ms.
 
 ## 12. `package.json`
 
+The server package is `apps/mqtt-simulator/server/package.json` (`mqtt-simulator-server`):
+
 ```json
 {
-  "name": "mqtt-simulator",
-  "version": "1.0.0",
-  "type": "module",
   "scripts": {
-    "start": "node src/index.js",
-    "dev":   "nodemon --ext js --watch src src/index.js"
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev":   "nodemon --ext ts,json --watch . --exec \"npx tsx index.ts\"",
+    "test":  "vitest run"
   },
-  "dependencies": {
-    "@caro/db":     "*",
-    "@caro/server": "*",
-    "express":      "^4.18.0",
-    "mqtt":         "^5.0.0",
-    "protobufjs":   "^7.0.0"
-  },
-  "devDependencies": {
-    "nodemon": "^3.0.0"
-  }
+  "dependencies": { "@caro/db": "*", "@caro/server": "*", "cors": "^2.8.5", "dotenv": "^16.0.0", "express": "^4.18.0", "mqtt": "^5.0.0" }
 }
 ```
+
+`protobufjs` is not a server dependency; it resolves from the monorepo root `node_modules` (see the handoff Key Decisions). The `apps/mqtt-simulator/package.json` at the app root (`@caro/mqtt-simulator`) is a leftover: its `start`/`dev` scripts reference `src/index.js`, which does not exist.
 
 `asyncWrap` and `errorHandler` are imported from `@caro/server` — no local `middleware/` directory.
