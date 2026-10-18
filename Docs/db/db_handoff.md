@@ -116,26 +116,6 @@ Tests: `cd packages/db && npm test` — 156 passing (2026-09-22). Includes `quer
 
 ---
 
-## TypeScript Migration (history)
-
-**Date:** 2026-04-05
-
-All source files migrated to TypeScript (`strict: true`, zero `tsc` errors). Build output: `packages/db/dist/`.
-
-New types exported:
-- `DbPool`, `MigrationStatus`, `MigrationResult` — pool and migration internals
-- `ActiveTag`, `RevisionTag`, `NewTagInput`, `ExistingTagInput`, `ApplyResult`, `RevisionRow` — registry query return types
-
-Key changes:
-- `withTransaction<T>` is now generic — callers get typed return values
-- `applyRegistryRevision` refactored to use generic return directly (strict mode eliminates non-null assertion)
-- Migrations directory path fixed: increased from 2 to 3 `../` hops to correctly resolve from `dist/` instead of `src/` — path now traverses `dist/` → `packages/db/` → `packages/` → repo root → `db/postgres/migrations/`
-- `path` default import replaced with named imports (`dirname`, `resolve`); explicit `__filename` via `fileURLToPath(import.meta.url)` added
-- Test file imports updated: `../query.js` → `../src/query.ts`, `../migrations.js` → `../src/migrations.ts`
-- 11 unit tests passing (query.test.js ×5, migrations.test.js ×6)
-
----
-
 ## Key Documents
 
 | Document | Path |

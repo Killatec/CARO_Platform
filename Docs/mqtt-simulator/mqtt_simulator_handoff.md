@@ -1,5 +1,5 @@
 # MQTT Simulator — Handoff
-**Updated:** 2026-04-15 | **Root:** `apps/mqtt-simulator/` | **API:** 3002 | **UI:** 5174
+**Updated:** 2026-10-17 | **Root:** `apps/mqtt-simulator/` | **API:** 3002 | **UI:** 5174
 ⚠ Dev/test tool only — never deploy to production.
 
 ---
@@ -21,7 +21,7 @@
 
 ## What Is Not Built
 
-- No automated tests — intentional. The simulator is a dev/test tool; test coverage is not required.
+- Broad test coverage — intentional. The simulator is a dev/test tool. Only the pure value generators (`server/services/simGenerators.ts`) are unit-tested: `cd apps/mqtt-simulator/server && npm test`.
 
 ---
 
@@ -58,6 +58,7 @@ Read order: this file → deltas → task-specific spec.
 - **`module_id` derived from `tag_registry.module` column** — not from meta array parsing. Falls back to `'unknown'` if the column is null.
 - **`tag_id` coerced to `Number` on registry load** — node-postgres returns INTEGER as string.
 - **`protobufjs` installed at monorepo root** — server-local install blocked by `@caro/db` workspace resolution. Run `npm install` from monorepo root if missing.
+- **`cors` types come from a local shim**, `server/types/cors.d.ts`.
 - **`asyncWrap` and `errorHandler` imported from `@caro/server`** — no local `middleware/` directory. **`apiClient` imported from `@caro/ui/api/client`** — no local `api/client.js`.
 - **`command_id` deduplication** — implemented with a 60-second in-memory rolling TTL. If a `command_id` is present and already seen, the command is dropped and a WARN is logged. If `command_id` is absent, the command is processed normally. Known limitation: if the simulator restarts, the dedup Set is lost and a redelivered command from before the restart will be processed again. Acceptable for a dev tool.
 
@@ -67,29 +68,3 @@ Read order: this file → deltas → task-specific spec.
 
 - **Zero active MQTT tags = process exit.** Apply a registry in Tag Registry before starting the simulator. The simulator requires at least one tag with `module_type = 'MQTT'`.
 - **KNOWN DEFECT (2026-09-19, not fixed): `MQTT_BROKER_URL`, `MQTT_CLIENT_ID`, and `LOG_BUFFER_SIZE` are never actually read from `.env`.** `services/mqttClient.ts:5-6` and `services/simulatorService.ts:13` read them as module-scope `const`s, evaluated when `index.ts` imports those modules — which happens before `index.ts`'s own `loadEnv()` call, since ES module imports fully evaluate before the importing module's own statements run regardless of textual order. All three silently fall back to their hardcoded defaults always; latent only because those defaults currently match `.env`'s configured values. Setting any of the three to something else in `.env` has no effect. Fix before pointing the simulator at a second project (multi-project work) — per-project broker URL and client ID are exactly what that work needs to configure, and two of those three are currently the only things that would need to differ.
-
----
-
-## TypeScript Migration
-
-**Date:** 2026-04-07
-
-Both layers of the MQTT Simulator migrated to TypeScript (`strict: true`, zero `tsc` errors).
-
-**Server (`apps/mqtt-simulator/server/`)**
-- 7 source files renamed `.js` → `.ts`: `index`, `app`, `routes/simulator`, `services/mqttClient`, `services/protobuf`, `services/registry`, `services/simulatorService`
-- `tsconfig.json` created extending root `tsconfig.base.json`
-- `types/cors.d.ts` module shim added (`@types/cors` does not exist on npm)
-- Key types: `MqttClient`, `ProtoTag`, `SimTag`, `LogEntry`, `ModuleStatus`, `SimulatorStatus`
-- `package.json`: `build: tsc`, `start: node dist/index.js`, `dev` uses `tsx`
-- Server starts cleanly: connects to PostgreSQL, loads tag registry, connects to MQTT broker
-
-**Client (`apps/mqtt-simulator/client/`)**
-- 5 source files renamed `.js`/`.jsx` → `.ts`/`.tsx`: `main`, `App`, `api/simulator`, `stores/useSimulatorStore`, `components/SimulatorPanel`
-- `tsconfig.json` created extending root `tsconfig.base.json`
-- `vite.config.js` → `vite.config.ts`
-- Key types: `SimulatorStore`, `SimulatorStatus`, `ModuleStatus`, `LogEntry`
-- `package.json` build script: `tsc && vite build`
-- Client starts cleanly on `:5174`
-
-No automated tests exist for the MQTT Simulator by intentional design.
