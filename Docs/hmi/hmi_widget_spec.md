@@ -22,12 +22,13 @@ hmi_functional_spec | hmi_API_spec | CARO_DB_Spec
 | 1.9 | 2026-04-14 | PM / Claude | Spec text fixes: removed erroneous useTagWriter reference from NumericMon NOTE; corrected BooleanSet pending-state reference from useTagWriter.isPending to useWriteGuard; clarified disabled vs readOnly in Section 4.2; fixed BooleanMon bad-quality description (label always shown); clarified write() is single-tag for widgets, batch at server level; documented Boolean 2-column layout in Section 4.4. |
 | 2.0 | 2026-04-14 | PM / Claude | Added useTagGroup utility (Section 3.6). Added Analog_In composite widget (Section 5). First multi-tag widget in the catalog. |
 | 2.1 | 2026-04-19 | PM / Claude | §3.5: TagPathIndex-backed resolution noted (O(1) per call). §3.6: useTagGroup complexity noted as O(children). Matches perf commits be308f5 and cceb114. |
+| 2.2 | 2026-10-17 | PM / Claude | Reconciled with the code: dependencies (uplot runtime dep, @caro/ui peer); hmi-context exports; `write()` never rejects (errors via `error(tagId)`), no batch form; TagDef shape and format resolution from registry columns; BooleanMon ignores trueLabel/falseLabel; BooleanSet confirm uses @caro/ui Modal; Timer and SpectrumChart added to the catalog; MockHmiProvider props; Open Questions answered by the implementation. |
 
 ---
 
 ## 1. Purpose
 
-This document defines the `@caro/widgets` package — a collection of React components for displaying and interacting with live tag values in CARO_Platform HMI applications. Widgets are transport-agnostic: they receive data and send writes through injected functions, with no direct dependency on Zustand, WebSocket, or REST APIs.
+This document defines the `@caro/widgets` package — a collection of React components for displaying and interacting with live tag values in CARO_Platform HMI applications. Widgets are transport-agnostic: they read values and send writes through hooks from `@caro/hmi-context`, with no direct dependency on Zustand, WebSocket, or REST APIs.
 
 Intended audience: Frontend developers implementing widgets, developers composing dashboards, and QA engineers writing widget tests.
 
@@ -42,18 +43,18 @@ The `@caro/widgets` package lives at `packages/widgets/` in the CARO_Platform mo
 | Package | Path | Purpose |
 |---|---|---|
 | `@caro/ui` | `packages/ui/` | Stateless primitives (Button, Input, Modal). Zero domain knowledge. No runtime dependencies. |
-| `@caro/widgets` | `packages/widgets/` | Tag-bound HMI widgets. Depends on React only. Transport injected via props. |
+| `@caro/widgets` | `packages/widgets/` | Tag-bound HMI widgets. Transport via `@caro/hmi-context` hooks. |
 | `@caro/db` | `packages/db/` | PostgreSQL pool. Server-side only. |
 
 ### 2.2 Dependencies
 
-`@caro/widgets` has no runtime dependencies beyond React. It does NOT depend on Zustand, any WebSocket library, or any HTTP client. These are peer dependencies of the HMI application, not the widget package.
+As built (`packages/widgets/package.json`): one runtime dependency, `uplot` (for `SpectrumChart`), and peer dependencies `react` ^18, `@caro/hmi-context` and `@caro/ui`. It does NOT depend on Zustand, any WebSocket library, or any HTTP client.
 
 > *NOTE: `@caro/widgets` may import primitives from `@caro/ui` (Button, Input, Badge) and Tailwind utility classes for styling. It must never import from `@caro/db` or any server-side module.*
 
-> *NOTE: `@caro/widgets` now includes composite multi-tag widgets (AnalogIn) alongside the foundational single-tag widgets.*
+> *NOTE: `@caro/widgets` includes composite multi-tag widgets (AnalogIn, Timer) and a chart widget (SpectrumChart) alongside the foundational single-tag widgets.*
 
-> *NOTE: Several widget behaviors are implemented via internal shared utilities in `packages/widgets/src/shared/`. These are not exported from `@caro/widgets` but are important for contributors: `useNumericInput` (focus/blur/write state for numeric inputs — shared by NumericSet and AnalogIn NumericSetCell), `ToggleSwitch` (toggle button component — shared by BooleanSet and AnalogIn BooleanSetCell), `colorMap` (boolean color constants keyed by name — shared across BooleanMon, BooleanSet, and AnalogIn).*
+> *NOTE: Several widget behaviors are implemented via internal shared utilities in `packages/widgets/src/shared/`. These are not exported from `@caro/widgets` but are important for contributors: `useNumericInput` (focus/blur/write state for numeric inputs — shared by NumericSet and AnalogIn NumericSetCell), `ToggleSwitch` (toggle button component — shared by BooleanSet and AnalogIn BooleanSetCell), `colorMap` (boolean color constants keyed by name — shared across BooleanMon, BooleanSet, and AnalogIn), `useWriteGuard`, `useSingleTag`, `useTagGroup`, `withErrorBoundary` (every exported widget is wrapped in it), `WidgetLabel`, `widgetStyles`.*
 
 ---
 
@@ -67,8 +68,8 @@ Widgets in `@caro/widgets` use two custom hooks provided by the `@caro/hmi-conte
 
 | Package | Exports |
 |---|---|
-| `@caro/hmi-context` | HmiContextProvider, useLiveValue, useTagWriter, useTagMap |
-| `@caro/widgets` | NumericMon, NumericSet, BooleanMon, BooleanSet (and future widgets) |
+| `@caro/hmi-context` | HmiContextProvider, MockHmiProvider (also at `@caro/hmi-context/testing`), useLiveValue, useTagWriter, useCommandSender, useTagMap, useTagSubtree, useResolveAssetPath, useWsStats, useProjectRoot, useHmiContext, scopedKey / useScopedKey, and types |
+| `@caro/widgets` | NumericMon, NumericSet, BooleanMon, BooleanSet, AnalogIn, Timer, SpectrumChart, with their `*Props` types |
 
 ### 3.2 useLiveValue
 
@@ -76,9 +77,10 @@ Widgets in `@caro/widgets` use two custom hooks provided by the `@caro/hmi-conte
 
 ```ts
 // Signature (in @caro/hmi-context)
-export function useLiveValue(tagId: number): {
+export function useLiveValue(tagId: number | undefined): {
   value: number | boolean | string | null  // null = bad quality (device not connected or value not yet received)
 }
+// tagId === undefined (an optional asset path that doesn't resolve) → { value: null }, no subscription
 ```
 
 Quality is represented by `value === null`. There is no separate quality enum or timestamp field. When a device disconnects or telemetry is lost, the backend watchdog writes null to the LKV cache, which propagates to clients. Widgets check `value === null` to render the bad-quality state.
@@ -92,19 +94,19 @@ The HmiContextProvider implementation subscribes to the WebSocket layer and main
 ```ts
 // Signature (in @caro/hmi-context)
 export function useTagWriter(): {
-  write: (tagId: number, value: any) => Promise<void>,
+  write: (tagId: number, value: number | boolean | string) => Promise<void>,
   isPending: (tagId: number) => boolean,
   error: (tagId: number) => string | null
 }
-// write() sends a single tag write. Batch writes are a server-level concern (mode loading).
-// write() rejects on network error, backend validation failure,
-//   or device rejection (CMD_ACK with accepted: false)
+// write() sends a single tag write. There is no batch form.
+// write() never rejects: a network error, backend validation failure, or device rejection
+//   (CMD_ACK with accepted: false, or TIMEOUT) is caught and stored as error(tagId).
 // isPending clears in the finally block — guaranteed regardless of outcome
 ```
 
-The write function calls `POST /api/v1/tags/write`. isPending is managed entirely within useTagWriter — widgets do not track pending state independently.
+The write function calls `POST /api/v1/tags/write` with `{ values: [{ tag_id, value }], comment: 'HMI write' }`. isPending is managed entirely within useTagWriter — widgets do not track pending state independently (they use `useWriteGuard` instead, §4.2).
 
-> *NOTE: The `HmiContextProvider.writeTag()` implementation inspects the CMD_ACK results embedded in the server response. If any tag in the response has `accepted: false`, `writeTag` throws an `Error` with the rejection code as the message (e.g. `'Device rejected: MODULE_FAULT'`, `'Device rejected: TIMEOUT'`). This surfaces through `useTagWriter`'s catch block into `error(tagId)`, which the widget reads to display an inline rejection message. This means device-level rejections (including 1-second CMD_ACK timeouts) surface identically to network and backend errors — the widget sees a string error message regardless of origin.*
+> *NOTE: The `HmiContextProvider.writeTag()` implementation inspects the CMD_ACK results embedded in the server response. If any tag in the response has `accepted: false`, `writeTag` throws an `Error` whose message is `'Device rejected: <rejection_code>'` (e.g. `'Device rejected: MODULE_FAULT'`, `'Device rejected: TIMEOUT'`, `'Device rejected: UNKNOWN'` when no code is given). An `ok: false` response throws with the server's error message. Either surfaces through `useTagWriter`'s catch block into `error(tagId)`, which the widget reads to display an inline rejection message. This means device-level rejections (including 1-second CMD_ACK timeouts) surface identically to network and backend errors — the widget sees a string error message regardless of origin.*
 
 ```ts
 // useTagWriter implementation sketch
@@ -119,8 +121,7 @@ export function useTagWriter() {
     try {
       await writeFn(tagId, value);
     } catch (err) {
-      setErrors(e => ({ ...e, [tagId]: err.message }));
-      throw err;
+      setErrors(e => ({ ...e, [tagId]: err.message }));   // not rethrown
     } finally {
       setPending(p => ({ ...p, [tagId]: false }));
     }
@@ -140,8 +141,8 @@ export function useTagWriter() {
 2. HmiContextProvider triggers WebSocket SUBSCRIBE. Backend sends SNAPSHOT. useLiveValue returns current value immediately.
 3. Widget displays value. Subsequent deltas update useLiveValue automatically.
 4. For setpoint widgets: user clicks the value to enter edit mode, types a new value, and presses Enter. Widget calls `write(tag.tag_id, newValue)`. Input remains focused for immediate follow-up edits. `useWriteGuard.isWriting` becomes true, making input read-only until the guard clears.
-5. `write()` Promise resolves (CMD_ACK accepted: true). finally block clears isPending. Widget shows confirmed value.
-6. `write()` Promise rejects (network error or device rejection). finally block clears isPending. `error(tag.tag_id)` is set. Widget shows rejection reason.
+5. CMD_ACK accepted: `write()` resolves; finally block clears isPending. The widget shows the confirmed value when telemetry echoes it.
+6. Network error or device rejection: `write()` still resolves, `error(tag.tag_id)` is set, finally block clears isPending. Widget shows the rejection reason.
 7. Widget unmounts. useLiveValue cleanup unsubscribes. WebSocket UNSUBSCRIBE sent if no other widgets need this tag_id.
 
 ### 3.5 Asset Path Resolution and Tag Definition
@@ -153,24 +154,27 @@ Error evaluation (wrong number of matches, missing expected children) is the wid
 ```ts
 // TagDef shape — from the backend in-memory tag map (Section 6.5 of hmi_functional_spec)
 {
-  tag_id: number,       // uint32
-  tag_path: string,     // full dot-separated path
-  data_type: string,    // "f32" | "bool"
+  tag_id: number,
+  tag_path: string,        // full dot-separated path
+  tag_name: string | null, // resolved display name
+  data_type: string,       // any tag_types value: f32, bool, i16, i32, string, f32[], i16[]
   is_setpoint: boolean,
-  module_id: string,
-  module_type: string,     // 'MQTT' | 'HMI' — source: tag_registry.module_type column
-  eng_min: number | null,  // resolved from meta (see resolution rule below)
+  trendable: boolean,      // tag_registry.trends
+  module_id: string,       // module ancestor name, 'unknown' if none
+  module_type: string,     // 'MQTT' | 'HMI' — tag_registry.module_type, defaulting to 'MQTT'
+  eng_min: number | null,  // registry column
   eng_max: number | null,
-  unit: string | null,     // resolved from meta (see resolution rule below)
-  meta: array              // full provenance chain
+  unit: string | null,
+  format: string | null,
+  meta: MetaLevel[]        // full provenance chain, root-to-leaf
 }
 ```
 
-**Meta field resolution rule:** Fields `eng_min`, `eng_max`, `unit`, and `format` are resolved by walking the `meta` array from root (meta[0]) to leaf (meta[last]). The first level containing the field wins. If no level contains the field, a default is used (null for eng_min/eng_max/unit, `2` for format decimal places).
+**Field resolution:** `eng_min`, `eng_max`, `unit` and `format` are resolved by the Tag Registry when a registry is applied and stored as `tag_registry` columns; widgets read them straight from `TagDef` and never walk `meta`.
 
-**Decimal formatting:** The number of decimal places for numeric display is resolved from the `format` field in `tag.meta` using the root-to-leaf resolution rule above, with a default of 2 decimal places.
+**Number formatting:** `resolveFormat(tag)` compiles `tag.format` once at mount: `#` → 0 decimals, `#.##` → 2 decimals (one per `#` after the point), `#.##E+0` → exponential. A null format uses `#.##`. An unrecognised pattern renders `Format not valid`.
 
-> *NOTE: Widgets use `tag.tag_id` internally for useLiveValue and useTagWriter calls. The `label` prop is a display override; if omitted, widgets derive a short label from the last segment of `tag.tag_path`.*
+> *NOTE: Widgets use `tag.tag_id` internally for useLiveValue and useTagWriter calls. The `label` prop is a display override; if omitted, widgets use the last dot-separated segment of the `assetPath` prop (`resolveLabel`).*
 
 ---
 
@@ -230,7 +234,7 @@ Widgets use shared fixed column widths (label, value, unit) from `widgetStyles.t
 
 ## 5. Widget Catalog
 
-Version 1.0 includes four foundational single-tag widgets. More complex multi-tag widgets (trend charts, gauges, state panels) will be added in future versions and will follow the same useLiveValue / useTagWriter hook contract.
+The catalog has four foundational single-tag widgets, two composite widgets (Analog_In, Timer) and one chart widget (SpectrumChart). All follow the same useLiveValue / useTagWriter hook contract. The trend chart is a separate package, `@caro/trend-chart`.
 
 ### MON Numeric_Mon
 
@@ -241,7 +245,7 @@ Read-only display of a numeric tag value (f32). No user interaction. Suitable fo
 | Prop | Type | Required | Default | Description |
 |---|---|---|---|---|
 | assetPath | string | Yes | — | Dot-separated path identifying the tag. Resolved via useResolveAssetPath. Abbreviated paths supported. |
-| label | string | No | — | Display label override. If omitted, the last segment of tag.tag_path is used. |
+| label | string | No | — | Display label override. If omitted, the last segment of `assetPath` is used. |
 
 > *NOTE: This widget calls useLiveValue internally from @caro/hmi-context. No subscription or write props are required.*
 
@@ -249,7 +253,7 @@ Read-only display of a numeric tag value (f32). No user interaction. Suitable fo
 
 - Resolves tag via `useResolveAssetPath(assetPath)` (must match exactly one tag).
 - Calls `useLiveValue(tag.tag_id)` on mount to subscribe to live value updates.
-- Displays the latest value formatted to the decimal places resolved from tag.meta `format` field (root-to-leaf, default 2) with the unit suffix.
+- Displays the latest value formatted with `tag.format` (default `#.##`), with `tag.unit` in the unit column (`-` when null).
 - value === null: shows `---` and applies red tint. Non-null: normal display.
 - Updates instantly on every useLiveValue value change — no debounce.
 
@@ -270,7 +274,7 @@ Editable numeric setpoint widget for f32 tags. Displays the confirmed device val
 | Prop | Type | Required | Default | Description |
 |---|---|---|---|---|
 | assetPath | string | Yes | — | Dot-separated path identifying the tag. Resolved via useResolveAssetPath. |
-| label | string | No | — | Display label override. Defaults to last segment of tag.tag_path. |
+| label | string | No | — | Display label override. Defaults to the last segment of `assetPath`. |
 
 **Behavior**
 
@@ -315,7 +319,7 @@ Read-only boolean state indicator. Displays ON/OFF, ACTIVE/CLEAR, or any custom 
 **Behavior**
 
 - Resolves tag via `useResolveAssetPath(assetPath)` (must match exactly one tag).
-- Displays a colored dot indicator right-aligned in the value column. No ON/OFF text rendered — dot color conveys state. trueLabel/falseLabel retained for accessibility.
+- Displays a colored dot indicator right-aligned in the value column. No ON/OFF text rendered — dot color conveys state. `trueLabel` / `falseLabel` are accepted for API compatibility but not used anywhere in the rendered output.
 - value === null: indicator shown as dashed red circle. Label is always displayed regardless of quality — only the value indicator reflects bad quality.
 - No user interaction.
 
@@ -348,7 +352,7 @@ Toggleable boolean setpoint. Displays the confirmed state and allows Supervisors
 
 - Resolves tag via `useResolveAssetPath(assetPath)` (must match exactly one tag).
 - Displays a toggle switch (28×14px). Track color follows trueColor/falseColor props. Uses role='switch' and aria-checked.
-- On click: if `requireConfirm=true`, opens a confirmation dialog. On confirm (or immediately if `requireConfirm=false`), calls `write(tag.tag_id, !currentValue)` from useTagWriter.
+- On click: if `requireConfirm=true`, opens a confirmation dialog (`@caro/ui` `Modal` titled "Confirm", with a Confirm button). On confirm (or immediately if `requireConfirm=false`), calls `write(tag.tag_id, !currentValue)` from useTagWriter.
 - Write-in-flight state is managed by `useWriteGuard` — toggle is disabled while `isWriting` is true. Write errors surface through `useTagWriter.error(tag.tag_id)` and display as inline red text below the widget.
 - value === null: toggle renders in the OFF position (null treated as false). Still interactive — clicking writes `true` (the inverse of null/false). Null quality does not block writes. Write validation is server-side.
 
@@ -391,6 +395,37 @@ Set (NumericSet), Mon (NumericMon), Tol (NumericSet), By (BooleanSet), Intk (Boo
 
 ---
 
+### COMP Timer
+
+Composite Set/Mon/Done row for a timer parameter.
+
+**Props:** `assetPath` (required; base path), `label` (optional; defaults to the last segment of `assetPath`), `showHeader` (optional, default false).
+
+**Children:** `Set` (NumericSet cell), `Mon` (NumericMon cell), `Done` (BooleanMon cell), resolved via `useTagGroup`, which throws if any is missing or ambiguous. The unit comes from the `Set` tag (`-` when null). Write errors are shown below the row, prefixed with the child name.
+
+```tsx
+<Timer assetPath="Gun.Warm_Up" label="Warm_Up" showHeader={true} />   // from hmi-definitions/shared/GunBox.tsx
+```
+
+---
+
+### CHART SpectrumChart
+
+Line chart of one `number[]` tag (e.g. an FFT spectrum), drawn with uPlot. The X axis is the array index, labelled "Bin"; there is no frequency mapping. The Y-axis label is the tag's unit.
+
+**Props**
+
+| Prop | Type | Required | Default | Description |
+|---|---|---|---|---|
+| assetPath | string | Yes | — | Must resolve to exactly one tag. |
+| label | string | No | last segment of `assetPath` | Display label. |
+| width / height | number | No | 640 / 320 | Fixed pixel size (no resize observer). |
+| yMin / yMax | number | No | −1000 / 1000 | Fixed Y range (the tag has no eng limits to derive one from). |
+
+Drag selects a zoom box on both axes (custom select hook; uPlot's own drag-to-zoom is disabled); double-click resets to the full range. Live data comes through `useLiveValue` like any other widget.
+
+---
+
 ## 6. Dashboard Composition
 
 A dashboard is a React component that instantiates widgets and defines the layout. There is no dashboard builder, JSON renderer, or drag-and-drop system. Dashboards are code.
@@ -399,23 +434,14 @@ A dashboard is a React component that instantiates widgets and defines the layou
 
 The HMI application wraps its component tree in `HmiContextProvider`. Widgets call useLiveValue and useTagWriter internally — no transport wiring is needed in dashboards.
 
-```jsx
-// packages/hmi-context/index.tsx — HmiContextProvider wires transport to hooks
-export function HmiContextProvider({ children }) {
-  const ws = useWebSocketInternal();  // WebSocket singleton
-  const tagDb = useTagRegistry();     // in-memory TagDef map from Tag Registry
-  return (
-    <HmiContext.Provider value={{ ws, tagDb }}>
-      {children}
-    </HmiContext.Provider>
-  );
-}
-
-// Wrap the entire HMI app once at the root:
-// <HmiContextProvider>
-//   <App />
-// </HmiContextProvider>
+```tsx
+// apps/caro-hmi/client/src/App.tsx — the app wraps everything once:
+<HmiContextProvider apiUrl="/api/v1" wsUrl={`ws://${window.location.host}/ws`}>
+  <Shell />
+</HmiContextProvider>
 ```
+
+`HmiContextProvider` (`packages/hmi-context/src/HmiContextProvider.tsx`) fetches `/tags` and `/config`, renders nothing until both settle, owns the WebSocket and reconciles subscriptions. Its mechanics are in `Docs/platform/CARO_Telemetry_Path_Reference.md` §8.
 
 ### 6.2 Dashboard Example
 
@@ -453,7 +479,7 @@ The dashboards-as-code approach is intentional and sufficient for a fixed machin
 
 The widget API (useLiveValue + useTagWriter hooks) does not change at all in this evolution — the DashboardRenderer simply instantiates widgets from the config and resolves TagDef objects from the tag map.
 
-> *NOTE: Multi-tag writes from a page component: call `useTagWriter().write([{tagId, value}, ...])` with all values in a single batch. Individual widgets always write one tag (or their own set of tags if multi-tag). Coordinated writes across unrelated widgets are a page component responsibility.*
+> *NOTE: `useTagWriter().write()` takes one tag; there is no batch form in the client today, although `POST /api/v1/tags/write` accepts an array. Coordinated multi-tag writes would need a new client API.*
 
 > *NOTE: Dashboard config storage and the DashboardRenderer component are out of scope. The current design intentionally supports this evolution without any breaking changes to the widget API.*
 
@@ -522,23 +548,20 @@ import { render, screen } from '@testing-library/react';
 import { NumericMon } from '@caro/widgets';
 import { MockHmiProvider } from '@caro/hmi-context/testing';
 
-const mockTags = [
-  {
-    tag_id: 1001,
-    tag_path: "Plant1.Module.power",
-    data_type: "f32",
-    is_setpoint: false,
-    module_id: "Module",
-    eng_min: 0,
-    eng_max: 5000,
-    unit: "W",
-    meta: []
+// MockHmiProvider props: tagDefs (Record<tag_id, TagDef>), tagValues (Record<tag_id, LiveValue>),
+// projectRoot (default 'test'), onWrite, onSendCommand.
+const tagDefs = {
+  1001: {
+    tag_id: 1001, tag_path: "Plant1.Module.power", tag_name: "power",
+    data_type: "f32", is_setpoint: false, trendable: false,
+    module_id: "Module", module_type: "MQTT",
+    eng_min: 0, eng_max: 5000, unit: "W", format: "#.##", meta: []
   }
-];
+};
 
 test('displays value when quality is good (non-null)', () => {
   render(
-    <MockHmiProvider tags={mockTags} tagValues={{ 1001: { value: 85.5 } }}>
+    <MockHmiProvider tagDefs={tagDefs} tagValues={{ 1001: { value: 85.5 } }}>
       <NumericMon assetPath="power" label="Power" />
     </MockHmiProvider>
   );
@@ -548,7 +571,7 @@ test('displays value when quality is good (non-null)', () => {
 
 test('shows dash when value is null (bad quality)', () => {
   render(
-    <MockHmiProvider tags={mockTags} tagValues={{ 1001: { value: null } }}>
+    <MockHmiProvider tagDefs={tagDefs} tagValues={{ 1001: { value: null } }}>
       <NumericMon assetPath="power" label="Power" />
     </MockHmiProvider>
   );
@@ -558,7 +581,7 @@ test('shows dash when value is null (bad quality)', () => {
 
 ## Open Questions
 
-- What is the `HmiContextProvider` WebSocket deduplication strategy when multiple widgets subscribe to the same tag? Reference counting or another approach?
-- What are the `trueColor` and `falseColor` design token values?
-- What is the `MockHmiProvider` test helper shape needed for widget testing?
+- What are the `trueColor` and `falseColor` design token values? (Today they are names mapped by `shared/colorMap.ts`.)
+
+*Answered by the implementation:* WebSocket deduplication is a per-tag subscriber set plus a level-triggered reconciler that sends one SUBSCRIBE/UNSUBSCRIBE per microtask (Telemetry Path Reference §8.5); the `MockHmiProvider` shape is shown in §7.
 
