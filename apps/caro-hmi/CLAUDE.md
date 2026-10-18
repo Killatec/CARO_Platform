@@ -208,6 +208,6 @@ TREND_FLUSH_HZ=4                  # flush cadence for TREND_DELTA frames (defaul
 | Spec Deltas | `Docs/hmi/hmi_deltas.md` |
 | Trend Viewer Spec | `Docs/hmi/trend-viewer/hmi_trend_viewer_spec.md` |
 | Trend Viewer Handoff | `Docs/hmi/trend-viewer/hmi_trend_viewer_handoff.md` |
-| Phase 2 Design | `Docs/Phase2_HMI_ServerCore_Design.docx` |
+| Phase 2 Design | `Phase2_HMI_ServerCore_Design.docx` — not in the repo (never committed); the as-built server core is described in this file and `Docs/hmi/hmi_functional_spec.md` §8 |
 | MQTT Spec | `Docs/platform/CARO_MQTT_Spec.md` |
 | DB Spec | `Docs/db/CARO_DB_Spec.md` |
