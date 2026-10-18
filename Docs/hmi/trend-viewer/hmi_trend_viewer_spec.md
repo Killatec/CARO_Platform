@@ -449,7 +449,7 @@ Where Div = `bucketS / native_bucket_s` of the chosen CAG. The cheap zone is **D
 | 7d  | 604,800 s|302,400 s| 604.8 s| Bucketed | 1min CAG |
 | 14d |1,209,600 s|604,800 s|1,209.6 s| Bucketed | 1min CAG |
 
-The 5m and 15m presets now return bucketed output (raw-source) instead of raw COV. All other presets are unchanged. See `Docs/trend_dispatch_unified_rule_proposal.md` for empirical validation (35% faster DB-side, 3.3× smaller wire payload vs raw COV at production activity).
+The 5m and 15m presets now return bucketed output (raw-source) instead of raw COV. All other presets are unchanged. The original rationale is in `trend_dispatch_unified_rule_proposal.md`, retired in `533001a` (git history: `f90d8c5`) for empirical validation (35% faster DB-side, 3.3× smaller wire payload vs raw COV at production activity).
 
 **Drag-zoom / End-picker windows** below 100 s return raw COV automatically; above 100 s return bucketed. The flip is at the single threshold `expectedPoints = bucketCount`, not at `bucket_s = 1.0`.
 

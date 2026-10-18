@@ -292,7 +292,7 @@ type ModeState =
 
 **Merge in `TrendChartContainer`.** `mergedData = useMemo(() => mergeTrendData(data, liveSub.tail, { seamCommittedThroughTs }), [data, liveSub.tail, swapCounter])` — a single path for both modes. There is no live/history split and no `getBufferSnapshot`. `seamCommittedThroughTs` is derived from `getSeamCommittedThroughTs(trendData.activeTilesRef)` — the `committedThroughTs` of the rightmost active tile.
 
-**Raw-vs-bucketed dispatch (Phase 6 unified rule, see `Docs/trend_dispatch_unified_rule_proposal.md`).** The server's shape decision is unaffected by the unified-tile refactor:
+**Raw-vs-bucketed dispatch (Phase 6 unified rule, see spec §6.3; the original `trend_dispatch_unified_rule_proposal.md` was retired in `533001a` and is in git history at `f90d8c5`).** The server's shape decision is unaffected by the unified-tile refactor:
 
 It is the Phase 6 two-step rule:
 
