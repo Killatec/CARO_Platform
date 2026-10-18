@@ -56,6 +56,8 @@ export class MqttBridge {
         this.client!.subscribe('caro/+/cmd_ack', () => {});
         this.client!.subscribe('caro/+/handshake_module', () => {});
 
+        // 'connect' fires again on every automatic reconnect: replace the timer, never stack one.
+        this.stopHeartbeat();
         this.heartbeatTimer = setInterval(
           () => this.heartbeatTick(),
           this.config.heartbeatIntervalMs
@@ -72,6 +74,10 @@ export class MqttBridge {
         resolve();
       });
 
+      // No beats while disconnected: mqtt.js would queue them (queueQoSZero) and
+      // send them as one burst on reconnect.
+      this.client.on('close', () => this.stopHeartbeat());
+
       this.client.on('error', reject);
 
       this.client.on('message', (topic: string, payload: Buffer) => {
@@ -81,11 +87,18 @@ export class MqttBridge {
   }
 
   stop(): Promise<void> {
-    if (this.heartbeatTimer !== null) clearInterval(this.heartbeatTimer);
+    this.stopHeartbeat();
     return new Promise((resolve) => {
       if (!this.client) { resolve(); return; }
       this.client.end(false, () => resolve());
     });
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer !== null) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
   }
 
   heartbeatTick(): void {

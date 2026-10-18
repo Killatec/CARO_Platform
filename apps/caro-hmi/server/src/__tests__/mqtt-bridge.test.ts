@@ -265,3 +265,62 @@ describe('MqttBridge — malformed payloads', () => {
     await bridge.stop();
   });
 });
+
+describe('MqttBridge — heartbeat timer', () => {
+  const beats = () => (mockClient.publish.mock.calls as unknown[][]).filter(c => c[0] === `caro/${MODULE_ID}/beat`).length;
+
+  it('beats once per interval after any number of reconnects', async () => {
+    vi.useFakeTimers();
+    try {
+      const bridge = makeBridge();
+      await startBridge(bridge);
+      mockClient.emit('connect');   // automatic reconnects
+      mockClient.emit('connect');
+      mockClient.publish.mockClear();
+
+      vi.advanceTimersByTime(bridgeConfig.heartbeatIntervalMs * 3);
+
+      expect(beats()).toBe(3);
+      await bridge.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops beating while disconnected and resumes on reconnect', async () => {
+    vi.useFakeTimers();
+    try {
+      const bridge = makeBridge();
+      await startBridge(bridge);
+      mockClient.emit('close');
+      mockClient.publish.mockClear();
+
+      vi.advanceTimersByTime(bridgeConfig.heartbeatIntervalMs * 3);
+      expect(beats()).toBe(0);
+
+      mockClient.emit('connect');
+      vi.advanceTimersByTime(bridgeConfig.heartbeatIntervalMs);
+      expect(beats()).toBe(1);
+      await bridge.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stop() leaves no timer running after reconnects', async () => {
+    vi.useFakeTimers();
+    try {
+      const bridge = makeBridge();
+      await startBridge(bridge);
+      mockClient.emit('connect');
+      await bridge.stop();
+      mockClient.publish.mockClear();
+
+      vi.advanceTimersByTime(bridgeConfig.heartbeatIntervalMs * 3);
+
+      expect(beats()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
