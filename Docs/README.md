@@ -211,8 +211,3 @@ Apps connect to their databases at startup and never change target at runtime; t
 | [hmi_trend_viewer_spec.md](hmi/trend-viewer/hmi_trend_viewer_spec.md) | Design spec (large; read by section). |
 | [hmi_trend_viewer_reference.md](hmi/trend-viewer/hmi_trend_viewer_reference.md) | Historian write path: tag change → hypertable row. |
 | [hmi_trends_perf_test_spec.md](hmi/trend-viewer/hmi_trends_perf_test_spec.md) | `/dev/trends-perf` test page spec. |
-
-**[archive/](archive/)** — kept for the record, not current
-| File | What it is |
-|---|---|
-| [hmi_trend_viewer_audit_2026-05-27.md](archive/hmi_trend_viewer_audit_2026-05-27.md) | Trend viewer audit (2026-05-27). Issues 2–10 were propagated the same day; the file is kept as the audit's source record. |
