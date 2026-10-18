@@ -1,7 +1,8 @@
 import type { MqttBridge, CmdAck } from './mqtt-bridge.js';
 import type { HmiTagSource } from './hmi-tag-source.js';
 import type { TagDef } from '@caro/hmi-context';
-import { upsertPendingSetpoints, getPendingSetpointsByTagIds } from '@caro/db';
+import { upsertPendingSetpoints, upsertCommandedSetpoints, getCommandedSetpointsByTagIds } from '@caro/db';
+import type { CommandedSetpointEntry } from '@caro/db';
 
 export type { CmdAck };
 
@@ -203,6 +204,9 @@ export class CmdController {
     return new Promise<WriteResult['devices'][number]>((resolve) => {
       const timer = setTimeout(() => {
         this.pending.delete(commandId);
+        // No ACK: the module may still have applied the values, and they remain the
+        // operator's intent, so they are what re-delivery sends.
+        this.storeCommandedSetpoints(moduleValues.map(v => ({ ...v, ack_status: 'timeout' })));
         resolve({
           module_id:  moduleId,
           command_id: commandId,
@@ -222,6 +226,7 @@ export class CmdController {
             upsertPendingSetpoints(accepted).catch((err: unknown) =>
               console.error('[CmdController] pending setpoint upsert failed:', (err as Error).message),
             );
+            this.storeCommandedSetpoints(accepted.map(a => ({ ...a, ack_status: 'accepted' })));
           }
           resolve({ module_id: moduleId, command_id: commandId, results });
         },
@@ -246,10 +251,18 @@ export class CmdController {
     });
   }
 
+  private storeCommandedSetpoints(entries: CommandedSetpointEntry[]): void {
+    upsertCommandedSetpoints(entries).catch((err: unknown) =>
+      console.error('[CmdController] commanded setpoint upsert failed:', (err as Error).message),
+    );
+  }
+
   /**
-   * Reads pending setpoints for the given MQTT module from the DB and
-   * re-publishes them as a SET_VALUES command (fire-and-forget, no ACK
-   * tracking). Called on startup and on STALLED→OK watchdog transition.
+   * Reads the commanded setpoints for the given MQTT module from the DB and
+   * re-publishes the populated ones as a SET_VALUES command (fire-and-forget,
+   * no ACK tracking). Unpopulated (null) Sets are not sent: modules without
+   * the handshake have no null-means-unpopulated contract. Called on startup
+   * and on STALLED→OK watchdog transition.
    */
   async restorePendingSetpoints(moduleId: string): Promise<void> {
     const moduleType = this.moduleTypeMap.get(moduleId);
@@ -261,14 +274,14 @@ export class CmdController {
 
     if (tagIds.length === 0) return;
 
-    const rows = await getPendingSetpointsByTagIds(tagIds);
+    const rows = (await getCommandedSetpointsByTagIds(tagIds)).filter(r => r.value !== null);
     if (rows.length === 0) return;
 
     this.mqttBridge.publishCommand(moduleId, {
       command_id:   crypto.randomUUID(),
       command_type: 'SET_VALUES',
       ts_utc_ms:    Date.now(),
-      payload:      { values: rows.map(r => ({ tag_id: r.tag_id, value: r.value as number | boolean })) },
+      payload:      { values: rows.map(r => ({ tag_id: r.tag_id, value: r.value })) },
     });
 
     console.log(`[CmdController] restored ${rows.length} pending setpoint(s) to ${moduleId}`);

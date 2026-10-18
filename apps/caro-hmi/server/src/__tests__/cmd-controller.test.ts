@@ -1,4 +1,12 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+vi.mock('@caro/db', () => ({
+  upsertPendingSetpoints:        vi.fn(() => Promise.resolve()),
+  upsertCommandedSetpoints:      vi.fn(() => Promise.resolve()),
+  getCommandedSetpointsByTagIds: vi.fn(() => Promise.resolve([])),
+}));
+
+import { upsertPendingSetpoints, upsertCommandedSetpoints, getCommandedSetpointsByTagIds } from '@caro/db';
 import { CmdController } from '../cmd-controller.js';
 import type { MqttBridge, CmdAck } from '../mqtt-bridge.js';
 import type { HmiTagSource } from '../hmi-tag-source.js';
@@ -10,6 +18,7 @@ const MQTT_MODULE = 'mqttMod';
 const HMI_MODULE  = 'hmiMod';
 const MQTT_TAG    = 1;
 const HMI_TAG     = 2;
+const MQTT_TAG_2  = 4;
 
 function makeTagDef(tag_id: number, module_id: string, module_type: string): TagDef {
   return {
@@ -32,7 +41,12 @@ function makeTagDef(tag_id: number, module_id: string, module_type: string): Tag
 const tagMap = new Map<number, TagDef>([
   [MQTT_TAG, makeTagDef(MQTT_TAG, MQTT_MODULE, 'MQTT')],
   [HMI_TAG,  makeTagDef(HMI_TAG,  HMI_MODULE,  'HMI')],
+  [MQTT_TAG_2, makeTagDef(MQTT_TAG_2, MQTT_MODULE, 'MQTT')],
 ]);
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -160,5 +174,153 @@ describe('CmdController', () => {
       accepted:       false,
       rejection_code: 'MODULE_TYPE_NOT_SUPPORTED',
     });
+  });
+});
+
+describe('CmdController — setpoint stores', () => {
+  function lastCommandId(mqttBridge: MqttBridge): string {
+    const calls = (mqttBridge.publishCommand as ReturnType<typeof vi.fn>).mock.calls;
+    return (calls[calls.length - 1][1] as { command_id: string }).command_id;
+  }
+
+  it('accepted ACK: stores accepted values in both pending and commanded stores', async () => {
+    const { ctrl, mqttBridge, triggerAck } = makeMocks();
+
+    const writePromise = ctrl.writeValues([{ tag_id: MQTT_TAG, value: 42 }]);
+    triggerAck({
+      command_id:   lastCommandId(mqttBridge),
+      command_type: 'SET_VALUES',
+      ts_utc_ms:    Date.now(),
+      results:      [{ tag_id: MQTT_TAG, accepted: true }],
+    });
+    await writePromise;
+
+    expect(upsertPendingSetpoints).toHaveBeenCalledWith([{ tag_id: MQTT_TAG, value: 42 }]);
+    expect(upsertCommandedSetpoints).toHaveBeenCalledWith([
+      { tag_id: MQTT_TAG, value: 42, ack_status: 'accepted' },
+    ]);
+  });
+
+  it('partial rejection: only the accepted tag is stored; the rejected row is left unchanged', async () => {
+    const { ctrl, mqttBridge, triggerAck } = makeMocks();
+
+    const writePromise = ctrl.writeValues([
+      { tag_id: MQTT_TAG,   value: 1 },
+      { tag_id: MQTT_TAG_2, value: 2 },
+    ]);
+    triggerAck({
+      command_id:   lastCommandId(mqttBridge),
+      command_type: 'SET_VALUES',
+      ts_utc_ms:    Date.now(),
+      results: [
+        { tag_id: MQTT_TAG,   accepted: true },
+        { tag_id: MQTT_TAG_2, accepted: false, rejection_code: 'OUT_OF_RANGE' },
+      ],
+    });
+    await writePromise;
+
+    expect(upsertPendingSetpoints).toHaveBeenCalledWith([{ tag_id: MQTT_TAG, value: 1 }]);
+    expect(upsertCommandedSetpoints).toHaveBeenCalledOnce();
+    expect(upsertCommandedSetpoints).toHaveBeenCalledWith([
+      { tag_id: MQTT_TAG, value: 1, ack_status: 'accepted' },
+    ]);
+  });
+
+  it('all rejected: neither store is written', async () => {
+    const { ctrl, mqttBridge, triggerAck } = makeMocks();
+
+    const writePromise = ctrl.writeValues([{ tag_id: MQTT_TAG, value: 1 }]);
+    triggerAck({
+      command_id:   lastCommandId(mqttBridge),
+      command_type: 'SET_VALUES',
+      ts_utc_ms:    Date.now(),
+      results:      [{ tag_id: MQTT_TAG, accepted: false, rejection_code: 'MODULE_FAULT' }],
+    });
+    await writePromise;
+
+    expect(upsertPendingSetpoints).not.toHaveBeenCalled();
+    expect(upsertCommandedSetpoints).not.toHaveBeenCalled();
+  });
+
+  it('timeout: stores every value as timeout in the commanded store only', async () => {
+    const { ctrl } = makeMocks();
+
+    const result = await ctrl.writeValues([
+      { tag_id: MQTT_TAG,   value: 7 },
+      { tag_id: MQTT_TAG_2, value: true },
+    ]);
+
+    expect(result.devices[0].results.every(r => r.rejection_code === 'TIMEOUT')).toBe(true);
+    expect(upsertPendingSetpoints).not.toHaveBeenCalled();
+    expect(upsertCommandedSetpoints).toHaveBeenCalledWith([
+      { tag_id: MQTT_TAG,   value: 7,    ack_status: 'timeout' },
+      { tag_id: MQTT_TAG_2, value: true, ack_status: 'timeout' },
+    ]);
+  });
+
+  it('late ACK after timeout is ignored: the row stays timeout', async () => {
+    const { ctrl, mqttBridge, triggerAck } = makeMocks();
+
+    await ctrl.writeValues([{ tag_id: MQTT_TAG, value: 7 }]);
+    triggerAck({
+      command_id:   lastCommandId(mqttBridge),
+      command_type: 'SET_VALUES',
+      ts_utc_ms:    Date.now(),
+      results:      [{ tag_id: MQTT_TAG, accepted: true }],
+    });
+
+    expect(upsertCommandedSetpoints).toHaveBeenCalledOnce();
+    expect(upsertCommandedSetpoints).toHaveBeenCalledWith([
+      { tag_id: MQTT_TAG, value: 7, ack_status: 'timeout' },
+    ]);
+  });
+
+  it('HMI-module writes are not stored', async () => {
+    const { ctrl } = makeMocks();
+
+    await ctrl.writeValues([{ tag_id: HMI_TAG, value: 99 }]);
+
+    expect(upsertPendingSetpoints).not.toHaveBeenCalled();
+    expect(upsertCommandedSetpoints).not.toHaveBeenCalled();
+  });
+
+  it('restorePendingSetpoints re-sends the populated commanded values of the module, skipping nulls', async () => {
+    const { ctrl, mqttBridge } = makeMocks();
+    vi.mocked(getCommandedSetpointsByTagIds).mockResolvedValueOnce([
+      { tag_id: MQTT_TAG,   value: 3.5,  ack_status: 'timeout',  set_at: new Date() },
+      { tag_id: MQTT_TAG_2, value: null, ack_status: 'accepted', set_at: new Date() },
+    ]);
+
+    await ctrl.restorePendingSetpoints(MQTT_MODULE);
+
+    expect(getCommandedSetpointsByTagIds).toHaveBeenCalledWith([MQTT_TAG, MQTT_TAG_2]);
+    expect(mqttBridge.publishCommand).toHaveBeenCalledOnce();
+    const [moduleId, command] = (mqttBridge.publishCommand as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      { command_type: string; payload: { values: unknown[] } },
+    ];
+    expect(moduleId).toBe(MQTT_MODULE);
+    expect(command.command_type).toBe('SET_VALUES');
+    expect(command.payload.values).toEqual([{ tag_id: MQTT_TAG, value: 3.5 }]);
+  });
+
+  it('restorePendingSetpoints publishes nothing when every stored value is null', async () => {
+    const { ctrl, mqttBridge } = makeMocks();
+    vi.mocked(getCommandedSetpointsByTagIds).mockResolvedValueOnce([
+      { tag_id: MQTT_TAG, value: null, ack_status: 'accepted', set_at: new Date() },
+    ]);
+
+    await ctrl.restorePendingSetpoints(MQTT_MODULE);
+
+    expect(mqttBridge.publishCommand).not.toHaveBeenCalled();
+  });
+
+  it('restorePendingSetpoints is a no-op for an HMI module', async () => {
+    const { ctrl, mqttBridge } = makeMocks();
+
+    await ctrl.restorePendingSetpoints(HMI_MODULE);
+
+    expect(getCommandedSetpointsByTagIds).not.toHaveBeenCalled();
+    expect(mqttBridge.publishCommand).not.toHaveBeenCalled();
   });
 });
