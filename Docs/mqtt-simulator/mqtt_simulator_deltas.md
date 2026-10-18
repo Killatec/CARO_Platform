@@ -5,10 +5,4 @@ Read once at session start. Add entries when implementation diverges from spec.
 
 ---
 
-**Last cleared:** 2026-10-17. `i32` data type propagated → `mqtt_simulator_bootstrap.md` §5 value-initialization tables (new `i16`/`i32` rows, `advanceIntValue` + `I16_RANGE`/`I32_RANGE`) and §8 protobuf type map.
-
----
-
-**Last cleared:** 2026-09-20. `MQTT_BROKER_URL`/`MQTT_CLIENT_ID`/`LOG_BUFFER_SIZE` module-scope-read defect (not fixed — an ongoing known defect, not a completed divergence) propagated to `mqtt_simulator_handoff.md` Gotchas as its permanent record; `mqtt_simulator_bootstrap.md`'s env table cross-references it there.
-
----
+**Last cleared:** 2026-10-17. Propagated entries live in their target docs; earlier propagation notes are in git history.
