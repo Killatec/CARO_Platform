@@ -74,10 +74,14 @@ definitions.
 
 The CARO_Platform uses two database systems:
 
--   PostgreSQL 17 --- operational data: tag registry, HMI configuration,
+-   PostgreSQL 17 (native install on the dev machine; `psql` 17.9) --- operational data: tag registry, HMI configuration,
     users, sessions, modes, setpoints, commissioning, audit log.
 
--   TimescaleDB --- time-series telemetry keyed by tag_id.
+-   TimescaleDB --- time-series telemetry keyed by tag_id. Docker image `timescale/timescaledb:latest-pg16` (PostgreSQL 16; the TimescaleDB version is not pinned).
+
+**1.1 Implementation Status (as of 2026-10-17)**
+
+Built (migrated): `tag_registry`, `registry_revisions`, `tag_types`, `module_types` (§3), `pending_setpoint_values` (§7, with differences noted there), `schema_migrations`, and the TimescaleDB objects (§9). **Not migrated:** `users`, `sessions` (§4), `commissioned_modules` (§5), `operation_modes`, `mode_revisions`, `setpoint_values` (§6), `system_settings` (§8), `audit_log` (§10), and the electronic-signature columns (§11).
 
 **2. Conventions**
 
@@ -92,7 +96,10 @@ reference a specific revision row rather than the logical tag identity.
 Instead, tag_id integrity is enforced at the application layer: the
 backend validates tag_id against the active in-memory tag map (built
 from the latest non-retired tag_registry rows) before any write is
-accepted.
+accepted. (As built: `POST /tags/write` checks the tag map before a
+SET_VALUES; `pending_setpoint_values` rows are only written for tags
+that passed that check. Historian rows are written for tag_ids from
+the tag map only.)
 
 **2.2 Append-Only Tables**
 
@@ -143,9 +150,12 @@ Current migrations:
 -   016_create_pending_setpoint_values.sql
 -   017_add_i32_tag_type.sql
 
-> *NOTE: The schema_migrations table is created programmatically inside
-> migrations.js on every runMigrations() call — it is not created via a
-> migration file.*
+> *NOTE: The schema_migrations table (`filename` PK, `applied_at`) is created
+> programmatically by `packages/db/migrations.ts` (`CREATE TABLE IF NOT
+> EXISTS`) on every runMigrations() call — it is not created via a
+> migration file. Each migration runs in its own transaction and is
+> recorded only after it succeeds; `pg_advisory_lock(1)` serialises
+> concurrent runners.*
 
 **TimescaleDB migrations** live in `db/timescale/migrations/` and are named with a `T00N_` prefix (e.g. `T001_create_tag_samples.sql`). They are applied by `runTimescaleMigrations()` from `@caro/db` and tracked in a `schema_migrations` table on the Timescale instance. Never edit existing Timescale migration files; add new ones only.
 
@@ -237,11 +247,15 @@ false.
 > *NOTE: Unique constraint on (tag_id, registry_rev). GIN index on meta.
 > B-tree indexes on tag_id, registry_rev, data_type, module, module_type, retired.*
 >
-> *NOTE: `getActiveTags()` in `packages/db/registry.js` is the canonical
+> *NOTE: `getActiveTags()` in `packages/db/registry.ts` is the canonical
 > query for this table. It returns the latest non-retired row per tag_id.
-> node-postgres returns INTEGER columns as strings; `getActiveTags()` coerces
-> tag_id to Number at the mapping step before returning rows. All consumers
-> receive a numeric tag_id — no caller-side coercion is needed.*
+> It applies `Number(row.tag_id)` at the mapping step, so all consumers
+> receive a numeric tag_id. (node-postgres returns BIGINT as a string but
+> INTEGER as a number; the column has been INTEGER since migration 004.)*
+>
+> *NOTE: `data_type` has a foreign key to `tag_types(type_name)`
+> (`fk_tag_registry_data_type`, migration 008). New tag_ids are allocated
+> as max(tag_id) + 1 with a floor of 1000, so the first tag is 1001.*
 
 **3.2 registry_revisions**
 
@@ -302,6 +316,8 @@ Referenced by template validation only — no FK from tag_registry.
   ---------------- ---------------- -------------------------------------
 
 **4. Users and Sessions**
+
+*Not migrated — no migration creates this table yet (tracked in `Docs/platform/platform_todo.md`). Target design.*
 
 **4.1 users**
 
@@ -369,6 +385,8 @@ per active session.
 
 **5. Module Commissioning**
 
+*Not migrated — no migration creates this table yet (tracked in `Docs/platform/platform_todo.md`). Target design.*
+
 **5.1 commissioned_modules**
 
 One row per module instance as defined in the Tag Registry. Created
@@ -412,6 +430,8 @@ Validated manually by an Administrator.
 > tag\'s meta array to find the ancestor with type = module.*
 
 **6. Operation Modes**
+
+*Not migrated — no migration creates this table yet (tracked in `Docs/platform/platform_todo.md`). Target design.*
 
 Three-table schema for named, revision-controlled snapshots of setpoint
 values. See hmi_functional_spec Section 6.6 for workflow
@@ -532,6 +552,12 @@ audit_log (Section 10).
                    NULL             this tag.
   ---------------- ---------------- -------------------------------------
 
+**As built (migration 016):** `tag_id INTEGER PRIMARY KEY`, `value JSONB NOT NULL`, `set_by VARCHAR(255)` **nullable, no FK** (no users table yet, never written), `set_at TIMESTAMPTZ NOT NULL DEFAULT now()`.
+
+`upsertPendingSetpoints()` (`packages/db/setpoints.ts`) upserts **every** accepted SET_VALUES value, setting `set_at = now()`. There is no comparison against a mode revision, rows are never deleted, and nothing clears the table (modes do not exist yet). `getPendingSetpointsByTagIds()` reads the rows back for setpoint re-delivery on startup and watchdog recovery (CARO_MQTT_Spec §6.3).
+
+> *Target-design notes (the epsilon comparison, mode-activation clear and save-dialog display below are not built):*
+>
 > *NOTE: Rows are created or updated only on CMD_ACK with accepted=true.
 > The backend compares the ACK-confirmed value against the active mode
 > revision value (epsilon for f64/i32, strict equality for bool). If
@@ -551,6 +577,8 @@ audit_log (Section 10).
 > promoting to a mode revision.*
 
 **8. System Settings**
+
+*Not migrated — no migration creates this table yet (tracked in `Docs/platform/platform_todo.md`). Target design.*
 
 **8.1 system_settings**
 
@@ -597,15 +625,15 @@ Hypertable storing all trending tag value history.
                                                     watchdog stall sentinel.
   ---------------- -------------------------------- -------------------------------------
 
-Hypertable configuration:
+Hypertable configuration (T001 as amended by T004):
 
-- `chunk_time_interval = 12 hours`
-- Compression: `timescaledb.compress`, `timescaledb.compress_segmentby = 'tag_id'`; compression policy: compress chunks older than 12 hours
+- `chunk_time_interval = 1 hour` (T001 created it with 12 hours; T004 changed it)
+- Compression: `timescaledb.compress`, `compress_segmentby = 'tag_id'`, `compress_orderby = 'ts DESC'`; compression policy: compress chunks older than 10 minutes, job every 5 minutes (T004)
 - Retention policy: drop chunks older than 14 days
 
-Migrations live in `db/timescale/migrations/` (prefix `T00N_*`). Applied by `runTimescaleMigrations()` from `@caro/db` at HMI server startup. Tracked in a `schema_migrations` table on the Timescale instance (same convention as the main Postgres runner). Current migrations: `T001_create_tag_samples.sql`, `T004_tighten_compression_policy.sql`, `T006_create_cag_1s.sql` through `T009_create_cag_10min.sql`.
+Migrations live in `db/timescale/migrations/` (prefix `T00N_*`). Applied by `runTimescaleMigrations()` from `@caro/db` at HMI server startup and by `HistorianReconnector` when the historian comes back. Tracked in a `schema_migrations` table on the Timescale instance (same convention as the main Postgres runner). Current migrations: `T001_create_tag_samples.sql`, `T004_tighten_compression_policy.sql`, `T006_replace_1s_cagg.sql`, `T007_create_10s_cagg.sql`, `T008_create_1min_cagg.sql`, `T009_create_10min_cagg.sql`.
 
-> *NOTE: `docker-compose.timescale.yml` at the repo root starts the TimescaleDB container. Development database: `caro_timescale` on port 5433. The HMI server writes via `TimescaleDbWriter`; falls back silently to `NullDbWriter` if Timescale is unreachable at boot. Restart required to promote from `NullDbWriter` to `TimescaleDbWriter` (periodic reconnect is on the backlog).*
+> *NOTE: `docker-compose.timescale.yml` at the repo root starts the TimescaleDB container. Development database: `caro_timescale` on port 5433. The HMI server writes via `TimescaleDbWriter`; falls back to `NullDbWriter` (one warning at startup, then rate-limited "No historian writer" errors) if Timescale is unreachable at boot. `HistorianReconnector` retries every `TIMESCALE_RECONNECT_MS` (default 30 s) and hot-swaps in a `TimescaleDbWriter` once it connects — no restart needed.*
 
 **9.2 Continuous Aggregate Views (CAGs)**
 
@@ -613,28 +641,36 @@ Four CAGs materialize off `tag_samples` (flat topology — each reads raw direct
 
 | View | Bucket | Retention | Refresh |
 |---|---|---|---|
-| `tag_samples_1s_cagg` | 1 s | 14 d | 1 min |
-| `tag_samples_10s_cagg` | 10 s | 90 d | 1 min |
-| `tag_samples_1min_cagg` | 1 min | 1 y | 1 min |
-| `tag_samples_10min_cagg` | 10 min | indefinite | 1 min (start_offset 1 h) |
+| `tag_samples_1s_cagg` | 1 s | 14 d | every 1 min, start_offset 15 min |
+| `tag_samples_10s_cagg` | 10 s | 90 d | every 1 min, start_offset 15 min |
+| `tag_samples_1min_cagg` | 1 min | 365 d | every 1 min, start_offset 15 min |
+| `tag_samples_10min_cagg` | 10 min | none (no retention policy) | every 1 min, start_offset 1 h |
+
+All refresh policies use `end_offset = 0`.
 
 Each CAG materializes four columns per bucket: `last` (LOCF source, `last(value ORDER BY ts)`), `null_count` (`count(*) FILTER (WHERE value IS NULL)`), `min` (`min(value)`), `max` (`max(value)`).
 
 **9.3 `getTrendTile()` — Trend Read Entry Point**
 
-`getTrendTile(tagIds, startTime, endTime, bucketCount)` in `packages/db/timescale/trends.ts` is the single named read function for trend data. It derives `bucketS = (endTime - startTime) / (bucketCount × 1000)` internally and dispatches:
+`getTrendTile(tagIds, startTime, endTime, bucketCount, nowMs?)` in `packages/db/timescale/trends.ts` is the single named read function for trend data. It returns `Promise<{ tile, meta }>` and dispatches in two steps:
 
-- `bucketS < 1.0` → raw `tag_samples` (COV samples, no aggregation)
-- `1.0 ≤ bucketS < 16` → `tag_samples_1s_cagg`
-- `16 ≤ bucketS < 160` → `tag_samples_10s_cagg`
-- `160 ≤ bucketS < 1600` → `tag_samples_1min_cagg`
-- `≥ 1600` → `tag_samples_10min_cagg`
+1. **Raw or bucketed** (`dispatchShape`): if `(endTime − startTime) in seconds × 10` (`SAMPLE_RATE_HZ`) ≤ `bucketCount`, it returns raw change-of-value samples from `tag_samples`, each series with an optional bounded `prev` (last sample in the 5 minutes before `startTime`).
+2. **Bucketed source** (`deriveBucketSMs`, `DISPATCH_TABLE`): `bucketSMs = round((endTime − startTime) / bucketCount)`, `bucketS = bucketSMs / 1000`, which must be in `(0, MAX_BUCKET_S = 14746]`. Then:
+   - `bucketS < 1` → gap-filled buckets from `tag_samples`;
+   - `< 16` → `tag_samples_1s_cagg`;
+   - `< 160` → `tag_samples_10s_cagg`;
+   - `< 1600` → `tag_samples_1min_cagg`;
+   - otherwise → `tag_samples_10min_cagg`.
+
+Aggregate buckets that start after `nowMs` (the caller's commit watermark, default `Date.now()`) are nulled.
 
 Watermark-aware fall-through splits any query whose `endTime > watermark_ts` — the trailing portion falls through to the next-finer source recursively. `source: 'mixed'` in the response when stitching occurred. Watermark lookups are memoized per-source with a 30-second TTL and in-flight Promise deduplication (`watermarkCache` / `watermarkInFlight` in `trends.ts`); cold `_timescaledb_internal.cagg_watermark()` catalog queries cost 130–300 ms at production data scale and are absorbed into one call per source per 30s regardless of concurrent tile fetches.
 
-**Min/max aggregate response (v0.8).** The aggregate path returns per-series `{ value, min, max }` arrays. The re-aggregation CTE uses `min(s.min)` / `max(s.max)` (not `last()`) so Div > 1 outer re-aggregation spans the full range of source sub-buckets. The JS post-pass applies the three-case rule: `null_count > 0` → all three null; `bucket_min IS NULL` (empty/gapfilled bucket) → all three collapse to LOCF'd `last`; otherwise → `last`, `bucket_min`, `bucket_max`. Raw path returns only `ts`/`value` — no min/max. See `Docs/hmi/trend-viewer/hmi_trend_viewer_spec.md` §6.5 for the full three-case rule.
+**Min/max aggregate response (v0.8).** The aggregate path returns per-series `{ value, min, max }` arrays. The re-aggregation CTE uses `min(s.min)` / `max(s.max)` (not `last()`) so Div > 1 outer re-aggregation spans the full range of source sub-buckets. The JS post-pass applies the three-case rule: `null_count > 0` → all three null; `bucket_min IS NULL` (empty/gapfilled bucket) → all three collapse to LOCF'd `last`; otherwise → `last`, `bucket_min`, `bucket_max`. Raw path returns only `ts`/`value` (plus `prev`) — no min/max. See `Docs/hmi/trend-viewer/hmi_trend_viewer_spec.md` §6.5 for the full three-case rule.
 
 **10. Audit Log**
+
+*Not migrated — no migration creates this table yet (tracked in `Docs/platform/platform_todo.md`). Target design.*
 
 **10.1 audit_log**
 
@@ -782,6 +818,8 @@ o.outcome, o.after_value AS confirmed FROM audit_log r JOIN audit_log o
 ON r.command_id = o.command_id AND o.event_type = \'tag.write.outcome\'
 WHERE r.event_type = \'tag.write.request\' AND r.tag_id = \$1 ORDER BY
 r.ts DESC.
+
+*§11 is reserved design only — not built.*
 
 **11. Electronic Signatures --- Reserved (21 CFR Part 11 Readiness)**
 

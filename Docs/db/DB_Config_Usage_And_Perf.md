@@ -4,6 +4,12 @@
 **Status:** Design validated by measurement gates and implemented (TimescaleDB migrations T001–T009, trends API v0.9). Live config and migration list: `Docs/db/db_handoff.md`.
 **Location:** `Docs/db/DB_Config_Usage_And_Perf.md` (the earlier planned name `Historian_DB_Summary.md` was never used).
 
+> **As built vs this design (checked 2026-10-17).** The database configuration in §2–§3 matches the migrations. Two things changed after this document was written:
+> 1. **Tiles:** the trend viewer requests **500 buckets per tile** with **2 visible tiles** per window (2–4 when the viewport straddles tile boundaries) plus **1 overfetch tile per side** (`TREND_VIEWER_DEFAULTS` in `packages/trend-chart/src/level.ts`), not 4 × 250. The 250-bucket measurements in §6–§7 are kept as the evidence they were.
+> 2. **Raw vs bucketed:** raw change-of-value samples are returned only when `window_seconds × 10 ≤ bucket_count` (`dispatchShape`). Otherwise the response is bucketed, and `bucket_s < 1` is served as gap-filled buckets from `tag_samples` (`source: 'tag_samples'`), not as raw samples. The CAG ladder for `bucket_s ≥ 1` is unchanged.
+>
+> The live query builder is `buildGapfillSql(opts)` in `packages/db/timescale/trends.ts`. It also returns `min`/`max` and a null count, which the §5.1 sketch omits.
+
 This document is the single source of truth for all decisions regarding the historian database (TimescaleDB on `caro_timescale`) — chunk and compression policy, continuous aggregates (CAGs), tile structure, query shape, dispatch logic, and the empirical performance results that justify each choice.
 
 For the design narrative and the window-to-CAG dispatch as built, see `Docs/hmi/trend-viewer/hmi_trend_viewer_spec.md` §4.3 and §6.3 (the `Trend_CAGs_Structure.md` design note this document was written against was never committed). This document is the operational summary.
@@ -14,9 +20,9 @@ For the design narrative and the window-to-CAG dispatch as built, see `Docs/hmi/
 
 - **Raw hypertable:** `tag_samples` on `caro_timescale` (port 5433)
 - **Four CAGs:** 1-second, 10-second, 1-minute, 10-minute, all materialized off `tag_samples`
-- **Tile structure:** fixed 250 buckets per tile, 4 tiles per window in parallel
+- **Tile structure:** *as built* 500 buckets per tile, 2 visible tiles per window + 1 overfetch per side (designed and measured as 250 × 4)
 - **Per-query tag cap:** N ≤ 8 tags. Larger charts fan out into multiple parallel queries.
-- **Dispatch:** by output bucket size (`bucket_s`), routed to the CAG where re-aggregation ratio (Div) stays ≤ 16
+- **Dispatch:** raw samples only when the window's worst-case point count fits in `bucket_count`; otherwise by output bucket size (`bucket_s`), routed to the CAG where re-aggregation ratio (Div) stays ≤ 16
 - **Query shape:** `time_bucket_gapfill()` + `locf()` with **bounded `prev` correlated subquery** (5-minute lookback) — bound is mandatory, not optional
 - **Writer dependency:** every trendable tag has a sample written at least every 60 seconds; the 5-min `prev` bound provides 5× safety margin
 - **Connection pool:** max 10 (recommended size 20-30 for production trend-viewer concurrency)
@@ -93,6 +99,8 @@ The cheap-zone boundary (Div ≤ 16, measured) maps to roughly a decade-and-a-ha
 ## 4. Dispatch Logic
 
 ### 4.1 Routing rule (canonical)
+
+*Design form below. As built, each tile is its own request: `bucket_s = round(tile_ms / bucket_count) / 1000` with `bucket_count = 500`, and the first branch is preceded by the raw-vs-bucketed check described at the top of this document.*
 
 Dispatch is on `bucket_s = window_seconds / total_buckets`, where `total_buckets = N_tiles × 250` (so 500 at minimum, 1000 at maximum).
 
@@ -185,6 +193,8 @@ PostgreSQL's generic plan regime (activated after the 5th prepared execution) ca
 
 ### 6.1 Fixed tile size: 250 buckets
 
+*Superseded in the implementation by 500 buckets per tile (see the note at the top). The reasoning below is the original 250-bucket design.*
+
 Three independent justifications:
 
 1. **Test (d) measured outcome:** 4×250 beats 1×1000 by 51% on uncompressed (61 ms → 30 ms wall-clock).
@@ -192,6 +202,8 @@ Three independent justifications:
 3. **Cliff avoidance:** per-tile working set stays below the heap-scatter cliff across the operating range.
 
 ### 6.2 4 tiles per window in parallel
+
+*As built: 2 visible tiles (up to 4 when the viewport is not tile-aligned) + 1 overfetch tile per side, fetched in parallel, with ⌈N/8⌉ requests per tile for N tags.*
 
 Initial render fires 4 tiles via `Promise.all`. Per-query mean is ~70-90% of wall-clock (parallelism factor 2.79× measured, vs theoretical max 4×). The remaining gap is connection-pool contention and last-tile straggler effects.
 
@@ -338,4 +350,4 @@ Each gate is measurement-driven. Resist building all four CAGs upfront.
 | Date | Change |
 |---|---|
 | 2026-04-27 | Initial summary. Design validated by gate testing with bounded `prev` fix. Ready for trends API implementation. |
-| 2026-10-17 | Moved to `Docs/db/`. Status updated to implemented; references to companion files that were never committed repointed or marked *not in repo*. |
+| 2026-10-17 | As-built note added at the top (500-bucket tiles, 2 visible + overfetch, raw-vs-bucketed window rule, `tag_samples` bucketed source); §1, §4.1, §6.1–§6.2 annotated. Moved to `Docs/db/`. Status updated to implemented; references to companion files that were never committed repointed or marked *not in repo*. |
