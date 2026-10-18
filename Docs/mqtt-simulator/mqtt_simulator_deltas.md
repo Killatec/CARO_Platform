@@ -5,7 +5,7 @@ Read once at session start. Add entries when implementation diverges from spec.
 
 ---
 
-- **2026-10-01 — `i32` data type (`mqtt_simulator_bootstrap.md` §239 type map):** `i32` → `int_value` (`int32`, clamped to ±2³¹). `advanceI16Value` replaced by `advanceIntValue(simT, deltaMs, range)` with exported `I16_RANGE`/`I32_RANGE`; `i32` shares the `i16` sine-wave and random-setpoint branches.
+**Last cleared:** 2026-10-17. `i32` data type propagated → `mqtt_simulator_bootstrap.md` §5 value-initialization tables (new `i16`/`i32` rows, `advanceIntValue` + `I16_RANGE`/`I32_RANGE`) and §8 protobuf type map.
 
 ---
 

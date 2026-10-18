@@ -108,6 +108,7 @@ Taken directly from the `tag_registry.module` column — no meta array parsing.
 | `data_type` | Initial | Per-tick update |
 |---|---|---|
 | `f32` | `50.0` | `50 + 25 * sin(2π * t / periodMs)`. `t` increments by `TICK_INTERVAL_MS` each tick. `periodMs = SINE_PERIOD_S * 1000`. |
+| `i16`, `i32` | Sine-wave value at a random phase (`simT` random in 0–30 000 ms) | Same sine wave, rounded and clamped to the type's range: `advanceIntValue(simT, deltaMs, range)` in `simGenerators.ts`, with exported `I16_RANGE` / `I32_RANGE`. |
 | `bool` | `false` | 0.5% probability flip per tick (~1 toggle per 200 ticks). |
 
 **Setpoint tags (`is_setpoint: true`):**
@@ -115,6 +116,7 @@ Taken directly from the `tag_registry.module` column — no meta array parsing.
 | `data_type` | Initial |
 |---|---|
 | `f32` | `0` |
+| `i16`, `i32` | `0`; "Change Sets" randomizes to an integer in −100…100 |
 | `bool` | `false` |
 
 All tags start with `simT: 0`.
@@ -237,6 +239,7 @@ Tag value `oneof` field per `data_type`:
 | `f32` | `float_value` | `float` (32-bit IEEE 754) | number |
 | `bool` | `bool_value` | `bool` | boolean |
 | `i16` | `int_value` | `int32` (clamped to −32768…32767) | number |
+| `i32` | `int_value` | `int32` (clamped to ±2³¹) | number |
 
 `protobufjs` installed at monorepo root (not server-local — blocked by `@caro/db` workspace resolution). Run `npm install` from monorepo root if missing.
 

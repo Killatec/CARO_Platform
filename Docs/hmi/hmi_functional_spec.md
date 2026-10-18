@@ -254,7 +254,7 @@ CARO_HMI operates exclusively against tags identified by tag_id. The Tag Registr
 |---|---|---|
 | tag_id | UINT32 | Primary identifier for all HMI operations: telemetry subscription, setpoint commands, trending queries, alarm binding, audit records. Transmitted as uint32 in all WebSocket messages. |
 | tag_path | VARCHAR | Human-readable label displayed in dashboards and trend views. Fetched at startup; used for display only — never as an identifier on the wire. |
-| data_type | VARCHAR | Determines input validation and display formatting. Scalar types: `f32`, `i16`, `bool`, `string`. Array types: `f32[]`, `i16[]`. Only scalar numeric types (`f32`, `i16`, `bool`) are trendable; array types are read-only non-trendable. |
+| data_type | VARCHAR | Determines input validation and display formatting. Scalar types: `f32`, `i16`, `i32`, `bool`, `string`. Array types: `f32[]`, `i16[]`. Only scalar numeric types (`f32`, `i16`, `i32`, `bool`) are trendable; array types are read-only non-trendable. |
 | is_setpoint | BOOLEAN | If true, tag accepts write commands from Supervisor role. If false, tag is monitor-only. |
 | meta | JSONB | Provenance chain (leaf-to-root). Used to group tags in the UI by hierarchy, display context, and resolve fields (eng_min, eng_max, unit, format) via root-to-leaf resolution (see Section 6.5). |
 | trends | BOOLEAN | If true, the tag's values are written to TimescaleDB by the telemetry loop. Used to filter time-series persistence — only tagged trends are stored. |

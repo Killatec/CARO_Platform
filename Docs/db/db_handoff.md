@@ -55,7 +55,7 @@ Files in `db/postgres/migrations/`. Applied in filename order. Tracked in `schem
 
 - Never edit an existing migration file.
 - New behavior = new file with next sequential prefix.
-- Applied: `001` `002` `003` `004` `006` `007` `008` `009` `010` `011` `012` `013` `014` (005 skipped — do not reuse)
+- Applied: `001`–`004`, `006`–`017` (005 skipped — do not reuse)
 - `007` — create `tag_types` lookup table; migrate `tag_registry.data_type` to FK
 - `008` — revert `tag_registry.data_type` FK back to string (`tag_types.type_name`)
 - `009` — remove unused tag types; rename `f64` → `f32`
@@ -64,6 +64,9 @@ Files in `db/postgres/migrations/`. Applied in filename order. Tracked in `schem
 - `012` — add `i16` (Int 16) to `tag_types`
 - `013` — add nullable display columns `unit`, `format`, `eng_min`, `eng_max` to `tag_registry`
 - `014` — add `string`, `f32[]`, `i16[]` to `tag_types`
+- `015` — add `tag_name` column to `tag_registry`
+- `016` — create `pending_setpoint_values`
+- `017` — add `i32` (Int 32) to `tag_types`
 
 ### TimescaleDB migrations
 

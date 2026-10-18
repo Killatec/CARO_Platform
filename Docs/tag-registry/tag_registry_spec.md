@@ -78,7 +78,7 @@ The shared module exports:
 - `applyFieldCascade(templateMap, changedTemplate)` — given a template that has changed, propagates the effect to all child instances in the map. Returns an updated `templateMap`. Pure function — does not mutate its input.
 - `validateParentTypes(templateMap, rootName, options)` — evaluates `VALIDATE_REQUIRED_PARENT_TYPES` and `VALIDATE_UNIQUE_PARENT_TYPES` rules. Returns `{ errors: [], warnings: [] }`.
 - `resolveRegistry(templateMap, rootName)` — resolves the full hierarchy into a flat tag list with `tag_path`, `tag_name`, `module`, `module_type`, `data_type`, `is_setpoint`, `trends`, `unit`, `format`, `eng_min`, `eng_max`, and `meta`. Pure function. Extracts `.default` from each field definition before merging with instance overrides. `module` is the name of the nearest ancestor with `template_type: "module"` (null if none). `module_type` is the `Module_Type` field value from that module template (null if none). The `trends` field is `true` if any level in the resolved hierarchy has a field key matching `"trends"` (case-insensitive) with value `true` after instance override resolution, `false` otherwise. `tag_name` is the dot-joined `asset_name`s of meta levels where `In_Tag_Name === true`, root→leaf (see §16.11). The display columns `unit`, `format`, `eng_min`, `eng_max` are resolved via `resolveDisplayField` and are `null` for non-numeric tags (see §11.3). The `meta` array is ordered root-to-tag: `meta[0]` is the root level entry, `meta[meta.length - 1]` is the tag-level entry.
-- `validateResolvedTags(resolvedTags)` — post-resolution cross-field validator. Enforces: `trends` only on `f32`, `i16`, or `bool`; `is_setpoint` only on non-array types; `TAG_NAME_EMPTY`, `TAG_NAME_TOO_LONG`, `DUPLICATE_TAG_NAME` (see §10.9 and §16.11). Returns `{ valid, errors, warnings }`. Called by both client (live validation panel) and server (authoritative re-run on batch save) after `resolveRegistry`.
+- `validateResolvedTags(resolvedTags)` — post-resolution cross-field validator. Enforces: `trends` only on `f32`, `i16`, `i32`, or `bool`; `is_setpoint` only on non-array types; `TAG_NAME_EMPTY`, `TAG_NAME_TOO_LONG`, `DUPLICATE_TAG_NAME` (see §10.9 and §16.11). Returns `{ valid, errors, warnings }`. Called by both client (live validation panel) and server (authoritative re-run on batch save) after `resolveRegistry`.
 - `getModuleNames(tagMap)` — returns a sorted `string[]` of distinct module_id values from the resolved tag map, ordered by each module's minimum tag_id. Used by `HmiTagSource` (producer) and `ModuleInfoTable` (widget) for consistent module index assignment.
 - `packedBit(words, bitIndex)` / `setPackedBit(words, bitIndex, value)` — LSB-first read/write of a single bit within a `number[]` word array (16 bits per word). Used for the `Module_Info.Watchdog` packed-bit array.
 - `ModuleStatus` / `ModuleStatusLabels` — const enum (`UNKNOWN=0`, `OK=1`, `WARNING=2`, `FAULT=3`, `STALLED=4`) and display-label map. Shared between producer and widget.
@@ -137,6 +137,7 @@ New unsaved templates (null hash) are deleted instantly client-side via `removeT
 | `f32` | Float 32 | Scalar | Yes | Yes |
 | `bool` | Boolean | Scalar | Yes | Yes |
 | `i16` | Int 16 | Scalar | Yes | Yes |
+| `i32` | Int 32 | Scalar | Yes | Yes |
 | `string` | String | Scalar | No | No |
 | `f32[]` | Float 32 Array | Array | No | No |
 | `i16[]` | Int 16 Array | Array | No | No |
@@ -144,7 +145,7 @@ New unsaved templates (null hash) are deleted instantly client-side via `removeT
 Data types are stored in the `tag_types` database table (see DB Spec §3.3). `DEFAULT_DATA_TYPE = 'f32'` is the only hardcoded constant. The server validates `TagType` field values against `tag_types.type_name` on template save using `Promise.all` alongside `ModuleType` validation. New types can be added by inserting rows into `tag_types`.
 
 **Constraints enforced at resolved-tag level (see §10.9):**
-- Only `f32`, `i16`, and `bool` may have `trends = true`. Setting `trends: true` on a `string` or array tag is a validation error.
+- Only `f32`, `i16`, `i32`, and `bool` may have `trends = true`. Setting `trends: true` on a `string` or array tag is a validation error.
 - Array types (`f32[]`, `i16[]`) may not be setpoints. Setting `is_setpoint: true` on an array tag is a validation error.
 
 ---
@@ -301,7 +302,7 @@ Any structural change to a template triggers `applyFieldCascade` immediately on 
 
 After `resolveRegistry` produces the flat tag list, `validateResolvedTags(resolvedTags)` enforces rules that span multiple resolved fields:
 
-- **Trendable types:** `trends: true` is only valid when `data_type` is `f32`, `i16`, or `bool`. Setting `trends: true` on a `string` or array tag (`f32[]`, `i16[]`) is a validation error.
+- **Trendable types:** `trends: true` is only valid when `data_type` is `f32`, `i16`, `i32`, or `bool`. Setting `trends: true` on a `string` or array tag (`f32[]`, `i16[]`) is a validation error.
 - **Array setpoints:** `is_setpoint: true` is only valid on scalar types. Array tags (`f32[]`, `i16[]`) may not be setpoints.
 - **`tag_name` rules:** `TAG_NAME_EMPTY` (empty `tag_name`), `TAG_NAME_TOO_LONG` (>40 chars), `DUPLICATE_TAG_NAME` (case-insensitive duplicate within the entire resolved registry; one error per offending tag; empty names excluded). See §16.11 for full `tag_name` / `In_Tag_Name` specification.
 
@@ -332,7 +333,7 @@ Registry generation uses `resolveRegistry(templateMap, rootName)`. It runs clien
 
 ### 11.3 Display Column Resolution
 
-Four flat display columns — `unit`, `format`, `eng_min`, `eng_max` — are resolved per tag and stored as nullable columns on `tag_registry` (added by migration 013). They are populated only for **numeric tags**: those whose resolved `data_type` is in `TYPES_WITH_UNIT` (`shared/constants.ts`, currently `{ 'f32', 'i16', 'f32[]', 'i16[]' }`). Boolean, string, and other non-numeric tags receive `null` for all four columns.
+Four flat display columns — `unit`, `format`, `eng_min`, `eng_max` — are resolved per tag and stored as nullable columns on `tag_registry` (added by migration 013). They are populated only for **numeric tags**: those whose resolved `data_type` is in `TYPES_WITH_UNIT` (`shared/constants.ts`, currently `{ 'f32', 'i16', 'i32', 'f32[]', 'i16[]' }`). Boolean, string, and other non-numeric tags receive `null` for all four columns.
 
 Resolution is performed by `resolveDisplayField(fieldName, meta, assetPath)` in `resolveRegistry.ts`. The algorithm walks the meta chain from root (index 0) to tag (index last) and applies these rules:
 
