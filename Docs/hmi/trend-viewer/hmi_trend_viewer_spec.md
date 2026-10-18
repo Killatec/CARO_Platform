@@ -11,6 +11,7 @@ hmi_trend_viewer_reference | hmi_functional_spec | hmi_API_spec | hmi_widget_spe
 
 | Version | Date | Author | Summary |
 |---|---|---|---|
+| 2.7 | 2026-10-17 | PM / Claude | §7.1 file map reconciled with `packages/trend-chart/src/`: added `bigintMath.ts`, `sessionPersistence.ts`, `runTileFetch.ts`, `gatedFetchTile.ts`, `tileActiveSet.ts`, `mergeTrendData.ts`, `useLiveSubscription.ts`, `SpanIndicator.tsx`, `BucketFetchIndicator.tsx`, `TagPickerModal.tsx`, `css.d.ts`; `CursorDisplay` described as range-message-only. |
 | 2.6 | 2026-09-22 | PM / Claude | §13.6 Session Persistence: storage key gained a `storageScope` segment — `caro.${storageScope}.trend-viewer.session.${persistKey}` (was `caro.trend-viewer.session.${persistKey}`). New `storageScope` prop on `TrendChartContainer` (default `'default'`), threaded through `loadSession`/`saveSession`/`clearSession`/`useSessionPersistence`, namespaces a session by system (`PROJECT_ROOT`) so two systems viewed from the same browser never collide. Part of HMI multi-system UI selection; package stays platform-ignorant. |
 | 2.5 | 2026-05-28 | PM / Claude | Wheel-zoom one-tick-stale bug fix. §9.2 Implementation note: added one sentence clarifying that `userScaleRef.current` is the source of truth for the dispatched range after `zoomXScale` — `u.setScale` defers `.min`/`.max` mutation to the next animation frame so reading `u.scales['x']` immediately after returns stale pre-zoom values. |
 | 2.4 | 2026-05-27 | PM / Claude | 2026-05-27 audit propagation pass (Issues 2–10). §7 client package structure: `useSessionPersistence.ts` added to the file map; `useTrendMode.ts` description expanded for `onTransition`; `TrendChartContainer.tsx` description updated to "thin wiring layer" with the actual line count (~440) and hook-composition list; `SpanBucketIndicator.tsx` removed (file deleted); §7.1 closing "hooks pending" line updated. §19 glossary: `latestSampleTs` simplified to `sessionHighWaterMark` with a historical note about the prior `max(...)` formula; `Live Mode` entry expanded to enumerate the three semantic uses of "live" in the codebase (mode predicate / `isLive` prop / tile-level live-edge per terminal-cache rule). §6.1 INVALID_TAG_IDS row clarified to explicitly include "non-positive integer (`id ≤ 0`)"; request param description tightened to "positive integers (>0)". §7.1 axisInteractions file-map line corrected (9 → 7 exported functions). |
@@ -550,7 +551,15 @@ packages/trend-chart/
     tileCache.ts                  # TileCache (LRU, 50 MB cap), makeTileCacheKey
     colorAssign.ts                # colorAssign(tagId), PALETTE, PALETTE_SIZE
     axisInteractions.ts           # pure axis pan/zoom helpers (7 exported functions)
+    bigintMath.ts                 # clampLowerBound + bigint helpers
+    sessionPersistence.ts         # V1 session schema; load/save/clearSession(scope, persistKey)
     (date formatting lives in @caro/ui — see formatDateTime / formatDate)
+
+    # ── useTrendData sub-modules ────────────────────────────────────────────
+    runTileFetch.ts               # unified tile fetch pipeline (live + history), terminal-cache rule
+    gatedFetchTile.ts             # CLIENT_OVER_RANGE / CLIENT_UNDER_RANGE / CLIENT_PRE_EPOCH gating
+    tileActiveSet.ts              # active-tile entries, assembleData, committedThroughTs
+    mergeTrendData.ts             # merge cached TrendData with the live tail (live wins on its range)
 
     # ── React hooks ─────────────────────────────────────────────────────────
     useTrendData.ts               # REST fetch orchestration; owns TileCache instance
@@ -560,6 +569,7 @@ packages/trend-chart/
                                   # invalidateNonTerminalTiles) — supersedes the prior
                                   # dispatchModeAction container wrapper
     useZoomState.ts               # zoom level state; exports computeDragZoomViewport
+    useLiveSubscription.ts        # trend WS subscription, per-tag ring, bucket accumulator, raw buffer
     useSessionPersistence.ts      # debounced localStorage save (~250 ms), unmount flush,
                                   # initial-load reconciliation (filter saved tagIds against
                                   # trendable set, promote stale live-fixed to live-trailing
@@ -578,8 +588,13 @@ packages/trend-chart/
                                   # pan/zoom. ~440 lines after the 2026-05-27 refactor.
     SpanPresets.tsx               # footer: 8-preset strip (1m/5m/15m/1h/4h/24h/7d/14d)
     EndPicker.tsx                 # footer: End datetime picker button + Live/Go Live button
-    Legend.tsx                    # vertical column on the right side of the chart
-    CursorDisplay.tsx             # cursor-time display in the legend area
+    Legend.tsx                    # vertical column on the right side of the chart (cursor row,
+                                  # value header, tag table, gear button for the picker)
+    CursorDisplay.tsx             # range-message-only bar ("Range too wide/narrow…")
+    SpanIndicator.tsx             # footer: viewport span
+    BucketFetchIndicator.tsx      # legend strip: bucket size + last fetch duration
+    TagPickerModal.tsx            # tag picker (§11)
+    css.d.ts                      # ambient *.css module declaration
 
     render/
       uplotConfig.ts

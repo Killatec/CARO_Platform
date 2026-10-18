@@ -4,6 +4,7 @@
 
 | Date | Note |
 |---|---|
+| 2026-10-17 | Reconciled with `TrendsPerfTestPage.tsx` and `@caro/db`: inputs are `pointsPerTile` (default 500) and `nTiles` (default 2), not `pointsPerWindow`; the "Raw" row is served as bucketed `tag_samples` under the window-size dispatch rule; `getTrendExtent` uses two `ORDER BY ts … LIMIT 1` queries. |
 | 2026-04-29 | Initial markdown version. Wire contract aligned to hmi_trend_viewer_spec v0.5+ (start_time/end_time/bucket_count). PDF design doc was the original source. |
 
 ---
@@ -49,14 +50,11 @@ export async function getTrendExtent(): Promise<{
 }>;
 ```
 
-SQL:
+SQL (as built — two queries; the original single `min(ts)`/`max(ts)` form was replaced on 2026-05-17 because it scanned the whole table):
 ```sql
-SELECT (extract(epoch from min(ts)) * 1000)::bigint AS oldest_ms,
-       (extract(epoch from max(ts)) * 1000)::bigint AS newest_ms
-FROM tag_samples;
+SELECT (EXTRACT(EPOCH FROM ts) * 1000)::bigint AS ts_ms FROM tag_samples ORDER BY ts ASC  LIMIT 1;
+SELECT (EXTRACT(EPOCH FROM ts) * 1000)::bigint AS ts_ms FROM tag_samples ORDER BY ts DESC LIMIT 1;
 ```
-
-TimescaleDB resolves `min`/`max` via chunk metadata — no full scan.
 
 Returns `{ oldestMs: null, newestMs: null }` when the hypertable is empty.
 
@@ -114,9 +112,9 @@ Signature change: `createTagsRouter(tagMap, cmdController, trendableTagIds)` —
 
 ## 7. Row Definitions
 
-The page sweeps nine dispatch zones. `bucketS` is the per-bucket duration in seconds:
+The page sweeps nine dispatch zones. `bucketS` is the per-bucket duration in seconds. Window sizes below are for the defaults (500 buckets × 2 tiles = 1000 points per window):
 
-| Row | bucket_s | CAG | Div | window (pointsPerWindow=1000) |
+| Row | bucket_s | CAG | Div | window (defaults) |
 |---|---|---|---|---|
 | Raw | 0.5 | tag_samples | — | 500 s |
 | 1s CAG, Div=1 | 1 | 1s_cagg | 1 | 1000 s |
@@ -130,18 +128,20 @@ The page sweeps nine dispatch zones. `bucketS` is the per-bucket duration in sec
 
 Div = `bucketS / CAG_bucket_s` (e.g., bucketS=8 against 1s CAG = Div 8).
 
+> *NOTE: Since the window-size dispatch rule (`dispatchShape` in `packages/db/timescale/trends.ts`), the **Raw** row no longer measures raw change-of-value reads. With the defaults each Raw tile spans 250 s; 250 × 10 Hz = 2500 > 500 buckets, so the server answers with gap-filled buckets from `tag_samples` (`source: 'tag_samples'`). Raw COV is only returned when `tile_seconds × 10 ≤ bucket_count`.*
+
 ---
 
 ## 8. Inputs
 
 | Input | Default | Constraints |
 |---|---|---|
-| `pointsPerTile` | 250 | positive integer; warn if ≠ 250 (client policy) |
-| `pointsPerWindow` | 1000 | positive integer ≥ `pointsPerTile` |
-| `tagCount` | 8 | integer in [1, tagList.length] |
+| `pointsPerTile` | 500 (`TREND_VIEWER_DEFAULTS.bucketCount`) | positive integer; a warning shows when it differs from 500 |
+| `nTiles` | 2 (`visibleTilesPerWindow`) | positive integer — tiles per window |
+| `tagCount` | 8 | clamped to the number of trendable tags |
 
 Computed labels (displayed below inputs):
-- `n_tiles = ceil(pointsPerWindow / pointsPerTile)`
+- `n_tiles` = the `nTiles` input
 - `n_tag_groups = ceil(tagCount / 8)`
 - `reqs/cell = n_tiles × n_tag_groups`
 
