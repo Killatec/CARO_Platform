@@ -28,25 +28,6 @@ export async function upsertPendingSetpoints(
   );
 }
 
-/**
- * Returns all pending setpoint rows whose tag_id is in the provided list.
- * Returns an empty array if tagIds is empty.
- */
-export async function getPendingSetpointsByTagIds(
-  tagIds: number[],
-): Promise<PendingSetpointRow[]> {
-  if (tagIds.length === 0) return [];
-
-  const result = await query(
-    `SELECT tag_id, value
-     FROM pending_setpoint_values
-     WHERE tag_id = ANY($1::int[])`,
-    [tagIds],
-  );
-
-  return result.rows as PendingSetpointRow[];
-}
-
 /** 'accepted' = CMD_ACK confirmed the value; 'timeout' = no CMD_ACK in time. */
 export type SetpointAckStatus = 'accepted' | 'timeout';
 

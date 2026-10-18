@@ -102,20 +102,12 @@ describe('MqttBridge', () => {
     await bridge.stop();
   });
 
-  it('REQUEST_SNAPSHOT is sent on start for each module', async () => {
+  it('sends no command on connect — the snapshot follows the bind', async () => {
     const bridge = makeBridge();
     await startBridge(bridge);
 
-    const cmdTopics = (mockClient.publish.mock.calls as unknown[][])
-      .map(c => c[0] as string)
-      .filter(t => t === `caro/${MODULE_ID}/cmd`);
-    expect(cmdTopics.length).toBeGreaterThanOrEqual(1);
-
-    const snapshotCall = (mockClient.publish.mock.calls as unknown[][]).find(
-      c => (c[0] as string) === `caro/${MODULE_ID}/cmd`
-    )!;
-    const body = JSON.parse(snapshotCall[1] as string) as { command_type: string };
-    expect(body.command_type).toBe('REQUEST_SNAPSHOT');
+    const cmdTopics = (mockClient.publish.mock.calls as unknown[][]).filter(c => c[0] === `caro/${MODULE_ID}/cmd`);
+    expect(cmdTopics).toEqual([]);
     await bridge.stop();
   });
 
@@ -165,15 +157,13 @@ describe('MqttBridge — handshake', () => {
     await bridge.stop();
   });
 
-  it('sends REHANDSHAKE on handshake_backend before REQUEST_SNAPSHOT on every connect', async () => {
+  it('sends REHANDSHAKE on handshake_backend to each module on every connect', async () => {
     const bridge = makeBridge();
     await startBridge(bridge);
 
     const calls = mockClient.publish.mock.calls as unknown[][];
     const rehandshake = calls.findIndex(c => c[0] === `caro/${MODULE_ID}/handshake_backend`);
-    const snapshot    = calls.findIndex(c => c[0] === `caro/${MODULE_ID}/cmd`);
     expect(rehandshake).toBeGreaterThanOrEqual(0);
-    expect(rehandshake).toBeLessThan(snapshot);
     expect(JSON.parse(calls[rehandshake][1] as string)).toMatchObject({ message_type: 'REHANDSHAKE', ts_utc_ms: expect.any(Number) });
     expect(calls[rehandshake][2]).toMatchObject({ qos: 1 });
 

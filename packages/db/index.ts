@@ -15,5 +15,5 @@ export type { TagSampleRow } from './timescale/samples.js';
 export { getTimescaleDatabaseSizeBytes } from './timescale/stats.js';
 export { getTrendTile, getTrendExtent, MAX_BUCKET_S, SAMPLE_RATE_HZ, deriveBucketSMs, dispatchShape, __test_watermarkOverride, __test_clearWatermarkCache } from './timescale/trends.js';
 export type { RawTrendSeries, AggregateTrendSeries, RawTrendTile, AggregateTrendTile, TrendTile, TileMetaSegment, TileMeta, TileResult } from './timescale/trends.js';
-export { upsertPendingSetpoints, getPendingSetpointsByTagIds, upsertCommandedSetpoints, getCommandedSetpointsByTagIds } from './setpoints.js';
+export { upsertPendingSetpoints, upsertCommandedSetpoints, getCommandedSetpointsByTagIds } from './setpoints.js';
 export type { PendingSetpointRow, SetpointAckStatus, CommandedSetpointEntry, CommandedSetpointRow } from './setpoints.js';

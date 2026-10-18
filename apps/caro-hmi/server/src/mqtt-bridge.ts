@@ -57,10 +57,10 @@ export class MqttBridge {
 
         // Beats never stop, so a module would not notice a backend restart shorter
         // than its beat timeout: ask every module to re-bind. A bound module requests
-        // a new TAG_LIST and keeps its binding; anything else ignores it.
+        // a new TAG_LIST and keeps its binding; an unbound one is requesting anyway.
+        // The snapshot follows the bind (HandshakeController), not the connect.
         for (const moduleId of this.moduleIds) {
           this.sendRehandshake(moduleId);
-          this.sendRequestSnapshot(moduleId);
         }
 
         resolve();
