@@ -38,6 +38,7 @@ startup against whatever database they're configured for.
 | `014_add_array_tag_types.sql` | Adds `string`, `f32[]`, `i16[]` to `tag_types` |
 | `015_add_tag_name_column.sql` | Adds `tag_name` column |
 | `016_create_pending_setpoint_values.sql` | `pending_setpoint_values` table — setpoint restore-on-reconnect |
+| `017_add_i32_tag_type.sql` | Adds `i32` (Int 32) to `tag_types` |
 
 Note: the table jumps from `004` to `006` — there is no `005` file on disk. `runMigrations()` only reads whatever `.sql` files are present and sorts by filename, so a gap in the sequence is harmless, not a missing dependency.
 
@@ -48,18 +49,18 @@ The recommended path is to let an app run `runMigrations()` itself at startup
 way). To apply the whole set by hand instead, run from the repo root:
 
 ```bash
-psql -h localhost -p 5432 -U caro -d caro_dev \
+psql -h localhost -p 5432 -U postgres -d caro_dev \
   -f db/postgres/migrations/001_create_tag_registry.sql
 
-psql -h localhost -p 5432 -U caro -d caro_dev \
+psql -h localhost -p 5432 -U postgres -d caro_dev \
   -f db/postgres/migrations/002_create_registry_revisions.sql
 ```
 
-Or pipe all of them, in order, in a single shell invocation:
+Running files by hand does **not** record them in `schema_migrations`, so the next app start runs them again (harmless, since they are idempotent). Or pipe all of them, in order, in a single shell invocation:
 
 ```bash
 for f in db/postgres/migrations/*.sql; do
-  psql -h localhost -p 5432 -U caro -d caro_dev -f "$f"
+  psql -h localhost -p 5432 -U postgres -d caro_dev -f "$f"
 done
 ```
 
@@ -69,10 +70,10 @@ Seed files are applied **after** all migrations.
 
 | File | Description |
 |---|---|
-| `dev_seed.sql` | 1 revision + 7 tags resolved from the `Plant1_System_A` hierarchy |
+| `dev_seed.sql` | 1 revision + 7 tags resolved from the `Plant1_System_A` hierarchy. That hierarchy is fictional — no such templates exist in `apps/tag-registry/templates/` — so seeded tags are retired by the first real registry apply. To create a project database, follow `Docs/platform/multi_project_runbook.md` §3 instead. |
 
 ```bash
-psql -h localhost -p 5432 -U caro -d caro_dev \
+psql -h localhost -p 5432 -U postgres -d caro_dev \
   -f db/postgres/seeds/dev_seed.sql
 ```
 
@@ -83,12 +84,13 @@ psql -h localhost -p 5432 -U caro -d caro_dev \
 | Host | `localhost` |
 | Port | `5432` |
 | Database | `caro_dev` |
-| User | `caro` |
-| Password | see `.env` (`POSTGRES_PASSWORD`) |
+| User | `postgres` (as in the root `.env.example`; `caro` is the TimescaleDB user, not this one) |
+| Password | root `.env` (`POSTGRES_PASSWORD`) |
 
-Create the database and user if they don't exist:
+Create the database if it doesn't exist:
 
 ```sql
-CREATE USER caro WITH PASSWORD 'changeme';
-CREATE DATABASE caro_dev OWNER caro;
+CREATE DATABASE caro_dev;
 ```
+
+Database names must be lowercase (see `Docs/platform/multi_project_runbook.md` §2).

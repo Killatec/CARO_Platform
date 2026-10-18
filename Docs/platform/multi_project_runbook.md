@@ -262,7 +262,10 @@ real registry. It works today only because 001 and 002 are `IF NOT EXISTS` guard
 apps migrate the rest themselves. Either bring it up to date or retire it in favour of this
 runbook.
 
-### 7. `db/postgres/README.md` names the wrong Postgres user
+### 7. `db/postgres/README.md` named the wrong Postgres user — fixed 2026-10-17
+
+The README now says `postgres`. Kept for history:
+
 
 Its "Local dev connection details" table says user `caro`; every real `.env` uses
 `postgres` for the main database. `caro` is the TimescaleDB user. Two databases, two users,
