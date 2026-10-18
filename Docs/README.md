@@ -22,7 +22,7 @@ How data gets from a module to the screen, and back as commands. These three are
 
 | Read | For |
 |---|---|
-| [platform/CARO_MQTT_Spec.md](platform/CARO_MQTT_Spec.md) | The MQTT wire contract (ICD) for module firmware: topics, telemetry and command payloads, CMD_ACK, the post-handshake Set push, the module handshake. **Start at §1.1 Implementation Status**: the backend accepts JSON telemetry only, has no TLS, and binds every module through the handshake without verifying its identity yet. |
+| [platform/CARO_MQTT_Spec.md](platform/CARO_MQTT_Spec.md) | The MQTT wire contract (ICD) for module firmware: topics, telemetry and command payloads, CMD_ACK, the post-handshake Set push (§6.3), the module handshake (§7). **Start at §1.1 Implementation Status**: the backend accepts JSON telemetry only, has no TLS, and binds every module through the handshake without verifying its identity yet. |
 | [platform/CARO_Telemetry_Path_Reference.md](platform/CARO_Telemetry_Path_Reference.md) | What the HMI server and browser do with each message, stage by stage: MQTT bridge → intake → LKV → historian queue → WebSocket → React context → widget. Includes the trend live-tail channel, the outbound command path, every config value, and §12 Known Gaps. |
 | [hmi/hmi_API_spec.md](hmi/hmi_API_spec.md) §5, §11 | Setpoint write and command REST endpoints, and the browser WebSocket messages. |
 
@@ -167,6 +167,7 @@ Apps connect to their databases at startup and never change target at runtime; t
 | Historian (TimescaleDB, CAGs, perf) | [db/DB_Config_Usage_And_Perf.md](db/DB_Config_Usage_And_Perf.md), [hmi/trend-viewer/hmi_trend_viewer_reference.md](hmi/trend-viewer/hmi_trend_viewer_reference.md) |
 | DB schema or a new migration | [db/CARO_DB_Spec.md](db/CARO_DB_Spec.md), [db/db_handoff.md](db/db_handoff.md) |
 | MQTT topics, payloads, commands | [platform/CARO_MQTT_Spec.md](platform/CARO_MQTT_Spec.md) |
+| The module handshake (binding, Set push, re-bind) | [platform/CARO_MQTT_Spec.md](platform/CARO_MQTT_Spec.md) §7 (protocol) and §6.3 (Set push); [platform/CARO_Telemetry_Path_Reference.md](platform/CARO_Telemetry_Path_Reference.md) §3.4 (backend implementation); [hmi/hmi_functional_spec.md](hmi/hmi_functional_spec.md) §9 (commissioning, not built) |
 | End-to-end telemetry flow (device → screen) | [platform/CARO_Telemetry_Path_Reference.md](platform/CARO_Telemetry_Path_Reference.md) |
 | Creating or switching a project | [platform/multi_project_runbook.md](platform/multi_project_runbook.md) |
 
