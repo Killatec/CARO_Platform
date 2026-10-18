@@ -34,7 +34,7 @@ Related: [hmi/trend-viewer/hmi_trend_viewer_reference.md](hmi/trend-viewer/hmi_t
 
 | App | API | UI | Status | Anchor → handoff | Deltas |
 |---|---|---|---|---|---|
-| Tag Registry | 3001 | 5173 | Complete | `apps/tag-registry/CLAUDE.md` → [tag_registry_handoff.md](tag-registry/tag_registry_handoff.md) | [tag_registry_deltas.md](tag-registry/tag_registry_deltas.md) |
+| Tag Registry | 3001 | 5173 | Complete for Phase 1–2 (unbuilt validators and auth listed in its handoff) | `apps/tag-registry/CLAUDE.md` → [tag_registry_handoff.md](tag-registry/tag_registry_handoff.md) | [tag_registry_deltas.md](tag-registry/tag_registry_deltas.md) |
 | MQTT Simulator | 3002 | 5174 | Active development (dev/test tool only) | `apps/mqtt-simulator/CLAUDE.md` → [mqtt_simulator_handoff.md](mqtt-simulator/mqtt_simulator_handoff.md) | [mqtt_simulator_deltas.md](mqtt-simulator/mqtt_simulator_deltas.md) |
 | CARO HMI | 3003 | 5175 | Trend viewer Phase A Steps 1–12 complete; multi-system UI selection done; auth and most CRUD not started | `apps/caro-hmi/CLAUDE.md` (Current State section) | [hmi_deltas.md](hmi/hmi_deltas.md) |
 | ↳ HMI Trend Viewer | — | — | Phase A complete | [hmi_trend_viewer_handoff.md](hmi/trend-viewer/hmi_trend_viewer_handoff.md) | [hmi_trend_viewer_deltas.md](hmi/trend-viewer/hmi_trend_viewer_deltas.md) |
@@ -64,7 +64,7 @@ Related: [hmi/trend-viewer/hmi_trend_viewer_reference.md](hmi/trend-viewer/hmi_t
 | Backend | Node.js + Express |
 | Database | PostgreSQL (registry) + TimescaleDB (historian), both via `@caro/db` |
 | Messaging | Mosquitto v5 — TCP 1883, WS 8080 |
-| Language | TypeScript — all packages and all apps. No JavaScript source files remain. |
+| Language | TypeScript for all package and app source. JavaScript remains in tests, the tag-registry E2E suite, config files and `scripts/` (see root `CLAUDE.md`). |
 | Packages | npm workspaces |
 
 ---
@@ -104,7 +104,7 @@ Schema spec: [db/CARO_DB_Spec.md](db/CARO_DB_Spec.md). Package and migration det
 
 **TimescaleDB (port 5433, separate Docker container, `docker-compose.timescale.yml`):**
 - Holds the `tag_samples` hypertable (14-day retention) plus four continuous aggregates: 1s, 10s, 1min and 10min.
-- The HMI server migrates it at startup and soft-fails to `NullDbWriter` if it's unreachable. **The HMI then looks healthy while recording nothing.**
+- The HMI server migrates it at startup and soft-fails to `NullDbWriter` if it's unreachable; `HistorianReconnector` retries every 30 s and switches over without a restart. **Until then the HMI looks healthy while recording nothing.**
 - Setup: [db/hmi_timescale_setup.md](db/hmi_timescale_setup.md). Migrations: [db/db_handoff.md](db/db_handoff.md). Design and performance: [db/DB_Config_Usage_And_Perf.md](db/DB_Config_Usage_And_Perf.md).
 
 **Trap: changing `TIMESCALE_DATABASE` and restarting the container does not create a second historian database.**

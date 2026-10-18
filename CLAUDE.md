@@ -46,7 +46,7 @@ Delta files are quick-note trackers for spec divergences that occur during imple
 
 These apply to every app and package in the monorepo:
 
-- **TypeScript:** All code is TypeScript. `tsc --noEmit` must stay clean in every package and app. No JavaScript source files remain.
+- **TypeScript:** All new code is TypeScript. `tsc --noEmit` must stay clean in every package and app. Application and package source is fully TypeScript; JavaScript remains only in tests (tag-registry unit tests, `packages/db` tests, the whole tag-registry Playwright E2E suite), config files (`vite`/`vitest`/`tailwind`/`postcss`), `scripts/`, `apps/tag-registry/scripts/migrate_field_types.js`, and two scratch files at `apps/mqtt-simulator/` root.
 - **No raw SQL in apps:** All PostgreSQL access via named functions from `@caro/db` only. No direct `pg` imports in any app.
 - **No DATABASE_URL:** Use the five `POSTGRES_*` env vars for the main Postgres and the five `TIMESCALE_*` env vars for the historian Postgres, both consumed by `@caro/db`. Never reference `DATABASE_URL`.
 - **API envelope:** `{ ok: true, data }` / `{ ok: false, error: { code, message } }`. Services throw `Error` with `.code`; never set HTTP status directly.
