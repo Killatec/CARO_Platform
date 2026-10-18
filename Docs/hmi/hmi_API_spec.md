@@ -16,6 +16,7 @@ hmi_functional_spec | CARO_MQTT_Spec | Tag Registry Functional Spec | CARO_DB_Sp
 | 1.3 | 2026-03-26 | PM / Claude | Rate limiting defaults added: 100 req/min read, 20 req/min write, both configurable (OI-02 closed). Idempotency note added: write retries are safe — telemetry loop resolves ambiguity. command_id correlation via WebSocket not required — out-of-sync detection handles outcome visibility. |
 | 1.4 | 2026-03-28 | PM / Claude | Audit log endpoint updated: tag.write split into tag.write.request and tag.write.outcome (two-row pattern with shared command_id); tag.sync.lost and tag.sync.reset added; comment no longer required on tag writes (mode save only). Sync reset endpoint added: POST /api/v1/tags/{tag_id}/sync-reset. PENDING_TABLE_EMPTY error code updated: no longer references cmd_status. |
 | 1.5 | 2026-04-14 | PM / Claude | POST /tags/write: `comment` field changed from required to optional for individual tag writes. The HMI client sends a default value but the field is not validated as required. `comment` remains required only for mode save operations (Section 8, POST /modes/{mode_id}/save). |
+| 2.1 | 2026-10-17 | PM / Claude | Reconciled against the implementation. Section 5: `POST /tags/write` response shape corrected to the built `{ devices: [{ module_id, command_id, results }] }`; validation codes as built. Section 11: transport as built (plain `ws://{host}/ws`, no session check), MODE_CHANGED marked not built, PING/PONG payloads, SUBSCRIBE semantics, TREND_DELTA sample semantics and value types. |
 | 2.0 | 2026-09-22 | PM / Claude | Section 5.2 added: GET /api/v1/config — runtime `projectRoot` for multi-system client page-tree selection and localStorage namespacing. No auth check; `databaseName` deliberately omitted (unlike Tag Registry's `/config`). |
 | 1.9 | 2026-06-02 | PM / Claude | Section 5.1 added: POST /api/v1/commands — module-type-agnostic command send. MQTT dispatches with CMD_ACK await (1s timeout). HMI dispatches RESET only; other cmd_str values return 400. Error codes added: VALIDATION_ERROR, COMMAND_NOT_SUPPORTED, COMMAND_REJECTED, TIMEOUT. |
 | 1.8 | 2026-05-26 | PM / Claude | Section 7 tile response: `responseTailTs` renamed `committedThroughTs` on both raw and aggregate responses. Field now carries the `DbPipeline` monotonic watermark rather than a wall-clock timestamp; client uses it directly as the ring trim threshold (no −1000 ms offset). |
@@ -246,20 +247,25 @@ Request body:
 
 The backend validates each tag_id (must exist and is_setpoint = true), groups tags by module_id, and publishes one SET_VALUES MQTT command per device. Each command carries only that device's tags.
 
-Success response (all devices accepted):
+Success response. The request resolves once every module has ACKed or timed out (1 second), so it carries the per-tag outcome:
 ```json
 {
   "ok": true,
   "data": {
     "devices": [
-      { "module_id": "RFPowerModule", "command_id": "<UUID4>", "status": "pending_ack", "tags": [ { "tag_id": 1001, "value": 90.0 }, { "tag_id": 1002, "value": 85.0 } ] },
-      { "module_id": "CoolingModule", "command_id": "<UUID4>", "status": "pending_ack", "tags": [ { "tag_id": 2001, "value": 25.0 } ] }
-    ],
-    "total_tags": 3,
-    "total_devices": 2
+      { "module_id": "RFPowerModule", "command_id": "<UUID4>", "results": [ { "tag_id": 1001, "accepted": true }, { "tag_id": 1002, "accepted": false, "rejection_code": "OUT_OF_RANGE" } ] },
+      { "module_id": "CoolingModule", "command_id": "<UUID4>", "results": [ { "tag_id": 2001, "accepted": false, "rejection_code": "TIMEOUT" } ] }
+    ]
   }
 }
 ```
+
+- `results` is the module's CMD_ACK results array, passed through. With no ACK within 1 second every tag is `accepted: false, rejection_code: "TIMEOUT"`. A module's rejection is therefore reported here, with `ok: true` — check each result.
+- HMI-module tags are written to `HmiTagSource` directly: `command_id` is `""` and every result is accepted.
+- Tags of a module whose `module_type` is neither MQTT nor HMI get `rejection_code: "MODULE_TYPE_NOT_SUPPORTED"`.
+- Accepted values are stored in `pending_setpoint_values` for re-delivery (CARO_MQTT_Spec §6.3).
+
+**Value validation as built:** a value must be a number, a boolean, or a string that parses as a number (it is then sent as a number). The tag's `data_type` is not checked, and entries with a non-numeric `tag_id` are skipped silently. A `values` array that is missing or empty returns 400 `VALIDATION_ERROR`.
 
 Partial validation failure response (some tags invalid before any MQTT command is sent):
 ```json
@@ -277,7 +283,7 @@ Partial validation failure response (some tags invalid before any MQTT command i
 }
 ```
 
-> *NOTE: All tags are validated before any MQTT command is sent. A validation failure returns 422 and no commands are issued. Device-side rejections (OUT_OF_RANGE, INTERLOCKED, etc.) are reported asynchronously via the WebSocket stream after CMD_ACK is received.*
+> *NOTE: All tags are validated before any MQTT command is sent. A validation failure returns 422 and no commands are issued. `TYPE_MISMATCH` is returned only for a value that is not a number, boolean or numeric string (detail: `{ tag_id, code, message }`). Device-side rejections arrive synchronously in `results` (above), not over the WebSocket.*
 
 ### POST /api/v1/tags/{tag_id}/sync-reset
 
@@ -729,20 +735,27 @@ Responses:
 
 ## 11. WebSocket API
 
-The WebSocket connection is the primary real-time data channel. Connection: `wss://{host}/ws` — the `caro_sid` cookie is sent automatically on the WSS upgrade. The backend validates the session before accepting.
+The WebSocket connection is the primary real-time data channel.
+
+- **Target design:** `wss://{host}/ws`; the `caro_sid` cookie is sent automatically on the WSS upgrade, and the backend validates the session before accepting.
+- **As built:** `ws://{host}/ws` on the HMI server port (the client uses `ws://${window.location.host}/ws`, proxied by Vite in development). Every connection is accepted; there is no session check.
+
+Server and client mechanics are traced in `Docs/platform/CARO_Telemetry_Path_Reference.md` §7–§8.
 
 | Message Type | Direction | Description |
 |---|---|---|
-| SUBSCRIBE | Client → Server | Subscribe to tag_ids for LKV live values. Server responds with SNAPSHOT then streams DELTA updates. |
-| UNSUBSCRIBE | Client → Server | Unsubscribe from tag_ids (LKV channel). |
-| SNAPSHOT | Server → Client | Full current LKV cache values for all subscribed tag_ids. Sent on subscribe or reconnect. Values only (no timestamps). |
+| SUBSCRIBE | Client → Server | Subscribe to tag_ids for LKV live values. Server replies with a SNAPSHOT of the **newly** subscribed tag_ids (empty `values` if none are new), then streams DELTA updates. |
+| UNSUBSCRIBE | Client → Server | Unsubscribe from tag_ids (LKV channel). No reply. |
+| SNAPSHOT | Server → Client | Current LKV values for the tag_ids just subscribed. After a reconnect the client re-subscribes everything, so the snapshot covers all of them. Values only (no timestamps). |
 | DELTA | Server → Client | Changed LKV values only, up to 8 Hz (125 ms tick). Filtered per client to subscribed tags only. Values only (no timestamps). |
-| PING | Client → Server | Latency measurement. |
-| PONG | Server → Client | Echoes PING timestamp. |
-| MODE_CHANGED | Server → Client | Broadcast when active mode revision changes. |
-| SUBSCRIBE_TREND | Client → Server | Subscribe to trend delta stream for the given tag_ids (Step 11). Server begins routing ingest events for those tags into the per-client trend outbox. |
-| UNSUBSCRIBE_TREND | Client → Server | Unsubscribe from trend delta stream for the given tag_ids. |
-| TREND_DELTA | Server → Client | Flushed at `TREND_FLUSH_HZ` (default 4 Hz). Contains all ingest events since last flush plus one synthetic event per subscribed tag that had no real ingest in the window (for flatline advancement). |
+| PING | Client → Server | `{ "type": "PING", "ts": <client ms> }`. The client sends one every 5 s. |
+| PONG | Server → Client | `{ "type": "PONG", "ts": <same value> }`. The client computes latency from it. |
+| MODE_CHANGED | Server → Client | Broadcast when the active mode revision changes. *Not yet built — operation modes do not exist yet.* |
+| SUBSCRIBE_TREND | Client → Server | Subscribe to the trend stream for the given tag_ids. Non-trendable tag_ids are ignored (logged server-side). No reply. |
+| UNSUBSCRIBE_TREND | Client → Server | Unsubscribe from the trend stream for the given tag_ids. No reply. |
+| TREND_DELTA | Server → Client | Flushed at `TREND_FLUSH_HZ` (default 4 Hz) to every client with trend subscriptions. One sample per subscribed tag per ingest of its module since the last flush, plus one synthetic sample (server time, current LKV value) for each subscribed tag that had none. |
+
+`tagIds` must be an array; a non-array payload is ignored. Within an array, only positive integers are used and the rest are ignored, so one bad id never discards the batch. Unparseable messages and unknown types are ignored without a reply.
 
 All WebSocket messages use JSON encoding. SNAPSHOT and DELTA carry a `values` object keyed by tag_id with the value only (no timestamp, no quality enum). A null value means bad quality.
 
@@ -773,7 +786,7 @@ All WebSocket messages use JSON encoding. SNAPSHOT and DELTA carry a `values` ob
 }
 ```
 
-`TREND_DELTA.samples` is a flat array of `{ moduleTs: number, tagId: number, value: number | boolean | null }`. Module timestamps match the values written to `tag_samples` (module clock, not WS-receipt wall-clock). `TREND_FLUSH_HZ` is configurable via server env var (default 4). Detailed spec: `Docs/hmi/trend-viewer/hmi_trend_viewer_spec.md` §4.4 and §10.6.
+`TREND_DELTA.samples` is a flat array of `{ moduleTs: number, tagId: number, value: number | boolean | string | null }`. `value` is the tag's LKV value at that ingest, whether or not it changed in that message, so a tag publishing at 10 Hz yields about 10 samples per second. `moduleTs` is the telemetry message's module timestamp, the same clock as `tag_samples` rows, except on synthetic samples, which carry server `Date.now()`. Each client buffers at most 500 samples per tag between flushes, dropping the oldest. `TREND_FLUSH_HZ` is configurable via server env var (default 4). Detailed spec: `Docs/hmi/trend-viewer/hmi_trend_viewer_spec.md` §4.4 and §10.6.
 
 > *NOTE: Protobuf encoding is reserved for future optimization (Phase 6). The current implementation uses JSON for all WebSocket messages.*
 

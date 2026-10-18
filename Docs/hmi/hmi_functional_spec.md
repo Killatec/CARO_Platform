@@ -14,6 +14,7 @@ Tag Registry Functional Spec | CARO_MQTT_Spec | CARO_DB_Spec | hmi_widget_spec
 | 2.5 | 2026-04-19 | PM / Claude | §10.0: HmiDataContext extended with `tagPathIndex`; tagPathIndex lifecycle paragraph added. useLiveValue mount-effect optimization documented. Matches perf commits be308f5 and cceb114. |
 | 2.6 | 2026-04-20 | PM / Claude | §10.1, §10.2: WS subscription model updated to reflect level-triggered reconciler (`desiredRef`/`serverRef`, microtask-batched flush, same-tick cancel). Matches perf commit 4977f4f. |
 | 2.7 | 2026-04-20 | PM / Claude | §2, §4, §10.2, §10.3: pre-refactor frontend-state sections rewritten to match `@caro/hmi-context` / `useLiveValue` implementation. Global-store and context-registry concepts removed. Per-tag value shape corrected to `{ value }` only — no quality, timestamp, or module_id. |
+| 2.8 | 2026-10-17 | PM / Claude | Reconciled MQTT/telemetry sections against the implementation: §7 channel table gains a Status column (JSON-only telemetry, handshake not built, no TLS); §8.1 snapshot-on-connect and setpoint re-delivery; §8.2 historian enqueue rules; §8.8 duty-tracked list and `Module_Count` meaning corrected; §8.9 stall sentinel and recovery; §8.10 routing table covers `/commands` and REQUEST_SNAPSHOT; §9 marked not built; §10 transport (plain `ws`, no auth), 8 Hz, reconnect backoff; §10.4 validation and audit status. |
 
 ---
 
@@ -398,20 +399,20 @@ Plant_A.RF_Module.RF_Fwd.interlock_enable (tag_id: 1004, type: bool, is_setpoint
 
 ## 7. MQTT Interface
 
-Full MQTT protocol specification is in CARO_MQTT_Spec.
+Full MQTT protocol specification is in `Docs/platform/CARO_MQTT_Spec.md`, including its §1.1 Implementation Status. Backend processing of each message is traced in `Docs/platform/CARO_Telemetry_Path_Reference.md`.
 
 Summary of MQTT channels used by the backend:
 
-| Channel | Direction | Purpose |
-|---|---|---|
-| `caro/{module_id}/telemetry` | Device → Backend | Tag value updates (Protobuf). Change-only in normal operation; full snapshot in response to REQUEST_SNAPSHOT. |
-| `caro/{module_id}/cmd` | Backend → Module | Typed commands: REQUEST_SNAPSHOT, SET_VALUES, RESET. Generic JSON envelope with payload object. |
-| `caro/{module_id}/cmd_ack` | Device → Backend | Command acknowledgement or rejection with reason code. |
-| `caro/{module_id}/handshake` | Backend → Module | Module handshake messages: schema delivery and tag list. |
-| `caro/{module_id}/handshake_ack` | Device → Backend | Handshake acknowledgements and firmware/tag-config hash confirmation. |
-| `caro/{module_id}/beat` | Backend → Module | Backend heartbeat published to each module at regular interval. |
+| Channel | Direction | Purpose | Status |
+|---|---|---|---|
+| `caro/{module_id}/telemetry` | Module → Backend | Tag value updates. Change-only or full in normal operation; full snapshot in response to REQUEST_SNAPSHOT. | Built — **JSON only**; Protobuf (the spec's production target) is not decoded yet. |
+| `caro/{module_id}/cmd` | Backend → Module | Commands: REQUEST_SNAPSHOT, SET_VALUES, RESET, and module-specific custom command types. JSON envelope with payload object. | Built. |
+| `caro/{module_id}/cmd_ack` | Module → Backend | Command acknowledgement or rejection with reason code. | Built. |
+| `caro/{module_id}/handshake` | Backend → Module | Tag list (TAG_LIST). | Not built. |
+| `caro/{module_id}/handshake_ack` | Module → Backend | Firmware/tag-config hash confirmation (CONFIRM). | Not built. |
+| `caro/{module_id}/beat` | Backend → Module | Backend heartbeat to each MQTT module, every `HEARTBEAT_INTERVAL_MS` (default 1 s). | Built. |
 
-> *NOTE: Telemetry runs unencrypted on the trusted local LAN (QoS0). All command and handshake channels use TLS and QoS1. Backend watchdog monitors telemetry continuity — loss of telemetry from a module writes null (bad quality) for all of that module's tags in the LKV cache. See CARO_MQTT_Spec for full protocol details.*
+> *NOTE: Target design: telemetry runs unencrypted on the trusted local LAN (QoS0); command and handshake channels use TLS and QoS1. As built, commands use QoS1 but there is no TLS or broker authentication on any channel. The backend watchdog monitors telemetry continuity — loss of telemetry from a module writes null (bad quality) for all of that module's tags in the LKV cache.*
 
 ---
 
@@ -426,7 +427,7 @@ The backend maintains an in-memory last-known-value (LKV) cache keyed by tag_id 
 Startup sequence:
 
 - Backend loads tag registry from PostgreSQL — builds the full tag_id map with value=null for all tags.
-- Backend sends a REQUEST_SNAPSHOT command to every known device via `caro/{module_id}/cmd` (see CARO_MQTT_Spec Section 6).
+- Backend sends a REQUEST_SNAPSHOT command to every MQTT module via `caro/{module_id}/cmd` on each broker connect, including reconnects (see CARO_MQTT_Spec Section 5), then re-delivers each module's last accepted setpoints (CARO_MQTT_Spec Section 6.3).
 - Devices respond by publishing their current values via the telemetry channel.
 - LKV value becomes non-null for each tag as values arrive.
 - Frontend clients that connect during this window receive null values on tags not yet heard from — the correct and honest state.
@@ -447,7 +448,7 @@ The backend runs two independent pipelines at decoupled rates:
 
 **WebSocket pipeline (pull-based, default 8 Hz / 125 ms tick):** On each tick, for each connected WebSocket client, compares per-tag generation counters against the client's last-sent generations. Tags with newer generations are included in a JSON DELTA message tailored to that client's subscription set. Each client receives only its subscribed tags — not a shared broadcast.
 
-**DB pipeline (push-based from MQTT handler):** Each incoming MQTT telemetry message is enqueued directly to the DB pipeline with its module-level timestamp. The pipeline flushes in batches to TimescaleDB. This is the sole write path for time-series persistence.
+**DB pipeline (push-based from TelemetryIntake):** For each incoming telemetry message, the trendable tags whose value changed are enqueued with the message's module-level timestamp. Periodic full snapshots (`TrendSnapshotScheduler`, at least one row per trendable tag per minute) and watchdog stall sentinels (null rows) are enqueued the same way. The pipeline flushes in batches to TimescaleDB. This is the sole write path for time-series persistence.
 
 > *NOTE: Ticks with zero changes produce no TimescaleDB writes and no WebSocket traffic for any client.*
 
@@ -565,11 +566,14 @@ The HMI server is both a telemetry consumer (via MQTT bridge) and a telemetry pr
 
 **Telemetry_CPU (DutyTracker):** The HMI server measures its own telemetry processing duty cycle and publishes it as the HMI tag `Telemetry_CPU`. A lightweight `DutyTracker` utility (`server/src/duty-tracker.ts`) wraps hot-path functions with `performance.now()` timing:
 
-- `MqttBridge.handleMessage()` — MQTT parse + ingest
+- `MqttBridge.handleMessage()` — MQTT parse + ingest (telemetry branch)
 - `TelemetryIntake.watchdogTick()` — module timeout scan
 - `TelemetryIntake` rate timer — per-second stats computation
-- `WsServer.tick()` — WebSocket delta broadcast
-- DB flush timer — TimescaleDB write queue drain
+- `HmiTagSource` publish tick
+- `WsServer.tick()` and `WsServer.trendFlush()` — WebSocket delta and trend flushes
+- `TrendSnapshotScheduler` tick
+
+The DB flush timer is not tracked.
 
 Each wrapped call accumulates busy-time in milliseconds. Once per second, `DutyTracker.snapshot(intervalMs)` computes `(busyMs / intervalMs) * 100` and resets the accumulator. The result is written to `hmiTags.Telemetry_CPU` via the `onBeforePublish` callback on `HmiTagSource`, so it flows through the standard telemetry pipeline and appears on the dashboard like any other tag.
 
@@ -579,7 +583,7 @@ The snapshot call itself runs outside `track()` so it does not inflate the windo
 
 | Tag | Type | Content |
 |---|---|---|
-| `Module_Info.Module_Count` | `i16` | Number of active non-HMI modules. Used by `ModuleInfoTable` for mismatch detection. |
+| `Module_Info.Module_Count` | `i16` | Number of module groups in the tag map (every distinct module_id, including the HMI module), set once at startup. Used by `ModuleInfoTable` for mismatch detection. |
 | `Module_Info.Status` | `i16[]` | Per-module `ModuleStatus` enum value (UNKNOWN=0, OK=1, WARNING=2, FAULT=3, STALLED=4). |
 | `Module_Info.Data_Rate` | `f32[]` | Per-module bytes/s in the last measurement window. |
 | `Module_Info.Pkg_Rate` | `f32[]` | Per-module packets/s in the last measurement window. |
@@ -601,9 +605,9 @@ The backend watchdog monitors telemetry continuity per module. When a module sto
 
 **Tick:** The watchdog runs on a timer with interval `min(watchdogTimeoutMs, 500ms)` — independent of the configured timeout so sub-second detection is always possible regardless of the timeout value.
 
-**On timeout trip:** All tags for the module are written to `null` in the LKV (bad quality). `moduleStatus` is set to `'STALLED'` and re-asserted on every subsequent tick while the module remains timed out.
+**On timeout trip:** All tags for the module are written to `null` in the LKV (bad quality), `moduleStatus` is set to `'STALLED'`, and one null row per trendable tag is enqueued to the historian so trends show a gap. A module never heard from trips on the first tick after startup.
 
-**Auto-recovery:** When fresh telemetry arrives, the module is removed from `timedOutModules` — LKV nulling and STALLED status stop. The `watchdogLatched` entry persists until manually cleared.
+**Auto-recovery:** The next telemetry message sets the module status from its `status` field and writes its values. On the following watchdog tick the module is removed from `timedOutModules` and `CmdController` sends it a REQUEST_SNAPSHOT (HMI module: an immediate publish) followed by a re-delivery of its pending setpoints. The `watchdogLatched` entry persists until manually cleared.
 
 **Manual reset:** `POST /api/v1/reset` (see §8.11). A module's latch is cleared only if `lastSeen` is within `watchdogTimeoutMs` of the reset time — i.e., the module must have resumed communication before it can be cleared.
 
@@ -611,11 +615,13 @@ The backend watchdog monitors telemetry continuity per module. When a module sto
 
 The `CmdController` is the single dispatch point for all outbound commands. It replaces the earlier `CommandPublisher` and routes by `module_type`:
 
-| module_type | SET_VALUES | RESET |
-|---|---|---|
-| MQTT | Published to `caro/{module_id}/cmd` via MqttBridge. ACK tracked with 1-second timeout. | Published to `caro/{module_id}/cmd` via MqttBridge. Fire-and-forget (no ACK tracking). |
-| HMI | Written directly to `HmiTagSource.setValue()`. Immediate accepted result. | Calls `HmiTagSource.reset()` directly. |
-| Other | Returns `MODULE_TYPE_NOT_SUPPORTED` rejection for all tags. | Silently ignored. |
+| module_type | SET_VALUES (`POST /tags/write`) | Broadcast RESET (`POST /reset`) | Command (`POST /commands`) | REQUEST_SNAPSHOT |
+|---|---|---|---|---|
+| MQTT | Published to `caro/{module_id}/cmd`. ACK tracked, 1-second timeout (`TIMEOUT` per tag). Accepted values upserted to `pending_setpoint_values`. | Published; fire-and-forget. | Any `cmd_str` published as `command_type`; ACK tracked, 1-second timeout (`TIMEOUT` 504 / `COMMAND_REJECTED`). | On broker connect and on watchdog recovery; fire-and-forget. |
+| HMI | Written directly to `HmiTagSource.setValue()`. Immediate accepted result. | Calls `HmiTagSource.reset()`. | `RESET` only → `HmiTagSource.reset()`; anything else `COMMAND_NOT_SUPPORTED` (400). | `HmiTagSource.publishNow()` on recovery. |
+| Other | Returns `MODULE_TYPE_NOT_SUPPORTED` rejection for all tags. | Ignored. | Resolves without doing anything. | Ignored. |
+
+`restorePendingSetpoints(moduleId)` re-publishes a MQTT module's `pending_setpoint_values` rows as one fire-and-forget SET_VALUES, on startup (after the broker connects) and on watchdog recovery.
 
 `MqttBridge` is scoped to MQTT-only modules — heartbeats and REQUEST_SNAPSHOT commands are never sent to the HMI module. The HMI module receives telemetry via `TelemetryIntake.ingest()` from `HmiTagSource` only.
 
@@ -653,13 +659,15 @@ The backend maintains a `commissioned_modules` table in PostgreSQL — one row p
 - An Administrator reviews the pending module in the HMI and confirms with a required comment. Validation sets `validated = true` and stores the pending hashes as the expected baseline.
 - On every subsequent connection the backend re-runs the handshake and compares received hashes against the stored baseline. A mismatch triggers an error condition.
 
-> *NOTE: Full handshake protocol — topic names, message types, payload formats, hash validation, and tag_path truncation rules — are defined in CARO_MQTT_Spec Section 7.*
+> *NOTE: Full handshake protocol — topic names, message types, payload formats, hash validation, and module-relative tag_name rules — are defined in CARO_MQTT_Spec Section 7.*
+
+> *NOTE: Not yet implemented. There is no `commissioned_modules` table and no handshake; the backend accepts telemetry from any module_id. This section is the target design.*
 
 ---
 
 ## 10. WebSocket Real-Time API
 
-The frontend establishes a WSS connection after authentication. The backend bridges MQTT device telemetry to WebSocket clients using the Protobuf message format defined in CARO_MQTT_Spec Appendix A.
+The frontend opens one WebSocket to `/ws` on the HMI server. All WebSocket messages are JSON (Protobuf encoding is planned for Phase 6). Target design: WSS, with the session validated on upgrade. As built: plain `ws://`, no authentication. Message contracts: `hmi_API_spec.md` §11. Server and client mechanics: `Docs/platform/CARO_Telemetry_Path_Reference.md` §7–§8.
 
 ### 10.0 Context Provider Architecture
 
@@ -678,12 +686,12 @@ The client wraps the application in `HmiContextProvider` from `@caro/hmi-context
 
 | Event | Behavior |
 |---|---|
-| Client connects | Backend authenticates session token. Connection accepted or rejected. |
-| Client sends SUBSCRIBE | Backend sends SnapshotMessage for requested tag_ids, then begins streaming DeltaMessages for changed tags at up to 10 Hz. |
+| Client connects | Target: backend authenticates the session token. As built: every connection is accepted. |
+| Client sends SUBSCRIBE | Backend sends a SNAPSHOT with the current values of the newly subscribed tag_ids, then streams DELTA messages for changed tags at up to 8 Hz (`WS_TICK_MS`, 125 ms). |
 | Widget mounts | Reconciler adds the tag_id to `desiredRef` and schedules a microtask flush. If the tag_id is not yet in `serverRef`, the next flush emits a batched `SUBSCRIBE` containing this and any other newly-desired tag_ids. |
 | Widget unmounts | Reconciler decrements the subscriber refcount for the tag_id. When it hits zero, the tag_id is removed from `desiredRef` and a flush is scheduled; the next flush emits a batched `UNSUBSCRIBE` containing this and any other newly-unwanted tag_ids. |
 | Client sends PING | Backend responds with PONG carrying the original timestamp for latency measurement. Ping interval: 5 seconds. |
-| Connection drops | Backend marks all subscribed tags as quality=bad in the client's view. Client auto-reconnects after 3 seconds. On reconnect, a fresh SnapshotMessage is sent before deltas resume. |
+| Connection drops | The client immediately sets every subscribed tag to null (bad quality) and reconnects with exponential backoff: 1 s, doubling per failed attempt, capped at 30 s. On reconnect the client re-subscribes everything it wants and the backend sends a fresh SNAPSHOT before deltas resume. |
 
 ### 10.2 Frontend Auto-Subscription Model
 
@@ -708,10 +716,10 @@ Per-tag subscribers live in `HmiContextProvider.subscribersRef` (`Map<tag_id, Se
 Setpoint writes go through the REST API, not WebSocket. The endpoint accepts one or more tag_id/value pairs. The device is the single source of truth.
 
 - User edits a value in a Set_Numeric or Set_Boolean widget and confirms.
-- Widget calls `POST /api/v1/tags/write` with a values array of `{ tag_id, value }` pairs and a required comment.
-- Backend validates all tags pre-flight: authorization, existence, is_setpoint, and data type. If any tag fails, WRITE_VALIDATION_FAILED is returned and no MQTT commands are issued.
+- Widget calls `POST /api/v1/tags/write` with a values array of `{ tag_id, value }` pairs and an optional comment.
+- Backend validates all tags pre-flight: existence, is_setpoint, and that the value is a number, a boolean, or a numeric string. If any tag fails, WRITE_VALIDATION_FAILED is returned and no MQTT commands are issued. (Target design: authorization and a check against the tag's data_type. Neither is built — auth is stubbed, and any numeric value is accepted for any numeric tag.)
 - Backend groups valid tags by module_id and publishes one SET_VALUES command per device via MQTT `caro/{module_id}/cmd` (QoS1).
-- Backend writes `tag.write.request` to audit_log (before value from LKV, requested value, actor, command_id).
+- Backend writes `tag.write.request` to audit_log (before value from LKV, requested value, actor, command_id). *Not yet built — there is no audit_log table.*
 - Device processes the command and responds with CMD_ACK (or 1-second timeout fires). Backend writes `tag.write.outcome` to audit_log. If accepted=true, pending_setpoint_values is updated via epsilon comparison against active mode revision.
 - Device reflects the new value in its next telemetry. The LKV cache is updated and the broadcast loop delivers the change to all subscribed WebSocket clients in the normal way.
 - If the device rejects the command (OUT_OF_RANGE, INTERLOCKED, etc.), the LKV is never updated and the frontend continues showing the previous confirmed value — no rollback required.

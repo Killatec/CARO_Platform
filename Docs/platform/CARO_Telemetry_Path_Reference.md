@@ -1,78 +1,85 @@
 # CARO_Platform — Telemetry Path Reference
 
 **From telemetry producer to screen pixel.**
-**Version:** 2.2 — October 2026
-*v2.2: Stage 5 (DB Pipeline) rewritten for the shipped TimescaleDB writer; duty-tracking list corrected (DbPipeline is not duty-tracked).*
-*v2.1: trend WS channel (Step 11) coverage added; cross-refs to trend viewer spec/handoff for the read side.*
-**Status:** Replaces `CARO_Telemetry_Path_Reference.docx` (v1.0, now obsolete).
+**Version:** 3.0 — 2026-10-17
+*v3.0: Reconciled line by line against the implementation. Corrected the intake (FAULT no longer short-circuits; trend listener is per ingest, not per changed tag), the trend WS channel (per-ingest snapshots, no server-side boolean coercion, outbox cap), the MQTT bridge (connect behaviour, JSON-only decoding), client reconnect/PING behaviour, the trend client hook (ring of 20, `drainBuffers`) and widget field resolution (registry columns, never `meta`). Added stall/recovery handling, the trend snapshot scheduler, the outbound MQTT path, a full configuration table and §12 Known Gaps.*
+*v2.2: Stage 5 (DB Pipeline) rewritten for the shipped TimescaleDB writer.*
+*v2.1: trend WS channel (Step 11) coverage added.*
 *Internal technical reference.*
 
 ---
 
 ## 1. Overview
 
-This document traces every step a telemetry value takes from its producer (MQTT device, or the HMI server itself) to a rendered pixel in the operator's browser. Each section corresponds to one module in the codebase. Code snippets are verbatim from the implementation. The goal is zero ambiguity about how data flows, transforms, and is consumed.
+This document traces every step a telemetry value takes from its producer (an MQTT module, or the HMI server itself) to a rendered pixel in the operator's browser, plus the return path for commands. Each section corresponds to one module in the codebase. Code snippets are copied from the implementation as of the version date.
+
+The MQTT wire contract itself — topics, payloads, commands, ACKs, and which parts are implemented — is defined in [`CARO_MQTT_Spec.md`](CARO_MQTT_Spec.md) (see its §1.1 Implementation Status). The historian write path past Stage 5 is in [`../hmi/trend-viewer/hmi_trend_viewer_reference.md`](../hmi/trend-viewer/hmi_trend_viewer_reference.md).
 
 ### 1.1 End-to-End Summary
 
-The full path has nine stages. Stages 1a and 1b are alternative producers; both feed Stage 2.
+Stages 1a and 1b are alternative producers; both feed Stage 3.
 
 | #   | Stage                       | Module                        | What happens |
 |-----|-----------------------------|-------------------------------|--------------|
-| 1a  | MQTT publish                | device / `mqtt-simulator`     | JSON telemetry published to `caro/{module_id}/telemetry` at ~10 Hz |
-| 1b  | HMI-internal publish        | `hmi-tag-source.ts`           | Proxy-based producer for `module_type='HMI'` tags; emits `TelemetryMessage` on a 250 ms timer |
-| 2   | MQTT receive (transport)    | `mqtt-bridge.ts`              | Subscribes `caro/+/telemetry`, parses JSON, delegates to `TelemetryIntake.ingest()` |
-| 3   | Universal ingestion         | `telemetry-intake.ts`         | LKV writes, FAULT handling, watchdog, rate tracking, DB enqueue |
+| 1a  | MQTT publish                | module firmware / `mqtt-simulator` | JSON telemetry published to `caro/{module_id}/telemetry`, typically 10 Hz |
+| 1b  | HMI-internal publish        | `hmi-tag-source.ts`           | Proxy-based producer for `module_type='HMI'` tags; emits a full `TelemetryMessage` every 250 ms |
+| 2   | MQTT receive (transport)    | `mqtt-bridge.ts`              | Subscribes `caro/+/telemetry` and `caro/+/cmd_ack`; `JSON.parse`s telemetry and hands it to `TelemetryIntake.ingest()` |
+| 3   | Universal ingestion         | `telemetry-intake.ts`         | LKV writes, FAULT handling, watchdog, rate tracking, historian enqueue, trend-listener call |
 | 4   | LKV cache                   | `lkv.ts`                      | In-memory `Map<tag_id, { value, generation }>`; generation bumps only on value change |
 | 5   | DB pipeline                 | `db-pipeline.ts`              | Module-timestamped queue, batch-flushed to TimescaleDB |
-| 6   | WebSocket server            | `ws-server.ts`                | Pull-based 125 ms (8 Hz) tick; per-client generation diff; `SUBSCRIBE → SNAPSHOT → DELTA` |
-| 7   | Client context              | `HmiContextProvider.tsx`      | Browser WS ingests `SNAPSHOT`/`DELTA`, updates `valuesRef`, fans out to subscriber callbacks |
+| 6   | WebSocket server            | `ws-server.ts`                | Live values: 125 ms (8 Hz) tick, per-client generation diff, `SUBSCRIBE → SNAPSHOT → DELTA`. Trend channel: 4 Hz `TREND_DELTA` flush |
+| 7   | Client context              | `HmiContextProvider.tsx`      | Browser WS ingests `SNAPSHOT`/`DELTA`/`TREND_DELTA`, updates `valuesRef`, fans out to subscriber callbacks |
 | 8   | Widget render               | `@caro/widgets`               | `useLiveValue` returns the new value; widget re-renders; `null` = bad quality renders `---` |
 
-**Parallel trend channel (Step 11).** The live-value path above is the only path for widget rendering. Trend chart live tail follows a parallel branch that diverges after Stage 3: `TelemetryIntake`'s `trendDeltaListener` fires on every COV write → `WsServer` appends the event to each subscribed client's per-tag `trendOutbox` → a separate `trendFlush` tick at `TREND_FLUSH_HZ` (default 4 Hz) drains the outbox and sends `TREND_DELTA` frames. This branch bypasses the LKV generation-diff model entirely: every intermediate sample is preserved, each sample carries its source `moduleTs`, and flatlined tags receive a synthetic heartbeat event on every flush. See §7.6 for the server-side mechanics and §8.7 for the client-side subscription management.
+**Parallel trend channel.** Widgets only ever use the live-value path above. The trend chart's live tail uses a parallel branch that splits off at Stage 3: after every `ingest()`, `TelemetryIntake` calls the trend listener with `(moduleTs, moduleId)`. `WsServer.handleTrendDelta` then appends the *current* LKV value of every trendable tag of that module to the outbox of each client subscribed to it, and a separate flush at `TREND_FLUSH_HZ` (default 4 Hz) sends them as `TREND_DELTA` frames. Every sample carries its source `moduleTs`, nothing is coalesced, and a subscribed tag with no ingest in a flush window still gets one synthetic sample. See §7.6 (server) and §8.7 (client).
 
 Two architectural rules drive everything else:
 
 - **`TelemetryIntake` is the universal entry point.** `MqttBridge` and `HmiTagSource` are both adapters. Future transports (OPC-UA, REST pollers) plug in at the same seam.
-- **Generation counters, not timestamps, drive change detection.** No clock synchronization required, no per-tag timestamps stored anywhere.
+- **Generation counters, not timestamps, drive live-value change detection.** No clock synchronization is needed for widgets, and the LKV stores no per-tag timestamp. The module timestamp is used only for historian rows and trend samples.
 
 ### 1.2 Data Shape at Each Boundary
 
 | Boundary                | Shape                                                                      | Notes |
 |-------------------------|----------------------------------------------------------------------------|-------|
-| MQTT wire (§2)          | `{ timestamp, status, tags: [{ tag_id, value }] }`                         | Module-level timestamp. `status: 'ONLINE' \| 'FAULT'`. Value may be number, boolean, string, or number array. |
-| HmiTagSource emit (§1b) | Same `TelemetryMessage` shape; synthesized in-process                      | `timestamp = Date.now()`. Routed through `intake.ingest()` — identical downstream path. |
-| LKV entry (§4)          | `{ value, generation }`                                                    | `value === null` ⇒ bad quality. Generation is a monotonic uint32. |
-| DB queue entry (§5)     | `{ moduleTs, tags: [{ tagId, value }] }`                                   | Module-level timestamp propagated from the source message. Array-valued tags excluded. |
-| WebSocket wire (§6)     | `{ type: 'SNAPSHOT' \| 'DELTA', values: { [tag_id]: value } }`             | Keys are stringified tag IDs. No timestamp, no generation, no quality enum. |
-| Trend WS wire (§7.6)    | `{ type: 'TREND_DELTA', samples: [{ moduleTs, tagId, value }, ...] }`      | Carries explicit `moduleTs` per sample; aggregates multiple per-tag events per flush window; value is numeric (booleans coerced to 1.0/0.0, null preserved). |
-| React state (§7–§8)     | `LiveValue = { value }`                                                    | `value === null` ⇒ bad quality. Drives widget re-render. |
+| MQTT wire (§2)          | `{ timestamp, status, tags: [{ tag_id, value }] }` (JSON)                  | Module-level timestamp. `status` is `'ONLINE'` or `'FAULT'`. Value is number, boolean, string, number array, or null. |
+| HmiTagSource emit (§2b) | Same `TelemetryMessage` shape, built in-process                            | `timestamp = Date.now()`, `status = 'ONLINE'`, every HMI tag every time. |
+| LKV entry (§5)          | `{ value, generation }`                                                    | `value === null` ⇒ bad quality. Generation increments by one per change. |
+| DB queue entry (§6)     | `{ moduleTs, tags: [{ tagId, value }] }`                                   | Trendable tags only; array values excluded. |
+| WebSocket wire (§7.4)   | `{ type: 'SNAPSHOT' \| 'DELTA', values: { [tag_id]: value } }`             | Keys are stringified tag IDs. No timestamp, no generation, no quality enum. |
+| Trend WS wire (§7.6)    | `{ type: 'TREND_DELTA', samples: [{ moduleTs, tagId, value }, ...] }`      | Values are raw LKV values (number, boolean, string or null). The client coerces booleans to 1/0 and strings to null. |
+| React state (§8)        | `LiveValue = { value }`                                                    | `value === null` ⇒ bad quality. Drives widget re-render. |
 
 ---
 
-## 2. Stage 1a — MQTT Publish (Device / Simulator)
+## 2. Stage 1a — MQTT Publish (Module / Simulator)
 
-External producers publish JSON to `caro/{module_id}/telemetry` at ~10 Hz. QoS 0, retain false.
+External producers publish JSON to `caro/{module_id}/telemetry`, QoS 0, retain false. `module_id` is the module's `asset_name` in the Tag Registry.
 
 ```jsonc
 // Published to caro/{module_id}/telemetry
 {
-  "timestamp": 1712617200000,   // Date.now() at publish
+  "timestamp": 1712617200000,   // module UTC ms at publish
   "status":    "ONLINE",        // "ONLINE" | "FAULT"
   "tags": [
     { "tag_id": 1, "value": 85.47 },
-    { "tag_id": 2, "value": 12.03 },
     { "tag_id": 3, "value": true },
-    { "tag_id": 4, "value": 150.0 }
+    { "tag_id": 9, "value": [0, 1, 0] }
   ]
 }
 ```
 
-**Key points.** `timestamp` is the only timestamp in the pipeline; it is module-level and used solely by the DB pipeline. `status: 'FAULT'` causes every tag in the module to be nulled in the LKV. `tags[]` contains every tag the module publishes on each tick — no metadata, no per-tag timestamp. Value types are `number`, `boolean`, `string`, or `number[]` (packed-bit arrays, e.g. watchdog).
+**JSON only.** The backend decodes telemetry with `JSON.parse` and nothing else. A Protobuf payload (the simulator can produce one per `packages/proto/tag.proto`) fails to parse and is dropped without a log line. See `CARO_MQTT_Spec.md` §1.1.
+
+**Key points.**
+- `timestamp` is the only timestamp in the pipeline. It is module-level and is used for historian rows and trend samples only. It is not validated (tracked in `Docs/platform/platform_todo.md`).
+- `status: 'FAULT'` nulls every tag of the module in the LKV before the message's values are applied (§4.1).
+- `tags[]` may carry every tag (full publish, the simulator default) or only changed tags (change-only mode); the backend handles both identically. An empty `tags` array is valid and still counts as a sign of life for the watchdog.
+- Values have no per-tag timestamp and no metadata.
 
 ### 2.1 Scope
 
-`MqttBridge` is scoped to modules whose `tag_registry.module_type` is `'MQTT'`. The scoping is computed at startup in `index.ts`:
+The HMI server treats a module as an MQTT module when its tags have `tag_registry.module_type = 'MQTT'`. The list is computed at startup in `index.ts` and used for heartbeats, REQUEST_SNAPSHOT and setpoint re-delivery:
 
 ```ts
 const mqttModuleIds = [...new Set(
@@ -82,37 +89,92 @@ const mqttModuleIds = [...new Set(
 )];
 ```
 
-Tags belonging to `module_type='HMI'` never travel over MQTT; they are produced by `HmiTagSource` (§2b).
+`module_id` comes from `tag-map.ts`: the `name` of the tag's `meta` level whose `type` is `'module'`, or `'unknown'` if there is none.
+
+The *subscriptions* are wildcards (`caro/+/telemetry`), so telemetry from any `module_id` is ingested. A module that isn't in the registry only updates its own `lastSeen`; its tags are dropped as unknown.
+
+Tags with `module_type='HMI'` never travel over MQTT; they are produced by `HmiTagSource` (§2b).
 
 ---
 
 ## 2b. Stage 1b — HMI-Internal Publish (HmiTagSource)
 
-`HmiTagSource` is a second telemetry producer, entirely in-process, for tags whose `module_type='HMI'`. The HMI server itself knows values like `Tag_Count`, `Telemetry_CPU`, and per-module `Module_Info.*` arrays (Status, Packet_Rate, Byte_Rate, Watchdog, Module_Count). Rather than hard-coding special pathways, these tags flow through the same `TelemetryIntake.ingest()` as external telemetry.
+`HmiTagSource` is a second telemetry producer, entirely in-process, for tags whose `module_type='HMI'`. It covers values only the HMI server knows: `Tag_Count`, `Telemetry_CPU`, `Reset_Count`, the per-module `Module_Info.*` arrays, and the historian `Trend_Info.*` tags. These flow through the same `TelemetryIntake.ingest()` as external telemetry rather than through special pathways.
 
 ### 2b.1 Proxy-based property access
 
-Callers read and write tag values as named properties. The property name is derived from `tag_path` by stripping the module segment and joining the remainder with `_`:
+Callers read and write tag values as named properties. The property name is derived from `tag_path` by dropping everything up to and including the module segment and joining the remainder with `_`:
 
 ```
 tag_path = 'CARO_1.HMI.Module_Info.Data_Rate'   → hmiTags.Module_Info_Data_Rate
 tag_path = 'CARO_1.HMI.Status.Active'           → hmiTags.Status_Active
 ```
 
+Two tags deriving the same property name throw at startup. A write to a property with no matching registry tag is absorbed and logged once per name; a read returns `null`. Every HMI tag starts at `null` except `Reset_Count`, which starts at `0`.
+
 ### 2b.2 Periodic publish
 
-Every `HMI_PUBLISH_INTERVAL_MS` (default 250 ms), `HmiTagSource` synthesizes a `TelemetryMessage` from its internal values map and calls `intake.ingest('HMI', message)`. An optional `onBeforePublish` hook fires first — used to push the current duty-cycle snapshot into `hmiTags.Telemetry_CPU` (§3.4).
+Every `HMI_PUBLISH_INTERVAL_MS` (default 250 ms), `publishTick()` runs:
 
-The downstream path from this point is identical to MQTT telemetry: LKV, DB pipeline, WS, widgets.
+```ts
+private publishTick(): void {
+  if (this.values.size === 0) return;
+  this.onBeforePublish?.();
+  this.dutyTracker.track(() => {
+    this.updateModuleInfoTags();
+    this.updateTrendInfoTags();
+    const message: TelemetryMessage = {
+      timestamp: Date.now(),
+      status: 'ONLINE',
+      tags: [...this.values.entries()].map(([tag_id, value]) => ({ tag_id, value })),
+    };
+    this.intake.ingest(this.moduleId, message);
+  });
+}
+```
+
+- `onBeforePublish` (wired in `index.ts`) writes the latest duty cycle into `hmiTags.Telemetry_CPU` (§4.4).
+- `updateModuleInfoTags()` turns `TelemetryIntake.getModuleStats()` into the `Module_Info.*` arrays: `Data_Rate` (KB/s), `Pkg_Rate` (packets/s), `Status` (`ModuleStatus` enum: `ONLINE`/`OK` → OK, `FAULT`, `STALLED`, anything else → UNKNOWN), `Tags_Per_Pkg`, and `Watchdog` (packed bits, LSB-first, 16 modules per word, from the *latched* watchdog). Module order is `getModuleNames()` over every tag with a module, the same order the client's `ModuleInfoTable` computes.
+- `updateTrendInfoTags()` copies `DbPipeline` and `TimescaleSizeMonitor` counters into `Trend_Info.*`.
+- `this.moduleId` is the `module` column of the HMI tags (normally `HMI`).
+
+`publishNow()` runs the same tick immediately; `CmdController.requestSnapshot()` uses it for the HMI module. From `ingest()` on, the path is identical to MQTT telemetry: LKV, DB pipeline, WS, widgets.
 
 ---
 
 ## 3. Stage 2 — MQTT Bridge (transport only)
 
-`MqttBridge` is a pure transport adapter. It does **not** write to the LKV, the DB pipeline, or the watchdog. Its entire job is: subscribe, parse, delegate.
+`MqttBridge` is a pure transport adapter. It does **not** touch the LKV, the DB pipeline or the watchdog. It subscribes, parses, delegates, and publishes outbound messages.
+
+### 3.1 Connect
 
 ```ts
-// mqtt-bridge.ts — handleMessage()
+this.client = mqtt.connect(this.config.mqttUrl);
+
+this.client.on('connect', () => {
+  this.client!.subscribe('caro/+/telemetry', () => {});
+  this.client!.subscribe('caro/+/cmd_ack', () => {});
+
+  this.heartbeatTimer = setInterval(
+    () => this.heartbeatTick(),
+    this.config.heartbeatIntervalMs
+  );
+
+  for (const moduleId of this.moduleIds) {
+    this.sendRequestSnapshot(moduleId);
+  }
+
+  resolve();
+});
+```
+
+- The connection uses mqtt.js defaults: MQTT 3.1.1, clean session, anonymous, no TLS, automatic reconnect.
+- The `connect` handler runs again on every automatic reconnect, so subscriptions and REQUEST_SNAPSHOT are re-sent each time. The heartbeat timer is also re-created without clearing the previous one (§12).
+- `start()` resolves on the first connect. If it rejects, `index.ts` logs "MQTT broker unavailable" and the server keeps running on REST and WS without live telemetry.
+
+### 3.2 Inbound
+
+```ts
 private handleMessage(topic: string, payload: Buffer): void {
   const parts    = topic.split('/');
   const moduleId = parts[1];
@@ -123,73 +185,111 @@ private handleMessage(topic: string, payload: Buffer): void {
       let message: TelemetryMessage;
       try {
         message = JSON.parse(payload.toString()) as TelemetryMessage;
-      } catch { return; }
+      } catch {
+        return;
+      }
       this.intake.ingest(moduleId, message);
     });
     return;
   }
 
   if (channel === 'cmd_ack') {
-    /* routed to CommandPublisher via cmdAckHandler */
+    let ack: CmdAck;
+    try {
+      ack = JSON.parse(payload.toString()) as CmdAck;
+    } catch {
+      return;
+    }
+    this.cmdAckHandler?.(moduleId, ack);
+    return;
   }
+
+  // unknown channels — ignore
 }
 ```
 
-The bridge also subscribes to `caro/+/cmd_ack` and routes those messages to a registered `CommandPublisher` — that path is covered in `hmi_functional_spec.md`, not here. Heartbeat publishes on `caro/{module_id}/beat` every `HEARTBEAT_INTERVAL_MS`.
+Unparseable payloads on either channel are dropped silently. Only the JSON *syntax* is checked: a payload that parses but has no `tags` array throws inside `ingest()` (§12). Telemetry handling is duty-tracked so its cost shows in `Telemetry_CPU`. CMD_ACKs go to `CmdController` (§3.3).
 
-Every call into `intake.ingest()` is wrapped in `dutyTracker.track()` so the time spent ingesting MQTT traffic is accounted for in the `Telemetry_CPU` figure surfaced to the UI.
+### 3.3 Outbound
+
+| Topic | Payload | QoS | When |
+|---|---|---|---|
+| `caro/{module_id}/beat` | `{ ts_utc_ms }` | 0 | Every `HEARTBEAT_INTERVAL_MS` (default 1000 ms), to each MQTT module |
+| `caro/{module_id}/cmd` | REQUEST_SNAPSHOT | 1 | On every broker connect (all MQTT modules); on watchdog recovery (one module) |
+| `caro/{module_id}/cmd` | SET_VALUES | 1 | `POST /api/v1/tags/write`; setpoint re-delivery on startup and recovery |
+| `caro/{module_id}/cmd` | RESET or custom `command_type` | 1 | `POST /api/v1/reset` (RESET to every module); `POST /api/v1/commands` |
+
+Every command carries a fresh `crypto.randomUUID()` `command_id`, `ts_utc_ms = Date.now()` and a `payload` (`{ values }` for SET_VALUES, `{}` otherwise).
+
+`CmdController` (`cmd-controller.ts`) owns the command lifecycle. It waits 1 s for a CMD_ACK on SET_VALUES and on `POST /api/v1/commands`, and is fire-and-forget for the rest. Accepted SET_VALUES values are stored in `pending_setpoint_values` for re-delivery. The full ACK contract is in `CARO_MQTT_Spec.md` §6.2–§6.3; the REST side is in `Docs/hmi/hmi_API_spec.md` §5–§5.1.
 
 ---
 
 ## 4. Stage 3 — Telemetry Intake (universal ingestion)
 
-`TelemetryIntake` is where all telemetry — MQTT, HMI-internal, and any future transport — converges. It owns LKV writes, FAULT handling, watchdog, per-module rate tracking, and DB-pipeline enqueue.
+`TelemetryIntake` is where all telemetry converges: MQTT, HMI-internal, and any future transport. It owns LKV writes, FAULT handling, the watchdog, per-module rate tracking, historian enqueue and the trend-listener call.
 
 ### 4.1 `ingest(moduleId, message)`
 
 ```ts
 ingest(moduleId: string, message: TelemetryMessage): void {
+  const isSnapshot = this.consumeTrendSnapshotPending(moduleId);
+
   this.lastSeen.set(moduleId, Date.now());
 
-  // Rate and status bookkeeping
   this.packetCount.set(moduleId, (this.packetCount.get(moduleId) ?? 0) + 1);
   this.packetsInWindow.set(moduleId, (this.packetsInWindow.get(moduleId) ?? 0) + 1);
   this.byteAccumulator.set(moduleId, (this.byteAccumulator.get(moduleId) ?? 0) + JSON.stringify(message).length);
   this.tagCountLast.set(moduleId, message.tags.length);
   this.moduleStatus.set(moduleId, message.status);
 
-  // FAULT short-circuit
   if (message.status === 'FAULT') {
     for (const tagId of this.moduleTagIds.get(moduleId) ?? []) {
       this.lkv.set(tagId, null);
     }
-    return;
+    // No early return: tag values carried in a FAULT frame are real telemetry
+    // and must flow to the historian via the COV loop below.
   }
 
-  // Per-tag LKV write + selective DB enqueue
   const changedTrendable: { tagId: number; value: number | boolean | string | null }[] = [];
+
   for (const { tag_id, value } of message.tags) {
-    if (!this.tagMap.has(tag_id)) continue;                 // drop unknown tags
+    if (!this.tagMap.has(tag_id)) continue;
     const changed = this.lkv.set(tag_id, value);
+    // Defense in depth: the resolved-tag validator already excludes array types
+    // from trendable tags, but this guard ensures that if validation is ever bypassed
+    // (e.g. direct DB writes), an array value still cannot reach the db-pipeline queue.
     if (changed && this.trendableTagIds.has(tag_id) && !Array.isArray(value)) {
       changedTrendable.push({ tagId: tag_id, value });
     }
   }
 
-  if (changedTrendable.length > 0) {
+  if (isSnapshot) {
+    const snapshot = this.buildModuleSnapshot(moduleId);
+    if (snapshot.length > 0) {
+      this.dbPipeline.enqueue({ moduleTs: message.timestamp, tags: snapshot });
+    }
+  } else if (changedTrendable.length > 0) {
     this.dbPipeline.enqueue({ moduleTs: message.timestamp, tags: changedTrendable });
   }
+
+  this.trendDeltaListener?.(message.timestamp, moduleId);
 }
 ```
 
-**Notable behaviors.** Unknown tag IDs are silently dropped (old firmware tolerance). Only changed **and** trendable tags are enqueued for the DB. Array-valued tags are filtered out of the DB queue in depth (the resolved-tag validator already excludes them — this is a defense-in-depth guard).
+**Notable behaviors.**
+- **Unknown tag IDs** are dropped silently (tolerates firmware newer or older than the registry). There is no check that a tag belongs to the publishing module.
+- **FAULT** nulls every tag of the module, then applies the frame's own values. Tags present in the frame end up with their new value; tags absent from it stay null.
+- **Historian:** only tags that changed and are trendable are enqueued, unless a trend snapshot is pending for this module (§4.5), in which case every trendable tag of the module is written from the LKV.
+- **Byte rate** is measured as the length of the re-stringified message, not the wire payload.
+- **Trend listener** fires on every ingest, whether or not anything changed (§7.6).
 
 ### 4.2 Watchdog (two-state model)
 
 There are **two watchdog sets**:
 
-- `timedOutModules` — non-latching. Tracks the real-time stall state. Auto-clears when telemetry resumes.
-- `watchdogLatched` — latching. Flips on when a module times out, stays on until an explicit `resetWatchdog(moduleId)` or `resetAllWatchdogs()` call.
+- `timedOutModules` — non-latching. Tracks the real-time stall state; auto-clears when telemetry resumes.
+- `watchdogLatched` — latching. Set when a module times out; stays set until an explicit reset (`POST /api/v1/reset` → `resetAllWatchdogs()`) while the module is live again.
 
 ```ts
 watchdogTick(): void {
@@ -201,25 +301,38 @@ watchdogTick(): void {
 
       if (timedOut) {
         if (!this.timedOutModules.has(moduleId)) {
-          // Transition into stalled — null LKV and set status
+          // Transition into stalled — null LKV, set status, enqueue sentinel
           this.timedOutModules.add(moduleId);
-          for (const tagId of tagIds) this.lkv.set(tagId, null);
+          for (const tagId of tagIds) {
+            this.lkv.set(tagId, null);
+          }
           this.moduleStatus.set(moduleId, 'STALLED');
+          this.enqueueWatchdogStallSentinel(moduleId);
         }
-        this.watchdogLatched.add(moduleId);    // latched — survives resumption
+        // Latch the watchdog indicator (survives comms resumption until manual reset)
+        this.watchdogLatched.add(moduleId);
       } else {
-        this.timedOutModules.delete(moduleId); // live — auto-clear
+        if (this.timedOutModules.has(moduleId)) {
+          // STALLED → OK transition: request a snapshot so LKV is repopulated immediately
+          this.moduleRecoveredHandler?.(moduleId);
+        }
+        // Comms are live — auto-clear the real-time stall flag
+        this.timedOutModules.delete(moduleId);
       }
     }
   });
 }
 ```
 
-The tick interval is `min(watchdogTimeoutMs, 500)` so detection never lags the timeout by more than ~500 ms. `resetWatchdog(moduleId)` is a no-op unless the module is currently live — prevents clearing a latched stall on a still-silent module.
+- The tick interval is `min(watchdogTimeoutMs, 500)`, so detection never lags the timeout by more than ~500 ms.
+- The watchdog covers every module in the registry, including the HMI module and any `'unknown'` module group. A module never heard from counts as stalled from startup.
+- **On stall**, `enqueueWatchdogStallSentinel` writes one historian row of `null` per trendable tag (`moduleTs = Date.now()`), so trends show a gap instead of a flat line.
+- **On recovery**, `moduleRecoveredHandler` (wired in `index.ts`) calls `cmdController.requestSnapshot(moduleId)` (REQUEST_SNAPSHOT for MQTT, `publishNow()` for HMI), then `cmdController.restorePendingSetpoints(moduleId)` (SET_VALUES re-delivery, MQTT only).
+- `resetWatchdog(moduleId)` and `resetAllWatchdogs()` clear the latch only for modules heard from within the timeout, so a reset can't clear a still-silent module.
 
 ### 4.3 Rate tracking and module stats
 
-A second 1 Hz timer snapshots per-module packet and byte rates:
+A second 1 Hz timer snapshots per-module packet and byte counts:
 
 ```ts
 startRateTimer(): void {
@@ -228,7 +341,7 @@ startRateTimer(): void {
       for (const moduleId of this.moduleTagIds.keys()) {
         this.lastRateSnapshot.set(moduleId, {
           packetsPerSec: this.packetsInWindow.get(moduleId) ?? 0,
-          bytesPerSec:   this.byteAccumulator.get(moduleId) ?? 0,
+          bytesPerSec: this.byteAccumulator.get(moduleId) ?? 0,
         });
         this.packetsInWindow.set(moduleId, 0);
         this.byteAccumulator.set(moduleId, 0);
@@ -239,24 +352,39 @@ startRateTimer(): void {
 }
 ```
 
-`getModuleStats()` returns these rates plus status and `tags_in_last_packet` for each module, surfaced to the UI via `Module_Info.*` tags published by `HmiTagSource`.
+`getModuleStats()` returns `{ module_id, status, packets_per_sec, bytes_per_sec, tags_in_last_packet, stalled, last_seen_ms }` per module, where `stalled` is the *latched* flag. `HmiTagSource` publishes them as the `Module_Info.*` tags (§2b.2).
 
 ### 4.4 Duty-cycle accounting
 
-Every callback that touches the hot path (`MqttBridge.handleMessage`, `TelemetryIntake.watchdogTick`, `TelemetryIntake.rateTimer`, `WsServer.tick`) is wrapped in `dutyTracker.track(fn)`. `DbPipeline` runs its own flush timer and is not duty-tracked. `DutyTracker.snapshot(intervalMs)` returns the busy time as a percentage and resets the accumulator. The 1 Hz rate timer snapshots the duty cycle and stores it; `HmiTagSource.onBeforePublish` reads it and writes it to `hmiTags.Telemetry_CPU`, closing the loop so the UI can display server load as just another tag.
+These hot-path callbacks are wrapped in `dutyTracker.track(fn)`:
+- `MqttBridge.handleMessage` (telemetry branch)
+- `TelemetryIntake.watchdogTick` and the rate timer
+- `HmiTagSource.publishTick`
+- `WsServer.tick` and `WsServer.trendFlush`
+- `TrendSnapshotScheduler.tick`
+
+`DbPipeline` runs its own flush timer and is not duty-tracked. The 1 Hz rate timer calls `DutyTracker.snapshot(1000)` outside `track()`, which returns busy time as a percentage and resets the accumulator. `HmiTagSource.onBeforePublish` writes the result to `hmiTags.Telemetry_CPU`, so server load shows in the UI as just another tag.
+
+### 4.5 Trend snapshot scheduler
+
+`TrendSnapshotScheduler` (`trend-snapshot-scheduler.ts`) guarantees every trendable tag at least one historian row per `TREND_SNAPSHOT_INTERVAL_MS` (default 60 s; off with `TREND_SNAPSHOT_ENABLED=false`). Each tick:
+1. **Force-write:** any module still pending from the previous tick gets `forceTrendSnapshot()`, an LKV snapshot written with `moduleTs = Date.now()` because no telemetry arrived.
+2. **Piggyback:** every module is marked pending again, so its *next* `ingest()` writes the full snapshot with the module's own timestamp (§4.1).
+
+This is unrelated to the MQTT REQUEST_SNAPSHOT command; it never touches MQTT.
 
 ---
 
 ## 5. Stage 4 — LKV Cache
 
-The Last-Known-Value cache is the central data structure. An in-memory `Map<tag_id, LkvEntry>`.
+The Last-Known-Value cache is the central data structure: an in-memory `Map<tag_id, LkvEntry>`.
 
 ```ts
 // lkv.ts
 export type LkvValue = number | boolean | string | number[] | boolean[] | string[] | null;
 
 export interface LkvEntry {
-  value:      LkvValue;
+  value: LkvValue;
   generation: number;
 }
 ```
@@ -267,7 +395,7 @@ export interface LkvEntry {
 set(tagId: number, value: LkvValue): boolean {
   const existing = this.entries.get(tagId);
   if (existing !== undefined && valuesEqual(existing.value, value)) {
-    return false;                          // same value → no generation bump
+    return false;
   }
   if (existing !== undefined) {
     existing.value = value;
@@ -279,62 +407,92 @@ set(tagId: number, value: LkvValue): boolean {
 }
 ```
 
-`valuesEqual` does strict equality for scalars and element-wise comparison for arrays. If the device sends `85.47` twice in a row, the second `set()` returns `false` and `generation` is unchanged — the WS server will not emit a DELTA for that tag.
+`valuesEqual` uses strict equality for scalars and element-wise comparison for arrays. If a module sends `85.47` twice in a row, the second `set()` returns `false` and the generation is unchanged, so the WS server sends no DELTA for that tag.
+
+Entries are created lazily. A tag never written has generation `0`, and `getValue()` returns `null` (bad quality) for it.
 
 ### 5.2 Null transitions
 
-If `value` was `85.47` and the watchdog writes `null`, the generation bumps. The WS server sends `DELTA { "1": null }`, and the widget renders `---`. When the device comes back with `85.47`, generation bumps again and the widget restores the number.
+If `value` was `85.47` and the watchdog writes `null`, the generation bumps. The WS server sends `DELTA { "1": null }`, and the widget renders `---`. When the module comes back with `85.47`, the generation bumps again and the widget restores the number.
 
 ### 5.3 No timestamps
 
-The LKV stores no timestamps. The only temporal concept is generation order. At 10 Hz with a uint32 ceiling, wrap time is ~13 years per tag; in practice non-existent.
+The LKV stores no timestamps; the only ordering is generation. Generations are plain JavaScript numbers, exact up to 2⁵³, so they never wrap in practice.
 
 ---
 
 ## 6. Stage 5 — DB Pipeline
 
-`DbPipeline` is a push-based queue: `TelemetryIntake` enqueues the trendable tags that changed on each ingest (change-of-value), plus a full trendable-tag snapshot when `TrendSnapshotScheduler` asks for one and a null sentinel per trendable tag when the watchdog marks a module stalled. The pipeline batch-flushes to the historian through a swappable writer — `TimescaleDbWriter` (wraps `writeTagSamples()` from `@caro/db`) or `NullDbWriter` when TimescaleDB was unreachable at startup. `HistorianReconnector` hot-swaps the real writer in via `setWriter()` once the historian comes back.
+`DbPipeline` is a push-based queue. `TelemetryIntake` enqueues three kinds of entry:
+- the trendable tags that changed on an ingest;
+- a full trendable-tag snapshot when the snapshot scheduler asks for one (§4.5);
+- a null sentinel per trendable tag when the watchdog marks a module stalled.
+
+The pipeline batch-flushes to the historian through a swappable writer: `TimescaleDbWriter` (wraps `writeTagSamples()` from `@caro/db`), or `NullDbWriter` when TimescaleDB was unreachable at startup. `HistorianReconnector` hot-swaps the real writer in via `setWriter()` once the historian comes back.
 
 ```ts
 export interface DbWriteEntry {
-  moduleTs: number;                                                      // from source message
-  tags:     { tagId: number; value: number | boolean | string | null }[];
+  moduleTs: number;
+  tags: { tagId: number; value: number | boolean | string | null }[];
 }
 ```
 
-`moduleTs` is the **source-message** timestamp, not the HMI server's receipt time. Every tag in a single enqueue shares the same `moduleTs`.
+`moduleTs` is the **source-message** timestamp, not the HMI server's receipt time. Every tag in one entry shares the same `moduleTs`.
 
-`DbPipeline` owns its own tick: `start()` sets an interval of `TIMESCALE_DB_TICK_MS` (default 500 ms) that calls `flushOnce()` — peek up to `TIMESCALE_DB_MAX_ENTRIES_PER_FLUSH` (500) entries, write them, then consume them, with an in-flight guard so ticks never overlap. The queue is capped at `TIMESCALE_DB_QUEUE_MAX` (5000), dropping the oldest entries when full. Its counters feed the `Trend_Info` observability tags.
+`DbPipeline` owns its own tick. `start()` sets an interval of `TIMESCALE_DB_TICK_MS` (default 500 ms) that calls `flushOnce()`:
+1. Peek up to `TIMESCALE_DB_MAX_ENTRIES_PER_FLUSH` (500) entries.
+2. Write them, with an in-flight guard so flushes never overlap.
+3. Consume them only on success; a failed write leaves the queue intact for the next tick.
 
-The DB pipeline is independent of the WS pipeline. They share the LKV but run on different triggers: DB is push-enqueue-by-TelemetryIntake; WS is pull-by-tick.
+The queue is capped at `TIMESCALE_DB_QUEUE_MAX` (5000) and drops the oldest entries when full. Its counters feed the `Trend_Info` tags.
 
-Write-path detail (writer coercion, bad-quality nulls, snapshot scheduler, storage): `Docs/hmi/trend-viewer/hmi_trend_viewer_reference.md`.
+The DB pipeline is independent of the WS pipeline. They share the LKV but run on different triggers: DB is push-enqueued by `TelemetryIntake`; WS is pulled by a tick.
+
+Write-path detail (writer coercion, bad-quality nulls, storage): [`../hmi/trend-viewer/hmi_trend_viewer_reference.md`](../hmi/trend-viewer/hmi_trend_viewer_reference.md).
 
 ---
 
 ## 7. Stage 6 — WebSocket Server
 
-Pull-based at `WS_TICK_MS` (default 125 ms, 8 Hz). Per-client generation tracking. `SUBSCRIBE → SNAPSHOT → DELTA`.
+The WebSocket endpoint is `/ws` on the HMI HTTP server (port 3003; the Vite dev client proxies it). All messages are JSON. There is no authentication; the session check described in `hmi_API_spec.md` §11 is not built.
 
 ### 7.1 Client state
 
 ```ts
 interface WsClient {
-  ws:            WebSocket;
-  subscriptions: Set<number>;              // tag_ids this client asked for
-  lastSentGen:   Map<number, number>;      // last generation delivered per tag_id
+  ws: WebSocket;
+  subscriptions: Set<number>;
+  lastSentGen: Map<number, number>;
+  trendSubscriptions: Set<number>;
+  trendOutbox: Map<number, Array<{ moduleTs: number; value: LkvValue }>>;
+  trendDroppedCount: number;
 }
 ```
 
-### 7.2 SUBSCRIBE handling
+On `close` or `error`, the client's trend state is cleared and the client is removed.
 
-On SUBSCRIBE, the server immediately SNAPSHOTs **only the newly subscribed** tag IDs:
+### 7.2 Inbound messages
+
+| Type | Handling |
+|---|---|
+| `SUBSCRIBE { tagIds }` | Adds the IDs to `subscriptions`. Immediately sends a `SNAPSHOT` containing **only the newly subscribed** IDs (an empty `values` object if all were already subscribed) and pins their `lastSentGen` to the current generation. |
+| `UNSUBSCRIBE { tagIds }` | Removes the IDs from `subscriptions` and `lastSentGen`. No reply. |
+| `SUBSCRIBE_TREND { tagIds }` | Adds only **trendable** IDs to `trendSubscriptions`; others are logged and ignored. No reply. |
+| `UNSUBSCRIBE_TREND { tagIds }` | Removes the IDs and their outbox entries. No reply. |
+| `PING { ts }` | Replies `PONG { ts }` with the same value, for client latency measurement. |
+
+`tagIds` must be an array. A non-array payload is ignored with a warning; within an array, only positive integers are used, and the others are logged by value. One bad ID never discards the rest of the batch. Unparseable JSON and unknown types are ignored.
 
 ```ts
 case 'SUBSCRIBE': {
-  const newTagIds = msg.tagIds.filter(id => !client.subscriptions.has(id));
-  for (const id of msg.tagIds) client.subscriptions.add(id);
-
+  const parsed = this.parseTagIdsArray((msg as { tagIds?: unknown }).tagIds);
+  if (!parsed) { console.warn('[WsServer] SUBSCRIBE: ignored malformed (non-array) tagIds payload'); return; }
+  const { valid: tagIds, rejected } = parsed;
+  if (rejected.length > 0) {
+    console.warn(`[WsServer] SUBSCRIBE: ignored ${rejected.length} invalid tagId(s): ${rejected.join(', ')}`);
+  }
+  const newTagIds = tagIds.filter(id => !client.subscriptions.has(id));
+  for (const id of tagIds) client.subscriptions.add(id);
   const values: Record<string, LkvValue> = {};
   for (const id of newTagIds) {
     values[String(id)] = this.lkv.getValue(id);
@@ -345,9 +503,9 @@ case 'SUBSCRIBE': {
 }
 ```
 
-After the SNAPSHOT, `lastSentGen` is pinned to the current generation — subsequent ticks only deliver changes after the snapshot. Re-subscribes for tags already in `subscriptions` produce no new SNAPSHOT entry (idempotent).
-
 ### 7.3 The tick — DELTA generation
+
+Runs every `WS_TICK_MS` (default 125 ms, 8 Hz):
 
 ```ts
 private tick(): void {
@@ -356,14 +514,16 @@ private tick(): void {
       if (client.ws.readyState !== WebSocket.OPEN) continue;
 
       const delta: Record<string, LkvValue> = {};
+
       for (const tagId of client.subscriptions) {
         const currentGen = this.lkv.getGeneration(tagId);
-        const lastGen    = client.lastSentGen.get(tagId) ?? 0;
+        const lastGen = client.lastSentGen.get(tagId) ?? 0;
         if (currentGen > lastGen) {
           delta[String(tagId)] = this.lkv.getValue(tagId);
           client.lastSentGen.set(tagId, currentGen);
         }
       }
+
       if (Object.keys(delta).length > 0) {
         this.send(client, { type: 'DELTA', values: delta });
       }
@@ -375,13 +535,15 @@ private tick(): void {
 ### 7.4 Wire format
 
 ```jsonc
-// On subscribe
+// Server → client, on SUBSCRIBE
 { "type": "SNAPSHOT", "values": { "1": 85.47, "2": 12.03, "3": true, "4": null } }
-// On tick, when at least one subscribed tag changed
+// Server → client, on tick, when at least one subscribed tag changed
 { "type": "DELTA",    "values": { "1": 86.12 } }
+// Server → client, reply to PING
+{ "type": "PONG", "ts": 1716543600000 }
 ```
 
-Keys are stringified tag IDs. Values are raw (`number | boolean | string | null`). No timestamp, no quality enum, no generation on the wire.
+Keys are stringified tag IDs. Values are raw LKV values (number, boolean, string, array or null). There is no timestamp, quality enum or generation on the wire.
 
 ### 7.5 Why generation counters?
 
@@ -393,15 +555,13 @@ Keys are stringified tag IDs. Values are raw (`number | boolean | string | null`
 
 ### 7.6 Trend WebSocket Channel
 
-Step 11 added a parallel channel on the same WebSocket connection for historian-fidelity live tail rendering. The live-value channel (§7.1–7.5) coalesces at 8 Hz, carries no per-sample timestamp, and delivers only changed values — correct for widget rendering but harmful for the trend chart's live tail, which must stitch time-series data accurately into a cached tile mosaic. The trend channel was built to bypass all three limitations.
-
-#### Three live-value limitations bypassed
+A parallel channel on the same connection serves the trend chart's live tail. The live-value channel coalesces at 8 Hz, carries no timestamps and sends only changes. That is right for widgets, but a live trend has to line up exactly with historian tiles, so the trend channel avoids all three:
 
 | Limitation | Live-value channel | Trend channel |
 |---|---|---|
-| Coalescing | 8 Hz tick; fast-changing tags lose intermediate samples | Every COV event in the flush window is preserved in `samples[]` |
-| No moduleTs | DELTA carries no timestamp; client must infer time | Each sample carries `moduleTs` from the originating telemetry frame |
-| Only-changed | Flatlined tags produce no DELTA | Synthetic event on flush guarantees at least one sample per subscribed tag per window |
+| Coalescing | 8 Hz tick; intermediate values are lost | One sample per ingest per subscribed tag, all kept until the flush |
+| No timestamp | DELTA carries no time | Each sample carries the `moduleTs` of the telemetry frame that produced it |
+| Only-changed | Flatlined tags produce nothing | A subscribed tag with no ingest in the window gets one synthetic sample per flush |
 
 #### Wire messages
 
@@ -415,68 +575,83 @@ Step 11 added a parallel channel on the same WebSocket connection for historian-
   "type": "TREND_DELTA",
   "samples": [
     { "moduleTs": 1716543600000, "tagId": 1, "value": 85.47 },
-    { "moduleTs": 1716543600250, "tagId": 1, "value": 86.12 },
-    { "moduleTs": 1716543600000, "tagId": 2, "value": 12.03 }
+    { "moduleTs": 1716543600100, "tagId": 1, "value": 86.12 },
+    { "moduleTs": 1716543600000, "tagId": 2, "value": true }
   ]
 }
 ```
 
-Multiple samples for the same `tagId` within one frame are possible — the flush window accumulates every COV event. Values are numeric post-coercion (booleans become 1.0/0.0); `null` is preserved as a quality sentinel.
+A tag can appear several times in one frame, once per ingest of its module in the window. Values are the raw LKV value: booleans arrive as `true`/`false` and `null` is preserved. The client does the numeric coercion (§8.7).
 
 #### Server-side mechanics
 
-Each connected client has two additional fields beyond the live-value state (§7.1):
+`index.ts` registers `intake.setTrendDeltaListener((moduleTs, moduleId) => wsServer.handleTrendDelta(moduleTs, moduleId))`. On every ingest:
 
 ```ts
-interface WsClient {
-  // ... live-value fields (§7.1) ...
-  trendSubscriptions: Set<number>;            // tag_ids subscribed via SUBSCRIBE_TREND
-  trendOutbox:        Map<number, TrendEvent[]>;  // per-tag accumulated events since last flush
+handleTrendDelta(moduleTs: number, moduleId: string): void {
+  const trendableTags = this.trendableTagsByModule.get(moduleId);
+  if (!trendableTags || trendableTags.size === 0) return;
+
+  // Read LKV once — shared across all clients for this ingest
+  const lkvCache = new Map<number, LkvValue>();
+  for (const tagId of trendableTags) {
+    lkvCache.set(tagId, this.lkv.getValue(tagId));
+  }
+
+  for (const client of this.clients) {
+    for (const tagId of trendableTags) {
+      if (!client.trendSubscriptions.has(tagId)) continue;
+      let events = client.trendOutbox.get(tagId);
+      if (!events) {
+        events = [];
+        client.trendOutbox.set(tagId, events);
+      }
+      if (events.length >= MAX_TREND_OUTBOX_PER_TAG) {
+        events.shift();                    // drop oldest — newest data is more relevant for live tail
+        client.trendDroppedCount++;
+      }
+      events.push({ moduleTs, value: lkvCache.get(tagId) ?? null });
+    }
+  }
 }
 ```
 
-`TelemetryIntake.setTrendDeltaListener(fn)` registers a single callback that fires after every `ingest()` call that produces COV events. `WsServer.handleTrendDelta(moduleTs, tagId, value)` is the registered listener: for each connected client whose `trendSubscriptions` includes `tagId`, it appends `{ moduleTs, tagId, value }` to that client's `trendOutbox`.
+So each ingest adds one sample for *every* subscribed trendable tag of that module, carrying the tag's current LKV value, whether or not it changed in that message. A module publishing at 10 Hz produces about 10 samples per tag per second. Each tag's outbox is capped at `MAX_TREND_OUTBOX_PER_TAG = 500`, dropping the oldest, with one batched warning per flush.
 
-The trendFlush tick runs at `TREND_FLUSH_HZ` (default 4 Hz, env-tunable 1–20). On each tick, for each client:
+`trendFlush()` runs every `1000 / TREND_FLUSH_HZ` ms (default 250 ms; `TREND_FLUSH_HZ` must be an integer 1–20 or the server refuses to start). For each open client with trend subscriptions:
+1. Each subscribed tag with outbox events contributes all of them, in order.
+2. Each subscribed tag with none contributes one synthetic sample `{ moduleTs: Date.now(), tagId, value: <current LKV> }`. This uses server time, a different clock from the module timestamps (see `hmi_trend_viewer_handoff.md` §11, issue D).
+3. The outbox is cleared and one `TREND_DELTA` frame is sent. Every flush sends a frame while the client has trend subscriptions.
 
-1. **LKV deduplication:** each subscribed `tagId`'s current LKV value is read once and reused across all clients in the same tick — no repeated LKV lookups per client.
-2. **Synthetic-on-flush:** any subscribed `tagId` with zero real events in its outbox gets one synthetic `{ moduleTs: serverNow, tagId, value: lkvValue }`. Ensures the client receives a heartbeat for every subscribed tag every flush window, even on flatlined tags.
-3. **Drain outbox:** collect all accumulated events across all subscribed tags; emit as a single `TREND_DELTA` frame.
-4. Clear each tag's outbox for the next window.
-
-The trendFlush callback is wrapped in `dutyTracker.track()` and runs synchronously on the event loop. No new concurrency concerns arise beyond those described in §10.1.
-
-See `Docs/hmi/trend-viewer/hmi_trend_viewer_spec.md` §4.4 and §10.6 for the trend viewer client's use of this channel.
+Client-side use of this channel: `Docs/hmi/trend-viewer/hmi_trend_viewer_spec.md` §4.4 and §10.6.
 
 ---
 
 ## 8. Stage 7 — Client Context
 
-The client wraps the React tree in `HmiContextProvider` from `@caro/hmi-context`. The provider owns the WebSocket, the tag map, the tag-path index, the live-value map, and per-tag subscriber callbacks.
+The client wraps the React tree in `HmiContextProvider` from `@caro/hmi-context` (`apps/caro-hmi/client/src/App.tsx`: `apiUrl="/api/v1"`, `wsUrl={`ws://${window.location.host}/ws`}`). The provider owns the WebSocket, the tag map, the tag-path index, `projectRoot`, the live-value map and the per-tag subscriber callbacks.
 
 ### 8.1 Split context
 
-The provider exposes **two** contexts to avoid subscription churn on stats ticks:
+The provider exposes **two** contexts, so the once-a-second stats refresh doesn't cause subscription churn:
 
 | Context             | Contents                                                         | Update rate |
 |---------------------|------------------------------------------------------------------|-------------|
-| `HmiDataContext`    | `tagMap`, `tagPathIndex`, `getLiveValue`, `subscribeLiveValue`, `writeTag` | Stable — changes only when tag map reloads |
+| `HmiDataContext`    | `tagMap`, `tagPathIndex`, `projectRoot`, `getLiveValue`, `subscribeLiveValue`, `subscribeTrend`, `writeTag`, `sendCommand` | Stable — changes only when the tag map loads |
 | `HmiStatsContext`   | `wsStats` (`connected`, `latencyMs`, `messagesPerSec`, `bytesPerSec`, `subscribedCount`) | 1 Hz |
 
 `useLiveValue` depends only on `HmiDataContext`, so the 1 Hz `wsStats` refresh never re-runs subscription effects.
 
 ### 8.2 Initialization sequence
 
-1. Fetch the tag map from `GET /api/v1/tags`. Populate `tagMap: Map<number, TagDef>`.
-2. Build `tagPathIndex` from the tag map (see §8.3).
-3. Open the WebSocket.
-4. Render `null` until step 1 completes; children do not mount against an empty map.
+1. Fetch `GET /api/v1/tags` and `GET /api/v1/config` in parallel. A failure of either is logged and the app carries on: an empty tag map, or `projectRoot = null`.
+2. Build `tagMap` and `tagPathIndex` (§8.3) from the tags response.
+3. When both requests have settled, set `tagMapLoaded`. Until then the provider renders `null`, so children never mount against an empty map.
+4. Open the WebSocket (the effect is gated on `tagMapLoaded`).
 
 ### 8.3 TagPathIndex — O(1) asset-path resolution
 
-Historically `useResolveAssetPath` iterated the full tag map (1.5k+ entries) and re-split `tag.tag_path` on every widget mount. For a tag-dense page (e.g. Power with ~100 widgets × 9 children each), this dominated page-navigation INP.
-
-The resolver is now pre-built **once** when the tag map loads. The index inserts every contiguous segment subsequence of every `tag_path` as a key:
+Widgets resolve asset paths like `RF_Fwd.monitor` against `tag_path`. Scanning the full tag map (1.5k+ entries) on every widget mount dominated page-navigation time on tag-dense pages, so the index is built **once** when the tag map loads. It inserts every contiguous segment run of every `tag_path` as a key:
 
 ```ts
 // packages/hmi-context/src/tagPathIndex.ts
@@ -497,60 +672,66 @@ export function buildTagPathIndex(tags: Iterable<TagDef>): TagPathIndex {
 }
 ```
 
-`useResolveAssetPath(assetPath)` and `useTagGroup(basePath, children, widgetName)` both delegate to `ctx.tagPathIndex.resolve(path)`. Semantics are unchanged: contiguous-segment match, ambiguity detection and error handling are the consumers' responsibility.
+`useResolveAssetPath(assetPath)` and `useTagGroup(basePath, children, widgetName)` both delegate to `ctx.tagPathIndex.resolve(path)`. Detecting ambiguous matches and handling errors is the consumer's job.
 
 ### 8.4 WebSocket message handling
 
 ```ts
-// HmiContextProvider.tsx — ws.onmessage
+// HmiContextProvider.tsx — ws.onmessage (after JSON.parse and byte counting)
 if (msg.type === 'SNAPSHOT' || msg.type === 'DELTA') {
-  for (const [key, rawValue] of Object.entries(msg.values ?? {})) {
+  wsStatsRef.current.messageCount++;
+  const entries = msg.values ?? {};
+  for (const [key, rawValue] of Object.entries(entries)) {
     const tagId = Number(key);
     const lv: LiveValue = { value: rawValue as number | boolean | string | null };
     valuesRef.current.set(tagId, lv);
     subscribersRef.current.get(tagId)?.forEach(cb => cb(lv));
   }
+} else if (msg.type === 'TREND_DELTA') {
+  wsStatsRef.current.messageCount++;
+  for (const { moduleTs, tagId, value } of msg.samples ?? []) {
+    trendSubscribersRef.current.get(tagId)?.forEach(cb => cb(moduleTs, value));
+  }
+} else if (msg.type === 'PONG' && msg.ts !== undefined) {
+  latencyRef.current = Date.now() - msg.ts;
 }
 ```
 
-- `valuesRef` — `Map<tag_id, LiveValue>`. Client-side mirror of the LKV for subscribed tags. Only `{ value }`; no quality, no timestamp, no module_id.
-- `subscribersRef` — `Map<tag_id, Set<callback>>`. Each `useLiveValue` call registers one callback (the `useState` setter) and removes it on unmount.
+- `valuesRef` — `Map<tag_id, LiveValue>`. The client-side mirror of the LKV for subscribed tags: just `{ value }`, with no quality, timestamp or module_id.
+- `subscribersRef` — `Map<tag_id, Set<callback>>`. Each `useLiveValue` call registers one callback (its `useState` setter) and removes it on unmount.
 
 ### 8.5 Subscription management — level-triggered reconciler
 
-The provider manages SUBSCRIBE / UNSUBSCRIBE messages via a **level-triggered reconciler**. Two sets govern state:
+The provider manages SUBSCRIBE / UNSUBSCRIBE through a **level-triggered reconciler** with two sets:
 
-- `desiredRef: Set<number>` — tag IDs at least one hook currently wants. Derived from `subscribersRef`.
-- `serverRef: Set<number>` — tag IDs the client has told the server about (what we've emitted on the wire, not yet retracted).
+- `desiredRef: Set<number>` — tag IDs at least one hook currently wants.
+- `serverRef: Set<number>` — tag IDs the client has subscribed on the wire and not yet retracted.
 
-On every `subscribeLiveValue` / unsubscribe call, the provider mutates `desiredRef` and schedules a microtask flush. The flush is the only code that talks to the wire:
+`subscribeLiveValue` and its unsubscribe function only mutate `desiredRef` and schedule a microtask flush. The flush is the only code that talks to the wire. It sends at most one message of each type, in the order `SUBSCRIBE` → `SUBSCRIBE_TREND` → `UNSUBSCRIBE` → `UNSUBSCRIBE_TREND`, and only while the socket is open.
 
-```ts
-function flush() {
-  const ws = wsRef.current;
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+**Guarantees.**
+- Any ordering of subscribe and unsubscribe calls within one microtask collapses to the final `desiredRef` state.
+- Subscribing and unsubscribing the same tag ID in the same tick produces zero wire messages.
+- `subscribeLiveValue(undefined, cb)` (an optional asset path that doesn't resolve) is a non-event: `cb({ value: null })`, with no subscription and no wire traffic.
 
-  const toSub:   number[] = [];  // in desiredRef but not serverRef
-  const toUnsub: number[] = [];  // in serverRef  but not desiredRef
-  for (const t of desiredRef.current) if (!serverRef.current.has(t)) toSub.push(t);
-  for (const t of serverRef.current)  if (!desiredRef.current.has(t)) toUnsub.push(t);
+### 8.6 Connection lifecycle
 
-  if (toSub.length)   { ws.send(JSON.stringify({ type: 'SUBSCRIBE',   tagIds: toSub   })); for (const t of toSub)   serverRef.current.add(t); }
-  if (toUnsub.length) { ws.send(JSON.stringify({ type: 'UNSUBSCRIBE', tagIds: toUnsub })); for (const t of toUnsub) serverRef.current.delete(t); }
-}
-```
+- **Open:** resets the reconnect delay to 1 s, starts a `PING { ts }` every 5 s (the `PONG` gives `latencyMs`), clears `serverRef` and schedules a flush. The flush then sends one `SUBSCRIBE` (and `SUBSCRIBE_TREND`) with everything currently desired, and the server answers with a fresh SNAPSHOT.
+- **Close or error:** sets every subscribed tag to `{ value: null }` and notifies its subscribers immediately, so widgets show bad quality the moment the connection drops. Then it clears `serverRef` and `trendServerRef`, stops the PING timer and schedules a reconnect. The reconnect delay starts at 1 s and doubles on each consecutive failure up to 30 s. `desiredRef`/`trendDesiredRef` are kept.
 
-**Guarantees.** Any ordering of sub / unsub calls within a single microtask collapses to the final `desiredRef` state. Same-tick subscribe + unsubscribe of the same tag ID produces zero wire messages. On reconnect, `onopen` clears `serverRef` and schedules a flush; the diff naturally produces a single `SUBSCRIBE` containing everything currently desired.
-
-### 8.6 `useLiveValue` — seed via initializer, sync via subscribe
+### 8.7 `useLiveValue` — seed via initializer, sync via subscribe
 
 ```ts
 // packages/hmi-context/src/hooks/useLiveValue.ts
-export function useLiveValue(tagId: number): LiveValue {
+export function useLiveValue(tagId: number | undefined): LiveValue {
   const ctx = useHmiContext();
-  const [liveValue, setLiveValue] = useState<LiveValue>(() => ctx.getLiveValue(tagId));
+  const [liveValue, setLiveValue] = useState<LiveValue>(() =>
+    tagId === undefined ? { value: null } : ctx.getLiveValue(tagId)
+  );
 
   useEffect(() => {
+    // subscribeLiveValue calls back synchronously with the current value, reconciling
+    // any value that changed between the useState initializer and this effect firing.
     const unsubscribe = ctx.subscribeLiveValue(tagId, setLiveValue);
     return unsubscribe;
   }, [tagId, ctx]);
@@ -559,138 +740,150 @@ export function useLiveValue(tagId: number): LiveValue {
 }
 ```
 
-No redundant `setLiveValue` on mount — the `useState` initializer seeds the value, and `subscribeLiveValue` invokes the callback synchronously with the current `valuesRef` value at the moment of subscribe, reconciling any drift between render and effect. This matters on tag-dense pages: avoiding ~N extra state updates per page mount measurably reduces page-navigation INP.
+Nothing calls `setLiveValue` on mount. The `useState` initializer seeds the value, and `subscribeLiveValue` invokes the callback synchronously at subscribe time, which reconciles any drift between render and effect. On tag-dense pages, avoiding ~N extra state updates per mount measurably reduces navigation time.
 
-### 8.7 Trend Client Subscription
+### 8.8 Trend client subscription
 
-`HmiContextProvider` manages SUBSCRIBE_TREND / UNSUBSCRIBE_TREND messages through a second level-triggered reconciler that mirrors the live-value reconciler (§8.5).
+`subscribeTrend(tagId, callback)` feeds a second reconciler (`trendDesiredRef` / `trendServerRef`) through the same flush as §8.5, and has the same reconnect behaviour (§8.6). On each `TREND_DELTA`, the provider calls every callback registered for each sample's `tagId` with `(moduleTs, value)`.
 
-#### Additional client state
+The consumer is `useLiveSubscription` in `@caro/trend-chart`. It keeps:
 
-Two refs track desired vs. server-confirmed trend subscriptions:
+- a **per-tag ring** of the last `TREND_RING_CAPACITY = 20` samples;
+- a **bucket accumulator** (aggregate mode), which folds samples into the current bucket of the visible resolution;
+- a **raw buffer** (raw mode), trimmed to 2 × the viewport span.
 
-- `trendDesiredRef: Set<number>` — tag IDs at least one trend consumer currently wants. Derived from registered `subscribeTrend` callbacks.
-- `trendServerRef: Set<number>` — tag IDs the client has emitted SUBSCRIBE_TREND for on the wire.
-
-#### Wire emission order in `flush()`
-
-The single flush function handles both channels in a defined order to prevent retracting tags the server hasn't heard about yet:
-
-1. `SUBSCRIBE` — new live-value tag IDs
-2. `SUBSCRIBE_TREND` — new trend tag IDs
-3. `UNSUBSCRIBE` — retracted live-value tag IDs
-4. `UNSUBSCRIBE_TREND` — retracted trend tag IDs
-
-Same-tick subscribe + unsubscribe of the same trend tag ID produces zero wire messages, for the same reason as the live-value path (§8.5).
-
-#### Reconnect behavior
-
-On disconnect, `trendServerRef` is cleared (server state is lost). `trendDesiredRef` survives — it reflects consumer demand, not server state. The `onopen` handler schedules a flush; the reconciler diff naturally produces `SUBSCRIBE_TREND` for every currently desired tag, re-establishing the full subscription set with a single message.
-
-#### Consumer: `useLiveSubscription` in `@caro/trend-chart`
-
-`subscribeTrend(tagId, callback)` is the hook entry point consumed by `useLiveSubscription`. On each `TREND_DELTA` frame the provider routes each sample to the registered callback for that `tagId`. `useLiveSubscription` maintains:
-
-- **Per-tag FIFO** (capacity `TREND_FIFO_CAPACITY = 100`): accumulates received events between commits.
-- **Bucket accumulator** (aggregate mode): maps each event to its tile bucket, merging by last-write-wins within a bucket. Three-case rule: exact-bucket match (update in place), new bucket (append), out-of-order (discard).
-- **Raw buffer** (raw mode): per-tag ring trimmed to 2×`viewportSpanMs` to bound memory.
-
-On tailing exit, `commitAndDrain()` atomically moves the accumulator/buffer contents into the cached tile data before the mode transition completes, preventing a gap between the last live event and the first REST tile fetch.
-
-See `Docs/hmi/trend-viewer/hmi_trend_viewer_handoff.md` §8 (Live Tail Runtime Architecture) for the full client-side hook architecture.
+It coerces values with `toNumericValue`: booleans become 1/0, strings and `null` become `null` (a gap). On leaving live mode, `drainBuffers()` clears the accumulator, raw buffers and high-water mark (not the ring) before the mode change. Full hook architecture: [`../hmi/trend-viewer/hmi_trend_viewer_handoff.md`](../hmi/trend-viewer/hmi_trend_viewer_handoff.md) §8.
 
 ---
 
 ## 9. Stage 8 — Widget Render
 
-Widgets are the final destination. They turn a `LiveValue` into pixels. The example here is `NumericMon`; composite widgets (e.g. `AnalogIn`) follow the same pattern via `useTagGroup`.
+Widgets are the final destination: they turn a `LiveValue` into pixels. `NumericMon` is shown here; composite widgets (e.g. `AnalogIn`) follow the same pattern via `useTagGroup`.
 
 ### 9.1 Path resolution + live subscription
 
 ```ts
-// NumericMon.tsx (condensed)
-export function NumericMon({ assetPath, label }: NumericMonProps) {
-  const tag = useSingleTag(assetPath, 'NumericMon');   // → tagPathIndex.resolve(), exactly one match
-  const lv  = useLiveValue(tag.tag_id);                // subscribes, gets LiveValue
-  const fmt = resolveFormat(tag);                      // compiled once at mount
+// packages/widgets/src/NumericMon.tsx
+function NumericMonInner({ assetPath, label }: NumericMonProps) {
+  const tag = useSingleTag(assetPath, 'NumericMon');
+  const lv = useLiveValue(tag.tag_id);
+  const fmt = resolveFormat(tag);
+  const displayLabel = resolveLabel(assetPath, label);
+
   const badQuality = lv.value === null;
 
   return (
-    <div className="inline-flex flex-col p-2 rounded border bg-white min-w-[80px]">
-      <WidgetLabel label={resolveLabel(assetPath, label)} unit={tag.unit} />
-      {badQuality
-        ? <div className="text-red-600 font-mono text-sm">---</div>
-        : <div className="font-mono text-sm text-gray-900">
-            {fmt(lv.value as number)}{tag.unit && <span className="text-gray-500 text-xs ml-1">{tag.unit}</span>}
-          </div>}
+    <div className={ROW_CONTAINER}>
+      <span className={LABEL_CLASS}>{displayLabel}</span>
+      {badQuality ? (
+        <span className={VALUE_BAD_CLASS}>---</span>
+      ) : (
+        <span className={VALUE_CLASS}>{fmt(lv.value as number)}</span>
+      )}
+      <span className={UNIT_CLASS}>{tag.unit ?? '-'}</span>
     </div>
   );
 }
+
+export const NumericMon = withErrorBoundary(NumericMonInner);
 ```
+
+`useSingleTag` resolves through `tagPathIndex` and throws unless exactly one tag matches; `withErrorBoundary` contains that error to the widget.
 
 ### 9.2 Rendering rules
 
 | `lv.value`          | Render |
 |---------------------|--------|
-| `null`              | `---` with red tint and red border. Bad quality. |
-| number              | `fmt(value)` using the compiled pattern from `tag.meta.format`. Default pattern `#.##` (two decimals). |
-| boolean / string    | Handled by `BooleanMon` / other widgets, not `NumericMon`. |
+| `null`              | `---` in the bad-quality style. |
+| number              | `fmt(value)`, the pattern compiled once from `tag.format` (`#`, `#.##`, `#.##E+0`; default `#.##`). Unit from `tag.unit`, `-` if none. |
+| boolean / string / array | Not handled by `NumericMon`. Booleans go to `BooleanMon`/`BooleanSet`, `number[]` to `SpectrumChart`. No widget renders strings yet (see `platform_todo.md`). |
 
-### 9.3 Meta-field resolution
+### 9.3 Field resolution
 
-`tag.unit`, `tag.eng_min`, `tag.eng_max`, and the format pattern are resolved **server-side** during tag-map construction by walking `tag.meta` from root (`meta[0]`) to leaf (`meta[last]`) and taking the first non-null value for each field. The client receives the resolved fields already on `TagDef` and re-walks `meta` only for `format` (see `resolveFormat` / `compileFormat` in `packages/widgets/src/shared/utils.ts`).
+`unit`, `eng_min`, `eng_max`, `format` and `tag_name` are resolved by the Tag Registry's `resolveRegistry` when a registry is applied, and stored as columns of `tag_registry`. The HMI server copies them straight from those columns into each `TagDef` (`tag-map.ts`), and widgets read them from `TagDef` (`resolveFormat` in `packages/widgets/src/shared/utils.ts`). Nothing walks `meta` for these fields. `meta` is used only for structure (the module ancestor that gives `module_id`).
 
 ---
 
 ## 10. Threading and Safety Model
 
-The HMI server runs on a single Node.js event loop. No worker threads, no shared memory, no locks.
+The HMI server runs on a single Node.js event loop: no worker threads, no shared memory, no locks.
 
 ### 10.1 Why no locks?
 
-In a multi-threaded design the LKV would need a read-write lock: MQTT writes, WS reads. In Node.js these never execute concurrently.
+In a multi-threaded design the LKV would need a read-write lock, with MQTT writing and WS reading. In Node.js these never execute concurrently.
 
 - **MQTT message callback** — runs synchronously on the event loop. Writes via `lkv.set()`. Cannot be interrupted.
-- **HmiTagSource publish timer** — same. Writes to LKV via `intake.ingest()`.
-- **Watchdog tick** — same. Writes nulls to LKV.
+- **HmiTagSource publish timer** — same. Writes to the LKV via `intake.ingest()`.
+- **Watchdog tick** — same. Writes nulls to the LKV.
 - **Rate-snapshot tick** — same. Reads counters, resets them.
 - **WS tick** — same. Reads `lkv.getGeneration()` and `lkv.getValue()`.
-- **DB flush timer** — same. Drains `dbPipeline.queue`.
-- **trendFlush tick** — same. Drains each subscribed client's `trendOutbox` and emits `TREND_DELTA` frames. Wrapped in `dutyTracker.track()` like every other hot-path callback.
+- **trendFlush tick** — same. Drains each subscribed client's `trendOutbox` and sends `TREND_DELTA`.
+- **Trend snapshot tick** — same. Enqueues LKV snapshots.
+- **DB flush timer** — peeks the queue synchronously, awaits the database write, then consumes the batch in the promise callback. The in-flight guard stops a second flush from starting meanwhile; enqueues during the write only append to the queue tail.
 
-Each callback runs to completion before the next one starts. That's the Node.js concurrency guarantee: no preemption within the synchronous phase of a callback.
+Each synchronous callback runs to completion before the next one starts. That is the Node.js concurrency guarantee: no preemption within the synchronous phase of a callback.
 
 ### 10.2 Async boundaries
 
-The only async operations are `ws.send()` / `mqtt.publish()` (both buffer internally; calls return synchronously) and the initial `loadTagMap()` at startup (happens before any telemetry is processed). No async operations sit between an LKV read and a `ws.send()` in `WsServer.tick()`.
+The async operations are:
+- `ws.send()` and `mqtt.publish()` — both buffer internally and return synchronously;
+- historian writes and pending-setpoint reads and writes (Postgres/TimescaleDB);
+- the startup DB calls, which finish before any telemetry is processed.
+
+No async operation sits between an LKV read and a `ws.send()` in `WsServer.tick()`.
 
 ---
 
 ## 11. Configuration Reference
 
+HMI server settings live in `apps/caro-hmi/server/.env` (see `.env.example`) and are read in `config.ts` or by the class that uses them.
+
 | Env var                   | Default                | Used by               | Effect |
 |---------------------------|------------------------|-----------------------|--------|
-| `MQTT_URL`                | `mqtt://localhost:1883`| `mqtt-bridge.ts`      | Mosquitto address. Absent broker → server runs degraded (REST + WS serve LKV without live telemetry). |
-| `WS_TICK_MS`              | `125`                  | `ws-server.ts`        | Delta tick interval. Lower = more responsive, higher CPU. |
-| `TIMESCALE_DB_TICK_MS`    | `500`                  | `db-pipeline.ts`      | DB-pipeline flush interval. |
-| `WATCHDOG_TIMEOUT_MS`     | `1000`                 | `telemetry-intake.ts` | Time without telemetry before nulling the module's LKV entries. |
-| `HEARTBEAT_INTERVAL_MS`   | `1000`                 | `mqtt-bridge.ts`      | Heartbeat publish frequency on `caro/{module_id}/beat`. |
-| `HMI_PUBLISH_INTERVAL_MS` | `250`                  | `hmi-tag-source.ts`   | HmiTagSource emit interval; also the cadence at which `Telemetry_CPU` is refreshed. |
-| `TREND_FLUSH_HZ`          | `4`                    | `ws-server.ts`        | Trend channel flush cadence. Valid range 1–20. Higher values reduce live-tail latency at the cost of more small WS frames. |
-| `POSTGRES_HOST` / `POSTGRES_PORT` / `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DATABASE` | — | `@caro/db` | PostgreSQL connection for `runMigrations()` and tag-map load. |
+| `HMI_PORT`                | `3003`                 | `index.ts`            | HTTP + WebSocket port. |
+| `MQTT_URL`                | `mqtt://localhost:1883`| `mqtt-bridge.ts`      | Broker address. If the broker is absent the server runs degraded (REST and WS serve the LKV without live telemetry). |
+| `HEARTBEAT_INTERVAL_MS`   | `1000`                 | `mqtt-bridge.ts`      | Interval of `caro/{module_id}/beat`. |
+| `WATCHDOG_TIMEOUT_MS`     | `1000`                 | `telemetry-intake.ts` | Silence before a module is marked STALLED and its LKV entries nulled. |
+| `HMI_PUBLISH_INTERVAL_MS` | `250`                  | `hmi-tag-source.ts`   | HmiTagSource publish interval; also how often `Telemetry_CPU` refreshes. |
+| `WS_TICK_MS`              | `125`                  | `ws-server.ts`        | Live-value DELTA tick. |
+| `TREND_FLUSH_HZ`          | `4`                    | `ws-server.ts`        | Trend channel flush rate. Integer 1–20; anything else stops startup. |
+| `TREND_SNAPSHOT_ENABLED`  | `true`                 | `index.ts`            | `false` disables the trend snapshot scheduler (§4.5). |
+| `TREND_SNAPSHOT_INTERVAL_MS` | `60000`             | `trend-snapshot-scheduler.ts` | Guaranteed historian-row interval per trendable tag. |
+| `TIMESCALE_DB_TICK_MS`    | `500`                  | `db-pipeline.ts`      | DB flush interval. (`config.ts` also reads it as `dbTickMs` with a `100` default, but nothing uses that value.) |
+| `TIMESCALE_DB_QUEUE_MAX`, `TIMESCALE_DB_MAX_ENTRIES_PER_FLUSH`, `TIMESCALE_RECONNECT_MS`, `TIMESCALE_SIZE_POLL_MS` | `5000`, `500`, `30000`, `30000` | historian | See `apps/caro-hmi/CLAUDE.md` § Environment. |
+| `POSTGRES_*`, `TIMESCALE_*` connection vars | — | `@caro/db` | Root `.env`; see `Docs/db/db_handoff.md`. |
+
+Constants that are not configurable: CMD_ACK timeout 1000 ms (`cmd-controller.ts`); trend outbox cap 500 per tag (`ws-server.ts`); client PING 5 s and reconnect backoff 1 s → 30 s (`HmiContextProvider.tsx`).
 
 ---
 
-## 12. Related Documents
+## 12. Known Gaps
+
+Behaviour a reader could reasonably assume but the implementation does not provide. Fixing any of these is a code change, not a doc change.
+
+| Gap | Where | Effect |
+|---|---|---|
+| Protobuf telemetry is not decoded | `mqtt-bridge.ts` `handleMessage` | A module publishing Protobuf (the spec's target default) is silently ignored; the watchdog then marks it STALLED. |
+| Heartbeat timer re-created on every reconnect | `mqtt-bridge.ts` `connect` handler | After N broker reconnects, each module receives N+1 heartbeats per interval. `stop()` clears only the latest timer. |
+| Valid JSON without a `tags` array throws | `telemetry-intake.ts` `ingest` (`message.tags.length`) | The exception escapes the MQTT message handler; one malformed publish can take down the handler or the process. Only JSON syntax is checked today. |
+| Telemetry timestamp not validated | `telemetry-intake.ts` | Tracked in `platform_todo.md`. |
+| Tag ownership not checked | `telemetry-intake.ts` | A module can update any registry tag by publishing its tag_id. |
+| No MQTT TLS or auth, no WS auth | `mqtt-bridge.ts`, `ws-server.ts` | See `CARO_MQTT_Spec.md` §1.1 and `hmi_API_spec.md` §11. |
+| Module handshake not built | — | See `CARO_MQTT_Spec.md` §7. |
+
+---
+
+## 13. Related Documents
 
 | Document                                 | Path                                   |
 |------------------------------------------|----------------------------------------|
+| MQTT interface spec (ICD)                | [`CARO_MQTT_Spec.md`](CARO_MQTT_Spec.md) |
+| Historian write path                     | [`../hmi/trend-viewer/hmi_trend_viewer_reference.md`](../hmi/trend-viewer/hmi_trend_viewer_reference.md) |
 | HMI App Anchor                           | `apps/caro-hmi/CLAUDE.md`              |
-| HMI Functional Spec                      | `Docs/hmi/hmi_functional_spec.md`          |
-| HMI Widget Spec                          | `Docs/hmi/hmi_widget_spec.md`              |
-| HMI API Spec                             | `Docs/hmi/hmi_API_spec.md`                 |
-| HMI Trend Viewer Spec                    | `Docs/hmi/trend-viewer/hmi_trend_viewer_spec.md`        |
-| HMI Trend Viewer Handoff                 | `Docs/hmi/trend-viewer/hmi_trend_viewer_handoff.md`     |
-| MQTT Spec                                | `Docs/platform/CARO_MQTT_Spec.md`               |
-| DB Spec                                  | `Docs/db/CARO_DB_Spec.md`                 |
-| Platform Handoff                         | `Docs/README.md`             |
+| HMI Functional Spec                      | [`../hmi/hmi_functional_spec.md`](../hmi/hmi_functional_spec.md) |
+| HMI API Spec (REST + WebSocket)          | [`../hmi/hmi_API_spec.md`](../hmi/hmi_API_spec.md) |
+| HMI Widget Spec                          | [`../hmi/hmi_widget_spec.md`](../hmi/hmi_widget_spec.md) |
+| HMI Trend Viewer Spec / Handoff          | [`../hmi/trend-viewer/`](../hmi/trend-viewer/) |
+| MQTT Simulator Bootstrap                 | [`../mqtt-simulator/mqtt_simulator_bootstrap.md`](../mqtt-simulator/mqtt_simulator_bootstrap.md) |
+| Protobuf schema                          | `packages/proto/tag.proto`             |
+| Platform entry point                     | [`../README.md`](../README.md)         |

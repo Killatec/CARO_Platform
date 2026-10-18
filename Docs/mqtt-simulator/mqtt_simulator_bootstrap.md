@@ -133,7 +133,7 @@ All tags start with `simT: 0`.
 4. Set `lastPublishedCount` and `lastPublishedBytes` for the module.
 5. Publish to `caro/{module_id}/telemetry`, QoS 0, `retain: false`.
 
-**Per-module mode Sets (initialized in `simulatorService.js`):**
+**Per-module mode Sets (initialized in `services/simulatorService.ts`):**
 ```js
 const activeModules = new Set(allModuleIds);  // all active on startup
 const deltaMode     = new Set();               // empty — full publish default
@@ -149,14 +149,16 @@ const protobufMode  = new Set();               // empty — JSON default
 | Delta + JSON | Changed tags only (`simValue !== previousValue`); update `previousValue` for all after comparison; may publish empty `tags` array |
 | Delta + Protobuf | Changed tags only; `encodeProto()` → Buffer |
 
-**`TelemetryMessage` shape (per `CARO_MQTT_Spec`):**
+**`TelemetryMessage` shape (per `CARO_MQTT_Spec` §5):**
 ```js
 {
-  timestamp: uint64,   // Date.now() ms
-  status:    "ONLINE",
+  timestamp: uint64,             // Date.now() ms
+  status:    "ONLINE" | "FAULT", // "FAULT" while the module's fault toggle is on
   tags: [ { tag_id: uint32, value: <encoded per data_type> } ]
 }
 ```
+
+The HMI backend decodes JSON only. A module switched to Protobuf is ignored by the HMI and soon shows as STALLED there; use Protobuf mode only to exercise other consumers of `tag.proto`.
 
 **`publishNow(moduleId)`** — immediate out-of-tick full publish. Used by REQUEST_SNAPSHOT and `POST /snapshot/:module_id`. Respects `protobufMode`. Updates `lastPublishedCount` and `lastPublishedBytes`. Delta mode not applied.
 
@@ -194,7 +196,7 @@ Note: `values` nested under `payload.values` — not top-level on the envelope.
 Processing:
 1. **Accept Sets guard:** if disabled for the module (`acceptSetsDisabled.has(moduleId)`), all tags in the command are rejected with `rejection_code: 'MODULE_FAULT'`. CMD_ACK is still published. No tag values are updated. Log: `[SIM] SET_VALUES rejected — acceptSets disabled for {moduleId}`.
 2. Validate `command_type === 'SET_VALUES'`.
-3. For each `{ tag_id, value }`: validate tag exists for this `module_id` and `is_setpoint === true`. If valid: update `simValue`. If not: mark `UNKNOWN_TAG` in CMD_ACK.
+3. For each `{ tag_id, value }`: validate that the tag exists in the simulator's registry (any MQTT module; the lookup is not scoped to the commanded module) and that `is_setpoint === true`. If valid: update `simValue`. If not: mark `UNKNOWN_TAG` in CMD_ACK. Values are not range-checked, so `OUT_OF_RANGE` is never produced.
 4. Publish CMD_ACK immediately to `caro/{module_id}/cmd_ack`, QoS 1.
 5. Updated values surface on next scheduled tick — no out-of-tick publish.
 
@@ -213,17 +215,21 @@ Processing:
 }
 ```
 
-**RESET** — CMD_ACK published; tag values are not reset in memory.
+**RESET** — increments the module's `Reset_Count` tag (an i16 monitor tag, initialized to 0 and excluded from the sine simulation) if it has one. Other tag values are not reset. CMD_ACK published with empty `results`.
 
-**REQUEST_SNAPSHOT** — calls `publishNow(moduleId)`.
+**REQUEST_SNAPSHOT** — calls `publishNow(moduleId)`. CMD_ACK published with empty `results`.
 
-`command_id` deduplication: 60-second rolling TTL Set — duplicate commands within the window are silently dropped.
+**Any other `command_type`** (e.g. `Stop_App`, `Home` from the HMI's `POST /api/v1/commands`) — no effect; CMD_ACK published with empty `results`, which the HMI treats as accepted.
+
+A message without `command_type` is dropped with a warning and no ACK.
+
+`command_id` deduplication: 60-second rolling TTL Set. Duplicate commands within the window are dropped with a warning and **no CMD_ACK**; `CARO_MQTT_Spec` §6.2 expects a `DUPLICATE` rejection instead. A command without `command_id` is processed normally. The simulator does not subscribe to `caro/+/beat` and does not evaluate `EXPIRED`.
 
 ---
 
 ## 8. Protobuf Encoding
 
-Implemented in `server/services/protobuf.js`. Schema: `packages/proto/tag.proto` (authoritative — do not duplicate under `apps/mqtt-simulator/`).
+Implemented in `server/services/protobuf.ts`. Schema: `packages/proto/tag.proto` (authoritative — do not duplicate under `apps/mqtt-simulator/`).
 
 `loadProto()` called once at `start()` time:
 ```js
@@ -240,10 +246,15 @@ Tag value `oneof` field per `data_type`:
 | `bool` | `bool_value` | `bool` | boolean |
 | `i16` | `int_value` | `int32` (clamped to −32768…32767) | number |
 | `i32` | `int_value` | `int32` (clamped to ±2³¹) | number |
+| `string` | `string_value` | `string` | string |
+| `f32[]` | `float_array_value` | `FloatArray { repeated float values }` | number[] |
+| `i16[]` | `int_array_value` | `Int32Array { repeated int32 values }` | number[] |
+
+Encoding runs `TelemetryMessage.verify()` first; a failure is logged and nothing is published for that tick.
 
 `protobufjs` installed at monorepo root (not server-local — blocked by `@caro/db` workspace resolution). Run `npm install` from monorepo root if missing.
 
-**JSON telemetry format** (simulator-only convenience, not in `CARO_MQTT_Spec`):
+**JSON telemetry format** (`CARO_MQTT_Spec` §5.1 — the default, and the only format the HMI decodes):
 ```js
 {
   timestamp: 1743073812000,
@@ -254,7 +265,7 @@ Tag value `oneof` field per `data_type`:
   ]
 }
 ```
-Production HMI always expects Protobuf.
+Values use native JSON types per `data_type`.
 
 ---
 
