@@ -10,6 +10,14 @@
 
 - [ ] Add NULL `prev` rate monitoring per `DB_Config_Usage_And_Perf.md` §8.1 — daily sample at 1-min bound; non-zero rate signals writer-cadence drift
 
+### MQTT interface — specified, not built
+
+Status detail: `CARO_MQTT_Spec.md` §1.1. Known defects in the built path (heartbeat timer duplicated per reconnect, payload without `tags` throws, Protobuf dropped silently, tag ownership unchecked) are listed in `CARO_Telemetry_Path_Reference.md` §12.
+
+- [ ] **Protobuf telemetry decoding** (`CARO_MQTT_Spec.md` §4, §5.2). `mqtt-bridge.ts` only `JSON.parse`s telemetry. Needs a decision first on how the backend tells the encodings apart (spec Open Questions).
+- [ ] **Broker TLS, client certificates, ACLs, anonymous rejection** (`CARO_MQTT_Spec.md` §2). Backend and simulator connect anonymously over plain `mqtt://`.
+- [ ] **Module handshake and commissioning** (`CARO_MQTT_Spec.md` §7, `hmi_functional_spec.md` §9): TAG_LIST / CONFIRM, hash validation against `commissioned_modules`. Depends on the `commissioned_modules` migration below.
+
 ### New `@caro/widgets` components — needed for Narya1's RF1 page
 
 Surfaced auditing the reference "RF Control" / "RF Phase" / "RF SpecA" screenshots against the Narya1 registry (`Narya1_registry.csv`). `Rf1PhaseXYBox`, `Rf1SpecABox`, and `Rf1DisplayBox` in `apps/caro-hmi/client/src/hmi-definitions/Narya1/boxes/` render the underlying tags as plain numeric fields in the meantime.
