@@ -899,6 +899,7 @@ Behaviour a reader could reasonably assume but the implementation does not provi
 |---|---|---|
 | Protobuf telemetry is not decoded | `mqtt-bridge.ts` `handleMessage` | A module publishing Protobuf (the spec's target default) is silently ignored; the watchdog then marks it STALLED. |
 | Telemetry timestamp not validated | `telemetry-intake.ts` | Tracked in `platform_todo.md`. |
+| Unchanged tags stay null after FAULT clears | `telemetry-intake.ts` `ingest` (FAULT branch) | Every FAULT message nulls all of the module's tags (§4.1). When the status returns to ONLINE nothing requests a snapshot — only watchdog recovery does (§4.2) — and telemetry is change-only, so tags that don't change stay null (bad quality) until they change. The module library's periodic round-robin refresh repairs them within about 10 s. A backend fix must not add work to every ingest (owner, 2026-10-18); the watchdog tick, which already runs per module every ≤ 500 ms, is the candidate place. No module raises FAULT today (RF_Control never does). |
 | Tag ownership not checked | `telemetry-intake.ts` | A module can update any registry tag by publishing its tag_id. |
 | No MQTT TLS or auth, no WS auth | `mqtt-bridge.ts`, `ws-server.ts` | See `CARO_MQTT_Spec.md` §1.1 and `hmi_API_spec.md` §11. |
 | Module identity not verified | `handshake-controller.ts` `verifyModuleIdentity()` | Every HANDSHAKE_REQUEST from an MQTT-type registry module is answered, whatever its `fw_hash` or template. See `CARO_MQTT_Spec.md` §7.3. |

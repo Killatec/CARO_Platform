@@ -13,7 +13,7 @@
 
 ### MQTT interface — specified, not built
 
-Status detail: `CARO_MQTT_Spec.md` §1.1. Known defects in the built path (Protobuf dropped silently, tag ownership unchecked, module identity not verified) are listed in `CARO_Telemetry_Path_Reference.md` §12.
+Status detail: `CARO_MQTT_Spec.md` §1.1. Known defects in the built path (Protobuf dropped silently, tags left null after a module leaves FAULT, tag ownership unchecked, module identity not verified) are listed in `CARO_Telemetry_Path_Reference.md` §12.
 
 - [ ] **Protobuf telemetry decoding** (`CARO_MQTT_Spec.md` §4, §5.2). `mqtt-bridge.ts` only `JSON.parse`s telemetry. Needs a decision first on how the backend tells the encodings apart (spec Open Questions).
 - [ ] **Broker TLS, client certificates, ACLs, anonymous rejection** (`CARO_MQTT_Spec.md` §2). Backend and simulator connect anonymously over plain `mqtt://`.
@@ -76,6 +76,7 @@ The Generate Tag Defs export (spec §12.1) is consumed by a generator that emits
 ## MQTT Devices
 
 - [ ] Implement deadband before publishing COV tag changes in device firmware to reduce historian churn and bus traffic.
+- [ ] **RF1 `SpecA.FFT_Size` vs the module array cap (RF_Control).** RF1's stored Set `SpecA.FFT_Size` (tag 1199) is `4096` (imported from `RF1_Sets.json` into `commanded_setpoints`), but the `CARO_MQTT_Interface` library caps array tags at `CARO_MAX_ARRAY_LEN` = 1024 values by default (`src/caro.h`). The array tag type holds at most that many values (`caro_i16_array_t values[CARO_MAX_ARRAY_LEN]`), so a 4096-bin `SpecA.Spectrum` (`i16[]`) does not fit the tag at all; what RF_Control does with the extra bins is not documented. RF_Control to decide: lower `FFT_Size` to ≤ 1024, raise `CARO_MAX_ARRAY_LEN` in its build (bigger buffers; check the 32 KB transmit buffer), or decimate the spectrum before publishing. If `FFT_Size` changes, update the stored Set too.
 
 ---
 
