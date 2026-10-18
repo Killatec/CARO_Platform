@@ -22,35 +22,10 @@ Prerequisites: PostgreSQL running with tag registry populated, Mosquitto on 1883
 
 ## Current State
 
-Phase A Steps 1–12 of the trend viewer are complete. Full subsystem detail (file map, mode machine, cache, divergences): `Docs/hmi/trend-viewer/hmi_trend_viewer_handoff.md`.
-
-- **Server core + client shell + demo pages** — see Server/Client Architecture below.
-- **Observability:** `HmiTagSource` publishes 7 `Trend_Info` tags every 250ms. `TrendSnapshotScheduler` guarantees ≥1 DB row/tag/minute.
-- **Trends API v0.9** — `GET /api/v1/trends/tile`:
-  - Dispatches on `bucketS` across raw + four CAGs, with watermark-aware fall-through.
-  - Aggregate response includes `bucketSMs`, `committedThroughTs`, per-series `min`/`max`; three-case post-pass.
-  - Future-bucket nulling: buckets past `committedThroughTs` are nulled server-side via `nowMs` from the `DbPipeline` watermark.
-  - `MAX_BUCKET_S=14746` exported from `@caro/db` and enforced at the route via `INVALID_BUCKET_S`; N≤8 cap; optional gzip.
-  - LOCF cutoff removed (814ms planning regression eliminated); watermark memoized (30s TTL); raw path unified (UNION ALL).
-- **Trend WS channel (Step 11):** SUBSCRIBE_TREND/UNSUBSCRIBE_TREND/TREND_DELTA on the shared WS connection; per-client outbox; `TREND_FLUSH_HZ=4` flush cadence; synthetic-on-flush events; `setTrendDeltaListener` wires `TelemetryIntake` to the WsServer outbox.
-- **`@caro/trend-chart` (Step 11 + unified-tile refactor + unified-viewport arc + Step 12):** see Shared Packages below.
-  - `useLiveSubscription`: ring buffer `TREND_RING_CAPACITY=20` + bucket accumulator for aggregate; raw buffer trimmed to 2×viewportSpanMs; `drainBuffers` clears accumulator/raw/HWM, NOT the ring.
-  - Unified `mergeTrendData` (live-wins-on-coverage, no `isTailing` param).
-  - Terminal-cache rule: non-terminal tiles held in `activeTilesRef`, never enter the LRU — eliminates Gap B.
-  - `dispatchModeAction` does live-exit drain only (no eviction on live-entry).
-- **Tag Picker (Step 12):** gear icon in Legend `<thead><th>` opens a modal; flat alphabetical trendable-tag list (left) + Trending list (right); click-to-stage, × to unstage, search filter, 16-tag stage cap; OK commits to `setTagIds`.
-- **Over-range UX (2026-05-13):**
-  - No-clamp wheel-zoom (`clampLowerBound` enforces `from >= 1n` only; span-centering clamp dropped).
-  - Unified `gatedFetchTile` wrapper in `useTrendData` (all four fetch sites delegate through it; `CLIENT_OVER_RANGE`/`CLIENT_PRE_EPOCH` sentinels).
-  - `placeholderData` (`n=2`) rendered behind a single collapsed `<TrendChart>` branch.
-  - "Range too wide. Zoom in or pick a smaller preset." renders inline on the right of the cursor row via `CursorDisplay`'s `rangeExceededMessage` prop (`lineHeight: 16px` pinned, no reflow). Pre-epoch tile filter in `tilesForViewport`.
-- **Audit remediation pass (2026-05-15 → 2026-05-17)** — all items from the May 2026 trend-viewer audit landed:
-  - **M1 metadata-as-return-value:** `getTrendTile()` returns `Promise<{ tile, meta }>` with per-segment `source`/`rangeStartMs`/`rangeEndMs`/`rowCount`/`dbElapsedMs` in `meta.segments[]` (subsumes the deleted `__test_lastUsedSources` singleton). The structured `[db] getTrendTile` summary log, gated by `TIMESCALE_LOG_TILE_QUERIES=1`, reads from `meta`.
-  - F5 per-tag trend-outbox cap (`MAX_TREND_OUTBOX_PER_TAG=500`, drop-oldest + batched warn); TG-7 `commitAndDrain` bug fix (in-place array reset + explicit `setTail(null)`); TG-1 EXPLAIN-based regression test guarding bounded-prev chunk pruning.
-  - R3 consolidated the two near-duplicate gapfill+locf SQL templates into one `buildGapfillSql(opts)` builder with a byte-equivalence snapshot test. R1 extracted `dropSeamDuplicates` / `nullFutureBuckets` as pure helpers.
-- **Module commands (2026-06-02):** `POST /api/v1/commands` — see Command Publisher row and Module command flow below. `PoleCommandsBox` buttons on the Pole demo page. Null-LKV write guard removed from `NumericSet`/`BooleanSet`.
-- **Multi-system UI selection (2026-09-22):** `GET /api/v1/config` → `{ projectRoot: string | null }` (no `databaseName`, no auth check); `@caro/hmi-context` `useProjectRoot()` + `scopedStorage.ts`; `@caro/trend-chart` `storageScope`; `hmi-definitions/registry.ts` per-system code-splitting and the `Narya1` page tree; `Shell.tsx` runtime tree resolution; `Header.tsx` badge. See Shared Packages, Client Architecture and Key Design Decisions below.
-- **Narya1 RF1 page (2026-09-24):** see the Narya1 RF1 Page row in Client Architecture below.
+- **Server core, client shell, demo pages:** complete — see Server/Client Architecture below.
+- **Trend viewer:** Phase A Steps 1–12 complete (trends API v0.9, trend WS channel, `@caro/trend-chart`, tag picker, audit remediation). History and as-built detail: `Docs/hmi/trend-viewer/hmi_trend_viewer_handoff.md`; package summary in Shared Packages below.
+- **Module commands** (`POST /api/v1/commands`), **multi-system UI selection** (`PROJECT_ROOT` → page tree, scoped storage) and the **Narya1 RF1 page:** see the Command Publisher, Shell, HMI Definitions and Narya1 rows below.
+- **Not built:** auth, most HMI tables, remaining CRUD endpoints — see Phase Status and `Docs/platform/platform_todo.md`.
 
 **Test baseline (2026-09-22):** 801 `@caro/trend-chart`, 80 `@caro/hmi-context`, 156 `@caro/db`, 286 server, 45 client.
 
