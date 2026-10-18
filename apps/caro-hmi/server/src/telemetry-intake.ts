@@ -76,7 +76,6 @@ export class TelemetryIntake {
     this.packetsInWindow.set(moduleId, (this.packetsInWindow.get(moduleId) ?? 0) + 1);
     this.byteAccumulator.set(moduleId, (this.byteAccumulator.get(moduleId) ?? 0) + JSON.stringify(message).length);
     this.tagCountLast.set(moduleId, message.tags.length);
-    const leftFault = this.moduleStatus.get(moduleId) === 'FAULT' && message.status !== 'FAULT';
     this.moduleStatus.set(moduleId, message.status);
 
     if (message.status === 'FAULT') {
@@ -110,21 +109,12 @@ export class TelemetryIntake {
     }
 
     this.trendDeltaListener?.(message.timestamp, moduleId);
-
-    // FAULT nulled every tag of the module, and telemetry is change-only, so
-    // tags that don't change would stay null: refill them like a stall recovery.
-    if (leftFault) this.moduleRecoveredHandler?.(moduleId);
   }
 
   setTrendDeltaListener(fn: ((moduleTs: number, moduleId: string) => void) | null): void {
     this.trendDeltaListener = fn;
   }
 
-  /**
-   * Called when a module's Last-Known-Value entries were nulled and it is publishing
-   * again: on the watchdog's STALLED → live transition, and on a message that ends a
-   * FAULT. index.ts answers with a REQUEST_SNAPSHOT.
-   */
   setModuleRecoveredHandler(fn: ((moduleId: string) => void) | null): void {
     this.moduleRecoveredHandler = fn;
   }

@@ -1,8 +1,7 @@
 # CARO_Platform — Telemetry Path Reference
 
 **From telemetry producer to screen pixel.**
-**Version:** 3.3 — 2026-10-18
-*v3.3: Leaving FAULT calls `moduleRecoveredHandler` (REQUEST_SNAPSHOT) like a stall recovery (§2, §3.3, §4.1, §4.2).*
+**Version:** 3.2 — 2026-10-18
 *v3.2: Payload shape checks in the bridge (`mqtt-payloads.ts`, §3.2); the heartbeat timer is replaced per connect and stopped on disconnect (§3.1). Both removed from §12.*
 *v3.1: Module handshake (§3.4): the bridge subscribes `caro/+/handshake_module`, sends REHANDSHAKE on connect instead of REQUEST_SNAPSHOT; Sets reach a module only in the post-CONFIRM push from `commanded_setpoints`; startup and recovery re-delivery removed (§3.3, §4.2).*
 *v3.0: Reconciled line by line against the implementation. Corrected the intake (FAULT no longer short-circuits; trend listener is per ingest, not per changed tag), the trend WS channel (per-ingest snapshots, no server-side boolean coercion, outbox cap), the MQTT bridge (connect behaviour, JSON-only decoding), client reconnect/PING behaviour, the trend client hook (ring of 20, `drainBuffers`) and widget field resolution (registry columns, never `meta`). Added stall/recovery handling, the trend snapshot scheduler, the outbound MQTT path, a full configuration table and §12 Known Gaps.*
@@ -76,7 +75,7 @@ External producers publish JSON to `caro/{module_id}/telemetry`, QoS 0, retain f
 
 **Key points.**
 - `timestamp` is the only timestamp in the pipeline. It is module-level and is used for historian rows and trend samples only. It is not validated (tracked in `Docs/platform/platform_todo.md`).
-- `status: 'FAULT'` nulls every tag of the module in the LKV before the message's values are applied, and the first non-FAULT message afterwards triggers a REQUEST_SNAPSHOT (§4.1).
+- `status: 'FAULT'` nulls every tag of the module in the LKV before the message's values are applied (§4.1).
 - `tags[]` may carry every tag (full publish, the simulator default) or only changed tags (change-only mode); the backend handles both identically. An empty `tags` array is valid and still counts as a sign of life for the watchdog.
 - Values have no per-tag timestamp and no metadata.
 
@@ -240,7 +239,7 @@ Telemetry handling is duty-tracked so its cost shows in `Telemetry_CPU`. CMD_ACK
 | Topic | Payload | QoS | When |
 |---|---|---|---|
 | `caro/{module_id}/beat` | `{ ts_utc_ms }` | 0 | Every `HEARTBEAT_INTERVAL_MS` (default 1000 ms), to each MQTT module |
-| `caro/{module_id}/cmd` | REQUEST_SNAPSHOT | 1 | Right after each post-CONFIRM Set push; on watchdog recovery; on the first non-FAULT message after a FAULT |
+| `caro/{module_id}/cmd` | REQUEST_SNAPSHOT | 1 | Right after each post-CONFIRM Set push; on watchdog recovery |
 | `caro/{module_id}/cmd` | SET_VALUES | 1 | `POST /api/v1/tags/write`; the post-CONFIRM Set push (every Set, nulls included) |
 | `caro/{module_id}/cmd` | RESET or custom `command_type` | 1 | `POST /api/v1/reset` (RESET to every module); `POST /api/v1/commands` |
 | `caro/{module_id}/handshake_backend` | REHANDSHAKE | 1 | On every broker connect (all MQTT modules); after a Set push with no ACK (max 3 in a row) |
@@ -314,7 +313,7 @@ ingest(moduleId: string, message: TelemetryMessage): void {
 
 **Notable behaviors.**
 - **Unknown tag IDs** are dropped silently (tolerates firmware newer or older than the registry). There is no check that a tag belongs to the publishing module.
-- **FAULT** nulls every tag of the module, then applies the frame's own values. Tags present in the frame end up with their new value; tags absent from it stay null. The first message whose status is not `FAULT` after one that was calls `moduleRecoveredHandler` once its values are applied (§4.2), so a REQUEST_SNAPSHOT refills the tags change-only telemetry would leave null.
+- **FAULT** nulls every tag of the module, then applies the frame's own values. Tags present in the frame end up with their new value; tags absent from it stay null.
 - **Historian:** only tags that changed and are trendable are enqueued, unless a trend snapshot is pending for this module (§4.5), in which case every trendable tag of the module is written from the LKV.
 - **Byte rate** is measured as the length of the re-stringified message, not the wire payload.
 - **Trend listener** fires on every ingest, whether or not anything changed (§7.6).
@@ -362,7 +361,7 @@ watchdogTick(): void {
 - The tick interval is `min(watchdogTimeoutMs, 500)`, so detection never lags the timeout by more than ~500 ms.
 - The watchdog covers every module in the registry, including the HMI module and any `'unknown'` module group. A module never heard from counts as stalled from startup.
 - **On stall**, `enqueueWatchdogStallSentinel` writes one historian row of `null` per trendable tag (`moduleTs = Date.now()`), so trends show a gap instead of a flat line.
-- **On recovery**, and on leaving FAULT (§4.1), `moduleRecoveredHandler` (wired in `index.ts`) calls `cmdController.requestSnapshot(moduleId)` (REQUEST_SNAPSHOT for MQTT, `publishNow()` for HMI), so tags that do not change, which change-only telemetry never re-sends, leave the null the stall wrote. Sets are not re-sent here: a module that lost its connection re-binds and gets the post-CONFIRM push (§3.4).
+- **On recovery**, `moduleRecoveredHandler` (wired in `index.ts`) calls `cmdController.requestSnapshot(moduleId)` (REQUEST_SNAPSHOT for MQTT, `publishNow()` for HMI), so tags that do not change, which change-only telemetry never re-sends, leave the null the stall wrote. Sets are not re-sent here: a module that lost its connection re-binds and gets the post-CONFIRM push (§3.4).
 - `resetWatchdog(moduleId)` and `resetAllWatchdogs()` clear the latch only for modules heard from within the timeout, so a reset can't clear a still-silent module.
 
 ### 4.3 Rate tracking and module stats

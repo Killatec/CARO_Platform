@@ -31,7 +31,6 @@ hmi_functional_spec \| hmi_API_spec \| CARO_DB_Spec
 
   1.8           2026-03-27   PM / Claude   Status/heartbeat topic row removed from Section 3 topic table. Section 5.3 (Status/Heartbeat) removed; backend heartbeat moved to new Section 5.3 (Backend Heartbeat). LWT references removed. Section 5.1 JSON format updated: status field added (ONLINE \| FAULT). Section 5.2 Protobuf format updated: legacy wrapper/DELTA language removed; payload described as directly mirroring JSON structure encoded per Protobuf schema.
   1.9           2026-10-01   PM / Claude   Handshake identifies tags by module-relative tag_name instead of truncated tag_path: TAG_LIST entries are { tag_id, tag_name }; Section 7.4 rewritten (tag_name derivation, uniqueness). Matches the Tag Registry "Generate Tag Defs" export the module's definitions are generated from.
-  2.2           2026-10-18   PM / Claude   REQUEST_SNAPSHOT is also sent on the first non-FAULT message after a FAULT (Sections 1.1, 5, 6.1).
   2.1           2026-10-18   PM / Claude   Module handshake implemented to the module-side contract (CARO_MQTT_Interface): topics renamed by publisher (handshake_backend / handshake_module); module-initiated HANDSHAKE_REQUEST carrying identity; TAG_LIST entries gain is_setpoint; CONFIRM carries missing_ids / unknown_tags / truncated instead of hashes; new REHANDSHAKE. Section 6.3 rewritten: the only Set delivery is the post-CONFIRM push from commanded_setpoints; startup and recovery re-delivery removed. REQUEST_SNAPSHOT now follows each CONFIRM and watchdog recovery, not the broker connect. Section 7 rewritten as built; identity verification still target.
   2.0           2026-10-17   PM / Claude   Reconciled against the implementation. New Section 1.1 Implementation Status. Sections 4/5: the backend currently decodes JSON telemetry only; backend handling of each telemetry field and REQUEST_SNAPSHOT triggers stated as built. Section 6: custom command types, optional top-level CMD_ACK error field, backend ACK handling (1 s timeout), backend-generated rejection codes (TIMEOUT, MODULE_TYPE_NOT_SUPPORTED), DUPLICATE marked module-evaluated. New Section 6.3 Setpoint Re-delivery. Section 7 marked not yet implemented. Open Questions updated.
   ------------- ------------ ------------- ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -56,7 +55,7 @@ This document is the target contract, and not all of it is built yet. Firmware w
 | Telemetry, Protobuf encoding | 4, 5.2 | **Not implemented.** The bridge only `JSON.parse`s telemetry; a Protobuf payload fails to parse and is silently dropped. | Encodes per `tag.proto` (per-module toggle), but the HMI cannot read it. |
 | Backend heartbeat `/beat` | 5.3 | Implemented: `{ ts_utc_ms }`, QoS0, every `HEARTBEAT_INTERVAL_MS` (default 1000 ms), to MQTT-type modules only. Never withheld. | Not subscribed. |
 | Watchdog | 5 | Implemented: `WATCHDOG_TIMEOUT_MS` (default 1000 ms), checked every `min(timeout, 500)` ms. | n/a |
-| REQUEST_SNAPSHOT | 5, 6.1 | Implemented: after every CONFIRM, on watchdog recovery, and when a module leaves FAULT; ACK not awaited. | Publishes a full snapshot immediately. |
+| REQUEST_SNAPSHOT | 5, 6.1 | Implemented: after every CONFIRM and on watchdog recovery; ACK not awaited. | Publishes a full snapshot immediately. |
 | SET_VALUES + per-tag CMD_ACK results | 6.1, 6.2 | Implemented, 1 s ACK timeout. | Implemented. |
 | RESET | 6.1 | Sent to every module by `POST /api/v1/reset`, or to one module by `POST /api/v1/commands`. | Increments the module's `Reset_Count` tag. |
 | Custom command types | 6.1 | Implemented via `POST /api/v1/commands` (e.g. `Stop_App`, `Home`). | ACKed with empty results; no other effect. |
@@ -145,10 +144,7 @@ The single telemetry topic caro/{module_id}/telemetry carries module-to-backend 
 The backend sends REQUEST_SNAPSHOT to an MQTT-type module (a module whose tags have `module_type = 'MQTT'` in the Tag Registry):
 
 -   right after the Set push that answers each handshake CONFIRM (Section 6.3) --- a module binding never triggers a full publish on its own;
--   when the watchdog sees it recover (stalled, then receiving telemetry again);
--   on the first message whose `status` is not `"FAULT"` after one that was.
-
-In the last two cases the module's Last-Known-Value entries were nulled (by the stall, or by every FAULT message), and telemetry is change-only, so without a snapshot the tags that do not change would stay null.
+-   when the watchdog sees it recover (stalled, then receiving telemetry again). Telemetry is change-only, so without it tags that do not change would stay null in the Last-Known-Value cache.
 
 It is not sent on broker connect: the REHANDSHAKE sent then leads to a bind, which is followed by one.
 
@@ -157,7 +153,7 @@ It is not sent on broker connect: the REHANDSHAKE sent then leads to a bind, whi
 A message is dropped (logged, rate-limited) unless `timestamp` is a finite number, `status` a string and `tags` an array; within `tags`, an entry whose `tag_id` is not an integer 0…2³²−1 or whose `value` is not one of the types below is skipped and the rest of the message applies.
 
 -   `timestamp` --- module UTC milliseconds. Used as the time of every historian row from that message and of live trend samples. Not validated (see `Docs/platform/platform_todo.md`).
--   `status` --- `"FAULT"` sets every tag of the module to bad quality (null) in the Last-Known-Value cache; values carried in the same message are then applied on top and still reach the historian. The first non-FAULT message after a FAULT makes the backend send REQUEST_SNAPSHOT, so every tag is refilled. Any other string is recorded as the module status and is otherwise ignored.
+-   `status` --- `"FAULT"` sets every tag of the module to bad quality (null) in the Last-Known-Value cache; values carried in the same message are then applied on top and still reach the historian. Any other string is recorded as the module status and is otherwise ignored.
 -   `tags[].tag_id` --- a tag_id unknown to the active Tag Registry is silently dropped. The backend does not check that the tag belongs to the publishing module.
 -   `tags[].value` --- number, boolean, string, number array or null, stored as received. Change detection is strict equality (element-wise for arrays).
 -   Telemetry silence longer than the watchdog timeout sets every tag of the module to null and its status to STALLED. The first message after that clears the stall.
@@ -235,7 +231,7 @@ The backend publishes commands to caro/{module_id}/cmd (QoS1, TLS). All commands
   ------------------ ------------------------------------------------------------------------------ ------------------------------------------------------------------------------------------------------------------------------------------------
   **command_type**   **payload contents**                                                           **Description**
 
-  REQUEST_SNAPSHOT   {}                                                                             Backend requests module to publish all current tag values via the telemetry channel. Sent right after the Set push that answers each handshake CONFIRM, when the watchdog sees the module recover, and when the module leaves FAULT (Section 5).
+  REQUEST_SNAPSHOT   {}                                                                             Backend requests module to publish all current tag values via the telemetry channel. Sent right after the Set push that answers each handshake CONFIRM, and when the watchdog sees the module recover (Section 5).
 
   SET_VALUES         { \"values\": \[ { \"tag_id\": \<uint32\>, \"value\": \<typed\> }, \... \] }   Write one or more setpoint values. Always an array --- single writes are a batch of one. The backend sends only tags belonging to this module. A `null` value means unpopulated: the post-CONFIRM Set push (Section 6.3) sends one for every Set with no stored value, and the module ACKs it `accepted: true`.
 
