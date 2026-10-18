@@ -5,7 +5,7 @@ import { MODULE_BOX, MODULE_TITLE, WIDGET_STACK } from '../../shared/index.js';
  * The reference UI plots the spectrum on an MHz X-axis derived from
  * Center_Freq/LO/Bin_Size. @caro/widgets' SpectrumChart is bin-index-only by
  * design (no frequency mapping) — used here as an interim approximation
- * pending a frequency-mapped variant (see Docs/platform_todo.md).
+ * pending a frequency-mapped variant (see Docs/platform/platform_todo.md).
  */
 export function Rf1SpecABox() {
   return (

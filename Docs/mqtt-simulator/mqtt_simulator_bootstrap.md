@@ -54,11 +54,11 @@ App-local `server/.env` (see `server/.env.example`):
 
 | Variable | Default | Notes |
 |---|---|---|
-| `MQTT_BROKER_URL` | `mqtt://localhost:1883` | **Not actually read from env** — see `Docs/mqtt_simulator_handoff.md` Gotchas. Always uses this default. |
-| `MQTT_CLIENT_ID` | `caro-simulator` | Must be unique on broker. **Not actually read from env** — see `Docs/mqtt_simulator_handoff.md` Gotchas. Always uses this default. |
+| `MQTT_BROKER_URL` | `mqtt://localhost:1883` | **Not actually read from env** — see `Docs/mqtt-simulator/mqtt_simulator_handoff.md` Gotchas. Always uses this default. |
+| `MQTT_CLIENT_ID` | `caro-simulator` | Must be unique on broker. **Not actually read from env** — see `Docs/mqtt-simulator/mqtt_simulator_handoff.md` Gotchas. Always uses this default. |
 | `TICK_INTERVAL_MS` | `100` | 10 Hz default |
 | `SINE_PERIOD_S` | `30` | Sine wave period for f32 monitor tags |
-| `LOG_BUFFER_SIZE` | `200` | Rolling in-memory log entries. **Not actually read from env** — see `Docs/mqtt_simulator_handoff.md` Gotchas. Always uses this default. |
+| `LOG_BUFFER_SIZE` | `200` | Rolling in-memory log entries. **Not actually read from env** — see `Docs/mqtt-simulator/mqtt_simulator_handoff.md` Gotchas. Always uses this default. |
 | `SIMULATOR_EXCLUDE_MODULES` | _(unset)_ | Comma-separated `module` names to exclude at registry load time (e.g. `Pole,Aux`). Excluded modules are stripped from `loadTagRegistry()` — no telemetry published, no cmd subscription. Applied in `services/registry.ts` after the `module_type = 'MQTT'` filter. |
 
 ---

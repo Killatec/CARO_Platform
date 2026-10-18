@@ -3,7 +3,7 @@
 # production / testing-machine users override TIMESCALE_DATA_DIR in a local .env
 # to point at a roomy drive (e.g. F:\TimescaleDB on the testing machine).
 #
-# See Docs/hmi_timescale_setup.md for Windows install steps.
+# See Docs/db/hmi_timescale_setup.md for Windows install steps.
 
 services:
   timescale:

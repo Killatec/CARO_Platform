@@ -5,7 +5,7 @@ import { MODULE_BOX, MODULE_TITLE, WIDGET_STACK } from '../../shared/index.js';
  * RF1.Module_Info.IP and .Status are String-type tags. NumericMon calls
  * value.toFixed() internally and would throw on a string value, so they're
  * omitted here pending a string-display widget (no dedicated one exists in
- * @caro/widgets yet — see Docs/platform_todo.md).
+ * @caro/widgets yet — see Docs/platform/platform_todo.md).
  */
 export function Rf1ModuleInfoBox() {
   return (

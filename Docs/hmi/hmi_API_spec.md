@@ -20,7 +20,7 @@ hmi_functional_spec | CARO_MQTT_Spec | Tag Registry Functional Spec | CARO_DB_Sp
 | 1.9 | 2026-06-02 | PM / Claude | Section 5.1 added: POST /api/v1/commands — module-type-agnostic command send. MQTT dispatches with CMD_ACK await (1s timeout). HMI dispatches RESET only; other cmd_str values return 400. Error codes added: VALIDATION_ERROR, COMMAND_NOT_SUPPORTED, COMMAND_REJECTED, TIMEOUT. |
 | 1.8 | 2026-05-26 | PM / Claude | Section 7 tile response: `responseTailTs` renamed `committedThroughTs` on both raw and aggregate responses. Field now carries the `DbPipeline` monotonic watermark rather than a wall-clock timestamp; client uses it directly as the ring trim threshold (no −1000 ms offset). |
 | 1.7 | 2026-05-11 | PM / Claude | Section 11 WebSocket: added SUBSCRIBE_TREND, UNSUBSCRIBE_TREND, TREND_DELTA message types (Step 11 live tail). Section 7 tile response: added `responseTailTs` field to aggregate response. Added TREND_FLUSH_HZ env var note. |
-| 1.6 | 2026-04-29 | PM / Claude | Section 7 Trends: replaced stub with live endpoint documentation — GET /api/v1/trends/tile (v0.5+ wire contract with start_time/end_time/bucket_count, watermark fall-through, discriminated source response), GET /api/v1/trends/extent (hypertable extent), GET /api/v1/tags/trendable (trendable tag discovery). Added error codes: INVALID_TAG_IDS (trends), INVALID_RANGE, INVALID_BUCKET_COUNT, INVALID_BUCKET_S, MISSING_QUERY_PARAM. Detailed spec: Docs/hmi_trend_viewer_spec.md. |
+| 1.6 | 2026-04-29 | PM / Claude | Section 7 Trends: replaced stub with live endpoint documentation — GET /api/v1/trends/tile (v0.5+ wire contract with start_time/end_time/bucket_count, watermark fall-through, discriminated source response), GET /api/v1/trends/extent (hypertable extent), GET /api/v1/tags/trendable (trendable tag discovery). Added error codes: INVALID_TAG_IDS (trends), INVALID_RANGE, INVALID_BUCKET_COUNT, INVALID_BUCKET_S, MISSING_QUERY_PARAM. Detailed spec: Docs/hmi/trend-viewer/hmi_trend_viewer_spec.md. |
 
 ---
 
@@ -328,7 +328,7 @@ Error responses:
 
 ## 5.2 System Config
 
-Runtime identity of the system this server is serving. The client uses `projectRoot` to select its page tree (`client/src/hmi-definitions/<PROJECT_ROOT>/`) and to namespace localStorage so two systems viewed from the same browser never read each other's saved state (see `Docs/multi_project_runbook.md` §4).
+Runtime identity of the system this server is serving. The client uses `projectRoot` to select its page tree (`client/src/hmi-definitions/<PROJECT_ROOT>/`) and to namespace localStorage so two systems viewed from the same browser never read each other's saved state (see `Docs/platform/multi_project_runbook.md` §4).
 
 ### GET /api/v1/config
 
@@ -412,7 +412,7 @@ Response:
 
 ## 7. Trends (TimescaleDB)
 
-Trend endpoints provide historical tag data from TimescaleDB. Detailed contract: `Docs/hmi_trend_viewer_spec.md` §6.
+Trend endpoints provide historical tag data from TimescaleDB. Detailed contract: `Docs/hmi/trend-viewer/hmi_trend_viewer_spec.md` §6.
 
 ### GET /api/v1/trends/tile
 Fetch a time-bucketed tile for one or more trendable tags.
@@ -773,7 +773,7 @@ All WebSocket messages use JSON encoding. SNAPSHOT and DELTA carry a `values` ob
 }
 ```
 
-`TREND_DELTA.samples` is a flat array of `{ moduleTs: number, tagId: number, value: number | boolean | null }`. Module timestamps match the values written to `tag_samples` (module clock, not WS-receipt wall-clock). `TREND_FLUSH_HZ` is configurable via server env var (default 4). Detailed spec: `Docs/hmi_trend_viewer_spec.md` §4.4 and §10.6.
+`TREND_DELTA.samples` is a flat array of `{ moduleTs: number, tagId: number, value: number | boolean | null }`. Module timestamps match the values written to `tag_samples` (module clock, not WS-receipt wall-clock). `TREND_FLUSH_HZ` is configurable via server env var (default 4). Detailed spec: `Docs/hmi/trend-viewer/hmi_trend_viewer_spec.md` §4.4 and §10.6.
 
 > *NOTE: Protobuf encoding is reserved for future optimization (Phase 6). The current implementation uses JSON for all WebSocket messages.*
 

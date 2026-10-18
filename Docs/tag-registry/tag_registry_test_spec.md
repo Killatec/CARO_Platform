@@ -24,7 +24,7 @@ This document defines the E2E (end-to-end) and unit test suite for the Tag Regis
 - Behaviour under concurrent multi-user edits
 
 **Relationship to the functional spec:**
-Each test file maps to one or more sections in Functional Spec. The test suite acts as a living executable companion to the spec — if a spec behaviour is observable in the browser it should have a corresponding test. Any deliberate deviation between test behaviour and spec language is documented in section 6 (skipped tests) and in `Docs/tag_registry_deltas.md`.
+Each test file maps to one or more sections in Functional Spec. The test suite acts as a living executable companion to the spec — if a spec behaviour is observable in the browser it should have a corresponding test. Any deliberate deviation between test behaviour and spec language is documented in section 6 (skipped tests) and in `Docs/tag-registry/tag_registry_deltas.md`.
 
 ---
 
@@ -84,7 +84,7 @@ The E2E suite is self-contained. `globalSetup.js` starts both servers automatica
 
 Prerequisites:
 - PostgreSQL running locally on port 5432
-- `%APPDATA%\postgresql\pgpass.conf` configured for passwordless `pg_dump`/`psql` access (see `Docs/platform_deltas.md`)
+- `%APPDATA%\postgresql\pgpass.conf` configured for passwordless `pg_dump`/`psql` access (see `Docs/platform/platform_deltas.md`)
 - Ports 3099 and 5199 must be free — `globalSetup.js` will throw with a clear error if either is in use
 
 ---

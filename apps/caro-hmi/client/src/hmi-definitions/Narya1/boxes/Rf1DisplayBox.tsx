@@ -5,7 +5,7 @@ import { MODULE_BOX, MODULE_TITLE, WIDGET_STACK } from '../../shared/index.js';
  * An_Display_1/2 and Dig_Display_1/2 are plain Int16 setpoints in the
  * registry and render as raw numbers here. The reference UI shows them as
  * resolved text labels (e.g. "Phase_Set") — that label-lookup rendering
- * needs a new widget, tracked in Docs/platform_todo.md.
+ * needs a new widget, tracked in Docs/platform/platform_todo.md.
  */
 export function Rf1DisplayBox() {
   return (

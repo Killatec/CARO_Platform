@@ -243,9 +243,9 @@ const { setAwaitedValue, isWriting } = useWriteGuard(tag.tag_id, lv.value, write
 | If your task involves… | Read… |
 |---|---|
 | Any HMI work | `apps/caro-hmi/CLAUDE.md` (always first) |
-| Server internals | `Docs/hmi_functional_spec.md` Sections 6, 8 |
-| REST or WebSocket API | `Docs/hmi_API_spec.md` |
-| Widget contract or new widgets | `Docs/hmi_widget_spec.md` |
-| Database schema | `Docs/CARO_DB_Spec.md` |
-| MQTT message format | `Docs/CARO_MQTT_Spec.md` |
-| What's left to build | `Docs/platform_todo.md` |
+| Server internals | `Docs/hmi/hmi_functional_spec.md` Sections 6, 8 |
+| REST or WebSocket API | `Docs/hmi/hmi_API_spec.md` |
+| Widget contract or new widgets | `Docs/hmi/hmi_widget_spec.md` |
+| Database schema | `Docs/db/CARO_DB_Spec.md` |
+| MQTT message format | `Docs/platform/CARO_MQTT_Spec.md` |
+| What's left to build | `Docs/platform/platform_todo.md` |

@@ -243,8 +243,8 @@ export function TrendChartContainer({
   // Single mutation entry point for tagIds. All callers MUST go through here
   // so the live-edge tile's committedThroughTs is invalidated before the state
   // update — otherwise the merge seam falls outside the accumulator's coverage
-  // and the chart shows a null gap. See Docs/hmi_trend_viewer_deltas.md (2026-05-27)
-  // and Docs/hmi_trend_viewer_spec.md §10.6/§10.7.
+  // and the chart shows a null gap. See Docs/hmi/trend-viewer/hmi_trend_viewer_deltas.md (2026-05-27)
+  // and Docs/hmi/trend-viewer/hmi_trend_viewer_spec.md §10.6/§10.7.
   const commitTagIds = useCallback((newIds: number[]) => {
     trendData.invalidateNonTerminalTiles();
     setTagIds(newIds);

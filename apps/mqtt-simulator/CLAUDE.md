@@ -3,11 +3,11 @@
 ## Session Start Reads
 
 At session start, read in order:
-1. `Docs/mqtt_simulator_handoff.md` — current state, key decisions, gotchas
-2. `Docs/mqtt_simulator_deltas.md` — open spec divergences
+1. `Docs/mqtt-simulator/mqtt_simulator_handoff.md` — current state, key decisions, gotchas
+2. `Docs/mqtt-simulator/mqtt_simulator_deltas.md` — open spec divergences
 
 Read this only if the session requires it:
-- Simulator architecture, startup sequence, or env vars → `Docs/mqtt_simulator_bootstrap.md`
+- Simulator architecture, startup sequence, or env vars → `Docs/mqtt-simulator/mqtt_simulator_bootstrap.md`
 
 ## App Hard Constraints
 

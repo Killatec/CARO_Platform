@@ -44,7 +44,7 @@ Read order: this file → deltas → task-specific spec.
 |---|---|
 | `mqtt_simulator_deltas.md` | Every session start |
 | `mqtt_simulator_bootstrap.md` | Architecture, startup sequence, telemetry loop, command handling, env vars |
-| `docs/CARO_MQTT_Spec.md` | Topic structure, message shapes, CMD_ACK format |
+| `Docs/platform/CARO_MQTT_Spec.md` | Topic structure, message shapes, CMD_ACK format |
 
 ---
 

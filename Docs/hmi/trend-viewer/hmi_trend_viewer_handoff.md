@@ -1,5 +1,5 @@
 # CARO_HMI Trend Viewer — Subsystem Handoff
-**Updated:** 2026-05-27 | **Phase A Steps 1–12 complete** | **Next:** TBD (see `Docs/platform_todo.md`)
+**Updated:** 2026-05-27 | **Phase A Steps 1–12 complete** | **Next:** TBD (see `Docs/platform/platform_todo.md`)
 
 ---
 
@@ -538,6 +538,6 @@ Observations from production behavior. Not divergences from spec — document he
 
 > **Note:** `@caro/trend-chart` ships from `dist/`. After editing source, run `npm run build --workspace=packages/trend-chart` before testing in the browser. Tests run against source directly.
 
-Phase A Steps 1–12 are complete. Next priority TBD. See `Docs/platform_todo.md` for the current open items list.
+Phase A Steps 1–12 are complete. Next priority TBD. See `Docs/platform/platform_todo.md` for the current open items list.
 
-> Pool sizing and other operational monitoring watchlist items live in `Docs/platform_todo.md`, not as development steps.
+> Pool sizing and other operational monitoring watchlist items live in `Docs/platform/platform_todo.md`, not as development steps.

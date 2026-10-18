@@ -81,7 +81,7 @@ Client is a standard Vite React app. `vite.config.ts` proxies `/api` and `/ws` t
 - **TelemetryIntake null-sentinel on watchdog stall.** When a trendable module transitions from healthy to stalled, TelemetryIntake enqueues a null value for each trendable tag (bad-quality sentinel). The FAULT status branch falls through to the COV enqueue (no early return) so stall transitions are always recorded.
 - **TimescaleDbWriter string-drop log guard is per-instance.** `_strDropLogged` is an instance field, not module-level. In practice there is one writer per process, so the behaviour is equivalent; per-instance makes it unit-testable.
 - **HmiTagSource never-sampled sentinel is `0`.** The DutyTracker / HmiTagSource "last-sampled" sentinel uses `0`, not `-1`. `performance.now()` is never exactly `0` at runtime, so this is unambiguous in practice.
-- **Trends REST wire contract is v0.9 (start_time/end_time/bucket_count + min/max bands + raw prev).** Query params: `tag_ids`, `start_time`, `end_time`, `bucket_count` — no `bucket_s` or `tile_index` on the wire. `bucketS` is derived server-side. Aggregate response carries per-series `value`/`min`/`max` arrays; three-case rule classifies each bucket (mixed-null / empty-collapse / normal — see §6.5). Raw responses (`source: 'raw'`) carry `ts`/`value` and optional `prev: { ts, value }` per series; the discriminated union enforces no min/max leakage. bigints serialized as numbers via `serializeTile()`. See `Docs/hmi_trend_viewer_spec.md` §6.
+- **Trends REST wire contract is v0.9 (start_time/end_time/bucket_count + min/max bands + raw prev).** Query params: `tag_ids`, `start_time`, `end_time`, `bucket_count` — no `bucket_s` or `tile_index` on the wire. `bucketS` is derived server-side. Aggregate response carries per-series `value`/`min`/`max` arrays; three-case rule classifies each bucket (mixed-null / empty-collapse / normal — see §6.5). Raw responses (`source: 'raw'`) carry `ts`/`value` and optional `prev: { ts, value }` per series; the discriminated union enforces no min/max leakage. bigints serialized as numbers via `serializeTile()`. See `Docs/hmi/trend-viewer/hmi_trend_viewer_spec.md` §6.
 - **Trends API enforces N ≤ 8 tags per request.** The N≤8 cap (not 20) comes from gate-tested heap-scatter data — the cliff lives at N≈10–11. Charts with more than 8 plotted tags fan out into multiple parallel requests on the client. Route returns 400 (`INVALID_TAG_IDS`) on violation.
 - **`HMI_TRENDS_GZIP` (default unset/off) gates Express `compression` middleware scoped to the `/api/v1/trends` mount only.** Does not affect other routes. Added for Phase A gzip A/B perf measurement against dense aggregate tile payloads.
 - **TrendSnapshotScheduler uses `private` keyword (not `#`) and `dutyTracker.track(fn)` (not `track(label, fn)`).** Follows existing codebase convention. `DutyTracker.track` takes `fn: () => T` only — no label parameter.
@@ -90,18 +90,18 @@ Client is a standard Vite React app. `vite.config.ts` proxies `/api` and `/ws` t
 - **A WS SUBSCRIBE/UNSUBSCRIBE batch with some invalid tag ids is never discarded wholesale.** Only a non-array payload is malformed; `parseTagIdsArray` otherwise splits valid ids (subscribed) from invalid ones (logged by value). This exists because one caller subscribing to a bad id (historically: `ModuleInfoTable.tsx`'s hardcoded root prefix resolving to nothing, falling back to tag_id `0`) used to poison every other tag's subscription riding in the same batch.
 - **Client and server module orderings (`getModuleNames`) must agree by construction, not by config.** Both filter to tags with a resolvable module ancestor before computing the sequence — server: `t.module != null`; client (`ModuleInfoTable.tsx`): `module_id !== 'unknown'` (the same condition, expressed via `tag-map.ts`'s null-vs-sentinel convention). An earlier version of this reasoning relied on `apps/tag-registry/server/.env`'s `VALIDATE_REQUIRED_PARENT_TYPES=module` to guarantee no tag lacks a module — that's apply-time config, says nothing about rows already in the table, and stops holding the moment someone edits the file. Do not reintroduce that shortcut.
 - **An unregistered or null `projectRoot` renders the NavTree empty state — never a silent fallback to `demo`.** `Shell.tsx` looks up `PROJECT_ROOT` in `hmiDefinitionsRegistry`; a miss (including `null`, before `/config` resolves or if it fails) resolves the tree to `[]`. Falling back to `demo` would put an operator on the wrong machine's nav tree with no visible signal — an empty state that says "nothing loaded" is a safer failure than a tree that loads but is wrong.
-- **Trend-viewer session persistence is namespaced per system, not just per `persistKey`.** `@caro/trend-chart` stays platform-ignorant (it never imports `@caro/hmi-context` or resolves `PROJECT_ROOT`); the client passes `storageScope={useProjectRoot() ?? 'unknown'}` into `TrendChartContainer`, which threads it down to `sessionPersistence.ts`'s `caro.<storageScope>.trend-viewer.session.<persistKey>` key. Without this, switching `PROJECT_ROOT` (see `Docs/multi_project_runbook.md` §4) would show one system's saved trend session laid over another system's live data.
+- **Trend-viewer session persistence is namespaced per system, not just per `persistKey`.** `@caro/trend-chart` stays platform-ignorant (it never imports `@caro/hmi-context` or resolves `PROJECT_ROOT`); the client passes `storageScope={useProjectRoot() ?? 'unknown'}` into `TrendChartContainer`, which threads it down to `sessionPersistence.ts`'s `caro.<storageScope>.trend-viewer.session.<persistKey>` key. Without this, switching `PROJECT_ROOT` (see `Docs/platform/multi_project_runbook.md` §4) would show one system's saved trend session laid over another system's live data.
 
 ## Reading Order by Topic
 
 | If your task involves… | Read (in order)… |
 |---|---|
-| HMI tag telemetry (HmiTagSource, TelemetryIntake) | 1. This file 2. `server/src/telemetry-intake.ts` 3. `server/src/hmi-tag-source.ts` 4. `server/src/index.ts` (wiring) 5. `Docs/hmi_functional_spec.md` §8.8 |
-| MQTT bridge / device telemetry | 1. This file 2. `server/src/mqtt-bridge.ts` 3. `server/src/telemetry-intake.ts` 4. `Docs/CARO_MQTT_Spec.md` |
-| Widget rendering / formatting | 1. `Docs/hmi_widget_spec.md` 2. `packages/widgets/src/shared/utils.ts` (compileFormat, resolveFormat) |
+| HMI tag telemetry (HmiTagSource, TelemetryIntake) | 1. This file 2. `server/src/telemetry-intake.ts` 3. `server/src/hmi-tag-source.ts` 4. `server/src/index.ts` (wiring) 5. `Docs/hmi/hmi_functional_spec.md` §8.8 |
+| MQTT bridge / device telemetry | 1. This file 2. `server/src/mqtt-bridge.ts` 3. `server/src/telemetry-intake.ts` 4. `Docs/platform/CARO_MQTT_Spec.md` |
+| Widget rendering / formatting | 1. `Docs/hmi/hmi_widget_spec.md` 2. `packages/widgets/src/shared/utils.ts` (compileFormat, resolveFormat) |
 | Setpoint write pipeline | 1. This file 2. `server/src/command-publisher.ts` 3. `server/src/routes/tags.ts` 4. `packages/hmi-context/src/HmiContextProvider.tsx` (writeTag) 5. `packages/widgets/src/shared/useWriteGuard.ts` |
-| LKV / WebSocket pipeline | 1. This file 2. `server/src/lkv.ts` 3. `server/src/ws-server.ts` 4. `Docs/CARO_Telemetry_Path_Reference.md` |
-| Historian write pipeline | 1. This file 2. `server/src/db-pipeline.ts` 3. `server/src/timescale-writer.ts` 4. `server/src/timescale-size-monitor.ts` 5. `Docs/CARO_DB_Spec.md` §9 6. `Docs/hmi_timescale_setup.md` |
+| LKV / WebSocket pipeline | 1. This file 2. `server/src/lkv.ts` 3. `server/src/ws-server.ts` 4. `Docs/platform/CARO_Telemetry_Path_Reference.md` |
+| Historian write pipeline | 1. This file 2. `server/src/db-pipeline.ts` 3. `server/src/timescale-writer.ts` 4. `server/src/timescale-size-monitor.ts` 5. `Docs/db/CARO_DB_Spec.md` §9 6. `Docs/db/hmi_timescale_setup.md` |
 
 ## Environment — two layers
 
@@ -156,13 +156,13 @@ TREND_FLUSH_HZ=4                  # flush cadence for TREND_DELTA frames (defaul
 
 | Document | Path |
 |---|---|
-| Bootstrap | `Docs/hmi_bootstrap.md` |
-| Functional Spec | `Docs/hmi_functional_spec.md` |
-| API Spec | `Docs/hmi_API_spec.md` |
-| Widget Spec | `Docs/hmi_widget_spec.md` |
-| Spec Deltas | `Docs/hmi_deltas.md` |
-| Trend Viewer Spec | `Docs/hmi_trend_viewer_spec.md` |
-| Trend Viewer Handoff | `Docs/hmi_trend_viewer_handoff.md` |
+| Bootstrap | `Docs/hmi/hmi_bootstrap.md` |
+| Functional Spec | `Docs/hmi/hmi_functional_spec.md` |
+| API Spec | `Docs/hmi/hmi_API_spec.md` |
+| Widget Spec | `Docs/hmi/hmi_widget_spec.md` |
+| Spec Deltas | `Docs/hmi/hmi_deltas.md` |
+| Trend Viewer Spec | `Docs/hmi/trend-viewer/hmi_trend_viewer_spec.md` |
+| Trend Viewer Handoff | `Docs/hmi/trend-viewer/hmi_trend_viewer_handoff.md` |
 | Phase 2 Design | `Docs/Phase2_HMI_ServerCore_Design.docx` |
-| MQTT Spec | `Docs/CARO_MQTT_Spec.md` |
-| DB Spec | `Docs/CARO_DB_Spec.md` |
+| MQTT Spec | `Docs/platform/CARO_MQTT_Spec.md` |
+| DB Spec | `Docs/db/CARO_DB_Spec.md` |

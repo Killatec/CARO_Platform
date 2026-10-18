@@ -1683,7 +1683,7 @@ describe('getTrendTile — D1 structured perf log (TIMESCALE_LOG_TILE_QUERIES ga
 // for performance. It paid 814ms of planning time per CAG request on production-scale
 // tag_samples (251 chunks × 8 tag_ids → catalog enumeration). LOCF now runs unbounded
 // past MAX(ts) — trailing empty buckets carry the last known value forward. Dead-tag
-// detection is deferred; see "Dead-tag detection" TODO in Docs/hmi_trend_viewer_handoff.md.
+// detection is deferred; see "Dead-tag detection" TODO in Docs/hmi/trend-viewer/hmi_trend_viewer_handoff.md.
 
 // ── Watermark memoization — unit tests (no DB required) ──────────────────────
 //

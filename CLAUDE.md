@@ -2,15 +2,15 @@
 
 ## Session Start
 
-1. Always read `Docs/platform_handoff.md` first — it is the platform constitution.
+1. Always read `Docs/README.md` first — it is the platform constitution.
 2. Read the relevant app anchor file next:
    - Tag Registry → `apps/tag-registry/CLAUDE.md`
    - MQTT Simulator → `apps/mqtt-simulator/CLAUDE.md`
    - HMI → `apps/caro-hmi/CLAUDE.md`
 3. Read platform specs only if the session requires them:
-   - DB schema or queries → `Docs/CARO_DB_Spec.md`
-   - MQTT message handling → `Docs/CARO_MQTT_Spec.md`
-4. Check `Docs/platform_todo.md` — know what is and isn't built before starting.
+   - DB schema or queries → `Docs/db/CARO_DB_Spec.md`
+   - MQTT message handling → `Docs/platform/CARO_MQTT_Spec.md`
+4. Check `Docs/platform/platform_todo.md` — know what is and isn't built before starting.
 
 Do not read specs you do not need. The handoff and delta files are always sufficient for orientation and planning.
 
@@ -21,9 +21,9 @@ Do not read specs you do not need. The handoff and delta files are always suffic
 Delta files are quick-note trackers for spec divergences that occur during implementation.
 
 - **During a task:** If you implement something that diverges from a spec, add a one-line entry to the relevant delta file immediately. Use the narrowest scope that applies:
-  - `Docs/platform_deltas.md` — cross-app changes.
-  - `Docs/{app}_deltas.md` — app-level changes (e.g. `hmi_deltas.md`, `tag_registry_deltas.md`, `mqtt_simulator_deltas.md`).
-  - `Docs/hmi_trend_viewer_deltas.md` — HMI trend viewer changes (REST endpoint, SnapshotEmitter, CAG migrations, `packages/trend-chart/`). Keeps trend churn out of the general HMI delta file.
+  - `Docs/platform/platform_deltas.md` — cross-app changes.
+  - `Docs/{app}/{app}_deltas.md` — app-level changes (e.g. `Docs/hmi/hmi_deltas.md`, `Docs/tag-registry/tag_registry_deltas.md`, `Docs/mqtt-simulator/mqtt_simulator_deltas.md`).
+  - `Docs/hmi/trend-viewer/hmi_trend_viewer_deltas.md` — HMI trend viewer changes (REST endpoint, SnapshotEmitter, CAG migrations, `packages/trend-chart/`). Keeps trend churn out of the general HMI delta file.
 
   Do not update handoff, bootstrap, or spec docs mid-task.
 - **At session end (when explicitly prompted):** Propagate each delta entry to its target doc (spec, handoff, or bootstrap), then delete the entry. The delta file should be empty or near-empty after propagation.
@@ -33,7 +33,7 @@ Delta files are quick-note trackers for spec divergences that occur during imple
 
 ## TODO File Discipline
 
-`Docs/platform_todo.md` is the single source of truth for unbuilt but specified features.
+`Docs/platform/platform_todo.md` is the single source of truth for unbuilt but specified features.
 
 - Check it at session start so you know what is and isn't implemented.
 - When a TODO item is completed, remove it from the file.
@@ -66,6 +66,6 @@ Run this at the end of every session that changed code or behavior:
 1. Run the full test suite for every affected package — do not close the session with failing tests.
 2. When explicitly prompted by the user:
    a. Propagate delta entries to their target docs (spec, handoff, bootstrap).
-   b. Remove completed TODO items from `Docs/platform_todo.md`.
+   b. Remove completed TODO items from `Docs/platform/platform_todo.md`.
    c. Clear propagated delta entries.
 3. Commit on `dev` with a clear message.

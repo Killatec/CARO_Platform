@@ -182,7 +182,7 @@ When `effectiveCachedN === 0`, `cachedArrs.value[-1]` is `undefined`, coalesces 
 
 ## 5. Spec-vs-code drift items already on a backlog
 
-For completeness — these are listed in `Docs/platform_todo.md` and `Docs/hmi_trend_viewer_handoff.md` and need no new action from this audit:
+For completeness — these are listed in `Docs/platform/platform_todo.md` and `Docs/hmi/trend-viewer/hmi_trend_viewer_handoff.md` and need no new action from this audit:
 
 - **WS per-ingest vs per-COV** (item 1.1 above; `platform_todo.md`)
 - **Dead-tag detection / LOCF cutoff replacement** (handoff §10 "Dead-tag detection")

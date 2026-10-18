@@ -448,7 +448,7 @@ The trendFlush tick runs at `TREND_FLUSH_HZ` (default 4 Hz, env-tunable 1–20).
 
 The trendFlush callback is wrapped in `dutyTracker.track()` and runs synchronously on the event loop. No new concurrency concerns arise beyond those described in §10.1.
 
-See `Docs/hmi_trend_viewer_spec.md` §4.4 and §10.6 for the trend viewer client's use of this channel.
+See `Docs/hmi/trend-viewer/hmi_trend_viewer_spec.md` §4.4 and §10.6 for the trend viewer client's use of this channel.
 
 ---
 
@@ -599,7 +599,7 @@ On disconnect, `trendServerRef` is cleared (server state is lost). `trendDesired
 
 On tailing exit, `commitAndDrain()` atomically moves the accumulator/buffer contents into the cached tile data before the mode transition completes, preventing a gap between the last live event and the first REST tile fetch.
 
-See `Docs/hmi_trend_viewer_handoff.md` §8 (Live Tail Runtime Architecture) for the full client-side hook architecture.
+See `Docs/hmi/trend-viewer/hmi_trend_viewer_handoff.md` §8 (Live Tail Runtime Architecture) for the full client-side hook architecture.
 
 ---
 
@@ -688,11 +688,11 @@ The only async operations are `ws.send()` / `mqtt.publish()` (both buffer intern
 | Document                                 | Path                                   |
 |------------------------------------------|----------------------------------------|
 | HMI App Anchor                           | `apps/caro-hmi/CLAUDE.md`              |
-| HMI Functional Spec                      | `Docs/hmi_functional_spec.md`          |
-| HMI Widget Spec                          | `Docs/hmi_widget_spec.md`              |
-| HMI API Spec                             | `Docs/hmi_API_spec.md`                 |
-| HMI Trend Viewer Spec                    | `Docs/hmi_trend_viewer_spec.md`        |
-| HMI Trend Viewer Handoff                 | `Docs/hmi_trend_viewer_handoff.md`     |
-| MQTT Spec                                | `Docs/CARO_MQTT_Spec.md`               |
-| DB Spec                                  | `Docs/CARO_DB_Spec.md`                 |
-| Platform Handoff                         | `Docs/platform_handoff.md`             |
+| HMI Functional Spec                      | `Docs/hmi/hmi_functional_spec.md`          |
+| HMI Widget Spec                          | `Docs/hmi/hmi_widget_spec.md`              |
+| HMI API Spec                             | `Docs/hmi/hmi_API_spec.md`                 |
+| HMI Trend Viewer Spec                    | `Docs/hmi/trend-viewer/hmi_trend_viewer_spec.md`        |
+| HMI Trend Viewer Handoff                 | `Docs/hmi/trend-viewer/hmi_trend_viewer_handoff.md`     |
+| MQTT Spec                                | `Docs/platform/CARO_MQTT_Spec.md`               |
+| DB Spec                                  | `Docs/db/CARO_DB_Spec.md`                 |
+| Platform Handoff                         | `Docs/README.md`             |

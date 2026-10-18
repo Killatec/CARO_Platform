@@ -4,7 +4,7 @@
  * Covers the reference "RF Control" / "RF Phase" / "RF SpecA" pages on one
  * consolidated page, built with the widgets that exist today. Three pieces
  * of the reference UI are deferred pending new @caro/widgets components
- * (tracked in Docs/platform_todo.md) and are NOT rendered here:
+ * (tracked in Docs/platform/platform_todo.md) and are NOT rendered here:
  *   1. The Phase X-Y scatter plot (RF1.Phase.Phase_XY.{X,Y} render as plain
  *      numeric fields in Rf1PhaseXYBox instead).
  *   2. The frequency-mapped (MHz-axis) spectrum chart (Rf1SpecABox uses the

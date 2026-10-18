@@ -3,7 +3,7 @@
  *
  * HMI status and module status boxes — generic diagnostics, not
  * Narya1-specific. Machine-specific boxes land here once the Narya1
- * registry templates are built out (see Docs/platform_todo.md).
+ * registry templates are built out (see Docs/platform/platform_todo.md).
  */
 import {
   HmiStatusBox,

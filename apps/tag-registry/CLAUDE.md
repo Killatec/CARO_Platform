@@ -3,14 +3,14 @@
 ## Session Start Reads
 
 At session start, read in order:
-1. `Docs/tag_registry_handoff.md` — current state, key decisions, gotchas
-2. `Docs/tag_registry_deltas.md` — open spec divergences
+1. `Docs/tag-registry/tag_registry_handoff.md` — current state, key decisions, gotchas
+2. `Docs/tag-registry/tag_registry_deltas.md` — open spec divergences
 
 Read these only if the session requires them:
-- UI behavior, validation, or workflow → `Docs/tag_registry_spec.md`
-- API endpoints or request/response shapes → `Docs/tag_registry_api_spec.md`
-- Component architecture, store behavior, folder structure → `Docs/tag_registry_bootstrap.md`
-- Writing or debugging tests → `Docs/tag_registry_test_spec.md`
+- UI behavior, validation, or workflow → `Docs/tag-registry/tag_registry_spec.md`
+- API endpoints or request/response shapes → `Docs/tag-registry/tag_registry_api_spec.md`
+- Component architecture, store behavior, folder structure → `Docs/tag-registry/tag_registry_bootstrap.md`
+- Writing or debugging tests → `Docs/tag-registry/tag_registry_test_spec.md`
 
 ## App Hard Constraints
 

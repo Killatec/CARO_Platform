@@ -52,7 +52,7 @@ The set is computed once at boot by `loadTagMap()` and exposed as `trendableTagI
 
 In scope: write path, storage layout, observability, configuration.
 
-This document covers the write path. The READ side (REST endpoint, continuous aggregates, tile-based queries) is documented in `Docs/hmi_trend_viewer_spec.md` and `Docs/hmi_trend_viewer_handoff.md`.
+This document covers the write path. The READ side (REST endpoint, continuous aggregates, tile-based queries) is documented in `Docs/hmi/trend-viewer/hmi_trend_viewer_spec.md` and `Docs/hmi/trend-viewer/hmi_trend_viewer_handoff.md`.
 
 ---
 
@@ -658,7 +658,7 @@ Host port **5433** → container port 5432. The shift lets a main-Postgres conta
 
 The compose defaults (`caro/caro/caro_historian`) are dev-only. Production must override all three via a local `.env`. `pg_isready` in the healthcheck uses the same values; overriding only `TIMESCALE_PASSWORD` will leave the healthcheck running as `caro/caro_historian` and succeed deceptively — override the full triplet.
 
-See also `Docs/hmi_timescale_setup.md` for Windows install steps.
+See also `Docs/db/hmi_timescale_setup.md` for Windows install steps.
 
 ---
 
@@ -718,8 +718,8 @@ Even at pessimistic 100% COV, the 57.5 GB budget is comfortably oversized for th
 | File | Role |
 |------|------|
 | `docker-compose.timescale.yml` | Local dev TimescaleDB. |
-| `Docs/hmi_timescale_setup.md` | Host-specific install notes (Windows). |
-| `Docs/CARO_DB_Spec.md` §9 | Formal database spec (schema, config resolution). |
+| `Docs/db/hmi_timescale_setup.md` | Host-specific install notes (Windows). |
+| `Docs/db/CARO_DB_Spec.md` §9 | Formal database spec (schema, config resolution). |
 
 ---
 

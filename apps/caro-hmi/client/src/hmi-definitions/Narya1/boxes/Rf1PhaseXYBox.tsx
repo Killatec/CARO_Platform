@@ -4,7 +4,7 @@ import { MODULE_BOX, MODULE_TITLE, WIDGET_STACK } from '../../shared/index.js';
 /**
  * The reference UI plots RF1.Phase.Phase_XY.{X,Y} as a live X-Y scatter
  * point. No widget for that exists yet in @caro/widgets (see
- * Docs/platform_todo.md) — the raw values render as numeric fields below
+ * Docs/platform/platform_todo.md) — the raw values render as numeric fields below
  * until it does.
  */
 export function Rf1PhaseXYBox() {

@@ -74,7 +74,7 @@ Every template returned by the server carries a `hash` field: a 6-character hex 
 
 > **Note:** `DATABASE_URL` must not be referenced anywhere in app code. Use the five `POSTGRES_*` variables instead, consumed by `@caro/db` pool.js.
 >
-> **Note:** as of the multi-project work, env is loaded in two layers via `loadEnv()` from `@caro/server/env` — `PORT`/`TEMPLATES_DIR`/`MAX_TAG_PATH_LENGTH`/`VALIDATE_*` stay in this app's own `server/.env`; `POSTGRES_*` and `PROJECT_ROOT` moved to the monorepo root `.env`, shared with mqtt-simulator and caro-hmi. See root `CLAUDE.md` and `Docs/platform_handoff.md` § Multi-Project Model.
+> **Note:** as of the multi-project work, env is loaded in two layers via `loadEnv()` from `@caro/server/env` — `PORT`/`TEMPLATES_DIR`/`MAX_TAG_PATH_LENGTH`/`VALIDATE_*` stay in this app's own `server/.env`; `POSTGRES_*` and `PROJECT_ROOT` moved to the monorepo root `.env`, shared with mqtt-simulator and caro-hmi. See root `CLAUDE.md` and `Docs/README.md` § Multi-Project Model.
 
 ### 2.7 GET /api/v1/config
 
