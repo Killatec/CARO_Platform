@@ -59,17 +59,13 @@ CARO_Platform is an industrial automation monorepo with three apps:
 
 ## Platform Rules
 
-The hard rules in root `CLAUDE.md` apply. These are the platform-specific ones:
+The hard rules in root `CLAUDE.md` apply everywhere: TypeScript only, no raw SQL in apps, no `DATABASE_URL`, the API envelope, shared packages first, `apps/tag-registry/` as the style reference. Two more rules that need more detail:
 
-- **No raw SQL in apps.** All PostgreSQL access via named functions from `@caro/db` only. No direct `pg` imports in any app.
-- **No DATABASE_URL.** Use five `POSTGRES_*` env vars for main Postgres and five `TIMESCALE_*` env vars for historian Postgres; both consumed by `@caro/db`.
-- **API envelope:** `{ ok: true, data }` / `{ ok: false, error: { code, message } }`. Services throw `Error` with `.code`; never set HTTP status directly.
 - **Env files — two layers:** every server loads env via `loadEnv()` from `@caro/server/env`.
   - The app's own `server/.env` loads first and wins on a conflict.
   - The monorepo root `.env` loads second, filling in only what's still unset (or what a parent process already injected into `process.env`, e.g. e2e's `globalSetup`).
   - Project identity and cross-app-must-agree settings (`PROJECT_ROOT`, `POSTGRES_*`, `TIMESCALE_*`) live at root; each app's own settings live in its own `server/.env`.
   - Never pass `override: true`.
-- **Style reference:** `apps/tag-registry/` is the convention baseline for all apps.
 - **TagDef field consumption:** consume `TagDef.{unit, eng_min, eng_max, format, tag_name, trendable}` directly. Never walk `meta` for these fields — `resolveRegistry` applies type-aware gating (e.g., suppressing unit/eng_min/eng_max on Booleans). Use `meta` only for structural data (e.g., `module_id`). This applies everywhere: `loadTagMap`, `resolveFormat`, any widget/hook reading tag metadata.
 
 ## Branching
