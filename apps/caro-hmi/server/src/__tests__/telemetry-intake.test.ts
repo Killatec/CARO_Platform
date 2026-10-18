@@ -692,3 +692,60 @@ describe('TelemetryIntake — trendDeltaListener', () => {
     expect(count).toBe(1);
   });
 });
+
+// ── Leaving FAULT ─────────────────────────────────────────────────────────────
+
+describe('TelemetryIntake — leaving FAULT requests a refill', () => {
+  function setup() {
+    const lkv = new LkvCache();
+    const intake = makeIntake(lkv);
+    const recovered = vi.fn();
+    intake.setModuleRecoveredHandler(recovered);
+    return { lkv, intake, recovered };
+  }
+
+  it('calls the recovered handler once on the first non-FAULT message after FAULT', () => {
+    const { intake, recovered } = setup();
+
+    intake.ingest(MODULE_ID, telemetryMsg([], 'ONLINE'));
+    intake.ingest(MODULE_ID, telemetryMsg([], 'FAULT'));
+    intake.ingest(MODULE_ID, telemetryMsg([], 'FAULT'));
+    expect(recovered).not.toHaveBeenCalled();
+
+    intake.ingest(MODULE_ID, telemetryMsg([], 'ONLINE'));
+    intake.ingest(MODULE_ID, telemetryMsg([], 'ONLINE'));
+
+    expect(recovered).toHaveBeenCalledOnce();
+    expect(recovered).toHaveBeenCalledWith(MODULE_ID);
+  });
+
+  it('does not fire for a module that never was in FAULT, nor on its first message', () => {
+    const { intake, recovered } = setup();
+    intake.ingest(MODULE_ID, telemetryMsg([], 'ONLINE'));
+    intake.ingest(MODULE_ID, telemetryMsg([], 'ONLINE'));
+    expect(recovered).not.toHaveBeenCalled();
+  });
+
+  it('fires again for each FAULT episode', () => {
+    const { intake, recovered } = setup();
+    for (let i = 0; i < 2; i++) {
+      intake.ingest(MODULE_ID, telemetryMsg([], 'FAULT'));
+      intake.ingest(MODULE_ID, telemetryMsg([], 'ONLINE'));
+    }
+    expect(recovered).toHaveBeenCalledTimes(2);
+  });
+
+  it('applies the values of the message that ends the FAULT before asking for the refill', () => {
+    const { lkv, intake, recovered } = setup();
+    recovered.mockImplementation(() => {
+      expect(lkv.getValue(TAG_MONITOR)).toBe(5);
+      expect(lkv.getValue(TAG_TREND)).toBeNull();   // still null from FAULT — the snapshot refills it
+    });
+
+    intake.ingest(MODULE_ID, telemetryMsg([{ tag_id: TAG_MONITOR, value: 1 }, { tag_id: TAG_TREND, value: 2 }], 'ONLINE'));
+    intake.ingest(MODULE_ID, telemetryMsg([], 'FAULT'));
+    intake.ingest(MODULE_ID, telemetryMsg([{ tag_id: TAG_MONITOR, value: 5 }], 'ONLINE'));
+
+    expect(recovered).toHaveBeenCalledOnce();
+  });
+});
