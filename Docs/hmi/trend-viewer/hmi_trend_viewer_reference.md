@@ -1,7 +1,8 @@
 # CARO_Platform — Trending Reference
 
 **From tag change to hypertable row — the HMI historian end-to-end.**
-**Version:** 1.2 — 2026-05-19
+**Version:** 1.3 — 2026-10-17
+*v1.3: Reconciled with the code. Trend snapshot scheduler added (§3.4) and "flatlines produce zero rows" corrected; historian reconnect replaces "NullDbWriter is terminal"; T001→T004 chunk change shown as it happens; file paths moved to `packages/db/timescale/`; compose defaults, degraded-boot DB_Size, startup/shutdown order, committed-through watermark.*
 *v1.2: Renamed from `CARO_Trending_Reference.md` to `hmi_trend_viewer_reference.md` (naming convention alignment). No content changes.*
 *v1.1: T004 chunk policy reflected (1h chunks, compress_after=10min); §15.1 removed (read endpoint shipped); cross-ref to trend viewer spec/handoff for the read path.*
 *Internal technical reference.*
@@ -21,7 +22,8 @@ It complements two sibling docs:
 
 | # | Stage | Module | What happens |
 |---|-------|--------|--------------|
-| 1 | Ingest | `telemetry-intake.ts` | For each module tick, every tag whose value changed AND is trendable (non-array) is collected into a `DbWriteEntry` with the module-level timestamp. |
+| 1 | Ingest | `telemetry-intake.ts` | For each module tick, every tag whose value changed AND is trendable (non-array) is collected into a `DbWriteEntry` with the module-level timestamp — or, when a trend snapshot is pending for that module, every trendable tag of the module (§3.4). |
+| 1b | Snapshot | `trend-snapshot-scheduler.ts` | Every `TREND_SNAPSHOT_INTERVAL_MS` (60 s) each module is marked for a full snapshot; a module that published nothing since the last mark gets one written from the LKV with `Date.now()`. |
 | 2 | Quality sentinel | `telemetry-intake.ts` | Watchdog stall → enqueue a sentinel with `value = null` for every trendable tag in the module. |
 | 3 | Enqueue | `db-pipeline.ts` | Entry appended to in-memory queue. If queue at capacity, oldest entry dropped; `droppedPkgsTotal` increments. |
 | 4 | Flush tick | `db-pipeline.ts` | Every `TIMESCALE_DB_TICK_MS` (default 500 ms): peek up to `TIMESCALE_DB_MAX_ENTRIES_PER_FLUSH`, call `writer.write()`, consume on success. |
@@ -34,19 +36,18 @@ It complements two sibling docs:
 
 The system is built on four rules:
 
-- **Change-of-Value, not polling.** The historian only sees values that actually moved. Flatlines occupy zero storage.
+- **Change-of-Value, plus a minute heartbeat.** The historian records values that moved, plus one snapshot row per trendable tag per minute (§3.4), so a flatlined tag costs one row a minute and the read path's 5-minute bounded `prev` lookback always finds a value.
 - **`null` means bad quality.** Every `null` in `tag_samples.value` is a deliberate discontinuity sentinel, not a missing number. Readers MUST NOT interpolate across it.
-- **Soft-fail on historian.** If TimescaleDB is unreachable at boot, HMI starts with `NullDbWriter` and keeps serving live data. The observable contract signals the degraded state to the operator; it does not crash the app.
+- **Soft-fail on historian.** If TimescaleDB is unreachable at boot, HMI starts with `NullDbWriter` and keeps serving live data, and `HistorianReconnector` keeps retrying. The observable contract signals the degraded state to the operator; it does not crash the app.
 - **Writers throw, pipeline counts.** Any writer failure — including the permanent `NullDbWriter` failure — feeds the `errorCountTotal` counter and holds `Trending = false`. Success paths are silent.
 
 ### 1.3 What Counts as "Trending"
 
 A tag is historian-eligible (trendable) iff:
 
-- It has `trend = true` in `tag_registry`, and
-- Its `data_type` is NOT an array type.
+- It has `trends = true` in `tag_registry`.
 
-The set is computed once at boot by `loadTagMap()` and exposed as `trendableTagIds: Set<number>`. `TelemetryIntake` uses this set as the gate for every enqueue. Array-typed tags (packed-bit, multi-value) are excluded at the source — the single-column schema cannot represent them.
+The set is computed once at boot by `loadTagMap()` from that column alone, and exposed as `trendableTagIds: Set<number>`. `TelemetryIntake` uses this set as the gate for every enqueue. Array-typed tags (packed-bit, multi-value) cannot be trendable because the Tag Registry's `validateResolvedTags` refuses `trends: true` on them at apply time; the intake also skips array values as defence in depth, since the single-column schema cannot represent them.
 
 ### 1.4 Scope & Non-Goals
 
@@ -64,7 +65,7 @@ At HMI boot, `loadTagMap()` partitions the active tag set:
 const { tagMap, moduleTagIds, trendableTagIds } = await loadTagMap(rows);
 ```
 
-`trendableTagIds` is a `Set<number>`. Only `tag_id` values in this set are ever enqueued. A tag moving from `trend=true` to `trend=false` (or vice versa) in the registry requires an HMI restart to take effect — the set is not reloaded at runtime.
+`trendableTagIds` is a `Set<number>`. Only `tag_id` values in this set are ever enqueued. A tag moving from `trends=true` to `trends=false` (or vice versa) in the registry requires an HMI restart to take effect — the set is not reloaded at runtime.
 
 ---
 
@@ -128,6 +129,15 @@ This writes one row per trendable tag in the stalled module with `value = NULL`.
 
 **Note:** the sentinel uses `Date.now()` (HMI clock) because by definition the module is no longer publishing and has no current timestamp.
 
+### 3.4 Trend Snapshot Scheduler
+
+COV alone would leave a tag that never changes with no rows at all. `TrendSnapshotScheduler` guarantees at least one row per trendable tag per `TREND_SNAPSHOT_INTERVAL_MS` (default 60 000; disabled with `TREND_SNAPSHOT_ENABLED=false`). Each tick, inside `dutyTracker.track()`:
+
+1. **Force-write:** a module still marked pending from the previous tick, because no telemetry arrived in between, gets `intake.forceTrendSnapshot(moduleId)`. That writes every trendable tag's current LKV value (array values as `null`) with `moduleTs = Date.now()`.
+2. **Piggyback:** every module is marked pending again. Its next `ingest()` consumes the mark and enqueues the full trendable-tag snapshot from the LKV, with the frame's own `message.timestamp`, instead of only the changed tags.
+
+This is what makes the 5-minute bounded `prev` lookback on the read side safe (`Docs/db/DB_Config_Usage_And_Perf.md` §5.3). It is unrelated to the MQTT `REQUEST_SNAPSHOT` command.
+
 ---
 
 ## 4. Stage 3 — DbPipeline
@@ -190,6 +200,7 @@ Peek-then-consume is why writers don't have to be idempotent — retried entries
 | `queueLength` (live) | Current `queue.length` at the moment of the getter call. Used for tests/debug, NOT the observability tag. | 5000 |
 | `lastFlushMs` | Wall-clock duration of the most recent flush, rounded. | n/a |
 | `historianHealthy` | `true` iff last flush did not throw. | n/a |
+| `committedThroughMs` | Advanced to the tick's start time after every successful flush and every empty tick (monotonic). A successful flush of a capped 500-entry batch advances it even if more entries remain queued. Served to trend clients as `committedThroughTs`. | n/a |
 | `trending` (tick-held) | `historianHealthy && writer.name !== 'null' && rowsWrittenDeltaThisTick > 0`. | n/a |
 | `rowsPerSec` (tick-held) | `(rowsWrittenTotal - rowsWrittenAtLastTick) / (tickMs/1000)`. | n/a |
 
@@ -287,15 +298,18 @@ No per-row quality enum, no per-row source ID, no soft-delete column. Every piec
 ### 6.2 Hypertable Configuration
 
 ```sql
+-- T001
 SELECT create_hypertable(
   'tag_samples',
   'ts',
-  chunk_time_interval => INTERVAL '1 hour',
+  chunk_time_interval => INTERVAL '12 hours',
   if_not_exists       => TRUE
 );
+-- T004
+SELECT set_chunk_time_interval('tag_samples', INTERVAL '1 hour');
 ```
 
-1-hour chunks are the unit of compression and retention. With a 10 Hz worst-case COV rate across 360 trendable tags a chunk reaches ~1.3 GB uncompressed before the compression policy fires at 10-minute age. Originally 12-hour chunks; tightened to 1-hour in T004 after perf testing identified an I/O amplification cliff on uncompressed chunks above ~1 GB.
+1-hour chunks (from T004 on) are the unit of compression and retention. With a 10 Hz worst-case COV rate across 360 trendable tags a chunk reaches ~1.3 GB uncompressed before the compression policy fires at 10-minute age. Originally 12-hour chunks; tightened to 1-hour in T004 after perf testing identified an I/O amplification cliff on uncompressed chunks above ~1 GB.
 
 ### 6.3 Indexes
 
@@ -335,7 +349,7 @@ Chunks older than 14 days are dropped wholesale. This is the hard disk bound —
 
 ### 6.6 Write Path
 
-`packages/db/samples.ts`:
+`packages/db/timescale/samples.ts`:
 
 ```ts
 export async function writeTagSamples(rows: TagSampleRow[]): Promise<void> {
@@ -364,7 +378,7 @@ Three design choices worth naming:
 
 ## 7. Observability — `Trend_Info` Tags
 
-Seven tags under `CARO_1.HMI.Trend_Info.*` expose the health of the pipeline to the operator. They are updated every HMI publish tick (250 ms) by `HmiTagSource.updateTrendInfoTags()`.
+Seven tags under `<root>.HMI.Trend_Info.*` (the system root that contains the HMI module) expose the health of the pipeline to the operator. They are updated every HMI publish tick (250 ms) by `HmiTagSource.updateTrendInfoTags()`.
 
 | Tag | Type | Unit | Source | Notes |
 |-----|------|------|--------|-------|
@@ -387,7 +401,7 @@ The HMI publish tick (250 ms) samples metrics that are produced at different cad
 
 ### 7.2 TrendStatusBox Widget
 
-`apps/caro-hmi/ui/.../TrendStatusBox.tsx` renders the seven tags on the System Overview page as a single STATUS_BOX module. One `BooleanMon` row (Trending) and six `NumericMon` rows. Value subscriptions use the contiguous-segment dot notation `HMI.Trend_Info.<Name>`. Styling follows the `HmiStatusBox` convention (`STATUS_BOX` frame, `MODULE_TITLE` header, `WIDGET_STACK` body).
+`apps/caro-hmi/client/src/hmi-definitions/shared/TrendStatusBox.tsx` renders the seven tags on the System Overview page as a single STATUS_BOX module. One `BooleanMon` row (Trending) and six `NumericMon` rows. Value subscriptions use the contiguous-segment dot notation `HMI.Trend_Info.<Name>`. Styling follows the `HmiStatusBox` convention (`STATUS_BOX` frame, `MODULE_TITLE` header, `WIDGET_STACK` body).
 
 ### 7.3 TimescaleSizeMonitor
 
@@ -411,13 +425,13 @@ private async poll(): Promise<void> {
 
 Key properties:
 
-- **Only instantiated on the TimescaleDbWriter path.** The null-writer boot does not create the monitor.
+- **Only instantiated on the TimescaleDbWriter path.** The null-writer boot does not create the monitor; `HistorianReconnector` creates one and attaches it with `HmiTagSource.attachSizeMonitor()` when it connects.
 - **Poll cadence `TIMESCALE_SIZE_POLL_MS` (default 30 000 ms).** `pg_database_size()` is a stat-call sum over the DB's file tree — 10-50 ms on a warm DB. Polling at 30 s is effectively free.
 - **Returns `null` until the first successful poll.** `sizeBytes` and `sizeGB` both return `null` while `_lastSuccessMs === 0`. Consumers (telemetry channel, widgets) can distinguish "no reading yet" from a true zero; `Trend_Info.DB_Size` publishes `null` on server restart instead of a misleading 0 GB.
 - **Holds last value on error.** The widget shows the last successful reading; stale-but-useful is better than flashing zeros.
 - **Log throttle one per hour.** Prevents log spam during extended outages.
 
-The underlying query is in `packages/db/stats.ts`:
+The underlying query is in `packages/db/timescale/stats.ts`:
 
 ```ts
 export async function getTimescaleDatabaseSizeBytes(): Promise<bigint> {
@@ -443,7 +457,7 @@ One row in the schema, one rule: `value IS NULL` means "bad quality." Every `NUL
 Sources that do NOT produce `NULL`:
 
 - Normal FAULT frames with real sensor values — those values flow through unchanged.
-- Flatlined tags — they produce zero rows (COV filter).
+- Flatlined tags — they produce one snapshot row per minute carrying the unchanged value (§3.4), never `NULL` unless the LKV itself is null.
 - Historian unreachable — no rows produced at all; degraded state is signaled via `Error_Count` and `Trending`.
 
 **Readers MUST treat `NULL` as a discontinuity.** Interpolating across a `NULL` sample would hide real quality gaps and misrepresent device behavior. This is a hard contract, not a convention.
@@ -454,7 +468,7 @@ Sources that do NOT produce `NULL`:
 
 ### 9.1 Migration System
 
-`packages/db/timescaleMigrations.ts` is the Timescale-specific migration runner. It mirrors the main-Postgres runner in structure but:
+`packages/db/timescale/migrations.ts` (`runTimescaleMigrations()`) is the Timescale-specific migration runner. It mirrors the main-Postgres runner in structure but:
 
 - Reads from `db/timescale/migrations/` (not `db/postgres/migrations/`).
 - Uses advisory lock ID **2** (main Postgres reserves ID 1).
@@ -476,7 +490,7 @@ Sources that do NOT produce `NULL`:
 
 ### 9.3 Idempotency
 
-Every statement in `T001_create_tag_samples.sql` is idempotent by construction:
+Every statement in `T001_create_tag_samples.sql` is idempotent by construction (the later T004 and T006–T009 files follow the same pattern):
 
 - `CREATE EXTENSION IF NOT EXISTS`
 - `CREATE TABLE IF NOT EXISTS`
@@ -524,10 +538,12 @@ From `apps/caro-hmi/server/src/index.ts`:
    ```
 5. `TelemetryIntake` constructed with `dbPipeline`. Watchdog started.
 6. `HmiTagSource` constructed with `dbPipeline` + `sizeMonitor`. Publish timer started.
-7. MQTT bridge, CmdController, ResetBus, HTTP, WS.
-8. `dbPipeline.start()` — begins flush tick.
-9. `mqttBridge.start()` — soft-fail (dev convenience; REST+WS still serve from LKV).
-10. HTTP listen.
+7. `HistorianReconnector` started — only when the writer is `NullDbWriter`.
+8. MQTT bridge, CmdController, ResetBus, Express app, WS server attached; trend-delta listener and module-recovered handler wired.
+9. `dbPipeline.start()` — begins flush tick.
+10. `TrendSnapshotScheduler.start()` — unless `TREND_SNAPSHOT_ENABLED=false`.
+11. `mqttBridge.start()` — soft-fail (dev convenience; REST+WS still serve from LKV); on success, pending setpoints are re-sent to every MQTT module.
+12. HTTP listen.
 
 **Critical detail:** `dbPipeline` is always wired — either to `TimescaleDbWriter` (happy path) or to `NullDbWriter` (degraded path). Application code never branches on whether trending "works"; the pipeline absorbs the variance.
 
@@ -546,9 +562,9 @@ Expected operator-visible state:
 - `Trend_Info.Error_Count` climbs at 2 Hz (one per flush tick) up to 9999.
 - `Trend_Info.Queue_Depth` grows until it hits 5000, then `Dropped_Pkgs` climbs.
 - `Trend_Info.Rows_Per_Sec` = 0.
-- `Trend_Info.DB_Size` = 0 (size monitor not created on degraded boot).
+- `Trend_Info.DB_Size` = `null` (no size monitor on degraded boot).
 
-**Current limitation:** this state is terminal until HMI restart. Periodic reconnect (NullDbWriter → TimescaleDbWriter without restart) is an open TODO.
+**Recovery:** `HistorianReconnector` retries `pingTimescale()` + `runTimescaleMigrations()` every `TIMESCALE_RECONNECT_MS` (default 30 000 ms). On success it calls `dbPipeline.setWriter(new TimescaleDbWriter())` and attaches a new `TimescaleSizeMonitor`, then stops. Entries still in the queue (up to 5000) are written by the next flush; anything already dropped is lost.
 
 ### 10.3 Shutdown Order
 
@@ -557,6 +573,7 @@ const shutdown = async (signal: string): Promise<void> => {
   hmiTags.stopPublishing();
   intake.stopWatchdog();
   trendSnapshotScheduler.stop();
+  historianReconnect.stop();
   if (sizeMonitor) await sizeMonitor.stop();
   await dbPipeline.stop();
   await mqttBridge.stop().catch(() => {});
@@ -585,14 +602,14 @@ Consumed by `packages/db/pool.ts`:
 
 ### 11.2 TimescaleDB (historian)
 
-Consumed by `packages/db/timescalePool.ts`:
+Consumed by `packages/db/timescale/pool.ts`:
 
 | Var | Default | Notes |
 |-----|---------|-------|
 | `TIMESCALE_HOST` | `localhost` | |
 | `TIMESCALE_PORT` | `5433` | Non-5432 default to coexist with main Postgres on the same host in dev. |
 | `TIMESCALE_DATABASE` | `caro_timescale` | |
-| `TIMESCALE_USER` | `postgres` | |
+| `TIMESCALE_USER` | `postgres` | The Docker setup creates `caro`; set it in the root `.env`. |
 | `TIMESCALE_PASSWORD` | (required) | Startup warns if unset. |
 
 ### 11.3 Pipeline Tuning
@@ -605,13 +622,15 @@ Consumed by `DbPipeline` constructor:
 | `TIMESCALE_DB_QUEUE_MAX` | `5000` | Max in-memory queue size. Oldest-first eviction on overflow. |
 | `TIMESCALE_DB_MAX_ENTRIES_PER_FLUSH` | `500` | Batch cap per flush tick. |
 
-### 11.4 Size Monitor
+### 11.4 Size Monitor, Reconnect, Snapshots
 
-Consumed by `TimescaleSizeMonitor`:
-
-| Var | Default | Notes |
-|-----|---------|-------|
-| `TIMESCALE_SIZE_POLL_MS` | `30000` | `pg_database_size()` poll cadence. |
+| Var | Default | Consumed by | Notes |
+|-----|---------|-------------|-------|
+| `TIMESCALE_SIZE_POLL_MS` | `30000` | `TimescaleSizeMonitor` | `pg_database_size()` poll cadence. |
+| `TIMESCALE_RECONNECT_MS` | `30000` | `config.ts` → `HistorianReconnector` | Retry interval while on `NullDbWriter`. |
+| `TREND_SNAPSHOT_ENABLED` | `true` | `config.ts` | `false` disables §3.4. |
+| `TREND_SNAPSHOT_INTERVAL_MS` | `60000` | `config.ts` → `TrendSnapshotScheduler` | Guaranteed row interval per trendable tag. |
+| `TIMESCALE_LOG_TILE_QUERIES` | unset | `@caro/db` trends | `1` logs one summary line per tile read (read side). |
 
 ### 11.5 Rules of the Road
 
@@ -633,14 +652,14 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER:     ${TIMESCALE_USER:-caro}
-      POSTGRES_PASSWORD: ${TIMESCALE_PASSWORD:-caro}
-      POSTGRES_DB:       ${TIMESCALE_DATABASE:-caro_historian}
+      POSTGRES_PASSWORD: ${TIMESCALE_PASSWORD:-caro_dev_password}
+      POSTGRES_DB:       ${TIMESCALE_DATABASE:-caro_timescale}
     ports:
       - "${TIMESCALE_HOST_PORT:-5433}:5432"
     volumes:
       - ${TIMESCALE_DATA_DIR:-./timescale-data}:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${TIMESCALE_USER:-caro} -d ${TIMESCALE_DATABASE:-caro_historian}"]
+      test: ["CMD-SHELL", "pg_isready -U ${TIMESCALE_USER:-caro} -d ${TIMESCALE_DATABASE:-caro_timescale}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -656,7 +675,7 @@ Host port **5433** → container port 5432. The shift lets a main-Postgres conta
 
 ### 12.4 Credentials
 
-The compose defaults (`caro/caro/caro_historian`) are dev-only. Production must override all three via a local `.env`. `pg_isready` in the healthcheck uses the same values; overriding only `TIMESCALE_PASSWORD` will leave the healthcheck running as `caro/caro_historian` and succeed deceptively — override the full triplet.
+The compose defaults (user `caro`, password `caro_dev_password`, database `caro_timescale`) are dev-only. Production must override all three via the root `.env`. `pg_isready` in the healthcheck uses the user and database values; overriding only `TIMESCALE_PASSWORD` leaves the healthcheck checking `caro`/`caro_timescale`.
 
 See also `Docs/db/hmi_timescale_setup.md` for Windows install steps.
 
@@ -691,27 +710,32 @@ Even at pessimistic 100% COV, the 57.5 GB budget is comfortably oversized for th
 | `apps/caro-hmi/server/src/timescale-size-monitor.ts` | Size poller for `Trend_Info.DB_Size`. |
 | `apps/caro-hmi/server/src/telemetry-intake.ts` | COV enqueue, FAULT pass-through, watchdog sentinel. |
 | `apps/caro-hmi/server/src/hmi-tag-source.ts` | `updateTrendInfoTags()` maps pipeline/monitor state to the seven observability tags. |
+| `apps/caro-hmi/server/src/trend-snapshot-scheduler.ts` | Per-minute snapshot guarantee (§3.4). |
+| `apps/caro-hmi/server/src/historian-reconnect.ts` | `HistorianReconnector` (§10.2). |
 
 ### 14.2 Shared DB Package
 
 | File | Role |
 |------|------|
-| `packages/db/timescalePool.ts` | Lazy singleton pool for the Timescale database. |
-| `packages/db/samples.ts` | `pingTimescale()`, `writeTagSamples()`. |
-| `packages/db/stats.ts` | `getTimescaleDatabaseSizeBytes()`. |
-| `packages/db/timescaleMigrations.ts` | Migration runner (advisory lock ID 2). |
+| `packages/db/timescale/pool.ts` | Lazy singleton pool for the Timescale database (`max: 10`). |
+| `packages/db/timescale/samples.ts` | `pingTimescale()`, `writeTagSamples()`. |
+| `packages/db/timescale/stats.ts` | `getTimescaleDatabaseSizeBytes()`. |
+| `packages/db/timescale/migrations.ts` | Migration runner (advisory lock ID 2). |
+| `packages/db/timescale/trends.ts` | Read side: `getTrendTile`, `getTrendExtent`. |
 
 ### 14.3 Schema
 
 | File | Role |
 |------|------|
 | `db/timescale/migrations/T001_create_tag_samples.sql` | Hypertable + index + compression + retention. |
+| `db/timescale/migrations/T004_tighten_compression_policy.sql` | 1 h chunks, compress after 10 min. |
+| `db/timescale/migrations/T006_replace_1s_cagg.sql` … `T009_create_10min_cagg.sql` | The four continuous aggregates (read side). |
 
 ### 14.4 UI
 
 | File | Role |
 |------|------|
-| `apps/caro-hmi/ui/.../TrendStatusBox.tsx` | Seven-row STATUS_BOX widget on the System Overview page. |
+| `apps/caro-hmi/client/src/hmi-definitions/shared/TrendStatusBox.tsx` | Seven-row STATUS_BOX widget on the System Overview page. |
 
 ### 14.5 Ops
 
@@ -725,9 +749,9 @@ Even at pessimistic 100% COV, the 57.5 GB budget is comfortably oversized for th
 
 ## 15. Known Limitations & Future Work
 
-### 15.1 NullDbWriter is terminal
+### 15.1 No UI signal for a dead historian
 
-If Timescale is unreachable at HMI boot, the pipeline runs with `NullDbWriter` until HMI is restarted. A periodic reconnect path (retry `pingTimescale()` every N minutes, swap in `TimescaleDbWriter` on success without restart) is a TODO.
+Recovery from `NullDbWriter` is automatic (§10.2), but while it lasts the only signals are the `Trend_Info` tags and the server console; nothing else on screen says samples are being discarded (`Docs/platform/multi_project_runbook.md` §6.1).
 
 ### 15.2 No firmware-level deadband
 
@@ -743,7 +767,7 @@ Changing `TIMESCALE_DB_TICK_MS` or any tuning var requires HMI restart. Most ope
 
 ### 15.5 `queueLength` getter is test-only
 
-The public `DbPipeline` surface exposes `queueLength` (live) in addition to `queueDepth` (tick-held). Only tests read `queueLength` today. A future cleanup could make it `internal` or remove it and expose a `flush()` method for test convenience instead.
+The public `DbPipeline` surface exposes `queueLength` (live) in addition to `queueDepth` (tick-held), plus a deprecated synchronous `flush()` that drains the queue. Only tests use them; their removal is tracked in `platform_todo.md`.
 
 ---
 
@@ -767,6 +791,6 @@ The public `DbPipeline` surface exposes `queueLength` (live) in addition to `que
 
 **Tick-held.** A metric computed once per flush tick (500 ms) and latched for the full interval. Opposed to live sampling, which can show sub-tick noise.
 
-**Trendable.** A tag with `trend = true` in `tag_registry` AND a non-array `data_type`. Only trendable tags are enqueued to the historian.
+**Trendable.** A tag with `trends = true` in `tag_registry` (the Tag Registry refuses that on array types). Only trendable tags are enqueued to the historian.
 
 **Writer.** An implementation of `DbWriter`. Two exist today: `TimescaleDbWriter` (real) and `NullDbWriter` (fallback). Both throw on failure; the pipeline counts errors.
