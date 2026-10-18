@@ -16,6 +16,18 @@ CARO_Platform is an industrial automation monorepo with three apps:
 4. Read the app anchor (`apps/<app>/CLAUDE.md`), then that app's handoff.
 5. Read specs only when the task needs them.
 
+## Telemetry path and MQTT interface
+
+How data gets from a module to the screen, and back as commands. These three are kept in line with the code.
+
+| Read | For |
+|---|---|
+| [platform/CARO_MQTT_Spec.md](platform/CARO_MQTT_Spec.md) | The MQTT wire contract (ICD) for module firmware: topics, telemetry and command payloads, CMD_ACK, setpoint re-delivery, handshake. **Start at §1.1 Implementation Status**: the backend currently accepts JSON telemetry only and has no TLS or handshake. |
+| [platform/CARO_Telemetry_Path_Reference.md](platform/CARO_Telemetry_Path_Reference.md) | What the HMI server and browser do with each message, stage by stage: MQTT bridge → intake → LKV → historian queue → WebSocket → React context → widget. Includes the trend live-tail channel, the outbound command path, every config value, and §12 Known Gaps. |
+| [hmi/hmi_API_spec.md](hmi/hmi_API_spec.md) §5, §11 | Setpoint write and command REST endpoints, and the browser WebSocket messages. |
+
+Related: [hmi/trend-viewer/hmi_trend_viewer_reference.md](hmi/trend-viewer/hmi_trend_viewer_reference.md) (historian write path), [mqtt-simulator/mqtt_simulator_bootstrap.md](mqtt-simulator/mqtt_simulator_bootstrap.md) §6–§8 (what the simulator publishes and how it answers commands), `packages/proto/tag.proto` (Protobuf schema).
+
 ---
 
 ## Apps
@@ -165,8 +177,8 @@ Apps connect to their databases at startup and never change target at runtime; t
 | [platform_todo.md](platform/platform_todo.md) | The backlog: specified but unbuilt features. |
 | [platform_deltas.md](platform/platform_deltas.md) | Open cross-app spec divergences. |
 | [multi_project_runbook.md](platform/multi_project_runbook.md) | How to create and switch projects; observed errors; known issues. |
-| [CARO_MQTT_Spec.md](platform/CARO_MQTT_Spec.md) | MQTT interface spec (topics, payloads, CMD/CMD_ACK). |
-| [CARO_Telemetry_Path_Reference.md](platform/CARO_Telemetry_Path_Reference.md) | Telemetry path from producer to pixel, stage by stage. |
+| [CARO_MQTT_Spec.md](platform/CARO_MQTT_Spec.md) | MQTT interface spec (ICD): topics, payloads, CMD/CMD_ACK, setpoint re-delivery, handshake; §1.1 says what is built. |
+| [CARO_Telemetry_Path_Reference.md](platform/CARO_Telemetry_Path_Reference.md) | Telemetry path from producer to pixel, stage by stage, plus the outbound command path, config and known gaps. |
 
 **[db/](db/)** — Postgres + TimescaleDB
 | File | What it is |

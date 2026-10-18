@@ -9,7 +9,7 @@
    - HMI → `apps/caro-hmi/CLAUDE.md`
 3. Read platform specs only if the session requires them:
    - DB schema or queries → `Docs/db/CARO_DB_Spec.md`
-   - MQTT message handling → `Docs/platform/CARO_MQTT_Spec.md`
+   - MQTT message handling → `Docs/platform/CARO_MQTT_Spec.md` (wire contract; §1.1 is what's built) and `Docs/platform/CARO_Telemetry_Path_Reference.md` (what the HMI does with each message)
 4. Check `Docs/platform/platform_todo.md` — know what is and isn't built before starting.
 
 Do not read specs you do not need. The handoff and delta files are always sufficient for orientation and planning.
