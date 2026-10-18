@@ -14,7 +14,7 @@ Tag Registry Functional Spec | CARO_MQTT_Spec | CARO_DB_Spec | hmi_widget_spec
 | 2.5 | 2026-04-19 | PM / Claude | §10.0: HmiDataContext extended with `tagPathIndex`; tagPathIndex lifecycle paragraph added. useLiveValue mount-effect optimization documented. Matches perf commits be308f5 and cceb114. |
 | 2.6 | 2026-04-20 | PM / Claude | §10.1, §10.2: WS subscription model updated to reflect level-triggered reconciler (`desiredRef`/`serverRef`, microtask-batched flush, same-tick cancel). Matches perf commit 4977f4f. |
 | 2.7 | 2026-04-20 | PM / Claude | §2, §4, §10.2, §10.3: pre-refactor frontend-state sections rewritten to match `@caro/hmi-context` / `useLiveValue` implementation. Global-store and context-registry concepts removed. Per-tag value shape corrected to `{ value }` only — no quality, timestamp, or module_id. |
-| 2.8 | 2026-10-17 | PM / Claude | Reconciled MQTT/telemetry sections against the implementation: §7 channel table gains a Status column (JSON-only telemetry, handshake not built, no TLS); §8.1 snapshot-on-connect and setpoint re-delivery; §8.2 historian enqueue rules; §8.8 duty-tracked list and `Module_Count` meaning corrected; §8.9 stall sentinel and recovery; §8.10 routing table covers `/commands` and REQUEST_SNAPSHOT; §9 marked not built; §10 transport (plain `ws`, no auth), 8 Hz, reconnect backoff; §10.4 validation and audit status. |
+| 2.8 | 2026-10-17 | PM / Claude | Reconciled against the implementation. New §1.1 Implementation Status; §2/§4 transport and auth status; §4.1 Header and page rendering as built; §4.2 machine configuration rewritten for `PROJECT_ROOT` + `registry.ts`; §5, §6.6, §8.4, §8.7 marked not built; §6.1–§6.5 meta order, TagDef fields and startup-only map; §8.6 no LISTEN/NOTIFY; §11 endpoint status column; §12 retention as built; §12.1 queue instead of WAL; §14 metrics panel, reconnect backoff, TLS status. MQTT/telemetry sections: §7 channel table gains a Status column (JSON-only telemetry, handshake not built, no TLS); §8.1 snapshot-on-connect and setpoint re-delivery; §8.2 historian enqueue rules; §8.8 duty-tracked list and `Module_Count` meaning corrected; §8.9 stall sentinel and recovery; §8.10 routing table covers `/commands` and REQUEST_SNAPSHOT; §9 marked not built; §10 transport (plain `ws`, no auth), 8 Hz, reconnect backoff; §10.4 validation and audit status. |
 
 ---
 
@@ -28,6 +28,26 @@ Intended audience: System architects, embedded firmware engineers, backend/front
 
 Document owner: Product Manager.
 
+### 1.1 Implementation Status (as of 2026-10-17)
+
+This document is the target specification. Large parts of it are not built yet; where the current behaviour differs, it is stated in place. Summary of what exists:
+
+| Area | Status |
+|---|---|
+| Telemetry ingest, LKV cache, watchdog, WebSocket live values | Built (§8, §10). JSON telemetry only — Protobuf is not decoded. |
+| Historian (TimescaleDB writes, CAGs, trend viewer) | Built (§8, §12; trend viewer spec). |
+| Setpoint writes (`POST /tags/write`), module commands, system reset | Built (§8.10, §8.11, §10.4) — no audit rows, no role checks. |
+| `pending_setpoint_values` and setpoint re-delivery | Built (migration 016; CARO_MQTT_Spec §6.3). |
+| HMI tag source, Module_Info / Trend_Info tags, StatsBar | Built (§8.8, §14.1). |
+| Multi-system page trees by `PROJECT_ROOT` | Built (§4.2). |
+| Authentication, sessions, RBAC, WSS (§5) | **Not built** — auth is stubbed; every request runs as a dev supervisor. |
+| Operation modes, mode compliance, out-of-sync latch (§6.6, §8.4) | **Not built**. |
+| Audit log (§8.7, §13) | **Not built** — no `audit_log` table. |
+| Module commissioning and handshake (§9) | **Not built**. |
+| Registry change detection (§8.6) | **Not built** — the tag map is loaded once at startup; apply a registry and restart the HMI server. |
+| Telemetry write-ahead buffer, DATA LOSS RISK warning (§12.1) | **Not built** — an in-memory queue only. |
+| TLS on any channel (§14.3) | **Not built**. |
+
 ---
 
 ## 2. Technology Stack
@@ -38,13 +58,13 @@ The following technology decisions are locked based on proof-of-concept validati
 |---|---|---|
 | Backend runtime | Node.js 18+ / Express | HTTP server, REST API, MQTT subscriber, WebSocket server |
 | Real-time transport | WebSocket (ws library) | Bidirectional streaming between backend and frontend |
-| Telemetry encoding | Protocol Buffers 3 (protobufjs) | Binary encoding for telemetry — significant bandwidth reduction over JSON |
+| Telemetry encoding | Protocol Buffers 3 (protobufjs) — *target*; the backend currently decodes JSON telemetry only (the simulator can encode Protobuf) | Binary encoding for telemetry — significant bandwidth reduction over JSON |
 | MQTT client | MQTT.js | Subscribe to device telemetry; publish commands and thresholds |
 | Database (tag registry) | PostgreSQL | Authoritative tag definitions — read at startup and on change |
 | Database (telemetry) | TimescaleDB | Time-series storage keyed by tag_id |
-| Frontend framework | React 18 | Component-based UI. Shares the @caro/ui package (design tokens and primitives) with the Tag Registry Admin Tool — consistent look and feel across all CARO_Platform tools. |
+| Frontend framework | React 18 (18.3) | Component-based UI. Shares the @caro/ui package (design tokens and primitives) with the Tag Registry Admin Tool — consistent look and feel across all CARO_Platform tools. |
 | State management | React Context (`@caro/hmi-context`) | Tag map and live-value subscriptions via `HmiContextProvider`. Selective re-renders via per-tag callback dispatch in `useLiveValue`. |
-| Build tool | Vite 5+ | Dev server with HMR and production bundler |
+| Build tool | Vite 5+ (6.4 installed) | Dev server with HMR and production bundler |
 | Package manager | npm | Dependency management |
 | Language | TypeScript | All HMI app and shared package code. |
 | Dev tooling | Concurrently + Nodemon | Run backend and frontend simultaneously; auto-reload on change |
@@ -63,10 +83,10 @@ CARO_HMI provides real-time tag monitoring, supervised setpoint delivery to embe
 |---|---|
 | Embedded Devices | Publish telemetry by tag_id via MQTT. Accept setpoint commands by tag_id. Evaluate all safety interlocks and alarms locally. Receive alarm threshold values as setpoint commands. |
 | MQTT Broker | Local broker on trusted LAN. Routes telemetry from devices to backend. Routes commands from backend to devices. TLS required for command channels; telemetry unencrypted on trusted LAN. |
-| Backend Server | Node.js / Express. Subscribes to device telemetry via MQTT. Maintains last-known-value cache keyed by tag_id. Bridges MQTT telemetry to WebSocket clients. Reads tag definitions from PostgreSQL Tag Registry at startup. Writes telemetry to TimescaleDB. Authenticates users and enforces RBAC. |
-| PostgreSQL (Tag Registry) | Authoritative source of all tag definitions. Read by backend at startup and on registry change notification. Schema defined in Tag Registry Functional Spec. |
+| Backend Server | Node.js / Express. Subscribes to device telemetry via MQTT. Maintains last-known-value cache keyed by tag_id. Bridges MQTT telemetry to WebSocket clients. Reads tag definitions from PostgreSQL Tag Registry at startup. Writes telemetry to TimescaleDB. Authenticates users and enforces RBAC (*not built — auth is stubbed*). |
+| PostgreSQL (Tag Registry) | Authoritative source of all tag definitions. Read by backend at startup (*target:* also on registry change notification — not built). Schema defined in Tag Registry Functional Spec. |
 | TimescaleDB | Stores time-series telemetry keyed by tag_id. Supports high-resolution, aggregated, and archived tiers. |
-| Web Frontend | React 18 / Vite web application. Connects via HTTPS REST + WSS. `HmiContextProvider` from `@caro/hmi-context` provides the tag map and live-value subscriptions to all components. Widgets from `@caro/widgets` read live tag values via `useLiveValue(tagId)`. No global store. |
+| Web Frontend | React 18 / Vite web application. Connects via HTTPS REST + WSS (*as built: plain HTTP and `ws://`*). `HmiContextProvider` from `@caro/hmi-context` provides the tag map and live-value subscriptions to all components. Widgets from `@caro/widgets` read live tag values via `useLiveValue(tagId)`. No global store. |
 | Cloud Monitoring (optional) | Read-only forwarding of telemetry to cloud. No write-back or remote control permitted. |
 
 > *NOTE: Network zone separation is required: embedded device network, backend LAN, and optional cloud DMZ must be logically or physically separated.*
@@ -77,72 +97,45 @@ The HMI application is divided into a generic shell and machine-specific content
 
 | Area | Generic / Machine-Specific | Description |
 |---|---|---|
-| Header | Generic | Performance metrics panel, active mode indicator, user info, logout. Always visible. |
+| Header | Generic | *Target:* performance metrics panel, active mode indicator, user info, logout. *As built:* title, a global Reset button (`POST /api/v1/reset`, then a `system-reset` window event) and a badge showing `projectRoot` ("No system configured" when unset). The performance metrics are a separate always-visible `StatsBar` above the content area (§14.1). There is no mode indicator, user info or logout. |
 | Left nav panel | Machine-specific | Navigation tree rendered from the machine config tree.js. Shell renders the tree generically; content is machine-defined. |
 | Main content | Machine-specific | Page component rendered for the selected nav node. Each node has exactly one page component, defined in tree.js. |
-| Page router | Generic | Shell reads the selected node id and renders node.page. No knowledge of page content. |
+| Page router | Generic | Shell reads the selected node id (kept in the URL hash) and renders `<node.page />` with no props. No knowledge of page content. |
 
 > *NOTE: The shell shares the same design tokens, primitives (@caro/ui), and widgets (@caro/widgets) as the Tag Registry Admin Tool — consistent look and feel across all CARO_Platform tools.*
 
 ### 4.2 Machine Configuration
 
-Machine-specific content lives in a configuration folder under `hmi-definitions/`. The active configuration is selected via a single environment variable. Switching machine types requires only a config path change — no shell code changes.
+*Target design (superseded by the as-built model below):* one config folder per machine type, a `tree.js` per folder, and an `HMI_CONFIG` environment variable selecting the active one.
 
-**Folder Structure**
+**As built.** Machine-specific content lives in `apps/caro-hmi/client/src/hmi-definitions/`, one folder per `PROJECT_ROOT` value (`Narya1`, `demo`), plus `shared/` for boxes used across systems. Each system folder has a `tree.ts` exporting `tree: TreeNode[]` and a `pages/` folder (Narya1 also has `boxes/`).
 
 ```
-apps/caro-hmi/
-  hmi-definitions/
-    rf-generator/           ← one folder per machine type
-      tree.js               ← nav tree definition and page imports (authoritative)
-      pages/
-        RFModuleOverview.jsx
-        RFFwdPage.jsx
-        RFRevPage.jsx
-        SystemStatusPage.jsx
-    cooling-system/         ← another machine config
-      tree.js
-      pages/
-      ...
+apps/caro-hmi/client/src/hmi-definitions/
+  registry.ts               ← explicit map: PROJECT_ROOT value → () => import('./<folder>/tree.js')
+  shared/                   ← boxes reused across systems (HmiStatusBox, ModuleStatusBox, PoleBox, SpecABox, …)
+  demo/
+    tree.ts
+    pages/
+  Narya1/
+    tree.ts
+    pages/
+    boxes/
 ```
 
-**tree.js**
-
-The tree.js file is the single source of truth for the machine config. It exports the nav tree array with explicit page component references. Every node — parent and leaf — has its own page component. The tree structure is independent of the Tag Registry hierarchy.
-
-```js
-// hmi-definitions/rf-generator/tree.js
-import { RFModuleOverviewPage } from './pages/RFModuleOverview';
-import { RFFwdPage } from './pages/RFFwdPage';
-import { RFRevPage } from './pages/RFRevPage';
-import { SystemStatusPage } from './pages/SystemStatusPage';
-
-export const tree = [
-  {
-    id: 'rf_module_1',
-    label: 'RF Module 1',
-    page: RFModuleOverviewPage,
-    children: [
-      { id: 'rf_fwd', label: 'RF Forward', page: RFFwdPage },
-      { id: 'rf_rev', label: 'RF Reverse', page: RFRevPage }
-    ]
-  },
-  { id: 'system_status', label: 'System Status', page: SystemStatusPage }
+```ts
+// hmi-definitions/Narya1/tree.ts (abridged)
+export const tree: TreeNode[] = [
+  { id: 'overview', label: 'System Overview', page: SystemOverviewPage },
+  { id: 'rf1',      label: 'RF1',             page: RF1Page },
 ];
 ```
 
-**Environment Config**
-
-```
-# .env
-HMI_CONFIG=hmi-definitions/rf-generator
-```
-
-The HMI shell imports tree.js from the configured path at startup. The shell has no knowledge of page content — it renders node.label in the nav tree and node.page in the main content area.
+There is no `HMI_CONFIG` variable. The server reports `PROJECT_ROOT` (root `.env`) through `GET /api/v1/config`. The client's `Shell` looks it up in `registry.ts` and dynamic-imports that system's tree, so each system is its own code-split chunk. An unregistered or unset root shows the nav tree's "No machine config loaded" state, never a fallback to `demo`. Switching systems means changing `PROJECT_ROOT` and restarting (`Docs/platform/multi_project_runbook.md`). The tree is navigation only; it is independent of the Tag Registry hierarchy.
 
 **Page Components**
 
-Page components are standard React components. They receive the selected tree node as a prop and use `useTagSubtree` (Section 6.6) and widgets (`@caro/widgets`) to compose their content. Pages are entirely machine-specific and live in the hmi-definitions folder.
+Page components are standard React components rendered with no props. They compose shared boxes and widgets (`@caro/widgets`), which locate their tags by asset path (`useResolveAssetPath`, or `useTagSubtree` — Section 6.7). Pages are entirely machine-specific and live in the hmi-definitions folder.
 
 > *NOTE: Pages may use useTagSubtree with any path prefix — the path is not required to match the node's position in the tree. A parent node page may aggregate data from multiple subtrees. A leaf node page may display tags from an unrelated part of the hierarchy. The tree is navigation structure only.*
 
@@ -153,13 +146,15 @@ The client is organized in four layers. Machine-specific code is confined to `hm
 | Layer | Path | Description |
 |---|---|---|
 | Shell | `client/src/shell/` | App chrome — Header (global Reset button), sidebar nav, content area. Generic; no machine-specific knowledge. |
-| Widgets | `@caro/widgets` | Monitoring and setpoint widgets (NumericMon, NumericSet, BooleanMon, BooleanSet, AnalogIn). Each widget self-wraps with an error boundary via the `withErrorBoundary` HOC — page definitions require no explicit error boundary wrappers. |
-| Shared building blocks | `hmi-definitions/shared/` | Reusable layout constants (`styles.ts`) and composite components (RfModuleBox, HmiStatusBox, ModuleStatusBox) built from widgets and shared styles. `ModuleStatusBox` renders `ModuleInfoTable` (WS-driven, §8.8). |
-| Page definitions | `hmi-definitions/<config>/pages/` | Pure layout — compose shared building blocks. No business logic. `OverviewPage` is the current reference implementation. |
+| Widgets | `@caro/widgets` | Monitoring and setpoint widgets (NumericMon, NumericSet, BooleanMon, BooleanSet, AnalogIn, Timer, SpectrumChart). Each widget self-wraps with an error boundary via the `withErrorBoundary` HOC — page definitions require no explicit error boundary wrappers. |
+| Shared building blocks | `hmi-definitions/shared/` | Reusable layout constants (`styles.ts`) and composite boxes (e.g. RfModuleBox, HmiStatusBox, TrendStatusBox, ModuleStatusBox, PoleBox, SpecABox) built from widgets and shared styles. `ModuleStatusBox` renders `ModuleInfoTable` (WS-driven, §8.8). System-specific boxes live in `hmi-definitions/<system>/boxes/` (Narya1). |
+| Page definitions | `hmi-definitions/<system>/pages/` | Pure layout — compose shared building blocks. No business logic. |
 
 ---
 
 ## 5. Authentication and Authorization
+
+*Not built (§1.1). This section is the target design.* As built, `server/src/middleware/auth-stub.ts` attaches `{ user_id: 'dev', username: 'dev', role: 'supervisor' }` to every request, no endpoint checks a role, and the WebSocket accepts every connection.
 
 Authentication is mandatory in all production environments. Role-based access control (RBAC) shall be enforced server-side.
 
@@ -257,44 +252,45 @@ CARO_HMI operates exclusively against tags identified by tag_id. The Tag Registr
 | tag_path | VARCHAR | Human-readable label displayed in dashboards and trend views. Fetched at startup; used for display only — never as an identifier on the wire. |
 | data_type | VARCHAR | Determines input validation and display formatting. Scalar types: `f32`, `i16`, `i32`, `bool`, `string`. Array types: `f32[]`, `i16[]`. Only scalar numeric types (`f32`, `i16`, `i32`, `bool`) are trendable; array types are read-only non-trendable. |
 | is_setpoint | BOOLEAN | If true, tag accepts write commands from Supervisor role. If false, tag is monitor-only. |
-| meta | JSONB | Provenance chain (leaf-to-root). Used to group tags in the UI by hierarchy, display context, and resolve fields (eng_min, eng_max, unit, format) via root-to-leaf resolution (see Section 6.5). |
+| meta | JSONB | Provenance chain, ordered **root-to-leaf** (`meta[0]` is the root level). Used for structure only — the `module` ancestor and `useTagSubtree` node types. Display fields come from the columns below. |
+| tag_name, unit, format, eng_min, eng_max | VARCHAR / DOUBLE | Resolved by the Tag Registry at apply time and read directly; never re-derived from `meta`. |
+| module, module_type | VARCHAR | Module ancestor name and its `Module_Type` (`MQTT` / `HMI`). |
 | trends | BOOLEAN | If true, the tag's values are written to TimescaleDB by the telemetry loop. Used to filter time-series persistence — only tagged trends are stored. |
 
 > *NOTE: The HMI always queries only the latest active (non-retired) version of each tag. The HMI never reads template JSON files directly — only the resolved tag_registry table.*
 
 ### 6.2 tag_id Wire Format
 
-tag_id is transmitted as uint32 in all Protobuf messages and WebSocket traffic. This matches the uint32 field type in the Protobuf schema defined in CARO_MQTT_Spec Appendix A, and the INTEGER column type in the tag_registry table. tag_path is fetched from the Tag Registry at startup and cached in memory for display purposes only — it is never transmitted on the wire.
+tag_id is transmitted as uint32 in all Protobuf messages and as a JSON number in MQTT and WebSocket messages (WebSocket `values` objects key it as a decimal string). This matches the uint32 field type in the Protobuf schema defined in CARO_MQTT_Spec Appendix A, and the INTEGER column type in the tag_registry table. tag_path is fetched from the Tag Registry at startup and cached in memory for display purposes only — it is never transmitted on the wire.
 
 ### 6.3 Tag Groups and Hierarchy
 
-The HMI uses the `meta` JSONB array to reconstruct the tag hierarchy for display purposes. Each entry carries a `type` (template type) and `name` (asset_name), ordered leaf-to-root. The HMI groups tags by their ancestor asset_names to build navigable dashboards without requiring additional configuration.
+Each `meta` entry carries a `type` (template type) and `name` (asset_name), ordered root-to-leaf. *Target:* the HMI groups tags by their ancestor asset_names to build navigable dashboards without additional configuration. *As built:* dashboards are hand-written pages (§4.2); hierarchy is used only through asset-path lookup (`useResolveAssetPath`, `useTagSubtree`).
 
 ### 6.4 Device-Side Tag Identity
 
-Embedded devices publish telemetry and receive commands using tag_id (uint32) directly. Devices are pre-configured with their assigned tag_ids during the module handshake (Section 8). The HMI layer operates exclusively with tag_id and has no knowledge of any device-internal addressing scheme.
+Embedded devices publish telemetry and receive commands using tag_id (uint32) directly. *Target:* devices learn their tag_ids during the module handshake (Section 9). *As built:* the handshake is not implemented; devices use the tag_ids from their generated definitions. The HMI layer operates exclusively with tag_id and has no knowledge of any device-internal addressing scheme.
 
 ### 6.5 Backend In-Memory Tag Map
 
 At startup the backend builds a rich in-memory map keyed by tag_id from the Tag Registry. This map is the primary runtime data structure for all backend operations — command routing, write validation, display labels, and telemetry ingestion. No repeated database queries are needed during normal operation.
 
+As built, each entry is a `TagDef` (`packages/hmi-context/src/types.ts`), built by `server/src/tag-map.ts` from `getActiveTags()`:
+
 | Field | Type | Purpose |
 |---|---|---|
-| tag_id | uint32 | Map key. Primary identifier for all operations. |
-| tag_path | VARCHAR | Display label for frontend. Never used as identifier on the wire. |
-| module_id | string | MQTT module_id derived from the module asset_name in the meta column. Used to route commands to the correct `caro/{module_id}/cmd` topic. |
-| module_type | string | Module transport type (`'MQTT'` or `'HMI'`). Sourced from tag_registry.module_type column, default `'MQTT'`. Used by POST /tags/write to reject writes to non-MQTT modules. |
-| data_type | string | Value type (f32, bool). Used for write validation and Protobuf encoding. |
-| is_setpoint | boolean | If true, tag accepts SET_VALUES commands (via useTagWriter). If false, write attempts are rejected with NOT_AUTHORIZED. |
-| eng_min / eng_max | number | Engineering limits. Reserved for future server-side OUT_OF_RANGE pre-validation before commands are sent to devices. |
-| meta | array | Full provenance chain. Available for hierarchy grouping and display context. |
-| trends | boolean | Whether this tag's values are written to TimescaleDB on each telemetry tick. Sourced from tag_registry.trends column. |
+| tag_id | number | Map key. Primary identifier for all operations. |
+| tag_path | string | Asset path; used for display and asset-path lookup, never as a wire identifier. |
+| tag_name | string \| null | Resolved display name (Tag Registry `In_Tag_Name` rule). |
+| module_id | string | `name` of the `meta` level whose `type` is `'module'`; `'unknown'` if none. Routes commands to `caro/{module_id}/cmd`. |
+| module_type | string | `tag_registry.module_type`, defaulting to `'MQTT'` when null. `CmdController` routes writes and commands on it (MQTT → broker, HMI → HmiTagSource, other → `MODULE_TYPE_NOT_SUPPORTED`). |
+| data_type | string | Any `tag_types` value. Not used to validate writes today. |
+| is_setpoint | boolean | `POST /tags/write` rejects non-setpoints with `TAG_NOT_WRITABLE`. |
+| trendable | boolean | `tag_registry.trends`. Selects historian writes and trend subscriptions. |
+| eng_min / eng_max / unit / format | number / string \| null | From the registry columns. eng limits are not enforced server-side. |
+| meta | array | Full provenance chain, root-to-leaf. |
 
-> *NOTE: The module_id for each tag is resolved by walking the tag's meta array and finding the entry where `type === 'module'`. The `name` field of that entry is the module_id. This requires every tag to have exactly one module ancestor — enforced by the VALIDATE_REQUIRED_PARENT_TYPES rule in the Tag Registry (see Section 8.1).*
-
-**Meta field resolution rule:** Fields `eng_min`, `eng_max`, `unit`, and `format` are resolved by walking the `meta` array from root (meta[0]) to leaf (meta[last]). The first level containing the field wins. If no level contains the field, a default is used (null for eng_min/eng_max/unit, `2` for format decimal places). This is implemented in `tag-map.ts getMetaField()`.
-
-The in-memory map is rebuilt whenever the backend detects a new Tag Registry revision has been applied by the Tag Registry Admin Tool.
+The map is built once at startup. It is not rebuilt when a new Tag Registry revision is applied; restart the HMI server after an apply.
 
 ### 6.6 Operation Modes
 
@@ -303,6 +299,8 @@ An operation mode is a named, revision-controlled snapshot of setpoint values fo
 Modes are revision-controlled: each mode has a linear revision history. A new mode may be created by cloning any existing revision of any mode. All setpoint changes performed by a Supervisor are first applied to devices in real time via the pending workflow (Section 5.2) and are permanently stored only when the Supervisor explicitly chooses a target mode and revision at save time.
 
 The current active mode name and revision number are maintained as a system-wide backend state value, sent to frontend clients via WebSocket on connect and on mode change. This allows the frontend to display a status such as 'Currently running: Production-HighSpeed v3' without per-tag tracking in the in-memory map.
+
+*Not built (§1.1) — no mode tables, endpoints or UI exist. Sections 6.6.1–6.6.3 are the target design.*
 
 #### 6.6.1 Data Model
 
@@ -458,6 +456,9 @@ When a WebSocket client sends a SUBSCRIBE message, the backend immediately respo
 
 ### 8.4 Mode Compliance State
 
+
+*Not built (§1.1). This section is the target design.*
+
 The backend maintains a `mode_compliance_state` for the active mode revision. This state is displayed in the HMI header alongside the active mode name.
 
 | State | Meaning |
@@ -487,6 +488,8 @@ OUT_OF_SYNC latches on the first good→bad transition and does not re-trigger f
 
 ### 8.5 Command Failure Handling
 
+*Target design; as built there is no audit_log and no status lifecycle — `CmdController` waits 1 s for the CMD_ACK, returns the per-tag results to the caller, and upserts accepted values into `pending_setpoint_values` (CARO_MQTT_Spec §6.2–§6.3).*
+
 Every setpoint write attempt is fully recorded in audit_log via two append-only rows sharing a command_id. The `pending_setpoint_values` table is a clean working-state table only — it contains no command lifecycle fields. Outcome tracking is the exclusive responsibility of audit_log.
 
 | Status | Meaning |
@@ -505,11 +508,13 @@ On backend restart: in-flight commands have no DB state to clean up (pending_set
 
 ### 8.6 Tag Registry Load
 
-On startup the backend loads the full active tag registry from PostgreSQL (`SELECT tag_id, tag_path, data_type, is_setpoint, meta FROM tag_registry WHERE retired = false` using DISTINCT ON to get the latest revision per tag_id). This map is held in memory and used to: validate incoming tag_ids, populate display labels for WebSocket clients, and determine which tags are writable.
+On startup the backend loads the full active tag registry from PostgreSQL via `@caro/db` `getActiveTags()` (DISTINCT ON the latest row per tag_id, non-retired; all columns including module, module_type, trends, tag_name and the display columns). This map is held in memory and used to: validate incoming tag_ids, populate display labels for WebSocket clients, and determine which tags are writable.
 
-> *NOTE: The backend detects Tag Registry changes via PostgreSQL LISTEN/NOTIFY — the Tag Registry Admin Tool fires NOTIFY registry_changes after each apply. However the backend does NOT auto-reload on notification. Auto-reload is unsafe during active device handshakes. Instead the backend displays a persistent HMI warning: 'Tag Registry has been updated — restart backend to apply changes.' An Administrator performs a controlled restart at an appropriate time.*
+> *NOTE: Target design — not built. Nothing in the code issues LISTEN or NOTIFY, and no warning is shown; the backend simply keeps the registry it loaded at startup.* The backend detects Tag Registry changes via PostgreSQL LISTEN/NOTIFY — the Tag Registry Admin Tool fires NOTIFY registry_changes after each apply. However the backend does NOT auto-reload on notification. Auto-reload is unsafe during active device handshakes. Instead the backend displays a persistent HMI warning: 'Tag Registry has been updated — restart backend to apply changes.' An Administrator performs a controlled restart at an appropriate time.*
 
 ### 8.7 Audit Log
+
+*Not built (§1.1) — there is no audit_log table and nothing writes audit rows. Sections 8.7.1–8.7.3 are the target design.*
 
 The `audit_log` table (CARO_DB_Spec Section 10) is the authoritative record of all user-initiated and system-initiated events. It is append-only and immutable — rows are never updated or deleted. Full schema is defined in CARO_DB_Spec.
 
@@ -585,7 +590,7 @@ The snapshot call itself runs outside `track()` so it does not inflate the windo
 |---|---|---|
 | `Module_Info.Module_Count` | `i16` | Number of module groups in the tag map (every distinct module_id, including the HMI module), set once at startup. Used by `ModuleInfoTable` for mismatch detection. |
 | `Module_Info.Status` | `i16[]` | Per-module `ModuleStatus` enum value (UNKNOWN=0, OK=1, WARNING=2, FAULT=3, STALLED=4). |
-| `Module_Info.Data_Rate` | `f32[]` | Per-module bytes/s in the last measurement window. |
+| `Module_Info.Data_Rate` | `f32[]` | Per-module KB/s (bytes ÷ 1024) in the last 1 s window. Bytes are measured as the length of the re-serialised JSON message, not the wire payload. |
 | `Module_Info.Pkg_Rate` | `f32[]` | Per-module packets/s in the last measurement window. |
 | `Module_Info.Tags_Per_Pkg` | `i16[]` | Per-module tag count from the most recent telemetry packet. |
 | `Module_Info.Watchdog` | `i16[]` | Per-module packed-bit watchdog flags. Bit `i` (LSB-first) = 1 if module `i` has a latched watchdog timeout. 16 flags per `i16` word. |
@@ -732,20 +737,26 @@ Setpoint writes go through the REST API, not WebSocket. The endpoint accepts one
 
 All REST endpoints shall be prefixed with `/api/v1/` to support future versioning.
 
-| Endpoint Group | Methods | Description |
-|---|---|---|
-| Authentication | POST | POST /auth/login, /auth/logout, /auth/verify-mfa. Refresh not required — sessions extended automatically on activity. |
-| Tag Registry | GET | Query active tags, tag metadata, tag hierarchy from the registry. Read-only. |
-| Current Values | GET | Read current value of one or more tags by tag_id from the LKV cache. |
-| Setpoints | POST | POST /tags/write — write one or more setpoint tag_id/value pairs as an array. Backend fans out one SET_VALUES MQTT command per device. Pre-flight validation; partial device failures reported per tag via WebSocket. |
-| Trends | GET | Query time-series data by tag_id (time range, resolution, aggregation level). |
-| Audit Logs | GET | Query audit records (filters: user, tag_id, event type, time range). |
-| Operation Modes | GET / POST | GET /modes — list modes and latest revision. GET /modes/{mode_id}/revisions — revision history. POST /modes — create new mode (clone optional). POST /modes/{mode_id}/save — save current pending values to a chosen revision (Supervisor + MFA). POST /modes/{revision_id}/activate — activate a revision (Supervisor + MFA). |
-| Device Status | GET | Query online/offline/fault status of connected devices (Administrator only). |
+| Endpoint Group | Methods | Description | Status |
+|---|---|---|---|
+| Authentication | POST | POST /auth/login, /auth/logout, /auth/verify-mfa. Refresh not required — sessions extended automatically on activity. | Not built |
+| Tag Registry | GET | `GET /tags` (full tag map), `GET /tags/trendable`. Read-only. Single-tag and hierarchy queries are target design. | Partly built |
+| Current Values | GET | Read current value of one or more tags by tag_id from the LKV cache. | Not built (values are WebSocket-only) |
+| Setpoints | POST | POST /tags/write — write one or more setpoint tag_id/value pairs as an array. Backend fans out one SET_VALUES MQTT command per device. Pre-flight validation; per-tag outcome returned in the HTTP response once each device ACKs or times out. | Built |
+| Commands / Reset | POST | `POST /commands` (one module, any command string), `POST /reset` (watchdog latch clear + RESET to all modules). | Built |
+| Config | GET | `GET /config` → `{ projectRoot }`. | Built |
+| Trends | GET | `GET /trends/tile`, `GET /trends/extent` (trend viewer spec §6). | Built |
+| Audit Logs | GET | Query audit records (filters: user, tag_id, event type, time range). | Not built |
+| Operation Modes | GET / POST | GET /modes — list modes and latest revision. GET /modes/{mode_id}/revisions — revision history. POST /modes — create new mode (clone optional). POST /modes/{mode_id}/save — save current pending values to a chosen revision (Supervisor + MFA). POST /modes/{revision_id}/activate — activate a revision (Supervisor + MFA). | Not built |
+| Device Status | GET | Query online/offline/fault status of connected devices (Administrator only). | Not built (module status is published as `Module_Info.*` tags instead) |
+
+Contracts for the built endpoints: `hmi_API_spec.md` (its §1.1 lists them).
 
 ---
 
 ## 12. Time-Series Data Retention
+
+*Target tiers:*
 
 | Tier | Resolution | Retention | Storage |
 |---|---|---|---|
@@ -754,11 +765,23 @@ All REST endpoints shall be prefixed with `/api/v1/` to support future versionin
 | Long-term archive | 1 sample/10 sec | Months 6–12 | TimescaleDB or cold storage |
 | Manual archive | N/A | Beyond 1 year | Manual database backup; restore on request |
 
+*As built* (retention policies in `db/timescale/migrations/`):
+
+| Table | Content | Retention |
+|---|---|---|
+| `tag_samples` | Raw change-of-value samples (plus ≥1 snapshot row per tag per minute) | 14 days |
+| `tag_samples_1s_cagg` | 1 s buckets (last / min / max / null_count) | 14 days |
+| `tag_samples_10s_cagg` | 10 s buckets | 90 days |
+| `tag_samples_1min_cagg` | 1 min buckets | 365 days |
+| `tag_samples_10min_cagg` | 10 min buckets | No retention policy (kept indefinitely) |
+
+Raw chunks compress after 10 minutes. Details: `Docs/db/DB_Config_Usage_And_Perf.md`.
+
 ### 12.1 Backup and Failure Policy
 
-- Daily backup for both TimescaleDB and PostgreSQL; minimum 30-day backup retention.
-- Backend shall implement a local write-ahead buffer for telemetry during DB unavailability (minimum: 1 hour at maximum ingestion rate).
-- If WAL buffer fills, HMI shall display a DATA LOSS RISK warning.
+- Daily backup for both TimescaleDB and PostgreSQL; minimum 30-day backup retention. *(Operational; nothing in the repo schedules backups.)*
+- Backend shall implement a local write-ahead buffer for telemetry during DB unavailability (minimum: 1 hour at maximum ingestion rate). *As built:* `DbPipeline` holds at most `TIMESCALE_DB_QUEUE_MAX` (5000) entries in memory and drops the oldest when full; nothing is persisted locally. If TimescaleDB is unreachable at startup, samples go to `NullDbWriter` (discarded) until `HistorianReconnector` connects.
+- If WAL buffer fills, HMI shall display a DATA LOSS RISK warning. *As built:* no warning is displayed; drops are counted in the `Trend_Info.Dropped_Pkgs` tag and logged to the server console.
 - Recovery procedures shall be documented before production deployment.
 
 ---
@@ -777,9 +800,9 @@ See Section 8.7 for full audit log specification.
 - REST API read endpoints shall respond within 200 ms for current-state queries.
 - Frontend shall sustain 60 FPS rendering with up to 500 active tags updating at 10 Hz.
 - WebSocket snapshot delivery on client subscribe shall complete within 1 second for up to 10,000 active tags.
-- Protobuf encoding is required for telemetry in production. No JSON fallback for telemetry channels.
+- Protobuf encoding is required for telemetry in production. No JSON fallback for telemetry channels. *As built: the reverse — JSON is the only telemetry encoding the backend accepts.*
 - Delta-only WebSocket messages shall be the default — full snapshots only on connect, reconnect, or new subscription.
-- The HMI shall display a live performance metrics panel showing: number of registered tags, WebSocket updates/sec, render FPS, active subscriptions, WebSocket latency (ms), and data rate (KB/s). Always visible as a runtime health indicator.
+- The HMI shall display a live performance metrics panel showing: number of registered tags, WebSocket updates/sec, render FPS, active subscriptions, WebSocket latency (ms), and data rate (KB/s). Always visible as a runtime health indicator. *As built* (`client/src/shell/StatsBar.tsx`): connection state, Latency, Render (FPS), Rate (WebSocket messages/s), Data Rate (KB/s), Subscribed (tag count), and Svr CPU (`HMI.Telemetry_CPU`). The registered-tag count is not shown.
 
 > *NOTE: The performance metrics panel is validated by the HMI_Test_1 proof-of-concept. Implementation should reuse the Metrics and StatusBar component patterns from that project.*
 
@@ -787,13 +810,13 @@ See Section 8.7 for full audit log specification.
 
 - Local backend services: target 99.5% availability during scheduled machine operation hours.
 - Loss of cloud connectivity shall not affect local operation.
-- WebSocket client auto-reconnects after 3-second backoff on connection drop.
+- WebSocket client auto-reconnects on connection drop. *As built:* exponential backoff starting at 1 s, doubling per failed attempt, capped at 30 s.
 - Database backup policy and telemetry write-ahead buffer requirements are defined in CARO_DB_Spec Section 10.
 
 ### 14.3 Security
 
-- All frontend-backend communication shall use TLS 1.2 or higher.
-- MQTT command and ack channels shall use TLS. Telemetry channels are unencrypted on trusted LAN.
+- All frontend-backend communication shall use TLS 1.2 or higher. *Not built — plain HTTP and `ws://`.*
+- MQTT command and ack channels shall use TLS. Telemetry channels are unencrypted on trusted LAN. *Not built — no TLS on any MQTT channel.*
 - Secrets shall not be stored in plaintext in source code or configuration files.
 - Network zone separation is required between device network, backend LAN, and optional cloud DMZ.
 

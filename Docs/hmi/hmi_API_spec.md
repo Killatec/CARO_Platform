@@ -16,7 +16,7 @@ hmi_functional_spec | CARO_MQTT_Spec | Tag Registry Functional Spec | CARO_DB_Sp
 | 1.3 | 2026-03-26 | PM / Claude | Rate limiting defaults added: 100 req/min read, 20 req/min write, both configurable (OI-02 closed). Idempotency note added: write retries are safe — telemetry loop resolves ambiguity. command_id correlation via WebSocket not required — out-of-sync detection handles outcome visibility. |
 | 1.4 | 2026-03-28 | PM / Claude | Audit log endpoint updated: tag.write split into tag.write.request and tag.write.outcome (two-row pattern with shared command_id); tag.sync.lost and tag.sync.reset added; comment no longer required on tag writes (mode save only). Sync reset endpoint added: POST /api/v1/tags/{tag_id}/sync-reset. PENDING_TABLE_EMPTY error code updated: no longer references cmd_status. |
 | 1.5 | 2026-04-14 | PM / Claude | POST /tags/write: `comment` field changed from required to optional for individual tag writes. The HMI client sends a default value but the field is not validated as required. `comment` remains required only for mode save operations (Section 8, POST /modes/{mode_id}/save). |
-| 2.1 | 2026-10-17 | PM / Claude | Reconciled against the implementation. Section 5: `POST /tags/write` response shape corrected to the built `{ devices: [{ module_id, command_id, results }] }`; validation codes as built. Section 11: transport as built (plain `ws://{host}/ws`, no session check), MODE_CHANGED marked not built, PING/PONG payloads, SUBSCRIBE semantics, TREND_DELTA sample semantics and value types. |
+| 2.1 | 2026-10-17 | PM / Claude | Reconciled against the implementation. New §1.1 Implementation Status (built endpoint list; auth stubbed; §3, §6, §8–§10 not built). §2.3/§2.4 marked target design. §4 `GET /tags` as built (no filtering, full TagDef, fixed pagination). New §5.3 `POST /reset`. §7 dispatch rule as built (raw-vs-bucketed by window size, `tag_samples` source, `committedThroughTs`, `min`/`max`, `prev`; no trendable check). §12 split into emitted vs target codes; `COMMAND_REJECTED` returns 500. Section 5: `POST /tags/write` response shape corrected to the built `{ devices: [{ module_id, command_id, results }] }`; validation codes as built. Section 11: transport as built (plain `ws://{host}/ws`, no session check), MODE_CHANGED marked not built, PING/PONG payloads, SUBSCRIBE semantics, TREND_DELTA sample semantics and value types. |
 | 2.0 | 2026-09-22 | PM / Claude | Section 5.2 added: GET /api/v1/config — runtime `projectRoot` for multi-system client page-tree selection and localStorage namespacing. No auth check; `databaseName` deliberately omitted (unlike Tag Registry's `/config`). |
 | 1.9 | 2026-06-02 | PM / Claude | Section 5.1 added: POST /api/v1/commands — module-type-agnostic command send. MQTT dispatches with CMD_ACK await (1s timeout). HMI dispatches RESET only; other cmd_str values return 400. Error codes added: VALIDATION_ERROR, COMMAND_NOT_SUPPORTED, COMMAND_REJECTED, TIMEOUT. |
 | 1.8 | 2026-05-26 | PM / Claude | Section 7 tile response: `responseTailTs` renamed `committedThroughTs` on both raw and aggregate responses. Field now carries the `DbPipeline` monotonic watermark rather than a wall-clock timestamp; client uses it directly as the ring trim threshold (no −1000 ms offset). |
@@ -30,6 +30,23 @@ hmi_functional_spec | CARO_MQTT_Spec | Tag Registry Functional Spec | CARO_DB_Sp
 This document defines the REST API contract between the CARO_HMI React frontend and the Node.js/Express backend. All endpoints are prefixed with `/api/v1`. All request and response bodies are JSON. All timestamps are ISO 8601 UTC strings.
 
 Real-time tag values are delivered exclusively via WebSocket (see Section 11). There is no REST endpoint for reading current tag values.
+
+### 1.1 Implementation Status (as of 2026-10-17)
+
+This document mixes the built API with the target design. The server (`apps/caro-hmi/server/src/app.ts`) mounts only these endpoints:
+
+| Endpoint | Section |
+|---|---|
+| `GET /api/v1/config` | 5.2 |
+| `GET /api/v1/tags` | 4 (behaviour differs — see there) |
+| `GET /api/v1/tags/trendable` | 7 |
+| `POST /api/v1/tags/write` | 5 |
+| `POST /api/v1/commands` | 5.1 |
+| `POST /api/v1/reset` | 5.3 |
+| `GET /api/v1/trends/tile`, `GET /api/v1/trends/extent` | 7 |
+| WebSocket `/ws` | 11 |
+
+Everything else here is **specified but not built**: authentication (§3), `GET /tags/{tag_id}`, `GET /tags/hierarchy`, `POST /tags/{tag_id}/sync-reset`, audit (§6), operation modes (§8), device status (§9), commissioned modules (§10), and the `MODE_CHANGED` WebSocket message. Auth is stubbed: `middleware/auth-stub.ts` attaches `{ user_id: 'dev', username: 'dev', role: 'supervisor' }` to every request, so no endpoint returns 401 or 403 and role requirements are not enforced.
 
 ---
 
@@ -61,11 +78,11 @@ Real-time tag values are delivered exclusively via WebSocket (see Section 11). T
 
 ### 2.3 Authentication
 
-All endpoints except `POST /auth/login` and `POST /auth/verify-mfa` require a valid `caro_sid` session cookie. Requests without a valid session return 401. The cookie is httpOnly, Secure, SameSite=Strict — sent automatically by the browser on every request and WSS upgrade.
+*Target design — not built (§1.1).* All endpoints except `POST /auth/login` and `POST /auth/verify-mfa` require a valid `caro_sid` session cookie. Requests without a valid session return 401. The cookie is httpOnly, Secure, SameSite=Strict — sent automatically by the browser on every request and WSS upgrade.
 
 ### 2.4 Pagination
 
-Paginated endpoints accept `page` (default: 1) and `page_size` (default: 50, max: 200) query parameters. Responses include:
+*Target design.* Paginated endpoints accept `page` (default: 1) and `page_size` (default: 50, max: 200) query parameters. No built endpoint paginates; `GET /tags` returns a fixed one-page block (§4). Responses include:
 
 ```json
 "pagination": { "page": 1, "page_size": 50, "total": 342, "total_pages": 7 }
@@ -83,6 +100,8 @@ Paginated endpoints accept `page` (default: 1) and `page_size` (default: 50, max
 ---
 
 ## 3. Authentication Endpoints
+
+*Not built (§1.1). This section is the target design.*
 
 See hmi_functional_spec Section 5.4 for full session and MFA implementation details.
 
@@ -167,9 +186,11 @@ List all active tags
 
 *Required role: ALL*
 
-Query parameters: `module_id` (string, optional), `is_setpoint` (boolean, optional), `page`, `page_size`.
+Query parameters (target design): `module_id` (string, optional), `is_setpoint` (boolean, optional), `page`, `page_size`.
 
-Response:
+**As built:** all query parameters are ignored. The response is every tag in the server's in-memory tag map (loaded once at startup — a registry apply needs a server restart), each a full `TagDef`: `tag_id, tag_path, tag_name, data_type, is_setpoint, trendable, module_id, module_type, eng_min, eng_max, unit, format, meta`. `pagination` is always `{ page: 1, page_size: <total>, total: <total>, total_pages: 1 }`. The browser client calls this once on load (`HmiContextProvider`).
+
+Target response:
 ```json
 {
   "ok": true,
@@ -190,7 +211,7 @@ Response:
 ```
 
 ### GET /api/v1/tags/{tag_id}
-Get a single tag definition
+*Not built.* Get a single tag definition
 
 *Required role: ALL*
 
@@ -199,6 +220,7 @@ Get a single tag definition
 ```
 
 ### GET /api/v1/tags/hierarchy
+*Not built.*
 Get tags grouped by device and hierarchy
 
 *Required role: ALL*
@@ -286,6 +308,7 @@ Partial validation failure response (some tags invalid before any MQTT command i
 > *NOTE: All tags are validated before any MQTT command is sent. A validation failure returns 422 and no commands are issued. `TYPE_MISMATCH` is returned only for a value that is not a number, boolean or numeric string (detail: `{ tag_id, code, message }`). Device-side rejections arrive synchronously in `results` (above), not over the WebSocket.*
 
 ### POST /api/v1/tags/{tag_id}/sync-reset
+*Not built* (the out-of-sync latch does not exist yet).
 
 *Required role: ALL (any logged-in user)*
 
@@ -318,7 +341,9 @@ Success response:
 { "ok": true, "data": { "module_id": "Pole", "cmd_str": "RESET" } }
 ```
 
-**MQTT dispatch:** Publishes `{ command_id, command_type: cmd_str, ts_utc_ms, payload: {} }` to `caro/{module_id}/cmd` and awaits a CMD_ACK with a 1-second timeout. Resolves on empty or all-accepted results. Rejects with `COMMAND_REJECTED` if any ACK result has `accepted: false`. Rejects with `TIMEOUT` (504) if no ACK arrives within 1 second.
+**MQTT dispatch:** Publishes `{ command_id, command_type: cmd_str, ts_utc_ms, payload: {} }` to `caro/{module_id}/cmd` and awaits a CMD_ACK with a 1-second timeout. Resolves on empty or all-accepted results. Rejects with `COMMAND_REJECTED` if the ACK carries an `error` field or any `accepted: false` result — returned as HTTP **500**, because the error is thrown without a status. Rejects with `TIMEOUT` (504) if no ACK arrives within 1 second. `cmd_str` is not validated against any list; it is forwarded as the MQTT `command_type`.
+
+**Other module types:** a `module_id` whose module_type is neither MQTT nor HMI — or that isn't in the tag map at all — resolves without doing anything, so the response is 200.
 
 **HMI dispatch:** Only `cmd_str = "RESET"` is supported — calls `hmiTagSource.reset()` and returns immediately. Any other `cmd_str` targeting an HMI module returns 400 `COMMAND_NOT_SUPPORTED`.
 
@@ -351,7 +376,26 @@ Unlike Tag Registry's `/config`, this endpoint deliberately serves `projectRoot`
 
 ---
 
+## 5.3 System Reset
+
+### POST /api/v1/reset
+
+*No role check (auth stubbed).* No request body.
+
+Fires every handler registered on the server's `ResetBus`, in registration order:
+
+1. `watchdog` — `TelemetryIntake.resetAllWatchdogs()`: clears the latched watchdog flag of every module heard from within the watchdog timeout.
+2. `module-reset` — `CmdController.sendResetAll()`: a fire-and-forget `RESET` command to every MQTT module, and `HmiTagSource.reset()` (increments `Reset_Count`) for the HMI module.
+
+```json
+{ "ok": true, "data": { "reset": ["watchdog", "module-reset"] } }
+```
+
+---
+
 ## 6. Audit Log
+
+*Not built (§1.1). This section is the target design.*
 
 ### GET /api/v1/audit
 Query audit log
@@ -434,9 +478,21 @@ Query parameters:
 | `end_time` | integer (ms since epoch) | required; must be > start_time |
 | `bucket_count` | integer | required; 1..2500 |
 
-The server internally derives `bucketS = (end_time - start_time) / (bucket_count × 1000)` for dispatch purposes: `< 1.0` → raw `tag_samples`; `< 16` → `1s_cagg`; `< 160` → `10s_cagg`; `< 1600` → `1min_cagg`; else → `10min_cagg`. Each source is queried with watermark-aware fall-through — if `end_time` is past the source's materialization watermark, the trailing portion is served from the next-finer source and `source: 'mixed'` is returned.
+Dispatch is done in `@caro/db` `getTrendTile` (`packages/db/timescale/trends.ts`) in two steps:
 
-Raw response (`bucketS < 1.0` — COV samples, irregular timestamps):
+1. **Raw or bucketed.** The worst-case point count is `(end_time − start_time) in seconds × 10` (`SAMPLE_RATE_HZ`). If that is ≤ `bucket_count`, the response is **raw** change-of-value samples (`source: 'raw'`). Otherwise it is bucketed.
+2. **Bucketed source.** `bucketSMs = round((end_time − start_time) / bucket_count)`, `bucketS = bucketSMs / 1000`, which must be in `(0, 14746]` or the request fails with `INVALID_BUCKET_S`. The source is picked by `bucketS`:
+   - `< 1` → `tag_samples` (gap-filled buckets computed from the raw table);
+   - `< 16` → `1s_cagg`;
+   - `< 160` → `10s_cagg`;
+   - `< 1600` → `1min_cagg`;
+   - else → `10min_cagg`.
+
+   Each CAG is queried with watermark-aware fall-through: if `end_time` is past the CAG's materialization watermark, the trailing portion is served from the next-finer source and `source: 'mixed'` is returned.
+
+Full design: `Docs/hmi/trend-viewer/hmi_trend_viewer_spec.md` §6.3.
+
+Raw response (COV samples, irregular timestamps):
 ```json
 {
   "ok": true,
@@ -444,14 +500,15 @@ Raw response (`bucketS < 1.0` — COV samples, irregular timestamps):
     "source": "raw",
     "startTime": 1776864000000,
     "endTime": 1776864480000,
+    "committedThroughTs": 1776864479500,
     "series": [
-      { "tagId": 42, "ts": [1776864001234, 1776864003445], "value": [1.9, 1.8] }
+      { "tagId": 42, "ts": [1776864001234, 1776864003445], "value": [1.9, 1.8], "prev": { "ts": 1776863998000, "value": 2.0 } }
     ]
   }
 }
 ```
 
-Aggregate response (`bucketS ≥ 1.0` — regular bucket grid):
+Aggregate response (regular bucket grid):
 ```json
 {
   "ok": true,
@@ -461,20 +518,21 @@ Aggregate response (`bucketS ≥ 1.0` — regular bucket grid):
     "endTime": 1776864480000,
     "bucketSMs": 1920,
     "n": 500,
+    "committedThroughTs": 1776864479500,
     "series": [
-      { "tagId": 42, "value": [1.9, 1.8, null, 2.0] }
+      { "tagId": 42, "value": [1.9, 1.8, null, 2.0], "min": [1.7, 1.8, null, 1.9], "max": [2.0, 1.9, null, 2.1] }
     ]
   }
 }
 ```
 
-`source` is one of `'raw'`, `'1s_cagg'`, `'10s_cagg'`, `'1min_cagg'`, `'10min_cagg'`, or `'mixed'`. `bucketSMs` is the bucket width in **integer milliseconds** (`Math.round(spanMs / bucketCount)` — always an integer). `n` is the actual row count — equals `bucket_count` for aligned requests, `bucket_count + 1` for unaligned. `null` in a value array represents a null-quality sample or a gap bucket. `startTime` / `endTime` are serialized as plain numbers (safe within `Number.MAX_SAFE_INTEGER`).
+`source` is one of `'raw'`, `'tag_samples'`, `'1s_cagg'`, `'10s_cagg'`, `'1min_cagg'`, `'10min_cagg'`, or `'mixed'`. `committedThroughTs` is the server's historian commit watermark (`DbPipeline.committedThroughMs`, or `Date.now()` before the first flush); aggregate buckets after it are returned as `null`. Raw series carry an optional `prev` — the last sample before `start_time` (looked back at most 5 minutes) — for drawing the line into the window. `bucketSMs` is the bucket width in **integer milliseconds** (`Math.round(spanMs / bucketCount)` — always an integer). `n` is the actual row count — equals `bucket_count` for aligned requests, `bucket_count + 1` for unaligned. `null` in a value array represents a null-quality sample or a gap bucket. `startTime` / `endTime` are serialized as plain numbers (safe within `Number.MAX_SAFE_INTEGER`).
 
 Validation errors:
 
 | Code | Trigger |
 |---|---|
-| `INVALID_TAG_IDS` | Empty list, count > 8, non-integer IDs, or ID outside the trendable set |
+| `INVALID_TAG_IDS` | Empty list, count > 8, or a non-integer / non-positive ID. Whether the ID exists or is trendable is **not** checked; an unknown tag ID gets a series with no data (raw: empty arrays; aggregate: every bucket `null`) rather than an error. |
 | `INVALID_RANGE` | `end_time ≤ start_time` or either timestamp is non-positive |
 | `INVALID_BUCKET_COUNT` | `bucket_count` outside 1..2500 or non-integer |
 | `INVALID_BUCKET_S` | Derived `bucketS` (internal float seconds) outside (0, MAX_BUCKET_S] (= (0, 14746]) — validated at route level before the DB call; normal clients never trigger this because the trend viewer clamps viewport span client-side |
@@ -519,11 +577,13 @@ Response:
 }
 ```
 
-The server filters the in-memory tag map by the `trendableTagIds` set (built at startup from the tag registry `is_trendable` flag). Used by the perf test page to discover tag IDs for sweep runs.
+The server filters the in-memory tag map by the `trendableTagIds` set (built at startup from the tag registry's `trends` column). Used by the perf test page to discover tag IDs for sweep runs.
 
 ---
 
 ## 8. Operation Modes
+
+*Not built (§1.1). This section is the target design.*
 
 ### GET /api/v1/modes
 List all operation modes with latest revision
@@ -660,6 +720,8 @@ Responses:
 
 ## 9. Device Status
 
+*Not built (§1.1). This section is the target design.*
+
 ### GET /api/v1/devices
 List commissioned devices and current status
 
@@ -679,6 +741,8 @@ List commissioned devices and current status
 ---
 
 ## 10. Commissioned Modules
+
+*Not built (§1.1). This section is the target design.*
 
 ### GET /api/v1/modules
 List commissioned module instances
@@ -799,35 +863,27 @@ MODE_CHANGED payload:
 
 ## 12. Error Code Reference
 
-| Code | HTTP | Description |
-|---|---|---|
-| INVALID_CREDENTIALS | 401 | Username or password incorrect. |
-| INVALID_MFA_CODE | 401 | TOTP code invalid or expired. |
-| ACCOUNT_LOCKED | 401 | Account locked after repeated failures. |
-| SESSION_EXPIRED | 401 | Session has expired — redirect to login. |
-| FORBIDDEN | 403 | Authenticated but role insufficient. |
-| TAG_NOT_FOUND | 404 | tag_id does not exist in the active registry. |
-| TAG_NOT_WRITABLE | 422 | Tag exists but is_setpoint = false. |
-| WRITE_VALIDATION_FAILED | 422 | One or more tags in a batch write failed validation. No MQTT commands issued. See details array. |
-| TYPE_MISMATCH | 422 | Value type does not match tag data_type. |
-| MODE_NOT_FOUND | 404 | mode_id does not exist. |
-| REVISION_NOT_FOUND | 404 | revision_id does not exist. |
-| REVISION_IMMUTABLE | 409 | Revision already activated — cannot be modified. |
-| ALREADY_ACTIVE | 409 | Revision is already the active revision. |
-| ALREADY_VALIDATED | 409 | Module is already validated. |
-| DEVICE_NOT_READY | 422 | Device offline or handshake not completed. |
-| INVALID_CHALLENGE_TOKEN | 401 | Save-time MFA token missing, invalid, or expired. |
-| PENDING_TABLE_EMPTY | 422 | No rows in pending_setpoint_values to promote. |
-| INVALID_TAG_IDS | 400 | Trends tile: tag_ids empty, count > 8, contains non-integer, or contains IDs outside the trendable set. |
-| INVALID_RANGE | 400 | Trends tile: end_time ≤ start_time, or either timestamp is non-positive. |
-| INVALID_BUCKET_COUNT | 400 | Trends tile: bucket_count outside 1..2500 or non-integer. |
-| INVALID_BUCKET_S | 400 | Trends tile: derived bucketS (internal float seconds) outside (0, MAX_BUCKET_S] (= (0, 14746]) — request spans too large a range for the given bucket count. Normal clients do not trigger this; the trend viewer clamps viewport span to MAX_VIEWPORT_SPAN_MS in the reducer. |
-| MISSING_QUERY_PARAM | 400 | Trends tile: a required query parameter (tag_ids, start_time, end_time, or bucket_count) is absent. |
-| VALIDATION_ERROR | 400 | Structural validation failure — missing or invalid field (e.g. module_id or cmd_str). |
-| COMMAND_NOT_SUPPORTED | 400 | Command string not supported for the target module_type (e.g. non-RESET cmd sent to HMI module). |
-| COMMAND_REJECTED | 400 | MQTT device CMD_ACK contained `accepted: false` for the command. |
-| TIMEOUT | 504 | MQTT device did not send CMD_ACK within 1 second. |
-| INTERNAL_ERROR | 500 | Unexpected server error. |
+Codes the built server emits:
+
+| Code | HTTP | Where | Description |
+|---|---|---|---|
+| WRITE_VALIDATION_FAILED | 422 | `POST /tags/write` | One or more tags failed pre-flight validation; no MQTT command is issued. Per-tag reasons in `details`. |
+| TAG_NOT_FOUND | `details` entry | `POST /tags/write` | tag_id not in the server's tag map. |
+| TAG_NOT_WRITABLE | `details` entry | `POST /tags/write` | Tag exists but `is_setpoint` is false. |
+| TYPE_MISMATCH | `details` entry | `POST /tags/write` | Value is not a number, boolean or numeric string (the tag's data_type is not checked). |
+| TIMEOUT | per-tag `rejection_code` / 504 | `/tags/write` result; `POST /commands` | No CMD_ACK within 1 second. |
+| MODULE_TYPE_NOT_SUPPORTED | per-tag `rejection_code` | `/tags/write` result | Tag's module_type is neither MQTT nor HMI. |
+| VALIDATION_ERROR | 400 | `/tags/write`, `/commands` | Missing or malformed body field (`values`, `module_id`, `cmd_str`). |
+| COMMAND_NOT_SUPPORTED | 400 | `POST /commands` | Non-RESET command for the HMI module. |
+| COMMAND_REJECTED | **500** | `POST /commands` | The module's CMD_ACK had an `error` field or an `accepted: false` result. The error is thrown without a status, so `errorHandler` defaults to 500. |
+| INVALID_TAG_IDS | 400 | `/trends/tile` | tag_ids empty, more than 8, or a non-integer / non-positive ID. Trendable membership is not checked. |
+| INVALID_RANGE | 400 | `/trends/tile` | end_time ≤ start_time, or either timestamp non-positive or not an integer. |
+| INVALID_BUCKET_COUNT | 400 | `/trends/tile` | bucket_count outside 1..2500 or non-integer. |
+| INVALID_BUCKET_S | 400 | `/trends/tile` | Derived bucketS outside (0, 14746] for a bucketed request. The trend viewer clamps its span so it does not send these. |
+| MISSING_QUERY_PARAM | 400 | `/trends/tile` | A required query parameter is absent or empty. |
+| INTERNAL_ERROR | 500 | any | Unexpected server error (`errorHandler` default). |
+
+Target-design codes not produced by the built server (their endpoints are not built — §1.1): INVALID_CREDENTIALS, INVALID_MFA_CODE, ACCOUNT_LOCKED, SESSION_EXPIRED, FORBIDDEN (401/403), MODE_NOT_FOUND, REVISION_NOT_FOUND, REVISION_IMMUTABLE, ALREADY_ACTIVE, ALREADY_VALIDATED, DEVICE_NOT_READY, INVALID_CHALLENGE_TOKEN, PENDING_TABLE_EMPTY.
 
 ## Open Questions
 
