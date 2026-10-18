@@ -13,7 +13,7 @@
 
 ### MQTT interface — specified, not built
 
-Status detail: `CARO_MQTT_Spec.md` §1.1. Known defects in the built path (heartbeat timer duplicated per reconnect, payload without `tags` throws, Protobuf dropped silently, tag ownership unchecked) are listed in `CARO_Telemetry_Path_Reference.md` §12.
+Status detail: `CARO_MQTT_Spec.md` §1.1. Known defects in the built path (Protobuf dropped silently, tag ownership unchecked, module identity not verified) are listed in `CARO_Telemetry_Path_Reference.md` §12.
 
 - [ ] **Protobuf telemetry decoding** (`CARO_MQTT_Spec.md` §4, §5.2). `mqtt-bridge.ts` only `JSON.parse`s telemetry. Needs a decision first on how the backend tells the encodings apart (spec Open Questions).
 - [ ] **Broker TLS, client certificates, ACLs, anonymous rejection** (`CARO_MQTT_Spec.md` §2). Backend and simulator connect anonymously over plain `mqtt://`.

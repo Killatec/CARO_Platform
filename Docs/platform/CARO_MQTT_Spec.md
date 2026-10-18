@@ -150,6 +150,8 @@ It is not sent on broker connect: the REHANDSHAKE sent then leads to a bind, whi
 
 **Backend handling of telemetry fields (as built):**
 
+A message is dropped (logged, rate-limited) unless `timestamp` is a finite number, `status` a string and `tags` an array; within `tags`, an entry whose `tag_id` is not an integer 0…2³²−1 or whose `value` is not one of the types below is skipped and the rest of the message applies.
+
 -   `timestamp` --- module UTC milliseconds. Used as the time of every historian row from that message and of live trend samples. Not validated (see `Docs/platform/platform_todo.md`).
 -   `status` --- `"FAULT"` sets every tag of the module to bad quality (null) in the Last-Known-Value cache; values carried in the same message are then applied on top and still reach the historian. Any other string is recorded as the module status and is otherwise ignored.
 -   `tags[].tag_id` --- a tag_id unknown to the active Tag Registry is silently dropped. The backend does not check that the tag belongs to the publishing module.

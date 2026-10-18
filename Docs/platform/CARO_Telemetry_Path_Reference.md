@@ -1,7 +1,8 @@
 # CARO_Platform — Telemetry Path Reference
 
 **From telemetry producer to screen pixel.**
-**Version:** 3.1 — 2026-10-18
+**Version:** 3.2 — 2026-10-18
+*v3.2: Payload shape checks in the bridge (`mqtt-payloads.ts`, §3.2); the heartbeat timer is replaced per connect and stopped on disconnect (§3.1). Both removed from §12.*
 *v3.1: Module handshake (§3.4): the bridge subscribes `caro/+/handshake_module`, sends REHANDSHAKE on connect instead of REQUEST_SNAPSHOT; Sets reach a module only in the post-CONFIRM push from `commanded_setpoints`; startup and recovery re-delivery removed (§3.3, §4.2).*
 *v3.0: Reconciled line by line against the implementation. Corrected the intake (FAULT no longer short-circuits; trend listener is per ingest, not per changed tag), the trend WS channel (per-ingest snapshots, no server-side boolean coercion, outbox cap), the MQTT bridge (connect behaviour, JSON-only decoding), client reconnect/PING behaviour, the trend client hook (ring of 20, `drainBuffers`) and widget field resolution (registry columns, never `meta`). Added stall/recovery handling, the trend snapshot scheduler, the outbound MQTT path, a full configuration table and §12 Known Gaps.*
 *v2.2: Stage 5 (DB Pipeline) rewritten for the shipped TimescaleDB writer.*
@@ -171,7 +172,7 @@ this.client.on('connect', () => {
 ```
 
 - The connection uses mqtt.js defaults: MQTT 3.1.1, clean session, anonymous, no TLS, automatic reconnect.
-- The `connect` handler runs again on every automatic reconnect, so subscriptions and REHANDSHAKE are re-sent each time. Beats are never withheld, so REHANDSHAKE is how a module learns of a backend restart shorter than its beat timeout; each bound module then re-binds (§3.4). The heartbeat timer is also re-created without clearing the previous one (§12).
+- The `connect` handler runs again on every automatic reconnect, so subscriptions and REHANDSHAKE are re-sent each time. Beats are never withheld, so REHANDSHAKE is how a module learns of a backend restart shorter than its beat timeout; each bound module then re-binds (§3.4). The heartbeat timer is replaced, not stacked, on each connect, and stopped when the connection closes, so mqtt.js never queues beats offline (it queues QoS 0 publishes by default) and sends them as a burst on reconnect.
 - `start()` resolves on the first connect. If it rejects, `index.ts` logs "MQTT broker unavailable" and the server keeps running on REST and WS without live telemetry.
 
 ### 3.2 Inbound
@@ -184,25 +185,38 @@ private handleMessage(topic: string, payload: Buffer): void {
 
   if (channel === 'telemetry') {
     this.dutyTracker.track(() => {
-      let message: TelemetryMessage;
+      let raw: unknown;
       try {
-        message = JSON.parse(payload.toString()) as TelemetryMessage;
+        raw = JSON.parse(payload.toString());
       } catch {
         return;
       }
-      this.intake.ingest(moduleId, message);
+      const parsed = parseTelemetry(raw);
+      if (!parsed.ok) {
+        this.reportDrop(moduleId, `telemetry dropped: ${parsed.reason}`);
+        return;
+      }
+      if (parsed.skipped > 0) {
+        this.reportDrop(moduleId, 'telemetry entries skipped (bad tag_id or value)', parsed.skipped);
+      }
+      this.intake.ingest(moduleId, parsed.message);
     });
     return;
   }
 
   if (channel === 'cmd_ack') {
-    let ack: CmdAck;
+    let raw: unknown;
     try {
-      ack = JSON.parse(payload.toString()) as CmdAck;
+      raw = JSON.parse(payload.toString());
     } catch {
       return;
     }
-    this.cmdAckHandler?.(moduleId, ack);
+    const parsed = parseCmdAck(raw);
+    if (!parsed.ok) {
+      this.reportDrop(moduleId, `CMD_ACK dropped: ${parsed.reason}`);
+      return;
+    }
+    this.cmdAckHandler?.(moduleId, parsed.message);
     return;
   }
 
@@ -212,7 +226,13 @@ private handleMessage(topic: string, payload: Buffer): void {
 
 A third branch handles `handshake_module`: the parsed message goes, unvalidated, to the handler `HandshakeController` registers with `onHandshake()` (§3.4).
 
-Unparseable payloads on any channel are dropped silently. Only the JSON *syntax* is checked: a payload that parses but has no `tags` array throws inside `ingest()` (§12). Telemetry handling is duty-tracked so its cost shows in `Telemetry_CPU`. CMD_ACKs go to `CmdController` (§3.3).
+Unparseable JSON on any channel is dropped silently. Parsed telemetry and CMD_ACKs are then shape-checked by `mqtt-payloads.ts`, so nothing downstream sees a malformed payload:
+
+- **Telemetry** is dropped unless `timestamp` is a finite number, `status` a string and `tags` an array. Entries whose `tag_id` is not an integer 0…2³²−1, or whose value is not a number, boolean, string, number array or null, are skipped; the rest of the frame still applies.
+- **A CMD_ACK** is dropped unless `command_id` is a string, `error` (if present) a string, and every `results` entry `{ integer tag_id, boolean accepted, string rejection_code? }`. One malformed result drops the whole ACK: filtering it out could turn a rejection into an all-accepted ACK, while dropping it lets the command time out.
+- Each drop is logged at once the first time, then at most once a minute per module and reason, with a count (`reportDrop`).
+
+Telemetry handling is duty-tracked so its cost shows in `Telemetry_CPU`. CMD_ACKs go to `CmdController` (§3.3).
 
 ### 3.3 Outbound
 
@@ -878,8 +898,6 @@ Behaviour a reader could reasonably assume but the implementation does not provi
 | Gap | Where | Effect |
 |---|---|---|
 | Protobuf telemetry is not decoded | `mqtt-bridge.ts` `handleMessage` | A module publishing Protobuf (the spec's target default) is silently ignored; the watchdog then marks it STALLED. |
-| Heartbeat timer re-created on every reconnect | `mqtt-bridge.ts` `connect` handler | After N broker reconnects, each module receives N+1 heartbeats per interval. `stop()` clears only the latest timer. |
-| Valid JSON without a `tags` array throws | `telemetry-intake.ts` `ingest` (`message.tags.length`) | The exception escapes the MQTT message handler; one malformed publish can take down the handler or the process. Only JSON syntax is checked today. |
 | Telemetry timestamp not validated | `telemetry-intake.ts` | Tracked in `platform_todo.md`. |
 | Tag ownership not checked | `telemetry-intake.ts` | A module can update any registry tag by publishing its tag_id. |
 | No MQTT TLS or auth, no WS auth | `mqtt-bridge.ts`, `ws-server.ts` | See `CARO_MQTT_Spec.md` §1.1 and `hmi_API_spec.md` §11. |
