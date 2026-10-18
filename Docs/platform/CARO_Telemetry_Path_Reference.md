@@ -1,7 +1,8 @@
 # CARO_Platform — Telemetry Path Reference
 
 **From telemetry producer to screen pixel.**
-**Version:** 2.1 — May 2026
+**Version:** 2.2 — October 2026
+*v2.2: Stage 5 (DB Pipeline) rewritten for the shipped TimescaleDB writer; duty-tracking list corrected (DbPipeline is not duty-tracked).*
 *v2.1: trend WS channel (Step 11) coverage added; cross-refs to trend viewer spec/handoff for the read side.*
 **Status:** Replaces `CARO_Telemetry_Path_Reference.docx` (v1.0, now obsolete).
 *Internal technical reference.*
@@ -23,7 +24,7 @@ The full path has nine stages. Stages 1a and 1b are alternative producers; both 
 | 2   | MQTT receive (transport)    | `mqtt-bridge.ts`              | Subscribes `caro/+/telemetry`, parses JSON, delegates to `TelemetryIntake.ingest()` |
 | 3   | Universal ingestion         | `telemetry-intake.ts`         | LKV writes, FAULT handling, watchdog, rate tracking, DB enqueue |
 | 4   | LKV cache                   | `lkv.ts`                      | In-memory `Map<tag_id, { value, generation }>`; generation bumps only on value change |
-| 5   | DB pipeline (placeholder)   | `db-pipeline.ts`              | Module-timestamped queue for future TimescaleDB writes |
+| 5   | DB pipeline                 | `db-pipeline.ts`              | Module-timestamped queue, batch-flushed to TimescaleDB |
 | 6   | WebSocket server            | `ws-server.ts`                | Pull-based 125 ms (8 Hz) tick; per-client generation diff; `SUBSCRIBE → SNAPSHOT → DELTA` |
 | 7   | Client context              | `HmiContextProvider.tsx`      | Browser WS ingests `SNAPSHOT`/`DELTA`, updates `valuesRef`, fans out to subscriber callbacks |
 | 8   | Widget render               | `@caro/widgets`               | `useLiveValue` returns the new value; widget re-renders; `null` = bad quality renders `---` |
@@ -242,7 +243,7 @@ startRateTimer(): void {
 
 ### 4.4 Duty-cycle accounting
 
-Every callback that touches the hot path (`MqttBridge.handleMessage`, `TelemetryIntake.watchdogTick`, `TelemetryIntake.rateTimer`, `WsServer.tick`, `DbPipeline.flush`) is wrapped in `dutyTracker.track(fn)`. `DutyTracker.snapshot(intervalMs)` returns the busy time as a percentage and resets the accumulator. The 1 Hz rate timer snapshots the duty cycle and stores it; `HmiTagSource.onBeforePublish` reads it and writes it to `hmiTags.Telemetry_CPU`, closing the loop so the UI can display server load as just another tag.
+Every callback that touches the hot path (`MqttBridge.handleMessage`, `TelemetryIntake.watchdogTick`, `TelemetryIntake.rateTimer`, `WsServer.tick`) is wrapped in `dutyTracker.track(fn)`. `DbPipeline` runs its own flush timer and is not duty-tracked. `DutyTracker.snapshot(intervalMs)` returns the busy time as a percentage and resets the accumulator. The 1 Hz rate timer snapshots the duty cycle and stores it; `HmiTagSource.onBeforePublish` reads it and writes it to `hmiTags.Telemetry_CPU`, closing the loop so the UI can display server load as just another tag.
 
 ---
 
@@ -290,9 +291,9 @@ The LKV stores no timestamps. The only temporal concept is generation order. At 
 
 ---
 
-## 6. Stage 5 — DB Pipeline (placeholder)
+## 6. Stage 5 — DB Pipeline
 
-`DbPipeline` is a push-based queue. Currently a placeholder — `flush()` drains the queue without writing. The real implementation will batch into TimescaleDB.
+`DbPipeline` is a push-based queue: `TelemetryIntake` enqueues the trendable tags that changed on each ingest (change-of-value), plus a full trendable-tag snapshot when `TrendSnapshotScheduler` asks for one and a null sentinel per trendable tag when the watchdog marks a module stalled. The pipeline batch-flushes to the historian through a swappable writer — `TimescaleDbWriter` (wraps `writeTagSamples()` from `@caro/db`) or `NullDbWriter` when TimescaleDB was unreachable at startup. `HistorianReconnector` hot-swaps the real writer in via `setWriter()` once the historian comes back.
 
 ```ts
 export interface DbWriteEntry {
@@ -301,16 +302,13 @@ export interface DbWriteEntry {
 }
 ```
 
-`moduleTs` is the **source-message** timestamp, not the HMI server's receipt time. Every tag in a single enqueue shares the same `moduleTs`. The flush timer runs at `TIMESCALE_DB_TICK_MS` (default 500 ms) in `db-pipeline.ts`:
+`moduleTs` is the **source-message** timestamp, not the HMI server's receipt time. Every tag in a single enqueue shares the same `moduleTs`.
 
-```ts
-const dbFlushTimer = setInterval(
-  () => dutyTracker.track(() => dbPipeline.flush()),
-  config.dbTickMs
-);
-```
+`DbPipeline` owns its own tick: `start()` sets an interval of `TIMESCALE_DB_TICK_MS` (default 500 ms) that calls `flushOnce()` — peek up to `TIMESCALE_DB_MAX_ENTRIES_PER_FLUSH` (500) entries, write them, then consume them, with an in-flight guard so ticks never overlap. The queue is capped at `TIMESCALE_DB_QUEUE_MAX` (5000), dropping the oldest entries when full. Its counters feed the `Trend_Info` observability tags.
 
 The DB pipeline is independent of the WS pipeline. They share the LKV but run on different triggers: DB is push-enqueue-by-TelemetryIntake; WS is pull-by-tick.
+
+Write-path detail (writer coercion, bad-quality nulls, snapshot scheduler, storage): `Docs/hmi/trend-viewer/hmi_trend_viewer_reference.md`.
 
 ---
 

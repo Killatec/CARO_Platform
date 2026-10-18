@@ -1,5 +1,5 @@
 # MQTT Simulator — Bootstrap
-**Updated:** 2026-04-05
+**Updated:** 2026-10-17
 Companion docs: `CARO_MQTT_Spec.md` | `CARO_DB_Spec.md`
 
 ---
@@ -56,10 +56,10 @@ App-local `server/.env` (see `server/.env.example`):
 |---|---|---|
 | `MQTT_BROKER_URL` | `mqtt://localhost:1883` | **Not actually read from env** — see `Docs/mqtt-simulator/mqtt_simulator_handoff.md` Gotchas. Always uses this default. |
 | `MQTT_CLIENT_ID` | `caro-simulator` | Must be unique on broker. **Not actually read from env** — see `Docs/mqtt-simulator/mqtt_simulator_handoff.md` Gotchas. Always uses this default. |
-| `TICK_INTERVAL_MS` | `100` | 10 Hz default |
-| `SINE_PERIOD_S` | `30` | Sine wave period for f32 monitor tags |
 | `LOG_BUFFER_SIZE` | `200` | Rolling in-memory log entries. **Not actually read from env** — see `Docs/mqtt-simulator/mqtt_simulator_handoff.md` Gotchas. Always uses this default. |
 | `SIMULATOR_EXCLUDE_MODULES` | _(unset)_ | Comma-separated `module` names to exclude at registry load time (e.g. `Pole,Aux`). Excluded modules are stripped from `loadTagRegistry()` — no telemetry published, no cmd subscription. Applied in `services/registry.ts` after the `module_type = 'MQTT'` filter. |
+
+The tick interval and sine period are **not** env-configurable (earlier versions of this doc listed `TICK_INTERVAL_MS` and `SINE_PERIOD_S`; nothing reads them). Auto-start on boot uses a hardcoded 100 ms (10 Hz). `POST /start` accepts an optional `intervalMs` (integer ≥ 50; 1000 if omitted). The sine period is the constant `SINE_PERIOD_MS = 30000` in `services/simGenerators.ts`.
 
 ---
 
@@ -107,9 +107,9 @@ Taken directly from the `tag_registry.module` column — no meta array parsing.
 
 | `data_type` | Initial | Per-tick update |
 |---|---|---|
-| `f32` | `50.0` | `50 + 25 * sin(2π * t / periodMs)`. `t` increments by `TICK_INTERVAL_MS` each tick. `periodMs = SINE_PERIOD_S * 1000`. |
+| `f32` | Sine-wave value at a random phase (`simT` random in 0–30 000 ms) | `50 + 25 * sin(2π * simT / SINE_PERIOD_MS)`. `simT` advances by the tick interval each tick. `advanceF32Value` in `simGenerators.ts`. |
 | `i16`, `i32` | Sine-wave value at a random phase (`simT` random in 0–30 000 ms) | Same sine wave, rounded and clamped to the type's range: `advanceIntValue(simT, deltaMs, range)` in `simGenerators.ts`, with exported `I16_RANGE` / `I32_RANGE`. |
-| `bool` | `false` | 0.5% probability flip per tick (~1 toggle per 200 ticks). |
+| `bool` | Random (`initBoolValue` — coin flip per tag) | Flips on every tick (`advanceBoolValue`). Tags don't move in sync because their initial values are independent. |
 
 **Setpoint tags (`is_setpoint: true`):**
 
@@ -125,7 +125,7 @@ All tags start with `simT: 0`.
 
 ## 6. Telemetry Loop
 
-`setInterval` at `TICK_INTERVAL_MS`. Per tick:
+`setInterval` at the start interval (100 ms on auto-start; `intervalMs` from `POST /start`). Per tick:
 
 1. Advance `simValue` and `simT` for all monitor tags across all modules.
 2. For each `module_id`: skip if not in `activeModules`.

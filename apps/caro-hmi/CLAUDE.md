@@ -144,7 +144,7 @@ HMI-specific workspace packages. Platform-wide packages (`@caro/db`, `@caro/ui`,
 | HMI tag telemetry (HmiTagSource, TelemetryIntake) | 1. This file 2. `server/src/telemetry-intake.ts` 3. `server/src/hmi-tag-source.ts` 4. `server/src/index.ts` (wiring) 5. `Docs/hmi/hmi_functional_spec.md` §8.8 |
 | MQTT bridge / device telemetry | 1. This file 2. `server/src/mqtt-bridge.ts` 3. `server/src/telemetry-intake.ts` 4. `Docs/platform/CARO_MQTT_Spec.md` |
 | Widget rendering / formatting | 1. `Docs/hmi/hmi_widget_spec.md` 2. `packages/widgets/src/shared/utils.ts` (compileFormat, resolveFormat) |
-| Setpoint write pipeline | 1. This file 2. `server/src/command-publisher.ts` 3. `server/src/routes/tags.ts` 4. `packages/hmi-context/src/HmiContextProvider.tsx` (writeTag) 5. `packages/widgets/src/shared/useWriteGuard.ts` |
+| Setpoint write pipeline | 1. This file 2. `server/src/cmd-controller.ts` 3. `server/src/routes/tags.ts` 4. `packages/hmi-context/src/HmiContextProvider.tsx` (writeTag) 5. `packages/widgets/src/shared/useWriteGuard.ts` |
 | LKV / WebSocket pipeline | 1. This file 2. `server/src/lkv.ts` 3. `server/src/ws-server.ts` 4. `Docs/platform/CARO_Telemetry_Path_Reference.md` |
 | Historian write pipeline | 1. This file 2. `server/src/db-pipeline.ts` 3. `server/src/timescale-writer.ts` 4. `server/src/timescale-size-monitor.ts` 5. `Docs/db/CARO_DB_Spec.md` §9 6. `Docs/db/hmi_timescale_setup.md` |
 

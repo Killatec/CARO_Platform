@@ -1,5 +1,5 @@
 # @caro/db — Package Handoff
-**Updated:** 2026-04-07 | **Path:** `packages/db/` | **Name:** `@caro/db`
+**Updated:** 2026-10-17 | **Path:** `packages/db/` | **Name:** `@caro/db`
 
 ---
 
@@ -22,6 +22,14 @@
 | `getRevisionTags(rev)` | All tag rows for a given revision; `null` if none |
 | `applyRegistryRevision(added, modified, retired, comment)` | Write registry diff in SERIALIZABLE transaction |
 | `getRevisions()` | All `registry_revisions` rows, DESC |
+| `getTagTypes()` / `getModuleTypes()` | `tag_types` / `module_types` lookup rows, by id |
+
+**HMI setpoints (migration 016):**
+
+| Function | Purpose |
+|---|---|
+| `upsertPendingSetpoints(entries)` | Upsert `pending_setpoint_values` rows (called on CMD_ACK `accepted=true`) |
+| `getPendingSetpointsByTagIds(tagIds)` | Read pending setpoints back for `restorePendingSetpoints` |
 
 **TimescaleDB (historian):**
 
@@ -33,6 +41,8 @@
 | `getTrendTile(tagIds, startTime, endTime, bucketCount, nowMs?)` | The single trend read entry point. Derives `bucketS` internally, dispatches on it across raw + four CAGs, applies watermark-aware fall-through, and nulls aggregate buckets whose `bucketStartMs > BigInt(nowMs ?? Date.now())`. Returns `Promise<{ tile, meta }>` — `tile` is a discriminated-union `TrendTile`. |
 | `getTrendExtent()` | Hypertable-wide `{ oldestMs: bigint\|null, newestMs: bigint\|null }` |
 | `MAX_BUCKET_S` | `14746` — canonical span-cap constant. Mirrored in `packages/trend-chart/src/level.ts` with a cross-reference comment, to avoid pulling pg-runtime into the browser bundle. |
+| `deriveBucketSMs`, `dispatchShape`, `SAMPLE_RATE_HZ` | Pure helpers behind `getTrendTile`'s bucket derivation and window-size shape dispatch; exported for tests (`@caro/trend-chart` keeps its own browser-side `deriveBucketSMs` in `level.ts`) |
+| `__test_watermarkOverride`, `__test_clearWatermarkCache` | Test-only hooks for the memoized watermark lookup |
 
 Integration test helpers at `packages/db/__tests__/helpers/trends-test-range.ts` (sandbox window 1970–1999, `resetTestRange`/`resetTestRangeExpectClean`/`writeTestSamples`/`refreshTestCagg`). Tests use `.ts` extensions; `vitest.config.js` include pattern is `*.test.{js,ts}`. Design and query detail: `Docs/hmi/trend-viewer/hmi_trend_viewer_spec.md` §4–§6 and `Docs/db/DB_Config_Usage_And_Perf.md`.
 
@@ -80,7 +90,7 @@ Separate container on port 5433, started via `docker-compose.timescale.yml` at t
 
 ## Environment Variables
 
-Read from each app's `server/.env`. Never use `DATABASE_URL`.
+Set in the monorepo root `.env` and loaded by each app's `loadEnv()` (two layers — see `Docs/README.md` § Platform Rules). Both pools read `process.env` lazily on first use, so they see whatever the app loaded. Never use `DATABASE_URL`.
 
 | Variable | Default | Required |
 |---|---|---|
@@ -89,18 +99,24 @@ Read from each app's `server/.env`. Never use `DATABASE_URL`.
 | `POSTGRES_DATABASE` | `caro_dev` | No |
 | `POSTGRES_USER` | `postgres` | No |
 | `POSTGRES_PASSWORD` | — | **Yes** |
+| `TIMESCALE_HOST` | `localhost` | No |
+| `TIMESCALE_PORT` | `5433` | No |
+| `TIMESCALE_DATABASE` | `caro_timescale` | No |
+| `TIMESCALE_USER` | `postgres` (the Docker setup uses `caro`) | No |
+| `TIMESCALE_PASSWORD` | — | **Yes** |
+| `TIMESCALE_LOG_TILE_QUERIES` | unset | No — `1` logs a `[db] getTrendTile` summary per tile |
 
 ---
 
 ## Current State
 
-Stable. In use by Tag Registry and MQTT Simulator.
+Stable. In use by all three apps: Tag Registry and MQTT Simulator (main Postgres), CARO HMI (main Postgres + TimescaleDB).
 
-Not implemented: `packages/db/__tests__/query.test.js` — `withTransaction()` failure path tests. Required before HMI service development. See `Docs/platform/platform_deltas.md`.
+Tests: `cd packages/db && npm test` — 156 passing (2026-09-22). Includes `query.test.js` (`withTransaction()` happy path and all four failure paths) and the TimescaleDB integration suite under `__tests__/timescale/`, which needs a running historian. Perf scripts: `npm run perf:*` (see `package.json`); results in `Docs/db/perf-history/`.
 
 ---
 
-## TypeScript Migration
+## TypeScript Migration (history)
 
 **Date:** 2026-04-05
 
@@ -125,4 +141,6 @@ Key changes:
 | Document | Path |
 |---|---|
 | DB Spec | `Docs/db/CARO_DB_Spec.md` |
+| Historian config & perf | `Docs/db/DB_Config_Usage_And_Perf.md` |
+| TimescaleDB setup | `Docs/db/hmi_timescale_setup.md` |
 | Platform Spec Delta | `Docs/platform/platform_deltas.md` |

@@ -1,12 +1,12 @@
 # CARO Historian — Database Configuration, Usage & Performance Summary
 
 **Date:** 2026-04-27
-**Status:** Design validated by measurement gates. Ready for implementation.
-**Target path:** `Docs/Historian_DB_Summary.md`
+**Status:** Design validated by measurement gates and implemented (TimescaleDB migrations T001–T009, trends API v0.9). Live config and migration list: `Docs/db/db_handoff.md`.
+**Location:** `Docs/db/DB_Config_Usage_And_Perf.md` (the earlier planned name `Historian_DB_Summary.md` was never used).
 
 This document is the single source of truth for all decisions regarding the historian database (TimescaleDB on `caro_timescale`) — chunk and compression policy, continuous aggregates (CAGs), tile structure, query shape, dispatch logic, and the empirical performance results that justify each choice.
 
-For the design narrative and the full window-to-CAG mapping table, see `Trend_CAGs_Structure.md`. This document is the operational summary.
+For the design narrative and the window-to-CAG dispatch as built, see `Docs/hmi/trend-viewer/hmi_trend_viewer_spec.md` §4.3 and §6.3 (the `Trend_CAGs_Structure.md` design note this document was written against was never committed). This document is the operational summary.
 
 ---
 
@@ -322,14 +322,14 @@ Each gate is measurement-driven. Resist building all four CAGs upfront.
 
 | Document | Purpose |
 |---|---|
-| `Trend_CAGs_Structure.md` | Design narrative, full window-to-CAG mapping table |
+| `Docs/hmi/trend-viewer/hmi_trend_viewer_spec.md` §4.3, §6.3 | Design narrative and window-to-CAG dispatch as built (the original `Trend_CAGs_Structure.md` was never committed) |
 | `perf-history/historian_perf_battery_2026-04-24.md` | Original perf measurements (raw + gapfill grids, tile-split) |
-| `perf_gates_2026-04-27.md` | Gate run 1 (N=20, FAIL on Gate 2) |
-| `perf_gates_2026-04-27_v2.md` | Gate run 2 (N=8, prepared statement diagnostic) |
-| `perf_gates_prepared_2026-04-XX.md` | Prepared-statement experiment (disproved) |
-| `perf_gates_bounded_prev_2026-04-XX.md` | Bounded-`prev` validation (PASS) |
-| `trend_viewer_tiling_discussion.pdf` | Design discussion 2026-04-24 |
-| `hmi_trend_viewer_spec_3.md` | Trend viewer functional spec |
+| `perf_gates_2026-04-27.md` | Gate run 1 (N=20, FAIL on Gate 2) — *not in repo; results summarized in §7* |
+| `perf_gates_2026-04-27_v2.md` | Gate run 2 (N=8, prepared statement diagnostic) — *not in repo; results summarized in §7* |
+| `perf_gates_prepared_2026-04-XX.md` | Prepared-statement experiment (disproved) — *not in repo; results summarized in §7* |
+| `perf_gates_bounded_prev_2026-04-XX.md` | Bounded-`prev` validation (PASS) — *not in repo; results summarized in §7* |
+| `trend_viewer_tiling_discussion.pdf` | Design discussion 2026-04-24 — *not in repo* |
+| `Docs/hmi/trend-viewer/hmi_trend_viewer_spec.md` | Trend viewer design spec (this table originally cited a draft, `hmi_trend_viewer_spec_3.md`) |
 
 ---
 
@@ -338,3 +338,4 @@ Each gate is measurement-driven. Resist building all four CAGs upfront.
 | Date | Change |
 |---|---|
 | 2026-04-27 | Initial summary. Design validated by gate testing with bounded `prev` fix. Ready for trends API implementation. |
+| 2026-10-17 | Moved to `Docs/db/`. Status updated to implemented; references to companion files that were never committed repointed or marked *not in repo*. |

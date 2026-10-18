@@ -27,7 +27,7 @@ CARO_Platform is an industrial automation monorepo with three apps:
 | CARO HMI | 3003 | 5175 | Trend viewer Phase A Steps 1–12 complete; multi-system UI selection done; auth and most CRUD not started | `apps/caro-hmi/CLAUDE.md` (Current State section) | [hmi_deltas.md](hmi/hmi_deltas.md) |
 | ↳ HMI Trend Viewer | — | — | Phase A complete | [hmi_trend_viewer_handoff.md](hmi/trend-viewer/hmi_trend_viewer_handoff.md) | [hmi_trend_viewer_deltas.md](hmi/trend-viewer/hmi_trend_viewer_deltas.md) |
 
-`npm run dev` at the repo root starts all six dev servers (`npm run dev:kill` first clears orphaned ports).
+`npm run dev` at the repo root clears orphaned ports and starts all six dev servers. `npm run dev:fresh` builds the shared packages first — use it on first run and after pulling package changes (see the build-then-consume note below).
 
 ## Packages
 
@@ -163,8 +163,6 @@ Apps connect to their databases at startup and never change target at runtime; t
 
 ## Doc map
 
-⚠ = known to be partly out of date. A refresh is pending; check against the code before relying on it.
-
 **[platform/](platform/)** — cross-app
 | File | What it is |
 |---|---|
@@ -172,14 +170,14 @@ Apps connect to their databases at startup and never change target at runtime; t
 | [platform_deltas.md](platform/platform_deltas.md) | Open cross-app spec divergences. |
 | [multi_project_runbook.md](platform/multi_project_runbook.md) | How to create and switch projects; observed errors; known issues. |
 | [CARO_MQTT_Spec.md](platform/CARO_MQTT_Spec.md) | MQTT interface spec (topics, payloads, CMD/CMD_ACK). |
-| [CARO_Telemetry_Path_Reference.md](platform/CARO_Telemetry_Path_Reference.md) | ⚠ Telemetry path from producer to pixel. Its DB pipeline stage predates the TimescaleDB writer. |
+| [CARO_Telemetry_Path_Reference.md](platform/CARO_Telemetry_Path_Reference.md) | Telemetry path from producer to pixel, stage by stage. |
 
 **[db/](db/)** — Postgres + TimescaleDB
 | File | What it is |
 |---|---|
 | [CARO_DB_Spec.md](db/CARO_DB_Spec.md) | Schema spec, including HMI tables not yet migrated. |
-| [db_handoff.md](db/db_handoff.md) | ⚠ `@caro/db` exports, migrations, rules. Its Postgres migration list, env section and Current State are dated 2026-04. |
-| [DB_Config_Usage_And_Perf.md](db/DB_Config_Usage_And_Perf.md) | ⚠ Historian config, CAG dispatch and the performance evidence behind them. It names companion docs that no longer exist. |
+| [db_handoff.md](db/db_handoff.md) | `@caro/db` exports, Postgres + TimescaleDB migrations, env vars, rules. |
+| [DB_Config_Usage_And_Perf.md](db/DB_Config_Usage_And_Perf.md) | Historian config, CAG dispatch and the performance evidence behind them. |
 | [hmi_timescale_setup.md](db/hmi_timescale_setup.md) | Docker/TimescaleDB install and first-boot steps. |
 | [perf-history/](db/perf-history/) | Historical perf baselines (reference only). |
 
@@ -207,7 +205,7 @@ Apps connect to their databases at startup and never change target at runtime; t
 | [hmi_functional_spec.md](hmi/hmi_functional_spec.md) | Functional spec: architecture, auth, data model, commissioning. |
 | [hmi_API_spec.md](hmi/hmi_API_spec.md) | REST + WebSocket contracts (built and planned). |
 | [hmi_widget_spec.md](hmi/hmi_widget_spec.md) | Widget contract and catalog. |
-| [hmi_bootstrap.md](hmi/hmi_bootstrap.md) | ⚠ First-time setup and data flow. Dated 2026-04: it says the DB pipeline is a placeholder and shows only the `demo` pages. |
+| [hmi_bootstrap.md](hmi/hmi_bootstrap.md) | First-time setup, data flow, folder structure, widget pattern. |
 
 **[hmi/trend-viewer/](hmi/trend-viewer/)**
 | File | What it is |

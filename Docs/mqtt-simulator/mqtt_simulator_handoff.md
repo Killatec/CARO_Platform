@@ -66,7 +66,6 @@ Read order: this file → deltas → task-specific spec.
 ## Gotchas
 
 - **Zero active MQTT tags = process exit.** Apply a registry in Tag Registry before starting the simulator. The simulator requires at least one tag with `module_type = 'MQTT'`.
-- **Bootstrap §16 references port 4000** — stale, describes an earlier single-process design. Ignore. Correct ports: API 3002, UI 5174.
 - **KNOWN DEFECT (2026-09-19, not fixed): `MQTT_BROKER_URL`, `MQTT_CLIENT_ID`, and `LOG_BUFFER_SIZE` are never actually read from `.env`.** `services/mqttClient.ts:5-6` and `services/simulatorService.ts:13` read them as module-scope `const`s, evaluated when `index.ts` imports those modules — which happens before `index.ts`'s own `loadEnv()` call, since ES module imports fully evaluate before the importing module's own statements run regardless of textual order. All three silently fall back to their hardcoded defaults always; latent only because those defaults currently match `.env`'s configured values. Setting any of the three to something else in `.env` has no effect. Fix before pointing the simulator at a second project (multi-project work) — per-project broker URL and client ID are exactly what that work needs to configure, and two of those three are currently the only things that would need to differ.
 
 ---
