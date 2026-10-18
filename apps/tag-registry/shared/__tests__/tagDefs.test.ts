@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createHash } from 'crypto';
-import { listMqttModuleTemplates, buildTagDefs, buildTagDefsFile, validateTagDefs, TAG_DEFS_BANNER } from '../tagDefs.js';
-import type { Template } from '../types.js';
+import { listMqttModuleTemplates, buildTagDefs, buildTagDefsFile, validateTagDefs, moduleRelativeTagName, TAG_DEFS_BANNER } from '../tagDefs.js';
+import type { MetaLevel, Template } from '../types.js';
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -269,5 +269,52 @@ describe('buildTagDefsFile', () => {
     }));
     expect(buildTagDefsFile(map, 'RF_Mod').content_hash)
       .toBe(buildTagDefsFile(makeMap(), 'RF_Mod').content_hash);
+  });
+});
+
+describe('moduleRelativeTagName', () => {
+  const lvl = (type: string, name: string, inTagName?: boolean): MetaLevel => ({
+    type,
+    name,
+    fields: inTagName === undefined ? {} : { In_Tag_Name: inTagName },
+  });
+
+  it('export shape: module at meta[0] — same as dropping meta[0]', () => {
+    const meta = [lvl('module', 'Narya_RF', false), lvl('Phase', 'Phase', true), lvl('tag', 'Set', true)];
+    expect(moduleRelativeTagName(meta)).toBe('Phase.Set');
+  });
+
+  it('registry shape: levels above the module are skipped', () => {
+    const meta = [
+      lvl('system', 'Narya1', true),
+      lvl('module', 'RF1', true),
+      lvl('Pwr_Mon', 'Pwr_Mon', false),
+      lvl('Mag', 'Mag_1', true),
+      lvl('Dir', 'Fwd', true),
+      lvl('tag', 'Gain', true),
+    ];
+    expect(moduleRelativeTagName(meta)).toBe('Mag_1.Fwd.Gain');
+  });
+
+  it('never includes the module level, even with In_Tag_Name true', () => {
+    expect(moduleRelativeTagName([lvl('module', 'RF1', true), lvl('tag', 'IP', true)])).toBe('IP');
+  });
+
+  it('skips levels whose In_Tag_Name is false or absent', () => {
+    const meta = [lvl('module', 'M'), lvl('Group', 'G', false), lvl('Group', 'H'), lvl('tag', 'T', true)];
+    expect(moduleRelativeTagName(meta)).toBe('T');
+  });
+
+  it('uses the first module level; a nested module level is an ordinary level', () => {
+    const meta = [lvl('module', 'Outer', true), lvl('module', 'Inner', true), lvl('tag', 'T', true)];
+    expect(moduleRelativeTagName(meta)).toBe('Inner.T');
+  });
+
+  it('returns "" when no level below the module is in the name', () => {
+    expect(moduleRelativeTagName([lvl('module', 'M', true), lvl('tag', 'T', false)])).toBe('');
+  });
+
+  it('returns null when meta has no module level', () => {
+    expect(moduleRelativeTagName([lvl('system', 'S', true), lvl('tag', 'T', true)])).toBeNull();
   });
 });

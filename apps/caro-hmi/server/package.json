@@ -12,6 +12,7 @@
     "@caro/db": "*",
     "@caro/hmi-context": "*",
     "@caro/server": "*",
+    "@caro/tag-registry-shared": "*",
     "compression": "^1.8.1",
     "cors": "^2.8.5",
     "dotenv": "^16.0.0",

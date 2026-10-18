@@ -1,7 +1,7 @@
 import { MQTT_MODULE_TYPE, IN_TAG_NAME_FIELD, ERROR_CODES } from './constants.js';
 import { hashTagDefs } from './hashTemplate.js';
 import { resolveRegistry } from './resolveRegistry.js';
-import type { Template, TemplateEntry, ValidationMessage } from './types.js';
+import type { MetaLevel, Template, TemplateEntry, ValidationMessage } from './types.js';
 import { extractTemplate } from './types.js';
 
 /**
@@ -69,6 +69,31 @@ export function listMqttModuleTemplates(templateMap: TemplateMapInput): string[]
     .sort(compareCodeUnits);
 }
 
+/**
+ * Module-relative tag_name: the dot-joined asset_names of the meta levels
+ * *below* the (first) module level whose In_Tag_Name is true. The module level
+ * itself is never included, whatever its In_Tag_Name — whether an instance
+ * shows its own name (e.g. "RF1") is an instance decision.
+ *
+ * The single rule for both consumers, which must agree by exact string match
+ * (tag_registry_spec §12.1, CARO_MQTT_Spec §7.4):
+ * - the Generate Tag Defs export, whose meta starts at the module template
+ *   (meta[0] is the module);
+ * - the HMI's handshake TAG_LIST, whose registry meta has levels above the
+ *   module (e.g. the system root).
+ *
+ * Returns null when meta has no module level.
+ */
+export function moduleRelativeTagName(meta: MetaLevel[]): string | null {
+  const moduleIndex = meta.findIndex(level => level.type === 'module');
+  if (moduleIndex === -1) return null;
+  return meta
+    .slice(moduleIndex + 1)
+    .filter(level => level.fields?.[IN_TAG_NAME_FIELD] === true)
+    .map(level => level.name)
+    .join('.');
+}
+
 interface ResolvedTagDef {
   /** Module-relative tag_name: dot-joined asset_names of levels below the module with In_Tag_Name true. */
   tagName: string;
@@ -78,20 +103,14 @@ interface ResolvedTagDef {
 }
 
 /**
- * Resolves a module template on its own (as if it were the root). The exported
- * tag_name is the module-relative tag_name: asset_names of levels *below* the
- * module whose In_Tag_Name is true. The module level itself (meta[0]) is always
- * skipped — whether an instance carries its name (e.g. "RF1") is an instance
- * decision, and this export has no instance dependency.
+ * Resolves a module template on its own (as if it were the root), so meta[0]
+ * is the module level. The exported tag_name is the module-relative tag_name
+ * (moduleRelativeTagName); this export has no instance dependency.
  */
 function resolveTagDefs(templateMap: TemplateMapInput, moduleTemplateName: string): ResolvedTagDef[] {
   return resolveRegistry(templateMap, moduleTemplateName)
     .map(tag => ({
-      tagName: tag.meta
-        .slice(1)
-        .filter(level => level.fields?.[IN_TAG_NAME_FIELD] === true)
-        .map(level => level.name)
-        .join('.'),
+      tagName: moduleRelativeTagName(tag.meta) ?? '',
       dataType: tag.data_type,
       sourcePath: tag.tag_path,
     }))
