@@ -155,3 +155,59 @@ describe('MqttBridge', () => {
     await bridge.stop();
   });
 });
+
+describe('MqttBridge — handshake', () => {
+  it('subscribes to caro/+/handshake_module on connect', async () => {
+    const bridge = makeBridge();
+    await startBridge(bridge);
+    const topics = (mockClient.subscribe.mock.calls as unknown[][]).map(c => c[0]);
+    expect(topics).toContain('caro/+/handshake_module');
+    await bridge.stop();
+  });
+
+  it('sends REHANDSHAKE on handshake_backend before REQUEST_SNAPSHOT on every connect', async () => {
+    const bridge = makeBridge();
+    await startBridge(bridge);
+
+    const calls = mockClient.publish.mock.calls as unknown[][];
+    const rehandshake = calls.findIndex(c => c[0] === `caro/${MODULE_ID}/handshake_backend`);
+    const snapshot    = calls.findIndex(c => c[0] === `caro/${MODULE_ID}/cmd`);
+    expect(rehandshake).toBeGreaterThanOrEqual(0);
+    expect(rehandshake).toBeLessThan(snapshot);
+    expect(JSON.parse(calls[rehandshake][1] as string)).toMatchObject({ message_type: 'REHANDSHAKE', ts_utc_ms: expect.any(Number) });
+    expect(calls[rehandshake][2]).toMatchObject({ qos: 1 });
+
+    mockClient.publish.mockClear();
+    mockClient.emit('connect');   // automatic reconnect
+    expect((mockClient.publish.mock.calls as unknown[][]).some(c => c[0] === `caro/${MODULE_ID}/handshake_backend`)).toBe(true);
+    await bridge.stop();
+  });
+
+  it('publishHandshake sends to caro/{module_id}/handshake_backend with QoS 1', async () => {
+    const bridge = makeBridge();
+    await startBridge(bridge);
+    mockClient.publish.mockClear();
+
+    bridge.publishHandshake(MODULE_ID, { message_type: 'TAG_LIST', ts_utc_ms: 1, payload: { tags: [] } });
+
+    const [topic, payload, opts] = mockClient.publish.mock.calls[0] as [string, string, { qos: number }];
+    expect(topic).toBe(`caro/${MODULE_ID}/handshake_backend`);
+    expect(JSON.parse(payload)).toEqual({ message_type: 'TAG_LIST', ts_utc_ms: 1, payload: { tags: [] } });
+    expect(opts).toMatchObject({ qos: 1 });
+    await bridge.stop();
+  });
+
+  it('routes parsed handshake_module messages to the handler and drops unparseable ones', async () => {
+    const bridge = makeBridge();
+    const handler = vi.fn();
+    bridge.onHandshake(handler);
+    await startBridge(bridge);
+
+    mockClient.emit('message', `caro/${MODULE_ID}/handshake_module`, Buffer.from('{"message_type":"CONFIRM"}'));
+    mockClient.emit('message', `caro/${MODULE_ID}/handshake_module`, Buffer.from('not json'));
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(handler).toHaveBeenCalledWith(MODULE_ID, { message_type: 'CONFIRM' });
+    await bridge.stop();
+  });
+});

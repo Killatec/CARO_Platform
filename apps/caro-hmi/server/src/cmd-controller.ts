@@ -2,7 +2,7 @@ import type { MqttBridge, CmdAck } from './mqtt-bridge.js';
 import type { HmiTagSource } from './hmi-tag-source.js';
 import type { TagDef } from '@caro/hmi-context';
 import { upsertPendingSetpoints, upsertCommandedSetpoints, getCommandedSetpointsByTagIds } from '@caro/db';
-import type { CommandedSetpointEntry } from '@caro/db';
+import type { CommandedSetpointEntry, SetpointAckStatus } from '@caro/db';
 
 export type { CmdAck };
 
@@ -15,6 +15,18 @@ export interface WriteResult {
 }
 
 type TagResult = { tag_id: number; accepted: boolean; rejection_code?: string };
+
+/** One Set of a module as the store holds it; value null = unpopulated (also when there is no row). */
+export interface ModuleSetpoint {
+  tag_id:     number;
+  value:      number | boolean | null;
+  ack_status: SetpointAckStatus | null;
+  set_by:     string | null;
+}
+
+export type SetpointPushResult =
+  | { outcome: 'acked'; results: TagResult[] }
+  | { outcome: 'timeout' };
 
 interface PendingCommand {
   resolve: (results: TagResult[]) => void;
@@ -268,10 +280,7 @@ export class CmdController {
     const moduleType = this.moduleTypeMap.get(moduleId);
     if (moduleType !== 'MQTT') return;
 
-    const tagIds = [...this.tagMap.entries()]
-      .filter(([, t]) => t.module_id === moduleId && t.is_setpoint)
-      .map(([tagId]) => tagId);
-
+    const tagIds = this.setpointTagIds(moduleId);
     if (tagIds.length === 0) return;
 
     const rows = (await getCommandedSetpointsByTagIds(tagIds)).filter(r => r.value !== null);
@@ -285,5 +294,72 @@ export class CmdController {
     });
 
     console.log(`[CmdController] restored ${rows.length} pending setpoint(s) to ${moduleId}`);
+  }
+
+  /** Every Set of the module, ordered by tag_id, with its stored value or null. */
+  async getModuleSetpoints(moduleId: string): Promise<ModuleSetpoint[]> {
+    const tagIds = this.setpointTagIds(moduleId);
+    if (tagIds.length === 0) return [];
+
+    const rows = new Map((await getCommandedSetpointsByTagIds(tagIds)).map(r => [r.tag_id, r]));
+    return tagIds.map(tag_id => {
+      const row = rows.get(tag_id);
+      return {
+        tag_id,
+        value:      row?.value ?? null,
+        ack_status: row?.ack_status ?? null,
+        set_by:     row?.set_by ?? null,
+      };
+    });
+  }
+
+  /**
+   * Publishes every given Set, nulls included, as one SET_VALUES and waits for its
+   * CMD_ACK (the handshake's post-CONFIRM push). The SET_VALUES is published
+   * before this returns, so a command sent next follows it on the wire.
+   *
+   * The values come from the store, so an ACK changes nothing except that a value
+   * stored as 'timeout' and now accepted is upgraded to 'accepted', keeping its
+   * set_by. pending_setpoint_values is not written.
+   */
+  pushSetpoints(moduleId: string, setpoints: ModuleSetpoint[]): Promise<SetpointPushResult> {
+    const commandId = crypto.randomUUID();
+
+    return new Promise<SetpointPushResult>((resolve) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(commandId);
+        resolve({ outcome: 'timeout' });
+      }, this.ackTimeoutMs);
+
+      this.pending.set(commandId, {
+        resolve: (results) => {
+          const confirmed = results
+            .filter(r => r.accepted)
+            .flatMap(r => {
+              const s = setpoints.find(sp => sp.tag_id === r.tag_id);
+              return s && s.value !== null && s.ack_status === 'timeout'
+                ? [{ tag_id: s.tag_id, value: s.value, ack_status: 'accepted' as const, set_by: s.set_by }]
+                : [];
+            });
+          if (confirmed.length > 0) this.storeCommandedSetpoints(confirmed);
+          resolve({ outcome: 'acked', results });
+        },
+        timer,
+      });
+
+      this.mqttBridge.publishCommand(moduleId, {
+        command_id:   commandId,
+        command_type: 'SET_VALUES',
+        ts_utc_ms:    Date.now(),
+        payload:      { values: setpoints.map(s => ({ tag_id: s.tag_id, value: s.value })) },
+      });
+    });
+  }
+
+  private setpointTagIds(moduleId: string): number[] {
+    return [...this.tagMap.values()]
+      .filter(t => t.module_id === moduleId && t.is_setpoint)
+      .map(t => t.tag_id)
+      .sort((a, b) => a - b);
   }
 }

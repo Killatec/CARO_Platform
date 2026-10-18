@@ -77,6 +77,11 @@ function makeMocks() {
   };
 }
 
+function lastCommandId(mqttBridge: MqttBridge): string {
+  const calls = (mqttBridge.publishCommand as ReturnType<typeof vi.fn>).mock.calls;
+  return (calls[calls.length - 1][1] as { command_id: string }).command_id;
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe('CmdController', () => {
@@ -178,11 +183,6 @@ describe('CmdController', () => {
 });
 
 describe('CmdController — setpoint stores', () => {
-  function lastCommandId(mqttBridge: MqttBridge): string {
-    const calls = (mqttBridge.publishCommand as ReturnType<typeof vi.fn>).mock.calls;
-    return (calls[calls.length - 1][1] as { command_id: string }).command_id;
-  }
-
   it('accepted ACK: stores accepted values in both pending and commanded stores', async () => {
     const { ctrl, mqttBridge, triggerAck } = makeMocks();
 
@@ -324,3 +324,77 @@ describe('CmdController — setpoint stores', () => {
     expect(mqttBridge.publishCommand).not.toHaveBeenCalled();
   });
 });
+
+describe('CmdController — handshake Set push', () => {
+  it('getModuleSetpoints returns every Set of the module, null-filled, ordered by tag_id', async () => {
+    const { ctrl } = makeMocks();
+    vi.mocked(getCommandedSetpointsByTagIds).mockResolvedValueOnce([
+      { tag_id: MQTT_TAG_2, value: true, ack_status: 'timeout', set_by: 'import:x', set_at: new Date() },
+    ]);
+
+    const result = await ctrl.getModuleSetpoints(MQTT_MODULE);
+
+    expect(getCommandedSetpointsByTagIds).toHaveBeenCalledWith([MQTT_TAG, MQTT_TAG_2]);
+    expect(result).toEqual([
+      { tag_id: MQTT_TAG,   value: null, ack_status: null,      set_by: null },
+      { tag_id: MQTT_TAG_2, value: true, ack_status: 'timeout', set_by: 'import:x' },
+    ]);
+  });
+
+  it('pushSetpoints publishes every value, nulls included, before returning', () => {
+    const { ctrl, mqttBridge } = makeMocks();
+
+    void ctrl.pushSetpoints(MQTT_MODULE, [
+      { tag_id: MQTT_TAG,   value: null, ack_status: null,       set_by: null },
+      { tag_id: MQTT_TAG_2, value: 5,    ack_status: 'accepted', set_by: null },
+    ]);
+
+    const [moduleId, command] = (mqttBridge.publishCommand as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string, { command_type: string; payload: { values: unknown[] } },
+    ];
+    expect(moduleId).toBe(MQTT_MODULE);
+    expect(command.command_type).toBe('SET_VALUES');
+    expect(command.payload.values).toEqual([{ tag_id: MQTT_TAG, value: null }, { tag_id: MQTT_TAG_2, value: 5 }]);
+  });
+
+  it('pushSetpoints ACK upgrades only accepted timeout rows, keeping set_by; nulls and pending are not written', async () => {
+    const { ctrl, mqttBridge, triggerAck } = makeMocks();
+
+    const push = ctrl.pushSetpoints(MQTT_MODULE, [
+      { tag_id: MQTT_TAG,   value: 7,    ack_status: 'timeout',  set_by: 'import:x' },
+      { tag_id: MQTT_TAG_2, value: null, ack_status: null,       set_by: null },
+    ]);
+    triggerAck({
+      command_id:   lastCommandId(mqttBridge),
+      command_type: 'SET_VALUES',
+      ts_utc_ms:    Date.now(),
+      results: [{ tag_id: MQTT_TAG, accepted: true }, { tag_id: MQTT_TAG_2, accepted: true }],
+    });
+
+    await expect(push).resolves.toMatchObject({ outcome: 'acked' });
+    expect(upsertCommandedSetpoints).toHaveBeenCalledWith([
+      { tag_id: MQTT_TAG, value: 7, ack_status: 'accepted', set_by: 'import:x' },
+    ]);
+    expect(upsertPendingSetpoints).not.toHaveBeenCalled();
+  });
+
+  it('pushSetpoints ACK on already-accepted rows writes nothing', async () => {
+    const { ctrl, mqttBridge, triggerAck } = makeMocks();
+
+    const push = ctrl.pushSetpoints(MQTT_MODULE, [{ tag_id: MQTT_TAG, value: 7, ack_status: 'accepted', set_by: 'import:x' }]);
+    triggerAck({ command_id: lastCommandId(mqttBridge), command_type: 'SET_VALUES', ts_utc_ms: Date.now(), results: [{ tag_id: MQTT_TAG, accepted: true }] });
+
+    await push;
+    expect(upsertCommandedSetpoints).not.toHaveBeenCalled();
+  });
+
+  it('pushSetpoints without an ACK resolves timeout and writes nothing', async () => {
+    const { ctrl } = makeMocks();
+
+    await expect(
+      ctrl.pushSetpoints(MQTT_MODULE, [{ tag_id: MQTT_TAG, value: 7, ack_status: 'timeout', set_by: null }]),
+    ).resolves.toEqual({ outcome: 'timeout' });
+    expect(upsertCommandedSetpoints).not.toHaveBeenCalled();
+  });
+});
+

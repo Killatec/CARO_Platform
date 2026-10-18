@@ -27,6 +27,7 @@ export class MqttBridge {
   private client: MqttClient | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private cmdAckHandler: ((moduleId: string, ack: CmdAck) => void) | null = null;
+  private handshakeHandler: ((moduleId: string, message: unknown) => void) | null = null;
 
   private readonly intake: TelemetryIntake;
   private readonly moduleIds: string[];
@@ -47,13 +48,18 @@ export class MqttBridge {
       this.client.on('connect', () => {
         this.client!.subscribe('caro/+/telemetry', () => {});
         this.client!.subscribe('caro/+/cmd_ack', () => {});
+        this.client!.subscribe('caro/+/handshake_module', () => {});
 
         this.heartbeatTimer = setInterval(
           () => this.heartbeatTick(),
           this.config.heartbeatIntervalMs
         );
 
+        // Beats never stop, so a module would not notice a backend restart shorter
+        // than its beat timeout: ask every module to re-bind. A bound module requests
+        // a new TAG_LIST and keeps its binding; anything else ignores it.
         for (const moduleId of this.moduleIds) {
+          this.sendRehandshake(moduleId);
           this.sendRequestSnapshot(moduleId);
         }
 
@@ -106,6 +112,24 @@ export class MqttBridge {
     this.cmdAckHandler = handler;
   }
 
+  /** Publishes a handshake message to caro/{module_id}/handshake_backend (QoS 1). */
+  publishHandshake(moduleId: string, message: object): void {
+    this.client?.publish(
+      `caro/${moduleId}/handshake_backend`,
+      JSON.stringify(message),
+      { qos: 1 }
+    );
+  }
+
+  sendRehandshake(moduleId: string): void {
+    this.publishHandshake(moduleId, { message_type: 'REHANDSHAKE', ts_utc_ms: Date.now() });
+  }
+
+  /** Receives every parsed message on caro/{module_id}/handshake_module, unvalidated. */
+  onHandshake(handler: (moduleId: string, message: unknown) => void): void {
+    this.handshakeHandler = handler;
+  }
+
   private handleMessage(topic: string, payload: Buffer): void {
     const parts    = topic.split('/');
     const moduleId = parts[1];
@@ -132,6 +156,17 @@ export class MqttBridge {
         return;
       }
       this.cmdAckHandler?.(moduleId, ack);
+      return;
+    }
+
+    if (channel === 'handshake_module') {
+      let message: unknown;
+      try {
+        message = JSON.parse(payload.toString());
+      } catch {
+        return;
+      }
+      this.handshakeHandler?.(moduleId, message);
       return;
     }
 

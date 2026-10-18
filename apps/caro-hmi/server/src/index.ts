@@ -13,6 +13,7 @@ import { TelemetryIntake } from './telemetry-intake.js';
 import { HmiTagSource } from './hmi-tag-source.js';
 import { MqttBridge } from './mqtt-bridge.js';
 import { CmdController } from './cmd-controller.js';
+import { HandshakeController } from './handshake-controller.js';
 import { ResetBus } from './reset-bus.js';
 import { WsServer } from './ws-server.js';
 import { createApp } from './app.js';
@@ -174,6 +175,9 @@ async function start(): Promise<void> {
 
   // 5b. Command controller (routes writes by module_type: MQTT→broker, HMI→HmiTagSource)
   const cmdController = new CmdController({ mqttBridge, hmiTagSource: hmiTags, tagMap });
+
+  // 5b'. Module handshake (answers HANDSHAKE_REQUEST, pushes Sets after CONFIRM)
+  new HandshakeController({ mqttBridge, cmdController, tagMap });
 
   // 5c. Reset bus (fans out reset signal to registered subsystems)
   const resetBus = new ResetBus();
