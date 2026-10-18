@@ -36,7 +36,7 @@ Related: [hmi/trend-viewer/hmi_trend_viewer_reference.md](hmi/trend-viewer/hmi_t
 |---|---|---|---|---|---|
 | Tag Registry | 3001 | 5173 | Complete for Phase 1–2 (unbuilt validators and auth listed in its handoff) | `apps/tag-registry/CLAUDE.md` → [tag_registry_handoff.md](tag-registry/tag_registry_handoff.md) | [tag_registry_deltas.md](tag-registry/tag_registry_deltas.md) |
 | MQTT Simulator | 3002 | 5174 | Active development (dev/test tool only) | `apps/mqtt-simulator/CLAUDE.md` → [mqtt_simulator_handoff.md](mqtt-simulator/mqtt_simulator_handoff.md) | [mqtt_simulator_deltas.md](mqtt-simulator/mqtt_simulator_deltas.md) |
-| CARO HMI | 3003 | 5175 | Trend viewer Phase A Steps 1–12 complete; multi-system UI selection done; auth and most CRUD not started | `apps/caro-hmi/CLAUDE.md` (Current State section) | [hmi_deltas.md](hmi/hmi_deltas.md) |
+| CARO HMI | 3003 | 5175 | Trend viewer Phase A Steps 1–12 complete; multi-system UI selection done; module handshake built (identity not verified); auth, commissioning and most CRUD not started | `apps/caro-hmi/CLAUDE.md` (Current State section) | [hmi_deltas.md](hmi/hmi_deltas.md) |
 | ↳ HMI Trend Viewer | — | — | Phase A complete | [hmi_trend_viewer_handoff.md](hmi/trend-viewer/hmi_trend_viewer_handoff.md) | [hmi_trend_viewer_deltas.md](hmi/trend-viewer/hmi_trend_viewer_deltas.md) |
 
 `npm run dev` at the repo root clears orphaned ports and starts all six dev servers. `npm run dev:fresh` builds the shared packages first — use it on first run and after pulling package changes (see the build-then-consume note below).

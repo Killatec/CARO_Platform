@@ -118,6 +118,9 @@ apps/caro-hmi/
 │       ├── lkv.ts               # LKV cache with generation counters
 │       ├── telemetry-intake.ts  # Transport-agnostic ingest: LKV write, watchdog, DB enqueue, trend deltas
 │       ├── mqtt-bridge.ts       # MQTT transport only — delegates to TelemetryIntake
+│       ├── mqtt-payloads.ts     # Shape checks for telemetry and CMD_ACK payloads
+│       ├── handshake-controller.ts # Module handshake: TAG_LIST, CONFIRM, post-CONFIRM Set push
+│       ├── tag-list.ts          # Builds a module's TAG_LIST (module-relative tag_name)
 │       ├── hmi-tag-source.ts    # Proxy-based HMI telemetry producer (module_type='HMI')
 │       ├── duty-tracker.ts      # Telemetry_CPU: wraps hot paths with performance.now() timing
 │       ├── ws-server.ts         # WebSocket server: live values + trend channel
@@ -127,7 +130,7 @@ apps/caro-hmi/
 │       ├── historian-reconnect.ts     # Retries TimescaleDB and hot-swaps the writer in
 │       ├── trend-snapshot-scheduler.ts # Guarantees ≥1 historian row per trendable tag per interval
 │       ├── tag-map.ts           # Tag registry loader
-│       ├── cmd-controller.ts    # SET_VALUES writes + module commands, CMD_ACK tracking, pending setpoints
+│       ├── cmd-controller.ts    # SET_VALUES writes + module commands, CMD_ACK tracking, setpoint store and Set push
 │       ├── reset-bus.ts         # Broadcast reset fan-out
 │       ├── routes/
 │       │   ├── config.ts        # GET  /api/v1/config      → { projectRoot }
