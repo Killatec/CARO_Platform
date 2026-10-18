@@ -1,7 +1,11 @@
 import mqtt from 'mqtt';
 import type { MqttClient } from 'mqtt';
-import type { TelemetryIntake, TelemetryMessage } from './telemetry-intake.js';
+import type { TelemetryIntake } from './telemetry-intake.js';
 import type { DutyTracker } from './duty-tracker.js';
+import { parseTelemetry, parseCmdAck } from './mqtt-payloads.js';
+
+/** A dropped-payload reason is logged at most once per this interval per module, with a count. */
+const DROP_LOG_INTERVAL_MS = 60_000;
 
 export interface CmdAck {
   command_id:   string;
@@ -28,6 +32,8 @@ export class MqttBridge {
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private cmdAckHandler: ((moduleId: string, ack: CmdAck) => void) | null = null;
   private handshakeHandler: ((moduleId: string, message: unknown) => void) | null = null;
+  /** "<module>|<what>" → drops since the last log line, and when that line was written. */
+  private readonly drops = new Map<string, { count: number; loggedAt: number }>();
 
   private readonly intake: TelemetryIntake;
   private readonly moduleIds: string[];
@@ -137,25 +143,38 @@ export class MqttBridge {
 
     if (channel === 'telemetry') {
       this.dutyTracker.track(() => {
-        let message: TelemetryMessage;
+        let raw: unknown;
         try {
-          message = JSON.parse(payload.toString()) as TelemetryMessage;
+          raw = JSON.parse(payload.toString());
         } catch {
           return;
         }
-        this.intake.ingest(moduleId, message);
+        const parsed = parseTelemetry(raw);
+        if (!parsed.ok) {
+          this.reportDrop(moduleId, `telemetry dropped: ${parsed.reason}`);
+          return;
+        }
+        if (parsed.skipped > 0) {
+          this.reportDrop(moduleId, 'telemetry entries skipped (bad tag_id or value)', parsed.skipped);
+        }
+        this.intake.ingest(moduleId, parsed.message);
       });
       return;
     }
 
     if (channel === 'cmd_ack') {
-      let ack: CmdAck;
+      let raw: unknown;
       try {
-        ack = JSON.parse(payload.toString()) as CmdAck;
+        raw = JSON.parse(payload.toString());
       } catch {
         return;
       }
-      this.cmdAckHandler?.(moduleId, ack);
+      const parsed = parseCmdAck(raw);
+      if (!parsed.ok) {
+        this.reportDrop(moduleId, `CMD_ACK dropped: ${parsed.reason}`);
+        return;
+      }
+      this.cmdAckHandler?.(moduleId, parsed.message);
       return;
     }
 
@@ -171,5 +190,23 @@ export class MqttBridge {
     }
 
     // unknown channels — ignore
+  }
+
+  /** Logs the first drop of a kind at once, then at most one line per DROP_LOG_INTERVAL_MS with the count since. */
+  private reportDrop(moduleId: string, what: string, count = 1): void {
+    const key = `${moduleId}|${what}`;
+    const now = Date.now();
+    const entry = this.drops.get(key);
+    if (!entry) {
+      this.drops.set(key, { count: 0, loggedAt: now });
+      console.warn(`[MqttBridge] ${moduleId}: ${what}${count > 1 ? ` (${count})` : ''}`);
+      return;
+    }
+    entry.count += count;
+    if (now - entry.loggedAt >= DROP_LOG_INTERVAL_MS) {
+      console.warn(`[MqttBridge] ${moduleId}: ${what} — ${entry.count} since last report`);
+      entry.count = 0;
+      entry.loggedAt = now;
+    }
   }
 }

@@ -201,3 +201,67 @@ describe('MqttBridge — handshake', () => {
     await bridge.stop();
   });
 });
+
+describe('MqttBridge — malformed payloads', () => {
+  function emit(channel: string, body: string) {
+    mockClient.emit('message', `caro/${MODULE_ID}/${channel}`, Buffer.from(body));
+  }
+
+  it('drops telemetry that parses but is not a valid frame, without throwing', async () => {
+    const intake = makeIntake();
+    const ingest = vi.spyOn(intake, 'ingest');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const bridge = makeBridge(intake);
+    await startBridge(bridge);
+
+    for (const body of ['{}', 'null', '[]', '{"timestamp":1,"status":"ONLINE"}', '{"timestamp":1,"status":"ONLINE","tags":5}']) {
+      expect(() => emit('telemetry', body)).not.toThrow();
+    }
+
+    expect(ingest).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+    await bridge.stop();
+  });
+
+  it('ingests the valid entries of a frame and skips the bad ones', async () => {
+    const lkv = new LkvCache();
+    const intake = new TelemetryIntake({
+      lkv, tagMap, moduleTagIds, trendableTagIds,
+      dbPipeline: new DbPipeline(),
+      watchdogTimeoutMs: 1000,
+      dutyTracker: new DutyTracker(),
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const bridge = makeBridge(intake);
+    await startBridge(bridge);
+
+    emit('telemetry', JSON.stringify({
+      timestamp: 1, status: 'ONLINE',
+      tags: [{ tag_id: TAG_MONITOR, value: 7 }, { tag_id: 'x', value: 1 }, null],
+    }));
+
+    expect(lkv.getValue(TAG_MONITOR)).toBe(7);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('skipped'));
+    warn.mockRestore();
+    await bridge.stop();
+  });
+
+  it('drops a malformed CMD_ACK without throwing or calling the handler', async () => {
+    const bridge = makeBridge();
+    const handler = vi.fn();
+    bridge.onCmdAck(handler);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await startBridge(bridge);
+
+    for (const body of ['null', '{}', '{"command_id":"c","results":[{"tag_id":1}]}']) {
+      expect(() => emit('cmd_ack', body)).not.toThrow();
+    }
+    emit('cmd_ack', '{"command_id":"c","results":[{"tag_id":1,"accepted":true}]}');
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(handler).toHaveBeenCalledWith(MODULE_ID, expect.objectContaining({ command_id: 'c' }));
+    warn.mockRestore();
+    await bridge.stop();
+  });
+});
