@@ -1,5 +1,5 @@
 # Tag Registry Admin Tool — REST API Specification
-**Draft** | Generated: 2026-04-02
+**Draft** | Generated: 2026-04-02 | **Reconciled with the implementation:** 2026-10-17
 Companion documents: [Functional Spec](tag_registry_spec.md) | [Bootstrap](tag_registry_bootstrap.md)
 
 ---
@@ -31,7 +31,9 @@ The root template is selected via a global dropdown in the client. On selection,
 { "ok": false, "error": { "code": "TEMPLATE_NOT_FOUND", "message": "..." } }
 ```
 
-HTTP status codes: 200 OK, 201 Created, 400 Bad Request, 404 Not Found, 409 Conflict, 422 Unprocessable Entity, 500 Internal Server Error.
+HTTP status codes used: 200 OK, 400 Bad Request, 403 Forbidden, 404 Not Found, 409 Conflict, 422 Unprocessable Entity, 500 Internal Server Error. No endpoint returns 201.
+
+Errors are formatted by `@caro/server`'s `errorHandler`: `{ ok: false, error: { code, message, details? } }`, with the HTTP status from the thrown error. An unexpected error has no code of its own and is returned as 500 `INTERNAL_ERROR`. Errors from PostgreSQL carry their SQLSTATE in `.code` (e.g. `40001` for a serialization failure), so that string is passed through as the error code, still with status 500.
 
 **Exception — file downloads.** `GET /api/v1/tag-defs` (§7) returns a binary `application/zip` body on success instead of the envelope. Its error responses still use the envelope.
 
@@ -42,11 +44,15 @@ HTTP status codes: 200 OK, 201 Created, 400 Bad Request, 404 Not Found, 409 Conf
   "ok": false,
   "error": {
     "code": "VALIDATION_ERROR",
-    "message": "...",
-    "details": [ { "field": "asset_name", "message": "must not contain a dot" } ]
+    "message": "Template graph validation failed",
+    "details": [
+      { "severity": "error", "code": "INVALID_REFERENCE", "message": "...", "ref": { "template_name": "rf_power_module" } }
+    ]
   }
 }
 ```
+
+`details` entries are the shared validators' `ValidationMessage` objects: `{ severity, code, message, ref? }`, where `ref` may carry `template_name`, `field`, `tag_path`, `asset_name` and similar keys.
 
 ### 2.4 Template Hashes
 
@@ -62,9 +68,9 @@ Every template returned by the server carries a `hash` field: a 6-character hex 
 |----------|-------------|---------|-------|
 | PORT | HTTP port | 3001 | 1+2 |
 | TEMPLATES_DIR | Absolute path to the templates/ folder | (required) | 1+2 |
-| MAX_TAG_PATH_LENGTH | Maximum permitted tag_path character length | 100 | 1+2 |
-| VALIDATE_REQUIRED_PARENT_TYPES | Comma-separated template_type values each tag must have as an ancestor. Empty = disabled. | (unset) | 1+2 |
-| VALIDATE_UNIQUE_PARENT_TYPES | If true, no tag may have more than one ancestor of the same template_type. | false | 1+2 |
+| MAX_TAG_PATH_LENGTH | Logged at startup only. **Not applied**: the limit is the constant `MAX_TAG_PATH_LENGTH = 100` in `shared/constants.ts`, and setting the variable has no effect. | 100 | 1+2 |
+| VALIDATE_REQUIRED_PARENT_TYPES | Comma-separated template_type values each tag must have as an ancestor. Empty = disabled. Served by `GET /config` and enforced **in the client only** (`useValidation`); the server never checks it on save or apply. | (unset) | 1+2 |
+| VALIDATE_UNIQUE_PARENT_TYPES | If true, no tag may have more than one `module` or more than one `parameter` ancestor. Only those two types are checked (`UNIQUE_ANCESTOR_TYPES` in `shared/constants.ts`); other types may repeat. Client-side only, like the row above. | false | 1+2 |
 | POSTGRES_HOST | PostgreSQL host | localhost | 2 only |
 | POSTGRES_PORT | PostgreSQL port | 5432 | 2 only |
 | POSTGRES_DATABASE | PostgreSQL database name | caro_dev | 2 only |
@@ -72,7 +78,7 @@ Every template returned by the server carries a `hash` field: a 6-character hex 
 | POSTGRES_PASSWORD | PostgreSQL password | (required) | 2 only |
 | PROJECT_ROOT | Gates `POST /api/v1/registry/apply` (§5.3). Unset/empty refuses every apply; `*` allows any root; any other value allows only an exact match. | (unset — refuses every apply) | 2 only |
 
-> **Note:** `DATABASE_URL` must not be referenced anywhere in app code. Use the five `POSTGRES_*` variables instead, consumed by `@caro/db` pool.js.
+> **Note:** `DATABASE_URL` must not be referenced anywhere in app code. Use the five `POSTGRES_*` variables instead, consumed by `@caro/db` (`packages/db/pool.ts`).
 >
 > **Note:** as of the multi-project work, env is loaded in two layers via `loadEnv()` from `@caro/server/env` — `PORT`/`TEMPLATES_DIR`/`MAX_TAG_PATH_LENGTH`/`VALIDATE_*` stay in this app's own `server/.env`; `POSTGRES_*` and `PROJECT_ROOT` moved to the monorepo root `.env`, shared with mqtt-simulator and caro-hmi. See root `CLAUDE.md` and `Docs/README.md` § Multi-Project Model.
 
@@ -103,7 +109,7 @@ Returns the server-side validation configuration so the client can apply the sam
 
 Fields are hand-picked, not a spread of `process.env` — `POSTGRES_PASSWORD` never appears in this or any response.
 
-**Client usage:** `AppShell` fetches this endpoint on mount and stores the result in `useUIStore.validationConfig`. `useValidation.js` reads `requiredParentTypes`/`uniqueParentTypes` and passes them to `validateParentTypes()`. `RegistryPage` and `HistoryPage` read `databaseName`/`projectRoot` directly from the store for their connection indicator; `RegistryPage` also compares `projectRoot` against the selected root to gate the Update DB button (§5.3).
+**Client usage:** `AppShell` fetches this endpoint on mount and stores the result in `useUIStore.validationConfig`. `useValidation.ts` reads `requiredParentTypes`/`uniqueParentTypes` and passes them to `validateParentTypes()`. `RegistryPage` and `HistoryPage` read `databaseName`/`projectRoot` directly from the store for their connection indicator; `RegistryPage` also compares `projectRoot` against the selected root to gate the Update DB button (§5.3).
 
 ---
 
@@ -126,13 +132,13 @@ Templates are stored as JSON files on disk under `TEMPLATES_DIR`. The `template_
 ```json
 {
   "templates": [
-    { "template_name": "numeric_mon", "template_type": "tag", "file_path": "tags/numeric_mon.json" },
+    { "template_name": "numeric_mon", "template_type": "tag", "file_path": "numeric_mon.json" },
     ...
   ]
 }
 ```
 
-> **Note:** This endpoint returns metadata only — not full template JSON. Clients needing full template data must call `GET /api/v1/templates/root/:name`.
+> **Note:** This endpoint returns metadata only — not full template JSON. Clients needing full template data must call `GET /api/v1/templates/root/:name`. `file_path` is relative to `TEMPLATES_DIR`. New templates are written flat at its root, but the startup scan is recursive, so a file in a subfolder is still indexed and keeps its path. The list is the server's in-memory index, built once at startup and updated by its own writes; files changed on disk by anything else are not seen until a restart.
 
 ### 3.2 Get Template
 
@@ -196,12 +202,19 @@ The map includes the root template itself and every template reachable via the c
 
 **Server processing:**
 
-1. Validate all `original_hash` values for both `changes` and `deletions`. Any mismatch → reject with `STALE_TEMPLATE` (409). Client must re-fetch root and discard local changes.
-2. Build the proposed template set: current on-disk templates + `changes` − `deletions`.
-3. Run `validateGraph` from `@caro/shared` on the proposed template set. `INVALID_REFERENCE` errors surface naturally if any remaining template references a deleted one.
+An empty `changes` and `deletions` returns the success shape with empty arrays and writes nothing.
+
+1. Validate all `original_hash` values for both `changes` and `deletions`:
+   - a mismatch → `STALE_TEMPLATE` (409); the client must re-fetch the root and discard local changes;
+   - a `null` hash for a name that already exists → `TEMPLATE_NAME_CONFLICT` (409);
+   - a non-null hash, or a deletion, for a name that doesn't exist → `TEMPLATE_NOT_FOUND` (404).
+2. Check every `TagType` and `ModuleType` field default in `changes` against the `tag_types` / `module_types` tables. An unknown value → **400** `SCHEMA_VALIDATION_ERROR`.
+3. Build the proposed template set (current templates + `changes` − `deletions`) and run `validateGraph` from `@caro/tag-registry-shared` on it. `INVALID_REFERENCE` errors surface naturally if any remaining template references a deleted one.
 4. Run `simulateCascade` on `changes` to identify upstream parent templates not in the submitted batch that are affected by the changes.
 5. If upstream impacts exist and `confirmed` is false → return `requires_confirmation` response (see below). No files written.
-6. If `confirmed` is true or there are no upstream impacts → write all files atomically including cascade updates, and unlink deleted template files. Return success.
+6. If `confirmed` is true or there are no upstream impacts → apply the field cascade, write each changed file (write to `<file>.tmp`, then rename), and unlink deleted template files. Return success.
+
+Batch save does **not** run `validateTemplate`, `validateResolvedTags` (tag_name rules) or `validateParentTypes` on the server. Those run in the client before it allows a save; `validateResolvedTags` runs on the server only at registry apply (§5.3). Each file is written atomically, but the batch as a whole is not: an I/O failure part-way through leaves the earlier files written.
 
 Graph validation errors (e.g. `INVALID_REFERENCE`, `CIRCULAR_REFERENCE`) are returned as `VALIDATION_ERROR` with the specific codes in the `details` array — not as top-level error codes.
 
@@ -248,8 +261,8 @@ Graph validation errors (e.g. `INVALID_REFERENCE`, `CIRCULAR_REFERENCE`) are ret
   "ok": true,
   "data": {
     "requires_confirmation": false,
-    "modified_files": ["modules/rf_power_module.json", "modules/Plant1_System_A.json"],
-    "deleted_files":  ["tags/old_template.json"]
+    "modified_files": ["rf_power_module.json", "Plant1_System_A.json"],
+    "deleted_files":  ["old_template.json"]
   }
 }
 ```
@@ -266,7 +279,7 @@ Graph validation errors (e.g. `INVALID_REFERENCE`, `CIRCULAR_REFERENCE`) are ret
 { "original_hash": "b7d1e5", "confirmed": false }
 ```
 
-First call (`confirmed: false`): server returns preview of affected parents. No files written.
+With `confirmed: false` and at least one parent referencing the template, the server returns a preview of affected parents and writes nothing. If no parent references it, the template is deleted on the first call.
 
 ```json
 {
@@ -280,13 +293,17 @@ First call (`confirmed: false`): server returns preview of affected parents. No 
 }
 ```
 
-Second call (`confirmed: true`): server removes template and all references atomically.
+With `confirmed: true`, the server removes the child references from each parent (rewriting those files), then deletes the template file. Each file write is atomic; the sequence is not.
+
+```json
+{ "ok": true, "data": { "requires_confirmation": false, "deleted": true, "affected_parents": [ { "template_name": "rf_power_module", "references_removed": 1 } ] } }
+```
 
 Responses: 200 OK, 404 `TEMPLATE_NOT_FOUND`, 409 `STALE_TEMPLATE` (hash mismatch).
 
 ### 3.6 Validate Templates
 
-`POST /api/v1/templates/validate` — Run full validation across all template files on disk without saving. Useful for startup checks or CI.
+`POST /api/v1/templates/validate` — Run full validation across all indexed templates without saving. Useful for startup checks or CI. It runs `validateTemplate` on every template, `validateGraph` on the whole set, and `validateResolvedTags` on the registry resolved from every template that is not some other template's child. `valid` is `false` if there is any error **or warning**. Parent-type rules are not checked.
 
 **Response data:**
 
@@ -295,20 +312,13 @@ Responses: 200 OK, 404 `TEMPLATE_NOT_FOUND`, 409 `STALE_TEMPLATE` (hash mismatch
   "valid": false,
   "errors": [
     {
-      "template_name": "rf_power_module",
       "severity": "error",
       "code": "INVALID_REFERENCE",
-      "message": "references unknown template \"analog_v2\""
+      "message": "references unknown template \"analog_v2\"",
+      "ref": { "template_name": "rf_power_module" }
     }
   ],
-  "warnings": [
-    {
-      "template_name": "rf_power_module",
-      "severity": "warning",
-      "code": "TYPE_FOLDER_MISMATCH",
-      "message": "template_type \"parameter\" does not match subfolder \"modules\""
-    }
-  ]
+  "warnings": []
 }
 ```
 
@@ -318,20 +328,23 @@ Responses: 200 OK, 404 `TEMPLATE_NOT_FOUND`, 409 `STALE_TEMPLATE` (hash mismatch
 
 Registry resolution is performed server-side during the apply operation (via `loadRoot` + `resolveRegistry`). No separate asset tree manipulation endpoints are implemented.
 
+### 4.1 Lookup Tables
+
+`GET /api/v1/tag-types` and `GET /api/v1/module-types` return every row of the `tag_types` / `module_types` table, ordered by `id`. The client fetches them through `client/src/api/tagTypes.ts` and `client/src/api/moduleTypes.ts`.
+
+```json
+{ "ok": true, "data": [ { "id": 1, "type_name": "f32", "display_name": "Float 32" } ] }
+```
+
+`data` is the array itself, not wrapped in an object.
+
 ---
 
 ## 5. Registry Endpoints
 
 ### 5.1 GET /api/v1/registry
 
-Returns the active tag registry from the database. Uses a subquery to get the latest row per `tag_id` and filter to non-retired rows only:
-
-```sql
-SELECT * FROM (
-  SELECT DISTINCT ON (tag_id) tag_id, registry_rev, tag_path, data_type, is_setpoint, trends, retired, meta
-  FROM tag_registry ORDER BY tag_id, registry_rev DESC
-) latest WHERE retired = false
-```
+Returns the active tag registry from the database via `@caro/db` `getActiveTags()`: the latest row per `tag_id`, non-retired rows only (`DISTINCT ON (tag_id) ... ORDER BY tag_id, registry_rev DESC`, then `WHERE retired = false`). Columns: `tag_id, registry_rev, tag_path, module, module_type, data_type, is_setpoint, trends, unit, format, eng_min, eng_max, tag_name, retired, meta`.
 
 **Response:**
 
@@ -344,9 +357,16 @@ SELECT * FROM (
         "tag_id": 1,
         "registry_rev": 3,
         "tag_path": "Plant1_System_A.RFPowerModule.RF_Fwd.setpoint",
+        "module": "RFPowerModule",
+        "module_type": "MQTT",
         "data_type": "f32",
         "is_setpoint": true,
         "trends": false,
+        "unit": "kW",
+        "format": "#.##",
+        "eng_min": 0,
+        "eng_max": 100,
+        "tag_name": "RF_Fwd.setpoint",
         "retired": false,
         "meta": [ ... ]
       }
@@ -359,7 +379,7 @@ No query parameters in the current implementation.
 
 ### 5.2 Registry Diff (Client-Side)
 
-Registry diff is computed entirely client-side by `diffRegistry(proposed, dbTags)` in `client/src/utils/diffRegistry.js`. No preview endpoint exists on the server.
+Registry diff for the preview is computed client-side by `diffRegistry(proposed, dbTags)` in `client/src/utils/diffRegistry.ts`. No preview endpoint exists on the server. The apply endpoint repeats the classification server-side (§5.3) and that result is what gets written.
 
 `diffRegistry` classifies each row as `added`, `modified`, `unchanged`, or `retired`. Modified rows include a `changedFields` array (listing which of `tag_path`, `data_type`, `is_setpoint`, `trends`, `meta` changed) and a `dbMeta` property (the database row's meta array, for field-level diff highlighting). Comparison uses a key-order-insensitive `deepEqual` so PostgreSQL JSONB key reordering does not produce false positives.
 
@@ -375,12 +395,25 @@ Applies the resolved registry to the database.
 { "rootName": "Plant1_System_A", "comment": "Initial tag registry load" }
 ```
 
-- `rootName` — required. Must be a valid template name. Returns 400 if missing.
-- `comment` — required. Non-empty string. Returns 400 if missing or empty.
+- `rootName` — required, non-empty string. Otherwise 400 `VALIDATION_ERROR`.
+- `comment` — required, non-empty string (stored trimmed). Otherwise 400 `VALIDATION_ERROR`.
 - `rootName` must match the server's configured `PROJECT_ROOT` (§2.6), checked after the two validations above and before the template is loaded. Unset/empty `PROJECT_ROOT` refuses every apply; `*` allows any root; otherwise an exact match is required. Returns 403 `PROJECT_ROOT_MISMATCH` on rejection.
 - Returns 404 if the `rootName` template does not exist on disk.
 
-Server loads the template graph via `loadRoot()`, resolves server-side via `resolveRegistry()`, diffs against `getActiveRegistry()`, writes inside a SERIALIZABLE transaction.
+Server processing (`registryService.applyRegistry`):
+
+1. `loadRoot(rootName)` and `resolveRegistry()` server-side; client-supplied tag data is never used.
+2. `validateResolvedTags()` on the result. Any error → 422 `SCHEMA_VALIDATION_ERROR`, with `TAG_NAME_EMPTY` / `TAG_NAME_TOO_LONG` / `DUPLICATE_TAG_NAME` / trend and setpoint type messages in `details`. `validateGraph` and the parent-type rules are **not** run here.
+3. Classify against `getActiveTags()` **by `tag_path`**:
+   - a path not in the database → added, with a new `tag_id` = current max `tag_id` (1000 if the table is empty) + 1, +2, …;
+   - a path present but differing in `data_type`, `is_setpoint`, `trends`, `module`, `module_type`, `unit`, `format`, `eng_min`, `eng_max`, `tag_name` or `meta` (key-order-insensitive) → modified, keeping its `tag_id`;
+   - an active path missing from the resolved set → retired.
+
+   Every active tag in the database is compared, whatever root it came from (see `Docs/README.md` § Multi-Project Model).
+4. Nothing changed → the no-changes response below, and no revision is created.
+5. Otherwise `applyRegistryRevision()` in one SERIALIZABLE transaction: a `registry_revisions` row (`applied_by = 'dev'`), then one new append-only `tag_registry` row per added, modified and retired tag at the new `registry_rev`. A serialization failure is not retried; it surfaces as a 500 (§2.2).
+
+**Tags whose `tag_path` exceeds 100 characters are dropped by `resolveRegistry` without any error or warning**, so they are never added; a tag whose path is renamed or moved past the limit is retired and not re-added. No validator checks `tag_path` length; `TAG_PATH_TOO_LONG` is declared but never emitted (§8).
 
 **Rejection response (HTTP 403):**
 
@@ -400,6 +433,7 @@ Server loads the template graph via `loadRoot()`, resolves server-side via `reso
 {
   "ok": true,
   "data": {
+    "ok": true,
     "registry_rev": 5,
     "added": 3,
     "modified": 1,
@@ -408,26 +442,22 @@ Server loads the template graph via `loadRoot()`, resolves server-side via `reso
 }
 ```
 
+`data` repeats `ok: true` because the service result is passed through unchanged.
+
 **No-changes response (HTTP 200):**
 
 ```json
 {
   "ok": true,
   "data": {
+    "ok": true,
     "registry_rev": null,
     "message": "No changes to apply"
   }
 }
 ```
 
-**Error response (HTTP 500):**
-
-```json
-{
-  "ok": false,
-  "error": { "message": "Failed to apply registry" }
-}
-```
+**Error responses:** 400 `VALIDATION_ERROR`, 403 `PROJECT_ROOT_MISMATCH`, 404 `TEMPLATE_NOT_FOUND`, 422 `SCHEMA_VALIDATION_ERROR` (resolved-tag rules), 500 for database failures (§2.2).
 
 ---
 
@@ -457,9 +487,9 @@ Returns all rows from `registry_revisions` ordered by `registry_rev DESC`.
 
 ### 6.2 GET /api/v1/registry/revisions/:rev
 
-Returns all `tag_registry` rows for a specific revision, ordered by `tag_path ASC`.
+Returns the `tag_registry` rows **written at** that revision — the tags added, modified or retired by that apply, not the full registry as of that revision — ordered by `tag_path ASC`. Columns: `tag_id, registry_rev, tag_path, module, module_type, data_type, is_setpoint, unit, format, eng_min, eng_max, tag_name, retired, meta` (**no `trends` column**).
 
-**Path parameter:** `:rev` — integer revision number. Returns 400 if non-integer.
+**Path parameter:** `:rev` — parsed with `parseInt`. A value that doesn't start with a number returns 400 `VALIDATION_ERROR`.
 
 **Response:**
 
@@ -474,7 +504,6 @@ Returns all `tag_registry` rows for a specific revision, ordered by `tag_path AS
         "tag_path": "Plant1_System_A.RFPowerModule.RF_Fwd.setpoint",
         "data_type": "f32",
         "is_setpoint": true,
-        "trends": false,
         "retired": false,
         "meta": [ ... ]
       }
@@ -483,7 +512,7 @@ Returns all `tag_registry` rows for a specific revision, ordered by `tag_path AS
 }
 ```
 
-Returns 404 if no rows exist for the given revision number.
+Returns 404 with code `NOT_FOUND` if no rows exist for the given revision number.
 
 ---
 
@@ -546,27 +575,32 @@ Only `data_type` is emitted per tag. `direction` was removed on 2026-10-01; it w
 
 ## 8. Error Code Reference
 
+Codes marked *not emitted* are declared in `shared/constants.ts` (or only listed here) but no code path produces them today.
+
 | Code | HTTP Status | Description |
 |------|-------------|-------------|
 | TEMPLATE_NOT_FOUND | 404 | No template with the given template_name exists. |
 | TEMPLATE_NAME_CONFLICT | 409 | A null-hash template in the batch uses a name that already exists on disk. |
 | STALE_TEMPLATE | 409 | One or more original_hash values do not match the current file on disk. The entire batch is rejected. Client must re-fetch the full root hierarchy and discard local changes before retrying. |
-| INVALID_REFERENCE | 422 | Template references a template_name that does not exist. |
-| CIRCULAR_REFERENCE | 422 | Template dependency graph contains a cycle. |
-| SCHEMA_VALIDATION_ERROR | 422 | Template does not conform to its JSON Schema. |
-| INVALID_ASSET_NAME | 422 | asset_name is empty or contains a dot character. |
-| INVALID_TEMPLATE_NAME | 422 | template_name contains a dot (.) character. |
-| DUPLICATE_SIBLING_NAME | 409 | Two siblings within the same parent share an asset_name. |
-| UNKNOWN_FIELD | 422 | Instance sets a field not defined in the child template. |
-| TAG_PATH_COLLISION | 409 | Renaming would create a tag_path that duplicates an active tag. |
-| TAG_PATH_TOO_LONG | 422 | A resolved tag_path exceeds MAX_TAG_PATH_LENGTH. |
-| PARENT_TYPE_MISSING | 422 | A tag is missing a required ancestor type (VALIDATE_REQUIRED_PARENT_TYPES). |
-| DUPLICATE_PARENT_TYPE | 422 | A tag has more than one ancestor of the same type (VALIDATE_UNIQUE_PARENT_TYPES). |
-| EMPTY_BRANCH | warning | A structural template in the root hierarchy contains no tag descendants. Declared but not yet emitted in Phase 1 validation. |
-| TAG_NAME_EMPTY | 422 | A resolved tag has an empty `tag_name` — no level in its ancestor path has `In_Tag_Name` set to `true`. Emitted by `validateResolvedTags`; surfaces on registry apply and template save. |
-| TAG_NAME_TOO_LONG | 422 | A resolved `tag_name` exceeds `MAX_TAG_NAME_LENGTH` (40 characters). Emitted by `validateResolvedTags`; surfaces on registry apply and template save. |
-| DUPLICATE_TAG_NAME | 422 | Two or more resolved tags share the same `tag_name` (case-insensitive comparison, entire-registry scope). One error emitted per offending tag. Enforced in-app by `validateResolvedTags` — no DB UNIQUE constraint. Surfaces on registry apply and template save. |
-| VALIDATION_ERROR | 422 | One or more validation rules failed. See details array. Graph validation errors from batchSave (INVALID_REFERENCE, CIRCULAR_REFERENCE) are returned as VALIDATION_ERROR with specific codes in the details array — not as top-level error codes. |
+| INVALID_REFERENCE | `details` entry | Template references a template_name that does not exist. From `validateGraph`, under 422 `VALIDATION_ERROR`. |
+| CIRCULAR_REFERENCE | `details` entry | Template dependency graph contains a cycle. From `validateGraph`, under 422 `VALIDATION_ERROR`. |
+| SCHEMA_VALIDATION_ERROR | 400 / 422 / `details` entry | Top-level 400 from batch save when a TagType/ModuleType default is not in its lookup table; top-level 422 from registry apply when resolved-tag rules fail; and the code of most `validateTemplate` / `validateResolvedTags` messages. |
+| INVALID_ASSET_NAME | `details` entry | asset_name is empty or contains a dot character (`validateTemplate`). |
+| INVALID_TEMPLATE_NAME | *not emitted* | Not declared in code. A dot in a template name is blocked only by the client's New Template dialog; the server accepts it. |
+| DUPLICATE_SIBLING_NAME | `details` entry | Two siblings within the same parent share an asset_name (`validateTemplate`). |
+| UNKNOWN_FIELD | *not emitted* | Instance sets a field not defined in the child template. |
+| TAG_PATH_COLLISION | *not emitted* | Renaming would create a tag_path that duplicates an active tag. |
+| TAG_PATH_TOO_LONG | *not emitted* | Over-length tag_paths are dropped silently instead (§5.3). |
+| NOT_FOUND | 404 | `GET /registry/revisions/:rev`: no rows for that revision. |
+| INTERNAL_ERROR | 500 | Unexpected server error (§2.2). |
+| PARENT_TYPE_MISSING | client only | A tag is missing a required ancestor type (VALIDATE_REQUIRED_PARENT_TYPES). Raised by the client's validation panel; no endpoint checks it. |
+| DUPLICATE_PARENT_TYPE | client only | A tag has more than one `module` or `parameter` ancestor (VALIDATE_UNIQUE_PARENT_TYPES). Client only, as above. |
+| EMPTY_BRANCH | *not emitted* | A structural template in the root hierarchy contains no tag descendants (tracked in `platform_todo.md`). |
+| TYPE_FOLDER_MISMATCH | *not emitted* | Leftover from the subfolder layout; declared in `shared/constants.ts` only. |
+| TAG_NAME_EMPTY | `details` entry | A resolved tag has an empty `tag_name` — no level in its ancestor path has `In_Tag_Name` set to `true`. From `validateResolvedTags`: blocks save in the client, and fails registry apply with 422 `SCHEMA_VALIDATION_ERROR`. Also a Tag Defs export error (§7). |
+| TAG_NAME_TOO_LONG | `details` entry | A resolved `tag_name` exceeds `MAX_TAG_NAME_LENGTH` (40 characters). Same surfaces as TAG_NAME_EMPTY (not the export). |
+| DUPLICATE_TAG_NAME | `details` entry | Two or more resolved tags share the same `tag_name` (case-insensitive comparison, entire-registry scope). One error emitted per offending tag. No DB UNIQUE constraint. Same surfaces as TAG_NAME_EMPTY. |
+| VALIDATION_ERROR | 400 / 422 | 400: a required request field is missing or malformed (`rootName`, `comment`, `:rev`, `root`). 422: graph validation failed on batch save, or graph / module-relative-name validation failed on Tag Defs export; the specific codes are in `details`. |
 | NO_MQTT_MODULES | 422 | `GET /api/v1/tag-defs` (§7): no `module` template with `Module_Type: "MQTT"` is reachable from `root`. |
 | TAG_NAME_LEAF_AND_GROUP | — | `details` entry under 422 `VALIDATION_ERROR` from `GET /api/v1/tag-defs` (§7): a module-relative name is also the parent of another name (case-insensitive). |
 | TAG_NAME_RESERVED_SEGMENT | — | `details` entry under 422 `VALIDATION_ERROR` from `GET /api/v1/tag-defs` (§7): a module-relative name has a segment equal to `data_type`, the leaf key. |

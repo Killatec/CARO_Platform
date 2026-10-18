@@ -165,95 +165,101 @@ await page.getByRole('button', { name: /history/i }).click();
 
 ### 4.1 tests/templates.spec.js — Templates Tree (6 tests)
 
-| # | Test | Covers |
-|---|---|---|
-| 1 | displays a template leaf in the Templates Tree after API creation | Functional spec §6: TemplatesTree folder view |
-| 2 | clicking a template leaf populates the Fields Panel | Functional spec §7: leaf click → Fields Panel |
-| 3 | editing a template default field value marks it dirty (orange) | Functional spec §8: dirty indicator |
-| 4 | creating a new template via NewTemplateModal | Functional spec §10: NewTemplateModal |
-| 5 | deleting a new unsaved template removes it instantly without Save | Functional spec §9: new template deletion |
-| 6 | deleting a saved template queues it as pending and shows Save bar | Functional spec §9: saved template deletion |
+| # | Test |
+|---|---|
+| 1 | displays a template leaf in the Templates Tree after API creation |
+| 2 | clicking a template leaf populates the Fields Panel |
+| 3 | editing a template default field value marks it dirty (bold italic) |
+| 4 | creating a new template via NewTemplateModal |
+| 5 | deleting a new unsaved template removes it instantly without Save |
+| 6 | deleting a saved template queues it as pending and shows Save bar |
 
 **Setup:** Creates one tag template via API in `beforeEach`.
 
-### 4.2 tests/fields-panel.spec.js — Fields Panel (8 tests)
+### 4.2 tests/fields-panel.spec.js — Fields Panel (10 tests)
 
-| # | Test | Covers |
-|---|---|---|
-| 1 | Template mode: shows template name and type as read-only | Functional spec §11: template mode display |
-| 2 | Template mode: Add Field button opens AddFieldModal | Functional spec §12: AddFieldModal trigger |
-| 3 | Template mode: adding a field via modal appends it to the panel | Functional spec §12: AddFieldModal confirm |
-| 4 | Template mode: editing a field marks the Save bar dirty | Functional spec §13: field edit → dirty |
-| 5 | Instance mode: shows template name, type, and asset name | Functional spec §14: instance mode display |
-| 6 | Instance mode: editing a field override turns it blue | Functional spec §14: override colour |
-| 7 | Instance mode: changing asset name is reflected in the tree | Functional spec §14: asset name edit |
-| 8 | Instance mode: editing asset name turns it orange | Functional spec §14: dirty asset name indicator |
+| # | Test |
+|---|---|
+| 1 | template mode: shows template name and type as read-only |
+| 2 | template mode: Add Field button opens AddFieldModal |
+| 3 | template mode: adding a field via AddFieldModal appends it to the panel |
+| 4 | template mode: trash icon on field row removes the field |
+| 5 | instance mode: clicking a system tree node shows asset name input |
+| 6 | instance mode: editing asset name does not clear the panel on each keystroke |
+| 7 | instance mode: override value shown in blue, dirty override shown in bold italic |
+| 8 | Instance mode: editing asset name turns it bold italic |
+| 9 | template mode: In_Tag_Name pinned row is visible and toggleable |
+| 10 | template mode: AddFieldModal shows reserved-name error for In_Tag_Name |
 
 **Setup:** Creates tag + parameter + module hierarchy via API. Navigates by `selectRoot`.
 
 ### 4.3 tests/system-tree.spec.js — System Tree (7 tests)
 
-| # | Test | Covers |
-|---|---|---|
-| 1 | System Tree shows root node after selectRoot | Functional spec §5: root display |
-| 2 | System Tree shows full hierarchy (module → parameter → tag) | Functional spec §5: hierarchy expansion |
-| 3 | Collapse / expand a tree node hides and shows children | Functional spec §5: collapse toggle |
-| 4 | Clicking a system tree node selects it and populates the panel | Functional spec §14: node selection |
-| 5 | Root node is shown without an asset-name row | Functional spec §14: root instance mode |
-| 6 | Deleting a node from the system tree removes it from the hierarchy | Functional spec §15: node deletion |
-| 7 | Deleted node does not appear after discard | Functional spec §15: deletion + discard |
+| # | Test |
+|---|---|
+| 1 | system tree renders the full hierarchy |
+| 2 | clicking a node populates the Fields Panel |
+| 3 | collapse button hides child nodes |
+| 4 | re-expanding shows child nodes again |
+| 5 | trash icon on a non-root node removes it and shows Save bar |
+| 6 | root node does not have a trash icon |
+| 7 | dirty node label shown in bold italic after instance edit |
 
 **Setup:** Creates 3-level hierarchy (module → parameter → tag) via API.
 
 ### 4.4 tests/drag-drop.spec.js — Drag and Drop (3 tests)
 
-| # | Test | Covers |
-|---|---|---|
-| 1 | Dragging a tag template onto a module node adds it as a child | Functional spec §16: drag-and-drop composition |
-| 2 | Dropped child appears in Fields Panel on click | Functional spec §16: post-drop selection |
-| 3 | Dragging onto a tag node is rejected (tag nodes are not valid drop targets) | Functional spec §16: invalid drop targets |
+| # | Test |
+|---|---|
+| 1 | dragging a tag template onto a module node adds it as a child |
+| 2 | dropped child appears in Fields Panel on click |
+| 3 | dragging onto a tag node is not accepted (tag nodes are not valid drop targets) |
 
 **Setup:** Creates one tag template and one module template via API. `beforeEach` calls `selectRoot(modMName)` to load the module into the system tree before each drag test.
 
 **Note on test 3:** The second drag (`tagLeaf2.dragTo(tagNodeInTree)`) is wrapped in `.catch(() => {})` because Playwright's `dragTo` may time out if the drop target rejects the event before the gesture completes. The assertion (`not.toContainText(tagT2Name)`) is what validates the behaviour, not whether `dragTo` resolves.
 
-### 4.5 tests/save-cancel.spec.js — Save/Cancel/Cascade flow (7 tests, 1 skipped)
+### 4.5 tests/save-cancel.spec.js — Save/Cancel/Cascade flow (7 tests)
 
-| # | Test | Status | Covers |
-|---|---|---|---|
-| 1 | Save bar is hidden when no changes are pending | Pass | Functional spec §17: save bar visibility |
-| 2 | Save bar appears after editing a field default | Pass | Functional spec §17: dirty detection |
-| 3 | Cancel/Discard hides Save bar and reverts field | Pass | Functional spec §17: discard flow |
-| 4 | Root dropdown is disabled while dirty | **Skip** | Functional spec §17.1 — cursor-not-allowed on wrapper but dropdown still interactive |
-| 5 | Save with no upstream parents completes and hides Save bar | Pass | Functional spec §18: simple save |
-| 6 | Save triggers CascadeConfirmModal when upstream parents are affected | Pass | Functional spec §19: cascade modal |
-| 7 | Confirming the cascade modal completes the save | Pass | Functional spec §19: cascade confirm |
+| # | Test |
+|---|---|
+| 1 | Save bar is hidden when no changes are pending |
+| 2 | Save bar appears after editing a field default |
+| 3 | Cancel/Discard hides the Save bar and reverts the field |
+| 4 | root dropdown is disabled while dirty |
+| 5 | Save with no upstream parents completes and hides Save bar |
+| 6 | Save triggers CascadeConfirmModal when upstream parents are affected |
+| 7 | Confirming the cascade modal completes the save |
 
 **Setup for tests 6 and 7:** Uses `po.selectRoot(pName)` (the parent) — not `selectRoot(tName)` (the tag). `loadRoot(pName)` populates `templateMap` with `{pName, tName}`. `simulateCascade` requires both templates in the store to detect that editing `tName` affects `pName`. Calling `selectRoot(tName)` would fail because tag templates are excluded from the root dropdown; calling `selectRoot` with a structural parent that was not explicitly loaded would leave the store without the tag, causing `simulateCascade` to report no affected ancestors and the cascade modal to never appear.
 
 **Setup for test 5:** Uses a standalone parameter template (`soloName`) with its own `eng_min` field and no children and no upstream parents. A tag template cannot be used as the root (see section 5.4). A structural parent with the tag as a child would trigger the cascade modal, causing `saveAndWait()` to hang.
 
-### 4.6 tests/validation.spec.js — Validation Panel (5 tests)
+### 4.6 tests/validation.spec.js — Validation Panel (7 tests)
 
-| # | Test | Covers |
-|---|---|---|
-| 1 | ValidationPanel shows no errors for a valid template | Functional spec §20: clean state |
-| 2 | ValidationPanel shows error for circular reference | Functional spec §20: CIRCULAR_REFERENCE |
-| 3 | ValidationPanel shows error for invalid field type | Functional spec §20: SCHEMA_VALIDATION_ERROR |
-| 4 | Save button is disabled when validation errors are present | Functional spec §20: save gating |
-| 5 | Childless structural root loads without validation errors | Functional spec §20: empty template |
+| # | Test |
+|---|---|
+| 1 | ValidationPanel is always visible with its header |
+| 2 | duplicate sibling asset_name shows DUPLICATE_SIBLING_NAME error |
+| 3 | dot in asset_name shows INVALID_ASSET_NAME error |
+| 4 | fixing the invalid asset name clears the error |
+| 5 | childless structural root loads without validation errors |
+| 6 | ValidationPanel is height-capped at 50 vh and its message list scrolls |
+| 7 | system tree nodes on an error path get a red tint |
 
 **Setup:** Creates templates via API; edits them through the UI to trigger validation states.
 
-### 4.7 tests/registry.spec.js — Registry Page (5 tests, 1 skipped)
+### 4.7 tests/registry.spec.js — Registry Page (7 tests)
 
-| # | Test | Status | Covers |
-|---|---|---|---|
-| 1 | Shows prompt when no root is selected | Pass | Functional spec §21: empty state |
-| 2 | Shows registry table after root selection | Pass | Functional spec §21: table display |
-| 3 | tag_path column is present and contains root template name prefix | Pass | Functional spec §21: tag path format |
-| 4 | Clicking tag_path column header sorts the table | Pass | Functional spec §21: column sort |
-| 5 | Error banner shown when graph has validation errors | **Skip** | Functional spec §21.3 — not reachable via API |
+| # | Test |
+|---|---|
+| 1 | shows prompt when no root is selected |
+| 2 | shows registry table after root selection |
+| 3 | tag_path column is present and prefixed with root template name |
+| 4 | clicking tag_path column header sorts the table |
+| 5 | error banner shown when graph has validation errors |
+| 6 | tag_name column is present and shows the resolved tag_name |
+| 7 | Export to CSV button downloads a CSV of the current table |
 
 **Setup:** Creates 3-level hierarchy (module → parameter → tag) via API, then calls `selectRoot(modMName)` followed by `po.navigateToRegistry()`. Navigation uses the sidebar button (client-side) to preserve store state — `page.goto('/registry')` would wipe Zustand state and cause the table to never render.
 
@@ -261,28 +267,28 @@ await page.getByRole('button', { name: /history/i }).click();
 
 #### 4.8.1 tests/registry-diff.spec.js — Registry Diff Display (6 tests)
 
-| # | Test | Covers |
-|---|---|---|
-| 1 | shows all tags as added (green) when not yet applied to database | diffRegistry added classification, bg-green-500 row class |
-| 2 | shows all rows as unchanged after applying registry | diffRegistry unchanged classification, no colored background |
-| 3 | shows new child as added (green) after registry was applied | diff after template modification — added row |
-| 4 | shows removed tag as retired (red) after registry was applied | diffRegistry retired classification, bg-red-500 row class |
-| 5 | shows modified row with cell-level highlight when field value changes | per-cell amber highlight (td[class*="amber"]), not full-row |
-| 6 | tag_id column shows 'new' for added rows and numeric id for unchanged rows | tag_id column behavior |
+| # | Test |
+|---|---|
+| 1 | shows all tags as added when not yet applied to database |
+| 2 | shows all rows as unchanged after applying registry |
+| 3 | shows new child as added (green) after registry was applied |
+| 4 | shows removed tag as retired (red) after registry was applied |
+| 5 | shows modified row with cell-level highlight when field value changes |
+| 6 | tag_id column shows new for added rows and numeric id for unchanged rows |
 
 **Pattern:** Timestamp-based template names (e.g. `tag_diff_${Date.now()}`) ensure tag_paths are unique per run and never appear in the DB before the test applies them. `applyRegistryApi()` and `getTemplate()` are imported from `helpers/api.js`.
 
 #### 4.8.2 tests/registry-apply.spec.js — Registry Apply Flow (7 tests)
 
-| # | Test | Covers |
-|---|---|---|
-| 1 | Update DB button is disabled when all tags are unchanged | disabled state when no changes |
-| 2 | Update DB button is enabled when changes exist | enabled state when added rows present |
-| 3 | clicking Update DB opens confirmation modal with correct contents | modal open, diff summary, comment input, Confirm disabled initially |
-| 4 | Confirm button enables only when comment is non-empty | Confirm gating on comment field |
-| 5 | Cancel closes modal without applying | Cancel flow, diff summary unchanged |
-| 6 | successful apply shows success banner and all rows become unchanged | banner text, diff resets to unchanged, banner auto-dismisses after 4s |
-| 7 | apply creates a new revision visible on the History page | revision count increments, comment and 'dev' visible on History page |
+| # | Test |
+|---|---|
+| 1 | Update DB button is disabled when all tags are unchanged |
+| 2 | Update DB button is enabled when changes exist |
+| 3 | clicking Update DB opens confirmation modal with correct contents |
+| 4 | Confirm button enables only when comment is non-empty |
+| 5 | Cancel closes modal without applying |
+| 6 | successful apply shows success banner and all rows become unchanged |
+| 7 | apply creates a new revision visible on the History page |
 
 **Key locators:**
 ```js
@@ -294,24 +300,23 @@ const confirmButton = (page) => page.getByRole('button', { name: 'Confirm' });
 
 #### 4.8.3 tests/history.spec.js — History Page (5 tests)
 
-| # | Test | Covers |
-|---|---|---|
-| 1 | History nav item is visible in sidebar | History sidebar button present |
-| 2 | History page shows revisions table with correct column headers | rev, applied_by, applied_at, comment headers |
-| 3 | revisions are ordered most recent first | DESC ordering by registry_rev |
-| 4 | applied_at column uses dd-MMM-yyyy HH:mm:ss format | regex `/^\d{2}-[A-Z][a-z]{2}-\d{4} \d{2}:\d{2}:\d{2}$/` |
-| 5 | comment column shows the comment entered during apply | comment round-trip |
+| # | Test |
+|---|---|
+| 1 | History nav item is visible in sidebar |
+| 2 | History page shows revisions table with correct column headers |
+| 3 | revisions are ordered most recent first |
+| 4 | applied_at column uses dd-MMM-yyyy HH:mm:ss format |
+| 5 | comment column shows the comment entered during apply |
 
 **Navigation:** `page.getByRole('button', { name: /history/i }).click()` — inline in each test, not via `pageObjects.js`.
 
-#### 4.8.4 tests/meta-modal.spec.js — Meta View Modal (4 tests)
+#### 4.8.4 tests/meta-modal.spec.js — Meta View Modal (3 tests)
 
-| # | Test | Covers |
-|---|---|---|
-| 1 | clicking View on a registry row opens meta modal with tag_path as title | modal opens, contains tag_path, shows Level N cards |
-| 2 | meta modal closes when Close button is clicked | modal close |
-| 3 | modified row meta modal shows diff legend when meta field value differs | legend text (changed/added/removed), amber cell highlight |
-| 4 | clicking View on a different row replaces the open modal | modal content switches to second row's tag_path |
+| # | Test |
+|---|---|
+| 1 | clicking View on a registry row opens meta modal with tag_path as title |
+| 2 | meta modal closes when Close button is clicked |
+| 3 | modified row meta modal shows diff legend when meta field value differs |
 
 **Modal locator pattern:**
 ```js
@@ -326,11 +331,11 @@ function metaModal(page, tagPath) {
 
 **Prerequisite:** `VALIDATE_REQUIRED_PARENT_TYPES=module` and `VALIDATE_UNIQUE_PARENT_TYPES=true` must be set in `apps/tag-registry/server/.env`. Without these vars the config endpoint returns empty arrays/false and tests will fail to observe the expected error codes.
 
-| # | Test | Covers |
-|---|---|---|
-| 1 | PARENT_TYPE_MISSING shown when tag has no module ancestor | Bootstrap §8.6, §8.10 — validateParentTypes wired via config endpoint |
-| 2 | No validation errors when tag has a module ancestor | Hierarchy: system → module → tag |
-| 3 | DUPLICATE_PARENT_TYPE shown when tag has two module ancestors | Hierarchy: system → module → module → tag |
+| # | Test |
+|---|---|
+| 1 | PARENT_TYPE_MISSING shown when tag has no module ancestor |
+| 2 | no validation errors when tag has a module ancestor |
+| 3 | DUPLICATE_PARENT_TYPE shown when tag has two module ancestors |
 
 **Setup:** Each test creates its own hierarchy via API in `beforeEach`. Test 1 uses a system root with a tag directly attached (no module between them). Test 2 builds a three-level chain: system → module → tag. Test 3 builds a four-level chain with two `module` type nodes. All created templates are cleaned up via `deleteTemplates(created.splice(0))` in `afterEach`.
 
@@ -338,11 +343,11 @@ function metaModal(page, tagPath) {
 
 ### 4.8.6 tests/trends.spec.js — Trends Column (3 tests)
 
-| # | Test | Covers |
-|---|---|---|
-| 1 | trends column header visible in Registry table | Bootstrap §8.5 — trends column between is_setpoint and meta |
-| 2 | Tag row shows false when no trends field in any template | shared/resolveRegistry — trends defaults to false |
-| 3 | Tag row shows true when module template has trends field set to true | shared/resolveRegistry — case-insensitive trends detection, Boolean field_type |
+| # | Test |
+|---|---|
+| 1 | trends column header is visible in Registry table |
+| 2 | trends is false when no hierarchy level has a trends field |
+| 3 | trends is true when a hierarchy level has trends field set to true |
 
 **Setup:** Each test creates a module → parameter → tag hierarchy via API. Test 3 additionally passes `{ trends: { field_type: 'Boolean', default: true } }` as the module-level `fields` argument to `createStructuralTemplate`. `po.selectRoot(modName)` loads the hierarchy, `po.navigateToRegistry()` switches to the Registry page client-side. The trends cell is the 7th `<td>` (0-indexed: 6) in each row: `tag_id(0), tag_path(1), module(2), module_type(3), data_type(4), is_setpoint(5), trends(6), meta(7)`.
 
@@ -350,14 +355,14 @@ function metaModal(page, tagPath) {
 
 #### 4.8.7 tests/module-type.spec.js — Module Type (6 tests)
 
-| # | Test | Covers |
-|---|---|---|
-| 1 | module template without Module_Type shows validation error | validateTemplate module requirement surfaced in ValidationPanel |
-| 2 | module template with Module_Type field passes validation | clean validation state with ModuleType field present |
-| 3 | Module_Type field renders as a dropdown in FieldsPanel template mode | ModuleType field_type → `<select>` with HMI/MQTT options from module_types lookup |
-| 4 | changing Module_Type dropdown value marks template dirty and saves | dirty detection, save round-trip, persistence across reload |
-| 5 | registry table shows module and module_type columns after apply | module/module_type columns visible in RegistryTable, correct values after applyRegistryApi |
-| 6 | AddFieldModal offers ModuleType as a field type option | ModuleType in AddFieldModal type dropdown |
+| # | Test |
+|---|---|
+| 1 | module template without Module_Type shows validation error |
+| 2 | module template with Module_Type field passes validation |
+| 3 | Module_Type field renders as a dropdown in FieldsPanel template mode |
+| 4 | changing Module_Type dropdown value marks template dirty and saves |
+| 5 | registry table shows module and module_type columns after apply |
+| 6 | AddFieldModal offers ModuleType as a field type option |
 
 **Setup:** Each test creates its own hierarchy via API in the test body (not in `beforeEach`). Module templates include `{ Module_Type: { field_type: 'ModuleType', default: 'HMI' } }` in the fields argument. `afterEach` navigates to `about:blank` and cleans up via `deleteTemplates(created.splice(0))`.
 
@@ -365,49 +370,36 @@ function metaModal(page, tagPath) {
 
 ---
 
-## 4.9 Registry Unit Test Files
+#### 4.8.8 tests/tag-defs.spec.js — Generate Tag Defs (2 tests)
 
-#### 4.9.1 client/__tests__/diffRegistry.test.js (44 tests)
+| # | Test |
+|---|---|
+| 1 | downloads a timestamped ZIP for a system with an MQTT module |
+| 2 | shows an error banner when the system has no MQTT module |
 
-Covers: `deepEqual` key-order insensitivity (via meta comparison), all `diffStatus` classifications (added/retired/unchanged/modified), sort order (added→modified→unchanged→retired), `changedFields` array on modified rows, `dbMeta` present on all modified rows, `tag_id` carry-over from db row onto unchanged/modified/retired rows, `module` diff detection (including null vs non-null), `module_type` diff detection (including null vs non-null), six-field combo change test. Edge cases: empty proposed array, empty db array, both empty.
+#### 4.8.9 tests/tree-reorder.spec.js — Tree reorder and reparenting (8 tests)
 
-Uses `makeProposed()` and `makeDb()` fixture helpers. `makeProposed()` includes `module` and `module_type` defaults matching the `ProposedTag` interface. No DOM, no network — pure function tests.
+| # | Test |
+|---|---|
+| 1 | reorder down: drag child 0 to after child 2, save, reload, order persists |
+| 2 | reorder up: drag last child to position 0, save, reload, order persists |
+| 3 | template panel drop into top zone inserts at position, not appended |
+| 4 | cross-parent drag reparents the child as a sibling under the new parent |
+| 5 | body-dropping a node onto a sibling nests it as that sibling's child |
+| 6 | body-dropping a child onto its own current parent is a no-op |
+| 7 | reparenting onto own descendant is rejected (cycle prevention) |
+| 8 | "See what's changed" modal shows Children Reordered section after reorder |
 
-#### 4.9.2 client/__tests__/formatDate.test.js (22 tests)
+#### 4.8.10 tests/ui-layout.spec.js — Editor layout (2 tests)
 
-Covers: all 12 month abbreviations (Jan–Dec), zero-padding for day, hour, minute, second, null/undefined/invalid inputs → `'—'`, `Date` objects, ISO strings, PostgreSQL TIMESTAMPTZ strings.
+| # | Test |
+|---|---|
+| 1 | System Tree, Properties, and Templates are three independent side-by-side columns with ValidationPanel below |
+| 2 | Templates panel header reads "Templates" not "All Templates" |
 
-**Timezone safety:** expected strings are built using the same local-time methods (`getDate()`, `getHours()`, etc.) as the implementation, ensuring tests pass regardless of the machine's timezone.
+## 4.9 Unit Test Files
 
-#### 4.9.3 server/__tests__/registryService.test.js (18 tests)
-
-Covers: `getActiveRegistry` (SQL contains `DISTINCT ON`, `ORDER BY registry_rev DESC`, `retired = false` in outer WHERE); `getRevisions` (SQL references `registry_revisions`, ordered `registry_rev DESC`); `getRevisionTags` (called with `[rev]` param, SQL has `registry_rev=$1`, ordered `tag_path ASC`, returns `null` for empty result set).
-
-`@caro/db` is fully mocked via `vi.mock('@caro/db', () => ({ query: vi.fn(), withTransaction: vi.fn() }))`. No real PostgreSQL connection required.
-
-#### 4.9.4 server/__tests__/registry.test.js (19 tests)
-
-HTTP route tests via `node:http.createServer(createApp())` + Node 18 global `fetch`. No supertest dependency. Server lifecycle: `beforeAll` starts server, `afterAll` closes it. All service deps mocked via `vi.mock`.
-
-Covers: `GET /api/v1/registry` (success with tag array, service error → 500); `POST /api/v1/registry/apply` (missing rootName → 400, missing comment → 400, template not found → 404, success → 200 with rev/counts, no changes → 200 with null rev); `GET /api/v1/registry/revisions` (success); `GET /api/v1/registry/revisions/:rev` (success, non-integer → 400, not found → 404).
-
-#### 4.9.5 shared/__tests__/validateTemplate.test.js (42 tests)
-
-Covers: valid tag templates (minimal, with TagType, Boolean, Numeric, String fields, at max identifier length), null/missing inputs (null, undefined, empty object, missing name/type), tag-specific errors (missing/wrong data_type, is_setpoint, Trends; numeric TagType default; children on tags), module-specific errors (missing Module_Type field, wrong field_type, numeric ModuleType default; modules with children allowed; non-module types don't require Module_Type; tag template with extra Module_Type field allowed), identifier length, children validation (dot in asset_name, empty asset_name, duplicate sibling names, long asset_name).
-
-Uses `makeTag()` and `makeStruct()` helpers for tag and structural templates, plus `makeModule()` helper scoped to the module-specific tests. No DOM, no network — pure function tests.
-
-#### 4.9.6 shared/__tests__/resolveRegistry.test.js (33 tests)
-
-Covers: null/empty inputs, single tag path resolution, root prefix, nested path assembly, multiple tags, meta structure (root-to-tag ordering), meta field resolution (instance override vs template default), trends (extensive: defaults, inheritance, case-insensitive key match, instance override, string/number type rejection, multi-level, parameter-level overrides), module/module_type extraction (module name propagation, Module_Type field default extraction, instance override wins, null when no module level, null when no Module_Type field, null on non-string default, nested hierarchy propagation), tag path too long exclusion.
-
-Uses `makeTag(name, dataType, isSetpoint, fields)`, `makeStruct(name, type, children, fields)`, and `wrap(template)` helpers. No DOM, no network — pure function tests.
-
-#### 4.9.7 server/__tests__/batchSave.test.js (21 tests)
-
-Covers: no-op (empty changes/deletions), hash checking (stale hash, not found, name conflict), new template creation (tag in `tags/`, parameter in `parameters/`, module in `modules/`), update existing (writes content, returns modified_files, updates in-memory index), deletion (removes file, returns deleted_files, stale hash, not found), graph validation (INVALID_REFERENCE rejected), ModuleType field validation (valid HMI saves, valid MQTT saves, invalid ModuleType default rejected with SCHEMA_VALIDATION_ERROR, invalid TagType regression, mixed batch with both valid types, mixed batch rejected when one ModuleType is invalid).
-
-`@caro/db` fully mocked: `getTagTypes` returns `[f32, bool]`, `getModuleTypes` returns `[HMI, MQTT]`. Uses temporary filesystem directories (`mkdtemp`) — each test gets a fresh `TEMPLATES_DIR`. No real PostgreSQL connection required.
+Per-file unit test counts are in §10.
 
 ---
 
@@ -568,33 +560,12 @@ Without this field, `isValid` will be `false`, the save button will be disabled,
 
 ## 6. Intentionally Skipped Tests
 
-### 6.1 root dropdown is disabled while dirty
+None as of 2026-10-17 — the suite contains no `test.skip`. The two tests this section used to list now run:
 
-**File:** `tests/save-cancel.spec.js` test 4
-**Browsers skipped:** Chromium, Firefox, WebKit (3 skips)
+- `save-cancel.spec.js` "root dropdown is disabled while dirty" — AppShell now renders the root `Dropdown` with `disabled={true}` while dirty (inside the `cursor-not-allowed` tooltip wrapper).
+- `registry.spec.js` "error banner shown when graph has validation errors" — reaches the error state client-side by typing a dot into an asset name (`INVALID_ASSET_NAME`), instead of creating a broken template through the API.
 
-```js
-test.skip('root dropdown is disabled while dirty', ...)
-```
-
-**Reason:** The root dropdown wrapper has `cursor-not-allowed` styling while dirty, but the `<select>` element itself has no `disabled` attribute — the dropdown remains interactive. The spec originally called for a `disabled` prop, but the current implementation uses a CSS cursor hint only. The test is skipped rather than deleted so it documents the implementation state.
-
-### 6.3 meta-modal.spec.js: clicking View on different row replaces modal
-
-**Deleted.** The modal renders with a full-viewport fixed overlay; clicking a background table button while the modal is open is blocked by the overlay by design. This interaction is not a valid user workflow.
-
-### 6.2 error banner shown when graph has validation errors
-
-**File:** `tests/registry.spec.js` test 5
-**Browsers skipped:** Chromium, Firefox, WebKit (3 skips)
-
-```js
-test.skip(true, 'Server validates INVALID_REFERENCE — broken template cannot be created via API');
-```
-
-**Reason:** The test attempts to create a structural template referencing a non-existent child to force an `INVALID_REFERENCE` validation error in the client. However, the server's `POST /api/v1/templates/batch` endpoint calls `validateGraph()` before writing — it rejects any template referencing a child that does not exist on disk, returning `400 INVALID_REFERENCE`. The broken template is never written, the client never loads it, and the error banner is never shown.
-
-The `INVALID_REFERENCE` error state in the registry is only reachable by manually corrupting template JSON files on disk after they have been written. Testing this state would require direct filesystem access from the test helper, which is out of scope for the browser E2E suite and is better covered by a server unit test.
+The old `meta-modal.spec.js` test "clicking View on a different row replaces the modal" remains deleted: the modal's full-viewport overlay blocks background clicks by design.
 
 ## 7. Selector Strategy
 
@@ -737,90 +708,69 @@ In addition to the Playwright E2E suite, a Vitest unit test suite covers the lay
 
 ### 10.2 Packages and locations
 
-| Package | Location | Run command |
-|---|---|---|
-| shared/ functions | apps/tag-registry/shared/ | `cd apps/tag-registry/shared && npx vitest run` |
-| server templateService + registry | apps/tag-registry/server/ | `cd apps/tag-registry/server && npx vitest run` |
-| useTemplateGraphStore + diffRegistry + formatDate | apps/tag-registry/client/ | `cd apps/tag-registry/client && npx vitest run` |
+| Package | Location | Run command | Include pattern (`vitest.config.js`) |
+|---|---|---|---|
+| shared/ functions | apps/tag-registry/shared/ | `cd apps/tag-registry/shared && npx vitest run` | `__tests__/**/*.test.{js,ts}` |
+| server services + routes | apps/tag-registry/server/ | `cd apps/tag-registry/server && npx vitest run` | `__tests__/**/*.test.{js,ts}` |
+| client stores, hooks, utils, api | apps/tag-registry/client/ | `cd apps/tag-registry/client && npx vitest run` | `__tests__/**/*.test.js`, `src/**/*.test.ts` |
 
-All three use Vitest 1.6.x. Config file: vitest.config.js in each package root. Test files: `__tests__/**/*.test.js`.
-
-Each package must be run from its own directory. There is no root-level vitest config under `apps/tag-registry/`.
+All three use Vitest 1.6.1. Each package must be run from its own directory; there is no root-level vitest config under `apps/tag-registry/`. `packages/db` has its own suite — see `Docs/db/db_handoff.md`.
 
 Note: the client package runs Vitest from the monorepo root `node_modules/.bin` because `@caro/ui` is a workspace-only package that cannot be resolved by a standalone `npm install` in the client directory. `npm test` works correctly because npm adds the project root's `node_modules/.bin` to PATH when running scripts.
 
-### 10.3 shared/ unit tests (112 tests, 8 files)
+Counts below are from `vitest run --reporter=json` on 2026-10-17.
 
-| File | Tests | Coverage |
-|---|---|---|
-| utils.test.js | 20 | deepEqual, deepNotEqual — all types and edge cases |
-| hashTemplate.test.js | 8 | 6-char hex output, determinism, key-order independence |
-| validateTemplate.test.js | 35 | Valid/invalid tags and structs, all field_types, identifier length, child rules |
-| validateGraph.test.js | 12 | Valid graphs, INVALID_REFERENCE, CIRCULAR_REFERENCE, multi-error |
-| simulateCascade.test.js | 10 | fields added/removed/changed, affectedParents per-instance, no-op |
-| applyFieldCascade.test.js | 7 | Purity, plain object/Map passthrough, field removal cascade, single-level only |
-| resolveRegistry.test.js | 13 | tag_path construction, rootName as first segment, meta leaf-to-root, field resolution, path length limit |
-| validateParentTypes.test.js | 7 | No-op when unconfigured, PARENT_TYPE_MISSING, DUPLICATE_PARENT_TYPE |
+### 10.3 shared/ unit tests (241 tests, 13 files)
 
-### 10.4 server/ unit tests (42 + 37 = 79 tests)
+| File | Tests |
+|---|---|
+| `__tests__/applyFieldCascade.test.js` | 7 |
+| `__tests__/bitPacking.test.ts` | 13 |
+| `__tests__/hashTemplate.test.js` | 11 |
+| `__tests__/moduleOrder.test.ts` | 6 |
+| `__tests__/moduleStatus.test.ts` | 4 |
+| `__tests__/resolveRegistry.test.js` | 57 |
+| `__tests__/simulateCascade.test.js` | 10 |
+| `__tests__/tagDefs.test.ts` | 26 |
+| `__tests__/utils.test.js` | 20 |
+| `__tests__/validateGraph.test.js` | 12 |
+| `__tests__/validateParentTypes.test.js` | 10 |
+| `__tests__/validateResolvedTags.test.ts` | 23 |
+| `__tests__/validateTemplate.test.js` | 42 |
 
-**Phase 1 — templateService (42 tests, 5 files):**
+### 10.4 server/ unit tests (120 tests, 9 files)
 
-Uses real temporary directories (os.tmpdir()) for file I/O. No mocking — tests the actual fs operations.
+`templateService` tests use real temporary directories (`mkdtemp`); `@caro/db` is mocked (`getTagTypes`, `getModuleTypes`, registry functions). Route tests use `node:http.createServer(createApp())` and global `fetch` — no supertest.
 
-| File | Tests | Coverage |
-|---|---|---|
-| initializeIndex.test.js | 7 | Empty dir, single/multiple files, skip no-name, skip non-JSON, re-init |
-| listAndGet.test.js | 7 | listTemplates with/without type filter, getTemplate success/not-found |
-| loadRoot.test.js | 9 | Single template, not-found, 2-level/3-level hierarchy, out-of-subgraph exclusion, missing child skip, cycle safety |
-| batchSave.test.js | 15 | New template, name conflict, stale hash (changes + deletions), update, delete, empty batch, requires_confirmation, confirmed cascade, graph validation rejection |
-| validateAll.test.js | 4 | Empty dir, all valid, broken reference |
+| File | Tests |
+|---|---|
+| `__tests__/batchSave.test.js` | 21 |
+| `__tests__/config.test.js` | 18 |
+| `__tests__/initializeIndex.test.js` | 7 |
+| `__tests__/listAndGet.test.js` | 7 |
+| `__tests__/loadRoot.test.js` | 9 |
+| `__tests__/registry.test.js` | 22 |
+| `__tests__/registryService.test.js` | 21 |
+| `__tests__/tagDefs.test.js` | 10 |
+| `__tests__/validateAll.test.js` | 5 |
 
-**Phase 2 — registryService (12 tests, 1 file):**
+### 10.5 client/ unit tests (173 tests, 14 files)
 
-`@caro/db` named exports mocked directly. Tests behavior and return values.
+Store tests use `vi.mock()` for the API modules and reset `useTemplateGraphStore` via `setState()` in `beforeEach`.
 
-| File | Tests | Coverage |
-|---|---|---|
-| registryService.test.js | 12 | getActiveRegistry, getRevisions, getRevisionTags — behavior and return value assertions. Mock targets @caro/db named exports directly. SQL pattern tests removed (covered by packages/db tests). |
-
-**packages/db/ (11 tests, 2 files):**
-
-| File | Tests | Coverage |
-|---|---|---|
-| query.test.js | 5 | withTransaction happy path, fn throws + ROLLBACK, fn throws + ROLLBACK throws, COMMIT throws + ROLLBACK, COMMIT throws + ROLLBACK throws |
-| migrations.test.js | 6 | runMigrations behavior |
-
-**Phase 2 — registry routes (19 tests, 1 file):**
-
-Uses `node:http.createServer(createApp())` + Node 18 global `fetch`. No supertest.
-
-| File | Tests | Coverage |
-|---|---|---|
-| registry.test.js | 19 | GET /registry, POST /apply (validation, not-found, success, no-changes), GET /revisions, GET /revisions/:rev (success, non-integer, not-found) |
-
-### 10.5 client/ unit tests (47 + 56 = 103 tests)
-
-**Phase 1 — useTemplateGraphStore (47 tests, 5 files):**
-
-Uses vi.mock() for templatesApi and useUIStore. Store reset via `useTemplateGraphStore.setState()` in beforeEach.
-
-| File | Tests | Coverage |
-|---|---|---|
-| loadRoot.test.js | 10 | Success, templateMap/hashes populated, originalTemplateMap clone, dirty clear, error handling, null guard |
-| updateTemplate.test.js | 6 | Field update, dirtySet add/remove, no-baseline always-dirty, early return, applyFieldCascade cascade |
-| addAndInject.test.js | 12 | addTemplate (null/existing hash), injectTemplateGraph (no-overwrite, dirtySet untouched, structuredClone) |
-| deletionActions.test.js | 7 | markForDeletion (removes from map, preserves hash/originalMap), removeTemplate (all-five, safe on missing) |
-| saveAndDiscard.test.js | 12 | Guards, payload shape, requires_confirmation, rooted reload, isolation mode wipe+refetch, confirmSave, discard, STALE_TEMPLATE |
-
-**Phase 2 — diffRegistry (34 tests, 1 file):**
-
-| File | Tests | Coverage |
-|---|---|---|
-| diffRegistry.test.js | 34 | All diffStatus classifications, sort order, changedFields, dbMeta on modified rows, tag_id carry-over, deepEqual key-order insensitivity, edge cases |
-
-**Phase 2 — formatDate (22 tests, 1 file):**
-
-| File | Tests | Coverage |
-|---|---|---|
-| formatDate.test.js | 22 | All 12 month abbreviations, zero-padding, null/undefined/invalid → '—', Date objects, ISO strings, PostgreSQL TIMESTAMPTZ |
+| File | Tests |
+|---|---|
+| `__tests__/addAndInject.test.js` | 12 |
+| `__tests__/deletionActions.test.js` | 7 |
+| `__tests__/diffRegistry.test.js` | 50 |
+| `__tests__/loadRoot.test.js` | 10 |
+| `__tests__/reorderChild.test.js` | 17 |
+| `__tests__/saveAndDiscard.test.js` | 12 |
+| `__tests__/updateTemplate.test.js` | 6 |
+| `__tests__/useTreeExpandStore.test.js` | 10 |
+| `__tests__/useValidation.test.js` | 5 |
+| `src/api/tagDefs.test.ts` | 3 |
+| `src/utils/dragTypes.test.ts` | 6 |
+| `src/utils/exportRegistryCsv.test.ts` | 14 |
+| `src/utils/exportTree.test.ts` | 11 |
+| `src/utils/registryRows.test.ts` | 10 |

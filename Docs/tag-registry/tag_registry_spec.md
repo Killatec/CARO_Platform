@@ -1,5 +1,5 @@
 # Tag Registry Admin Tool — Functional Specification
-**Draft** | Generated: 2026-04-02
+**Draft** | Generated: 2026-04-02 | **Reconciled with the implementation:** 2026-10-17 — where the current behaviour differs from the intended design, both are stated.
 Companion documents: [Bootstrap](tag_registry_bootstrap.md) | [API Spec](tag_registry_api_spec.md)
 
 ---
@@ -36,7 +36,9 @@ The tool enables engineers to:
 
 **Design philosophy:** Every asset is defined by a template. A root template is simply whichever template the user selects from the global root dropdown. All template types are user-defined and treated uniformly.
 
-The tool enables engineers to build hierarchical tag structures with instant local feedback. All cascade simulation and validation runs client-side against a locally held template graph, using shared pure functions from `apps/tag-registry/shared/`. The server re-runs the same logic authoritatively on batch save.
+The tool enables engineers to build hierarchical tag structures with instant local feedback. All cascade simulation and validation runs client-side against a locally held template graph, using shared pure functions from `apps/tag-registry/shared/`.
+
+The server re-runs only part of that logic. On batch save it checks hashes, TagType/ModuleType lookups and `validateGraph`, and applies the cascade. On registry apply it runs `validateResolvedTags`. `validateTemplate` and `validateParentTypes` run in the client only (see §10).
 
 ---
 
@@ -64,7 +66,11 @@ The HMI and backend runtime services read only the tag registry from the databas
 
 ### 4.1 Atomicity Guarantee
 
-All mutating operations are fully atomic. All file writes and database writes for a given operation are applied together. On any failure, the operation is rolled back and the system remains unchanged.
+**Intended:** all mutating operations are fully atomic — all file writes and database writes for a given operation are applied together, and any failure leaves the system unchanged.
+
+**As built:**
+- **Database:** registry apply is atomic (one SERIALIZABLE transaction).
+- **Template files:** each file is written atomically (write `<file>.tmp`, then rename). A batch save or template delete that writes several files is not; an I/O failure part-way through leaves the earlier files written and the in-memory index updated for them.
 
 ### 4.2 Shared Validation Module
 
@@ -73,17 +79,17 @@ Validation and cascade simulation logic lives in `apps/tag-registry/shared/`. Bo
 The shared module exports:
 
 - `validateTemplate(template)` — schema conformance, field rules, `asset_name` rules for a single template. Each field in `template.fields` must be `{ field_type, default }` where `field_type` is one of `"Numeric" | "String" | "Boolean" | "TagType" | "ModuleType"` and `default` matches the corresponding JS type.
-- `validateGraph(templates)` — circular references, broken references, duplicate template names across the full map.
+- `validateGraph(templates)` — circular references and broken references across the full map. It also has a duplicate-template-name check, but it runs over a `Map`, whose keys are already unique, so it can never fire (see §10.2).
 - `simulateCascade(currentTemplateMap, proposedChanges, originalTemplateMap?)` — computes field-level diffs, dropped instance values, and the list of affected parent templates given a proposed set of changes.
 - `applyFieldCascade(templateMap, changedTemplate)` — given a template that has changed, propagates the effect to all child instances in the map. Returns an updated `templateMap`. Pure function — does not mutate its input.
 - `validateParentTypes(templateMap, rootName, options)` — evaluates `VALIDATE_REQUIRED_PARENT_TYPES` and `VALIDATE_UNIQUE_PARENT_TYPES` rules. Returns `{ errors: [], warnings: [] }`.
 - `resolveRegistry(templateMap, rootName)` — resolves the full hierarchy into a flat tag list with `tag_path`, `tag_name`, `module`, `module_type`, `data_type`, `is_setpoint`, `trends`, `unit`, `format`, `eng_min`, `eng_max`, and `meta`. Pure function. Extracts `.default` from each field definition before merging with instance overrides. `module` is the name of the nearest ancestor with `template_type: "module"` (null if none). `module_type` is the `Module_Type` field value from that module template (null if none). The `trends` field is `true` if any level in the resolved hierarchy has a field key matching `"trends"` (case-insensitive) with value `true` after instance override resolution, `false` otherwise. `tag_name` is the dot-joined `asset_name`s of meta levels where `In_Tag_Name === true`, root→leaf (see §16.11). The display columns `unit`, `format`, `eng_min`, `eng_max` are resolved via `resolveDisplayField` and are `null` for non-numeric tags (see §11.3). The `meta` array is ordered root-to-tag: `meta[0]` is the root level entry, `meta[meta.length - 1]` is the tag-level entry.
-- `validateResolvedTags(resolvedTags)` — post-resolution cross-field validator. Enforces: `trends` only on `f32`, `i16`, `i32`, or `bool`; `is_setpoint` only on non-array types; `TAG_NAME_EMPTY`, `TAG_NAME_TOO_LONG`, `DUPLICATE_TAG_NAME` (see §10.9 and §16.11). Returns `{ valid, errors, warnings }`. Called by both client (live validation panel) and server (authoritative re-run on batch save) after `resolveRegistry`.
+- `validateResolvedTags(resolvedTags)` — post-resolution cross-field validator. Enforces: `trends` only on `f32`, `i16`, `i32`, or `bool`; `is_setpoint` only on non-array types; `TAG_NAME_EMPTY`, `TAG_NAME_TOO_LONG`, `DUPLICATE_TAG_NAME` (see §10.9 and §16.11). Returns `{ valid, errors, warnings }`. Called by the client (live validation panel) after each `resolveRegistry`, and by the server on registry apply and in `POST /templates/validate`. Not called by the server on batch save.
 - `getModuleNames(tagMap)` — returns a sorted `string[]` of distinct module_id values from the resolved tag map, ordered by each module's minimum tag_id. Used by `HmiTagSource` (producer) and `ModuleInfoTable` (widget) for consistent module index assignment.
 - `packedBit(words, bitIndex)` / `setPackedBit(words, bitIndex, value)` — LSB-first read/write of a single bit within a `number[]` word array (16 bits per word). Used for the `Module_Info.Watchdog` packed-bit array.
 - `ModuleStatus` / `ModuleStatusLabels` — const enum (`UNKNOWN=0`, `OK=1`, `WARNING=2`, `FAULT=3`, `STALLED=4`) and display-label map. Shared between producer and widget.
-- `constants` — error codes, `DEFAULT_DATA_TYPE`, `MAX_TAG_PATH_LENGTH` default.
-- `deepEqual(a, b)` / `deepNotEqual(a, b)` — JSON-serialization-based deep equality utilities (`utils.js`).
+- `constants` — error codes, `DEFAULT_DATA_TYPE`, `MAX_TAG_PATH_LENGTH` (the constant 100 — not read from the environment), `MAX_TAG_NAME_LENGTH`, `UNIQUE_ANCESTOR_TYPES`, the type sets.
+- `deepEqual(a, b)` / `deepNotEqual(a, b)` — recursive structural equality, insensitive to object key order (`utils.ts`).
 - `hashTagDefs(tags)` — SHA-256 (full hex) over the same canonical JSON as `hashTemplate`, applied to the nested `tags` tree. Used for the Tag Defs `content_hash` (§12.1).
 - `listMqttModuleTemplates(templateMap)` / `buildTagDefs(templateMap, moduleTemplateName)` / `buildTagDefsFile(templateMap, moduleTemplateName)` / `validateTagDefs(templateMap, moduleTemplateName)` — Tag Defs export builders (nested `tags` tree) and module-relative name validation (§12.1).
 
@@ -109,11 +115,12 @@ When the user clicks Save and the ValidationPanel shows no errors or warnings, t
 
 The server:
 
-- Checks every `original_hash` against the current file for both `changes` and `deletions`. Any mismatch rejects the entire batch with `STALE_TEMPLATE`. Client re-fetches the full root hierarchy and discards local changes.
-- Builds the proposed template set: current on-disk templates + `changes` − `deletions`.
+- Checks every `original_hash` against the server's index for both `changes` and `deletions`. Any mismatch rejects the entire batch with `STALE_TEMPLATE`; the client re-fetches the full root hierarchy and discards local changes. A `null` hash for an existing name gives `TEMPLATE_NAME_CONFLICT`.
+- Checks TagType and ModuleType field defaults against the `tag_types` / `module_types` tables (400 `SCHEMA_VALIDATION_ERROR` on an unknown value).
+- Builds the proposed template set: current templates + `changes` − `deletions`.
 - Runs `validateGraph` on the proposed set. `INVALID_REFERENCE` surfaces naturally if any remaining template references a deleted one.
 - Scans for upstream parents — templates outside the submitted batch that reference any of the changed templates. If any are found and `confirmed` is not `true`, returns a `requires_confirmation` response with a diff and `affectedParents` list. No files written.
-- If `confirmed: true` or no upstream impacts: writes all changed files atomically (cascade updates applied), unlinks deleted template files, updates the in-memory index. Returns `{ modified_files, deleted_files }`.
+- If `confirmed: true` or no upstream impacts: writes each changed file (cascade updates applied; each file atomic, the batch not — §4.1), unlinks deleted template files, updates the in-memory index. Returns `{ modified_files, deleted_files }`.
 
 ### 5.2 Pending Deletion Flow
 
@@ -230,13 +237,15 @@ Subsequent segments are the dot-joined chain of `asset_name`s from the root temp
 
 Example: `Plant1_System_A.RFPowerModule.ForwardPower.setpoint`
 
-Dots are not permitted in any `asset_name` OR `template_name`. `template_name` must not contain a dot character. The maximum permitted length of a `tag_path` is configurable via `MAX_TAG_PATH_LENGTH`.
+Dots are not permitted in any `asset_name` OR `template_name`. As built, the `asset_name` rule is enforced by `validateTemplate` (`INVALID_ASSET_NAME`), but the `template_name` rule only by the client's New Template dialog. The server accepts a dotted name, and renaming isn't possible in the UI.
+
+The maximum `tag_path` length is 100 characters, the constant `MAX_TAG_PATH_LENGTH` in `shared/constants.ts`. The `MAX_TAG_PATH_LENGTH` environment variable is only logged at startup and has no effect. A tag whose path exceeds the limit is **dropped by `resolveRegistry` without any error** (see §10.5).
 
 **Child array order is registry-neutral.** Reordering children within a parent template does not change any `tag_path` value — paths are built from `asset_name` strings, not from array indices. A pure reorder therefore produces zero diff when compared against the current database registry. The template file hash does change (array order is part of the canonical JSON), so the batch save pipeline correctly detects and persists the reorder.
 
 ### 9.2 tag_id — Stable Numeric Registry Address
 
-`tag_id` is an INTEGER assigned to a tag at its first registry generation. Stored only in the database. Assigned using `MAX(tag_id) + 1` within the generation transaction at SERIALIZABLE isolation. `tag_id` values are never reused, even if tags are retired.
+`tag_id` is an INTEGER assigned to a tag at its first registry generation. Stored only in the database. Assigned using `MAX(tag_id) + 1` within the generation transaction at SERIALIZABLE isolation, with a floor of 1000, so the first tag in an empty database gets `1001`. `tag_id` values are never reused, even if tags are retired.
 
 ### 9.3 Tag Matching by Full Path
 
@@ -250,20 +259,31 @@ If a tag is renamed or moved, its original `tag_path` becomes retired and a new 
 
 ## 10. Validation Rules
 
-Failures block the operation and display a detailed error report in the ValidationPanel. All validation logic is shared via `apps/tag-registry/shared/` and runs synchronously on every graph change client-side, and authoritatively on the server at batch save time.
+Failures block the operation and display a detailed error report in the ValidationPanel. All validation logic is shared via `apps/tag-registry/shared/` and runs synchronously on every graph change client-side.
+
+**Where each rule runs (as built):**
+
+| Validator | Client (live) | Server: batch save | Server: registry apply |
+|---|---|---|---|
+| `validateTemplate` | Yes | No | No |
+| `validateGraph` | Yes | Yes | No |
+| TagType / ModuleType lookup | Dropdowns only offer table values | Yes | No |
+| `validateParentTypes` | Yes | No | No |
+| `validateResolvedTags` | Yes | No | Yes |
+
+`POST /templates/validate` runs `validateTemplate`, `validateGraph` and `validateResolvedTags` over every indexed template.
 
 ### 10.1 Schema Conformance
 
-- Every template must conform to its JSON Schema draft-07 definition.
-- Each field must be `{ field_type, default }` where `field_type` ∈ `{ "Numeric", "String", "Boolean", "TagType", "ModuleType" }` and `default` matches the declared type.
-- Child instance field values must be a subset of fields defined in the referenced child template.
+- Each field must be `{ field_type, default }` where `field_type` ∈ `{ "Numeric", "String", "Boolean", "TagType", "ModuleType" }` and `default` matches the declared type (`validateTemplate`, `SCHEMA_VALIDATION_ERROR`).
+- *Intended, not implemented:* conformance to a JSON Schema draft-07 definition (no schema or schema validator exists), and child instance field values limited to the fields defined in the referenced child template (`UNKNOWN_FIELD` is declared but never emitted; an unknown override key is accepted and carried into `meta`).
 
 ### 10.2 Name Rules
 
-- All template names must be globally unique across the entire `templates/` folder.
-- All `asset_name` values must be non-empty and must not contain a dot (`.`) character.
-- No duplicate `asset_name` values among siblings within the same parent template.
-- `template_name` must not contain a dot (`.`) character. Error code: `INVALID_TEMPLATE_NAME`.
+- All template names must be globally unique across the entire `templates/` folder. *As built, not detected:* the server indexes templates by `template_name`, so if two files declare the same name, whichever is scanned second silently replaces the first. `validateGraph`'s duplicate check can't fire (§4.2). Creating a duplicate through the UI is still refused, by `TEMPLATE_NAME_CONFLICT` on save.
+- All `asset_name` values must be non-empty and must not contain a dot (`.`) character (`INVALID_ASSET_NAME`).
+- No duplicate `asset_name` values among siblings within the same parent template (`DUPLICATE_SIBLING_NAME`).
+- `template_name` must not contain a dot (`.`) character. *As built:* enforced only by the client's New Template dialog; there is no `INVALID_TEMPLATE_NAME` code.
 
 ### 10.3 Reference Rules
 
@@ -281,18 +301,23 @@ Failures block the operation and display a detailed error report in the Validati
 
 ### 10.5 Tag Path Length
 
-If any resolved `tag_path` exceeds the configured maximum path length, the save operation is blocked and the affected paths are listed.
+**Intended:** if any resolved `tag_path` exceeds the maximum path length, the save operation is blocked and the affected paths are listed (`TAG_PATH_TOO_LONG`).
+
+**As built:** no validator checks path length, and `TAG_PATH_TOO_LONG` is never emitted. `resolveRegistry` silently skips any tag whose `tag_path` is longer than 100 characters:
+- the tag is absent from the registry preview;
+- it is never added to the database;
+- an existing tag renamed or moved past the limit is retired.
 
 ### 10.6 Optional Parent Type Validation
 
-Controlled by server environment variables `VALIDATE_REQUIRED_PARENT_TYPES` and `VALIDATE_UNIQUE_PARENT_TYPES`. Evaluated via `validateParentTypes`.
+Controlled by server environment variables `VALIDATE_REQUIRED_PARENT_TYPES` and `VALIDATE_UNIQUE_PARENT_TYPES`, which the server only reports to the client via `GET /api/v1/config`. Evaluated via `validateParentTypes` **in the client only** — neither batch save nor registry apply checks them.
 
 - **`VALIDATE_REQUIRED_PARENT_TYPES`** — comma-separated list of `template_type` values that must appear in every tag's ancestor chain. Produces `PARENT_TYPE_MISSING` if absent. Example: `module`.
 - **`VALIDATE_UNIQUE_PARENT_TYPES`** — when `true`, enforces that certain ancestor types appear at most once in a tag's ancestor chain. Only types listed in `UNIQUE_ANCESTOR_TYPES` (defined in `shared/constants.ts`) are subject to this check — currently `module` and `parameter`. Other types (e.g. `Group`, `system`) may repeat in the hierarchy without error. Produces `DUPLICATE_PARENT_TYPE` on violation.
 
 ### 10.7 Tool Warnings (Non-Blocking)
 
-- `EMPTY_BRANCH` — structural template in the root hierarchy contains no tag descendants. **Note:** `EMPTY_BRANCH` is declared in `shared/constants.js` but is not emitted by `validateGraph`, `validateTemplate`, or `useValidation`.
+- `EMPTY_BRANCH` — structural template in the root hierarchy contains no tag descendants. **Note:** `EMPTY_BRANCH` is declared in `shared/constants.ts` but is not emitted by `validateGraph`, `validateTemplate`, or `useValidation`.
 
 ### 10.8 Template Change Propagation
 
@@ -306,7 +331,7 @@ After `resolveRegistry` produces the flat tag list, `validateResolvedTags(resolv
 - **Array setpoints:** `is_setpoint: true` is only valid on scalar types. Array tags (`f32[]`, `i16[]`) may not be setpoints.
 - **`tag_name` rules:** `TAG_NAME_EMPTY` (empty `tag_name`), `TAG_NAME_TOO_LONG` (>40 chars), `DUPLICATE_TAG_NAME` (case-insensitive duplicate within the entire resolved registry; one error per offending tag; empty names excluded). See §16.11 for full `tag_name` / `In_Tag_Name` specification.
 
-All rules return errors (blocking). `validateResolvedTags` is the sole enforcement point for these constraints — `validateTemplate` does not check them because the relevant fields live on different template levels. The function is exported from `apps/tag-registry/shared/` and runs in both client (live validation panel, called after each `resolveRegistry`) and server (authoritative re-run on batch save).
+All rules return errors (blocking). `validateResolvedTags` is the sole enforcement point for these constraints — `validateTemplate` does not check them because the relevant fields live on different template levels. The function is exported from `apps/tag-registry/shared/` and runs in the client (live validation panel, called after each `resolveRegistry`) and on the server at registry apply, where a failure returns 422 `SCHEMA_VALIDATION_ERROR` with the messages in `details`. Batch save does not run it.
 
 ---
 
@@ -386,7 +411,7 @@ A **Generate Tag Defs** button on the Registry page, beside **Export to CSV**, d
 - **`tags` is a tree nested by `tag_name` segment** (since 2026-10-01; previously a flat array of `{ tag_name, direction, data_type }`). The tag `Mag_1.Fwd.Gain` becomes `tags.Mag_1.Fwd.Gain`. A node is a **leaf iff it has a `data_type` key**, and a group node otherwise. The consumer generates a C++ struct from it for compile-time, name-addressed access (`Mag_1.Fwd.Gain`, not a string lookup).
 
 - `tag_name` is **module-relative**. It was named `tag_path` until 2026-10-01 and was renamed because the value is a name, not an asset path. It holds the dot-joined `asset_name`s of levels *below* the module whose `In_Tag_Name` is true (§16.11). It is not the full asset path, so organizational groupings such as `Pwr_Mon` drop out. For example, `Narya1.RF1.Pwr_Mon.Mag_1.Fwd.Gain` with system `tag_name` `RF1.Mag_1.Fwd.Gain` exports as `Mag_1.Fwd.Gain`. The module level itself is always skipped, even when an instance sets `In_Tag_Name` on it (as `Narya1` does for `RF1`), because whether the instance name is shown is an instance decision. The template is resolved on its own with `resolveRegistry`, using the module template as root, so nothing above the module can affect the output.
-- **Name validation.** Each module-relative name must be non-empty and unique within its template, compared case-insensitively. Two further rules come from the tree shape. No name may also be the parent of another (`Comb.Fwd` beside `Comb.Fwd.Gain`), compared case-insensitively, because that node would have to be leaf and group at once (`TAG_NAME_LEAF_AND_GROUP`). No segment may be `data_type`, the leaf key, because a group would then read as a leaf (`TAG_NAME_RESERVED_SEGMENT`). Violations reject the export with `VALIDATION_ERROR`, carrying `TAG_NAME_EMPTY` / `DUPLICATE_TAG_NAME` / `TAG_NAME_LEAF_AND_GROUP` / `TAG_NAME_RESERVED_SEGMENT` details from `validateTagDefs`. As of 2026-10-01, `Narya_RF`, `Cooling`, `Pole`, `Power_Control` and `RF_Control` pass. `Beam_Control` fails `TAG_NAME_LEAF_AND_GROUP` twice (`Scanning`, `Scanning.X`): `Scan.Enable` has `In_Tag_Name: false`, so it takes its parent's name while that parent's children sit below it. The `Beam` system's export is therefore refused until that template changes. This is checked separately because system-level `tag_name` validation can pass while module-relative names collide: the instance-name prefix may be the only thing that disambiguates.
+- **Name validation.** Each module-relative name must be non-empty and unique within its template, compared case-insensitively. Two further rules come from the tree shape. No name may also be the parent of another (`Comb.Fwd` beside `Comb.Fwd.Gain`), compared case-insensitively, because that node would have to be leaf and group at once (`TAG_NAME_LEAF_AND_GROUP`). No segment may be `data_type`, the leaf key, because a group would then read as a leaf (`TAG_NAME_RESERVED_SEGMENT`). Violations reject the export with `VALIDATION_ERROR`, carrying `TAG_NAME_EMPTY` / `DUPLICATE_TAG_NAME` / `TAG_NAME_LEAF_AND_GROUP` / `TAG_NAME_RESERVED_SEGMENT` details from `validateTagDefs`. As of 2026-10-01, `Narya_RF`, `Cooling`, `Pole`, `Power_Control` and `RF_Control` pass. `Beam_Control` fails `TAG_NAME_LEAF_AND_GROUP` twice (`Scanning`, `Scanning.X`): `Scan.Enable` has `In_Tag_Name: false`, so it takes its parent's name while that parent's children sit below it. Export from any root that reaches `Beam_Control` is therefore refused until that template changes. Of the two system templates today, that is `CARO_1` (`Narya1` does not reach it); `Beam` itself is a `Beam`-type template, not a selectable root. This is checked separately because system-level `tag_name` validation can pass while module-relative names collide: the instance-name prefix may be the only thing that disambiguates.
 - **Handshake contract.** The MQTT handshake's `TAG_LIST` identifies tags by this same module-relative `tag_name` (`CARO_MQTT_Spec.md` §7.1, §7.4, v1.9). A module built from this export binds ids by exact string match, so the export and the backend's `TAG_LIST` assembly must derive the name by the same rule.
 - Each leaf's `data_type` is the resolved `data_type`.
 - **Only `data_type` per leaf.** `direction` (Set/Mon) was dropped on 2026-10-01: compile-time name addressing does not need it. It remains in the registry's own data model as `is_setpoint`. `tag_id`, `unit`, `eng_min`, `eng_max`, `trends`, `scale`, `offset`, `format` and `is_setpoint` are deliberately excluded (D32 records why for each). Do not add them. The file has no instance dependency, so commissioning an instance or editing display metadata never changes it.
@@ -417,7 +442,9 @@ Append-only table. Rows are never updated or deleted.
 | tag_id | INTEGER NOT NULL | Stable numeric identifier. Never reused. |
 | registry_rev | INTEGER NOT NULL | The registry revision when this row was inserted or last modified. |
 | tag_path | VARCHAR NOT NULL | Full dot-separated path. Always begins with the root template's `template_name`. |
-| data_type | VARCHAR(40) NOT NULL | Data type enum value (Section 6). |
+| module | VARCHAR(40) NULL | `asset_name` of the nearest `module` ancestor; `null` if none. Indexed. Added by migration 011. |
+| module_type | VARCHAR(40) NULL | That module's `Module_Type` value (`MQTT`, `HMI`); `null` if none. Indexed. Added by migration 011. |
+| data_type | VARCHAR(40) NOT NULL | Data type value (Section 6). Foreign key to `tag_types(type_name)` (migration 008). |
 | is_setpoint | BOOLEAN NOT NULL | true = setpoint (writable); false = monitor (read-only). |
 | trends | BOOLEAN NOT NULL DEFAULT false | true if any asset in the tag's hierarchy has a field named "trends" (case-insensitive) set to true after instance override resolution. |
 | retired | BOOLEAN NOT NULL DEFAULT false | true if the tag is no longer present in the active template hierarchy. |
@@ -428,9 +455,9 @@ Append-only table. Rows are never updated or deleted.
 | eng_max | DOUBLE PRECISION NULL | Engineering range maximum. Resolved via `resolveDisplayField`. `null` for non-numeric tags. Added by migration 013. |
 | tag_name | VARCHAR(40) NULL | Resolved tag name: dot-joined `asset_name`s of meta levels where `In_Tag_Name === true`, root→leaf. Uniqueness enforced in-app by `validateResolvedTags` — no DB UNIQUE constraint. Added by migration 015. |
 
-Constraints: composite (`tag_id`, `registry_rev`) unique. Indexes on `tag_id`, `registry_rev`, `data_type`, `retired`. GIN index on `meta`.
+Constraints: composite (`tag_id`, `registry_rev`) unique; `data_type` → `tag_types(type_name)`. Indexes on `tag_id`, `registry_rev`, `data_type`, `retired`, `module`, `module_type`. GIN index on `meta`.
 
-**Note:** The partial unique index on `tag_path` (WHERE retired=false) was removed in migration 003. Uniqueness of active tag_paths is enforced at application level via the `DISTINCT ON` query in `getActiveRegistry()`.
+**Note:** The partial unique index on `tag_path` (WHERE retired=false) was removed in migration 003. Uniqueness of active tag_paths follows from the apply logic, which classifies by `tag_path` against the `DISTINCT ON (tag_id)` active set from `getActiveTags()`; no database constraint enforces it.
 
 ### 14.2 registry_revisions
 
@@ -455,11 +482,11 @@ Both errors and warnings block the Save operation.
 
 ### 15.2 Trigger
 
-All validation checks run synchronously on every change to the local template graph. No server call is made during editing. No debounce. The server re-runs the same validation authoritatively on batch save.
+All validation checks run synchronously on every change to the local template graph. No server call is made during editing. No debounce. The server re-runs only part of the validation (§10).
 
 ### 15.3 Message Structure
 
-Each message carries: severity (`"error"` or `"warning"`), code (error code string), message (human-readable description), and an optional `ref` object with `template_name`, `field`, or `tag_path`. The panel renders errors before warnings. Within each group, messages are ordered by ref then by code.
+Each message carries: severity (`"error"` or `"warning"`), code (error code string), message (human-readable description), and an optional `ref` object with `template_name`, `field`, or `tag_path`. The panel renders errors before warnings. Within each group, messages keep the order the validators produced them in (there is no further sort).
 
 ### 15.4 Save Blocking
 
@@ -467,7 +494,9 @@ Both errors and warnings set `isValid` to `false`. The Save button is disabled w
 
 ### 15.5 Client-Side Checks
 
-`INVALID_ASSET_NAME`, `DUPLICATE_SIBLING_NAME`, `CIRCULAR_REFERENCE`, `INVALID_REFERENCE`, `TAG_PATH_TOO_LONG`, `SCHEMA_VALIDATION_ERROR`, `UNKNOWN_FIELD`, `PARENT_TYPE_MISSING`, `DUPLICATE_PARENT_TYPE`, `TAG_NAME_EMPTY`, `TAG_NAME_TOO_LONG`, `DUPLICATE_TAG_NAME`, `EMPTY_BRANCH` (warning — declared but not yet emitted).
+Emitted: `INVALID_ASSET_NAME`, `DUPLICATE_SIBLING_NAME`, `CIRCULAR_REFERENCE`, `INVALID_REFERENCE`, `SCHEMA_VALIDATION_ERROR`, `PARENT_TYPE_MISSING`, `DUPLICATE_PARENT_TYPE`, `TAG_NAME_EMPTY`, `TAG_NAME_TOO_LONG`, `DUPLICATE_TAG_NAME`.
+
+Declared but never emitted: `TAG_PATH_TOO_LONG` (§10.5), `UNKNOWN_FIELD` (§10.1), `EMPTY_BRANCH` (warning, §10.7).
 
 ### 15.6 Registry Page Behaviour
 
@@ -479,7 +508,7 @@ Displays errors from the client-side `resolveRegistry` call. When any errors are
 
 ### 16.1 Global Root Selector
 
-A single global dropdown allows the user to select the root template. On selection, the client fetches the full reachable template graph from the server (`GET /api/v1/templates/root/:template_name`) and initialises the local template graph. The root dropdown wrapper has `cursor-not-allowed` styling while `isDirty` is true, with a tooltip: "Save or discard changes before switching root."
+A single global dropdown allows the user to select the root template. On selection, the client fetches the full reachable template graph from the server (`GET /api/v1/templates/root/:template_name`) and initialises the local template graph. While `isDirty` is true the root dropdown is disabled, inside a `cursor-not-allowed` wrapper with the tooltip "Save or discard changes before switching root".
 
 The **Save / See what's changed / Cancel** button group in AppShell is rendered only when `activeTab === 'editor'`. Navigating to the Registry or History tab hides the bar even if the graph is dirty.
 
@@ -551,12 +580,12 @@ Occupies the bottom portion of the right panel. Displays the name and editable f
 **System Tree node selected:**
 - Read-only metadata: Template Name, Template Type.
 - Editable: Asset Name (not shown for root node). Changes written via `updateTemplate()`.
-- All template fields shown, all editable. Fields with an instance override show the override value in orange bold. Fields showing the inherited template default show in normal weight.
+- All template fields shown, all editable. Fields with an instance override are shown in `text-blue-600`. Fields showing the inherited template default show in normal weight.
 - A `+` button in the panel header opens `AddFieldModal` — not shown in instance mode (fields are defined at the template level).
 
 **Template selected via Templates Tree:**
-- Read-only: Template Name. Editable: Template Type — rendered as a text input with datalist suggestions (`system`, `module`, `Group`, `parameter`, `tag`). Custom values are permitted. Changing `template_type` uses the same dirty-tracking as other template properties; existing validation rules are enforced on save (e.g., changing to `tag` requires `data_type`, `is_setpoint`, and `Trends` fields and no children; changing to `module` requires `Module_Type`). When dirty, the Template Type cell is highlighted orange bold.
-- All template default fields shown, all editable. Fields that are new or changed from the `originalTemplateMap` baseline shown in orange bold.
+- Read-only: Template Name. Editable: Template Type — rendered as a text input with datalist suggestions (`system`, `module`, `Group`, `parameter`, `tag`). Custom values are permitted. Changing `template_type` uses the same dirty-tracking as other template properties; existing validation rules are enforced on save (e.g., changing to `tag` requires `data_type`, `is_setpoint`, and `Trends` fields and no children; changing to `module` requires `Module_Type`). When dirty, the Template Type cell uses the dirty style (`text-gray-700 font-semibold italic`).
+- All template default fields shown, all editable. Fields that are new or changed from the `originalTemplateMap` baseline use the dirty style.
 - A `+` button in the panel header opens `AddFieldModal` to add a new field.
 - A trash icon on each field row deletes the field from `template.fields` via `updateTemplate()`.
 
