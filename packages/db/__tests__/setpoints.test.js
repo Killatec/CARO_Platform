@@ -18,27 +18,29 @@ describe('upsertCommandedSetpoints', () => {
     expect(query).not.toHaveBeenCalled();
   });
 
-  it('upserts value and ack_status with three params per entry', async () => {
+  it('upserts value, ack_status and set_by with four params per entry', async () => {
     await upsertCommandedSetpoints([
       { tag_id: 1001, value: 42.5, ack_status: 'accepted' },
-      { tag_id: 1002, value: true, ack_status: 'timeout' },
+      { tag_id: 1002, value: true, ack_status: 'timeout', set_by: 'import:RF1_Sets.json' },
     ]);
 
     expect(query).toHaveBeenCalledTimes(1);
     const [sql, params] = query.mock.calls[0];
-    expect(sql).toMatch(/INSERT INTO commanded_setpoints \(tag_id, value, ack_status\)/);
-    expect(sql).toMatch(/\(\$1::int, \$2::jsonb, \$3::varchar\), \(\$4::int, \$5::jsonb, \$6::varchar\)/);
+    expect(sql).toMatch(/INSERT INTO commanded_setpoints \(tag_id, value, ack_status, set_by\)/);
+    expect(sql).toMatch(/\(\$1::int, \$2::jsonb, \$3::varchar, \$4::varchar\), \(\$5::int, \$6::jsonb, \$7::varchar, \$8::varchar\)/);
     expect(sql).toMatch(/ON CONFLICT \(tag_id\) DO UPDATE/);
     expect(sql).toMatch(/ack_status = EXCLUDED\.ack_status/);
+    expect(sql).toMatch(/set_by\s+= EXCLUDED\.set_by/);
     expect(sql).toMatch(/set_at\s+= now\(\)/);
-    expect(params).toEqual([1001, '42.5', 'accepted', 1002, 'true', 'timeout']);
+    // An omitted set_by is written as NULL, so a later write clears an import's provenance.
+    expect(params).toEqual([1001, '42.5', 'accepted', null, 1002, 'true', 'timeout', 'import:RF1_Sets.json']);
   });
 
   it('stores an unpopulated Set as SQL NULL, not JSON null', async () => {
     await upsertCommandedSetpoints([{ tag_id: 1001, value: null, ack_status: 'accepted' }]);
 
     const [, params] = query.mock.calls[0];
-    expect(params).toEqual([1001, null, 'accepted']);
+    expect(params).toEqual([1001, null, 'accepted', null]);
   });
 
   it('keeps only the last entry for a repeated tag_id', async () => {
@@ -49,8 +51,8 @@ describe('upsertCommandedSetpoints', () => {
     ]);
 
     const [sql, params] = query.mock.calls[0];
-    expect(sql).not.toMatch(/\$7/);
-    expect(params).toEqual([1001, '3', 'accepted', 1002, '2', 'accepted']);
+    expect(sql).not.toMatch(/\$9/);
+    expect(params).toEqual([1001, '3', 'accepted', null, 1002, '2', 'accepted', null]);
   });
 
   it('propagates a query failure to the caller', async () => {
@@ -70,15 +72,15 @@ describe('getCommandedSetpointsByTagIds', () => {
   it('selects by tag_id array and returns the rows as given', async () => {
     const setAt = new Date('2026-10-18T10:00:00Z');
     const rows = [
-      { tag_id: 1001, value: 42.5, ack_status: 'accepted', set_at: setAt },
-      { tag_id: 1002, value: null, ack_status: 'timeout',  set_at: setAt },
+      { tag_id: 1001, value: 42.5, ack_status: 'accepted', set_by: 'import:RF1_Sets.json', set_at: setAt },
+      { tag_id: 1002, value: null, ack_status: 'timeout',  set_by: null,                   set_at: setAt },
     ];
     query.mockResolvedValueOnce({ rows });
 
     const result = await getCommandedSetpointsByTagIds([1001, 1002, 1003]);
 
     const [sql, params] = query.mock.calls[0];
-    expect(sql).toMatch(/SELECT tag_id, value, ack_status, set_at\s+FROM commanded_setpoints/);
+    expect(sql).toMatch(/SELECT tag_id, value, ack_status, set_by, set_at\s+FROM commanded_setpoints/);
     expect(sql).toMatch(/WHERE tag_id = ANY\(\$1::int\[\]\)/);
     expect(params).toEqual([[1001, 1002, 1003]]);
     expect(result).toEqual(rows);

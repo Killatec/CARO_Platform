@@ -55,9 +55,12 @@ export interface CommandedSetpointEntry {
   /** null = unpopulated (stored as SQL NULL, not JSON null). */
   value:      number | boolean | null;
   ack_status: SetpointAckStatus;
+  /** Who or what set the value. Omitted = NULL (no users table yet); an import names its source. */
+  set_by?:    string | null;
 }
 
 export interface CommandedSetpointRow extends CommandedSetpointEntry {
+  set_by: string | null;
   set_at: Date;
 }
 
@@ -75,15 +78,16 @@ export async function upsertCommandedSetpoints(
   if (byTagId.size === 0) return;
 
   const unique  = [...byTagId.values()];
-  const clauses = unique.map((_, i) => `($${i * 3 + 1}::int, $${i * 3 + 2}::jsonb, $${i * 3 + 3}::varchar)`).join(', ');
-  const params  = unique.flatMap(e => [e.tag_id, e.value === null ? null : JSON.stringify(e.value), e.ack_status]);
+  const clauses = unique.map((_, i) => `($${i * 4 + 1}::int, $${i * 4 + 2}::jsonb, $${i * 4 + 3}::varchar, $${i * 4 + 4}::varchar)`).join(', ');
+  const params  = unique.flatMap(e => [e.tag_id, e.value === null ? null : JSON.stringify(e.value), e.ack_status, e.set_by ?? null]);
 
   await query(
-    `INSERT INTO commanded_setpoints (tag_id, value, ack_status)
+    `INSERT INTO commanded_setpoints (tag_id, value, ack_status, set_by)
      VALUES ${clauses}
      ON CONFLICT (tag_id) DO UPDATE
        SET value      = EXCLUDED.value,
            ack_status = EXCLUDED.ack_status,
+           set_by     = EXCLUDED.set_by,
            set_at     = now()`,
     params,
   );
@@ -100,7 +104,7 @@ export async function getCommandedSetpointsByTagIds(
   if (tagIds.length === 0) return [];
 
   const result = await query(
-    `SELECT tag_id, value, ack_status, set_at
+    `SELECT tag_id, value, ack_status, set_by, set_at
      FROM commanded_setpoints
      WHERE tag_id = ANY($1::int[])`,
     [tagIds],

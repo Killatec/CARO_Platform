@@ -287,8 +287,8 @@ describe('CmdController — setpoint stores', () => {
   it('restorePendingSetpoints re-sends the populated commanded values of the module, skipping nulls', async () => {
     const { ctrl, mqttBridge } = makeMocks();
     vi.mocked(getCommandedSetpointsByTagIds).mockResolvedValueOnce([
-      { tag_id: MQTT_TAG,   value: 3.5,  ack_status: 'timeout',  set_at: new Date() },
-      { tag_id: MQTT_TAG_2, value: null, ack_status: 'accepted', set_at: new Date() },
+      { tag_id: MQTT_TAG,   value: 3.5,  ack_status: 'timeout',  set_by: null, set_at: new Date() },
+      { tag_id: MQTT_TAG_2, value: null, ack_status: 'accepted', set_by: null, set_at: new Date() },
     ]);
 
     await ctrl.restorePendingSetpoints(MQTT_MODULE);
@@ -307,7 +307,7 @@ describe('CmdController — setpoint stores', () => {
   it('restorePendingSetpoints publishes nothing when every stored value is null', async () => {
     const { ctrl, mqttBridge } = makeMocks();
     vi.mocked(getCommandedSetpointsByTagIds).mockResolvedValueOnce([
-      { tag_id: MQTT_TAG, value: null, ack_status: 'accepted', set_at: new Date() },
+      { tag_id: MQTT_TAG, value: null, ack_status: 'accepted', set_by: null, set_at: new Date() },
     ]);
 
     await ctrl.restorePendingSetpoints(MQTT_MODULE);

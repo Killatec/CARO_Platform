@@ -1,0 +1,406 @@
+{
+  "_comment": "RF_Control legacy RF1_Sets.json key -> RF1 module-relative tag_name. 'traced' = firmware loads the key into a variable that CARO_Fill_Tags copies into that Tags field (Rivendell_RF_Control/HPS/src/RF_Control.cpp, RF/RF_Pwr_cs.cpp, Param/DI_cs.cpp); 'name-only' = no echo in CARO_Fill_Tags, matched by name. Values are imported in the file's own units. Used by scripts/import-rf1-sets.js.",
+  "module_id": "RF1",
+  "map": {
+    "RF_Enable": {
+      "tag_name": "RF_Enable",
+      "evidence": "traced"
+    },
+    "PLL_Mux_Out": {
+      "tag_name": "PLL_Mux_Out",
+      "evidence": "traced"
+    },
+    "Pwr_Filter_K": {
+      "tag_name": "Pwr_Filter_K",
+      "evidence": "traced"
+    },
+    "An_Display_1": {
+      "tag_name": "An_Display_1",
+      "evidence": "traced"
+    },
+    "An_Display_2": {
+      "tag_name": "An_Display_2",
+      "evidence": "traced"
+    },
+    "Dig_Display_1": {
+      "tag_name": "Dig_Display_1",
+      "evidence": "traced"
+    },
+    "Dig_Display_2": {
+      "tag_name": "Dig_Display_2",
+      "evidence": "traced"
+    },
+    "Display_1_Offset": {
+      "tag_name": "Display_1_Offset",
+      "evidence": "traced"
+    },
+    "Display_2_Offset": {
+      "tag_name": "Display_2_Offset",
+      "evidence": "traced"
+    },
+    "GPIO033_Clk_En": {
+      "tag_name": "GPIO033_Clk_En",
+      "evidence": "traced"
+    },
+    "GPIO033_Value": {
+      "tag_name": "GPIO033_Value",
+      "evidence": "traced"
+    },
+    "Intk_Mask_Delay": {
+      "tag_name": "Intk_Mask_Delay",
+      "evidence": "traced"
+    },
+    "Test_Digital": {
+      "tag_name": "Test_Digital",
+      "evidence": "traced"
+    },
+    "Force_WatchDog": {
+      "tag_name": "Force_WatchDog",
+      "evidence": "traced"
+    },
+    "Force_SCR": {
+      "tag_name": "Force_SCR",
+      "evidence": "traced"
+    },
+    "Amp_Intk": {
+      "tag_name": "Amp_Intk",
+      "evidence": "traced"
+    },
+    "COM_1_TX": {
+      "tag_name": "COM_1_TX",
+      "evidence": "traced"
+    },
+    "COM_2_TX": {
+      "tag_name": "COM_2_TX",
+      "evidence": "traced"
+    },
+    "Spec_Intk_Delay_Set": {
+      "tag_name": "Spec_Intk_Delay_Set",
+      "evidence": "traced"
+    },
+    "Freq_Set": {
+      "tag_name": "Freq.Set",
+      "evidence": "traced"
+    },
+    "Freq_RSS": {
+      "tag_name": "Freq.RSS",
+      "evidence": "traced"
+    },
+    "Phase_X_Offset": {
+      "tag_name": "Phase.X_Offset",
+      "evidence": "traced"
+    },
+    "Phase_Y_Offset": {
+      "tag_name": "Phase.Y_Offset",
+      "evidence": "traced"
+    },
+    "Phase_Filter_K": {
+      "tag_name": "Phase.Filter_K",
+      "evidence": "traced"
+    },
+    "Phase_Set_RSS": {
+      "tag_name": "Phase.RSS",
+      "evidence": "traced"
+    },
+    "Shifter_Set": {
+      "tag_name": "Phase.Shifter_Set",
+      "evidence": "traced"
+    },
+    "Phase_PID_En": {
+      "tag_name": "Phase.PID.Enable",
+      "evidence": "traced"
+    },
+    "Phase_KP": {
+      "tag_name": "Phase.PID.KP",
+      "evidence": "traced"
+    },
+    "Phase_KI": {
+      "tag_name": "Phase.PID.KI",
+      "evidence": "traced"
+    },
+    "Phase_KD": {
+      "tag_name": "Phase.PID.KD",
+      "evidence": "traced"
+    },
+    "Phase_KFF": {
+      "tag_name": "Phase.PID.KFF",
+      "evidence": "traced"
+    },
+    "Phase_Mon_Delay": {
+      "tag_name": "Phase.PID.Mon_Delay",
+      "evidence": "traced"
+    },
+    "Phase_Step_Mask": {
+      "tag_name": "Phase.PID.Step_Mask",
+      "evidence": "traced"
+    },
+    "Power_PID_En": {
+      "tag_name": "Phase.PhPower.Enable",
+      "evidence": "traced"
+    },
+    "Power_Set_1": {
+      "tag_name": "Phase.PhPower.Power_Set_1",
+      "evidence": "traced"
+    },
+    "Power_Set_2": {
+      "tag_name": "Phase.PhPower.Power_Set_2",
+      "evidence": "traced"
+    },
+    "Power_Set_RSS": {
+      "tag_name": "Phase.PhPower.RSS",
+      "evidence": "traced"
+    },
+    "Power_KP": {
+      "tag_name": "Phase.PhPower.KP",
+      "evidence": "traced"
+    },
+    "Power_KI1": {
+      "tag_name": "Phase.PhPower.KI1",
+      "evidence": "traced"
+    },
+    "Power_KI2": {
+      "tag_name": "Phase.PhPower.KI2",
+      "evidence": "traced"
+    },
+    "Power_KD": {
+      "tag_name": "Phase.PhPower.KD",
+      "evidence": "traced"
+    },
+    "Power_D_Fil": {
+      "tag_name": "Phase.PhPower.D_Fil",
+      "evidence": "traced"
+    },
+    "Pwr_SIM_A": {
+      "tag_name": "Phase.PhPower.SIM_A",
+      "evidence": "traced"
+    },
+    "Pwr_SIM_B": {
+      "tag_name": "Phase.PhPower.SIM_B",
+      "evidence": "traced"
+    },
+    "Pulse_En": {
+      "tag_name": "Pulse.Enable",
+      "evidence": "traced"
+    },
+    "Pulse_Freq": {
+      "tag_name": "Pulse.Freq.Set",
+      "evidence": "traced"
+    },
+    "Pulse_Freq_RSS": {
+      "tag_name": "Pulse.Freq.RSS",
+      "evidence": "traced"
+    },
+    "Pulse_Width": {
+      "tag_name": "Pulse.Width.Set",
+      "evidence": "traced"
+    },
+    "Pulse_Width_RSS": {
+      "tag_name": "Pulse.Width.RSS",
+      "evidence": "traced"
+    },
+    "Mag_1_Fwd.Gain": {
+      "tag_name": "Mag_1.Fwd.Gain",
+      "evidence": "traced"
+    },
+    "Mag_1_Fwd.Offset": {
+      "tag_name": "Mag_1.Fwd.Offset",
+      "evidence": "traced"
+    },
+    "Mag_1_Fwd.Att": {
+      "tag_name": "Mag_1.Fwd.Att",
+      "evidence": "traced"
+    },
+    "Mag_1_Fwd.Intk_Level": {
+      "tag_name": "Mag_1.Fwd.Intk_Level",
+      "evidence": "traced"
+    },
+    "Mag_1_Fwd.Intk_En": {
+      "tag_name": "Mag_1.Fwd.Intk_En",
+      "evidence": "traced"
+    },
+    "Mag_2_Fwd.Gain": {
+      "tag_name": "Mag_2.Fwd.Gain",
+      "evidence": "traced"
+    },
+    "Mag_2_Fwd.Offset": {
+      "tag_name": "Mag_2.Fwd.Offset",
+      "evidence": "traced"
+    },
+    "Mag_2_Fwd.Att": {
+      "tag_name": "Mag_2.Fwd.Att",
+      "evidence": "traced"
+    },
+    "Mag_2_Fwd.Intk_Level": {
+      "tag_name": "Mag_2.Fwd.Intk_Level",
+      "evidence": "traced"
+    },
+    "Mag_2_Fwd.Intk_En": {
+      "tag_name": "Mag_2.Fwd.Intk_En",
+      "evidence": "traced"
+    },
+    "Mag_1_Ref.Gain": {
+      "tag_name": "Mag_1.Ref.Gain",
+      "evidence": "traced"
+    },
+    "Mag_1_Ref.Offset": {
+      "tag_name": "Mag_1.Ref.Offset",
+      "evidence": "traced"
+    },
+    "Mag_1_Ref.Att": {
+      "tag_name": "Mag_1.Ref.Att",
+      "evidence": "traced"
+    },
+    "Mag_1_Ref.Intk_Level": {
+      "tag_name": "Mag_1.Ref.Intk_Level",
+      "evidence": "traced"
+    },
+    "Mag_1_Ref.Intk_En": {
+      "tag_name": "Mag_1.Ref.Intk_En",
+      "evidence": "traced"
+    },
+    "Mag_2_Ref.Gain": {
+      "tag_name": "Mag_2.Ref.Gain",
+      "evidence": "traced"
+    },
+    "Mag_2_Ref.Offset": {
+      "tag_name": "Mag_2.Ref.Offset",
+      "evidence": "traced"
+    },
+    "Mag_2_Ref.Att": {
+      "tag_name": "Mag_2.Ref.Att",
+      "evidence": "traced"
+    },
+    "Mag_2_Ref.Intk_Level": {
+      "tag_name": "Mag_2.Ref.Intk_Level",
+      "evidence": "traced"
+    },
+    "Mag_2_Ref.Intk_En": {
+      "tag_name": "Mag_2.Ref.Intk_En",
+      "evidence": "traced"
+    },
+    "Comb_Fwd.Gain": {
+      "tag_name": "Comb.Fwd.Gain",
+      "evidence": "traced"
+    },
+    "Comb_Fwd.Offset": {
+      "tag_name": "Comb.Fwd.Offset",
+      "evidence": "traced"
+    },
+    "Comb_Fwd.Att": {
+      "tag_name": "Comb.Fwd.Att",
+      "evidence": "traced"
+    },
+    "Comb_Fwd.Intk_Level": {
+      "tag_name": "Comb.Fwd.Intk_Level",
+      "evidence": "traced"
+    },
+    "Comb_Fwd.Intk_En": {
+      "tag_name": "Comb.Fwd.Intk_En",
+      "evidence": "traced"
+    },
+    "Comb_Ref.Gain": {
+      "tag_name": "Comb.Ref.Gain",
+      "evidence": "traced"
+    },
+    "Comb_Ref.Offset": {
+      "tag_name": "Comb.Ref.Offset",
+      "evidence": "traced"
+    },
+    "Comb_Ref.Att": {
+      "tag_name": "Comb.Ref.Att",
+      "evidence": "traced"
+    },
+    "Comb_Ref.Intk_Level": {
+      "tag_name": "Comb.Ref.Intk_Level",
+      "evidence": "traced"
+    },
+    "Comb_Ref.Intk_En": {
+      "tag_name": "Comb.Ref.Intk_En",
+      "evidence": "traced"
+    },
+    "DI_Amtek_Intk.INE_Set": {
+      "tag_name": "Amtek_Intk.INE_Set",
+      "evidence": "traced"
+    },
+    "DI_Amtek_Intk.Test": {
+      "tag_name": "Amtek_Intk.Test",
+      "evidence": "traced"
+    },
+    "HPS_WD_Intk.INE_Set": {
+      "tag_name": "HPS_WD_Intk.INE_Set",
+      "evidence": "traced"
+    },
+    "HPS_WD_Intk.Test": {
+      "tag_name": "HPS_WD_Intk.Test",
+      "evidence": "traced"
+    },
+    "SC_Status_Intk.INE_Set": {
+      "tag_name": "SC_Status_Intk.INE_Set",
+      "evidence": "traced"
+    },
+    "SC_Status_Intk.Test": {
+      "tag_name": "SC_Status_Intk.Test",
+      "evidence": "traced"
+    },
+    "Spec_Intk.INE_Set": {
+      "tag_name": "Spec_Intk.INE_Set",
+      "evidence": "traced"
+    },
+    "Spec_Intk.Test": {
+      "tag_name": "Spec_Intk.Test",
+      "evidence": "traced"
+    },
+    "Phase_Set_1": {
+      "tag_name": "Phase.Set_1",
+      "evidence": "name-only"
+    },
+    "Phase_Set_2": {
+      "tag_name": "Phase.Set_2",
+      "evidence": "name-only"
+    },
+    "SpecA.Enable": {
+      "tag_name": "SpecA.Enable",
+      "evidence": "name-only"
+    },
+    "SpecA.FFT_Enable": {
+      "tag_name": "SpecA.FFT_Enable",
+      "evidence": "name-only"
+    },
+    "SpecA.Spectrum_En": {
+      "tag_name": "SpecA.Spectrum_En",
+      "evidence": "name-only"
+    },
+    "SpecA.Center_Freq_Set": {
+      "tag_name": "SpecA.Center_Freq",
+      "evidence": "name-only"
+    },
+    "SpecA.FFT_Size_Set": {
+      "tag_name": "SpecA.FFT_Size",
+      "evidence": "name-only"
+    },
+    "SpecA.Window_Set": {
+      "tag_name": "SpecA.Window.Set",
+      "evidence": "name-only"
+    },
+    "SpecA.RX_Gain_Set": {
+      "tag_name": "SpecA.RX_Gain",
+      "evidence": "name-only"
+    },
+    "SpecA.Averages_Set": {
+      "tag_name": "SpecA.Averages",
+      "evidence": "name-only"
+    },
+    "SpecA.Rate_Set": {
+      "tag_name": "SpecA.Rate.Set",
+      "evidence": "name-only"
+    },
+    "SpecA.Spec_Intk_Band_Set": {
+      "tag_name": "SpecA.Spec_Intk_Band_Set",
+      "evidence": "name-only"
+    },
+    "SpecA.Spec_Intk_Level_Set": {
+      "tag_name": "SpecA.Spec_Intk_Level_Set",
+      "evidence": "name-only"
+    }
+  }
+}
