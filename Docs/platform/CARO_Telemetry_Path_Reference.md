@@ -1,7 +1,8 @@
 # CARO_Platform — Telemetry Path Reference
 
 **From telemetry producer to screen pixel.**
-**Version:** 3.2 — 2026-10-18
+**Version:** 3.3 — 2026-10-18
+*v3.3: Handshake state reaches the HMI (§2b.2, §3.4): `HandshakeController` records each step, `HmiTagSource` publishes `Module_Info.Handshake`, and `GET /api/v1/handshake/{module_id}` serves the details.*
 *v3.2: Payload shape checks in the bridge (`mqtt-payloads.ts`, §3.2); the heartbeat timer is replaced per connect and stopped on disconnect (§3.1). Both removed from §12.*
 *v3.1: Module handshake (§3.4): the bridge subscribes `caro/+/handshake_module`, sends REHANDSHAKE on connect instead of REQUEST_SNAPSHOT; Sets reach a module only in the post-CONFIRM push from `commanded_setpoints`; startup and recovery re-delivery removed (§3.3, §4.2).*
 *v3.0: Reconciled line by line against the implementation. Corrected the intake (FAULT no longer short-circuits; trend listener is per ingest, not per changed tag), the trend WS channel (per-ingest snapshots, no server-side boolean coercion, outbox cap), the MQTT bridge (connect behaviour, JSON-only decoding), client reconnect/PING behaviour, the trend client hook (ring of 20, `drainBuffers`) and widget field resolution (registry columns, never `meta`). Added stall/recovery handling, the trend snapshot scheduler, the outbound MQTT path, a full configuration table and §12 Known Gaps.*
@@ -136,7 +137,7 @@ private publishTick(): void {
 ```
 
 - `onBeforePublish` (wired in `index.ts`) writes the latest duty cycle into `hmiTags.Telemetry_CPU` (§4.4).
-- `updateModuleInfoTags()` turns `TelemetryIntake.getModuleStats()` into the `Module_Info.*` arrays: `Data_Rate` (KB/s), `Pkg_Rate` (packets/s), `Status` (`ModuleStatus` enum: `ONLINE`/`OK` → OK, `FAULT`, `STALLED`, anything else → UNKNOWN), `Tags_Per_Pkg`, and `Watchdog` (packed bits, LSB-first, 16 modules per word, from the *latched* watchdog). Module order is `getModuleNames()` over every tag with a module, the same order the client's `ModuleInfoTable` computes.
+- `updateModuleInfoTags()` turns `TelemetryIntake.getModuleStats()` into the `Module_Info.*` arrays: `Data_Rate` (KB/s), `Pkg_Rate` (packets/s), `Status` (`ModuleStatus` enum: `ONLINE`/`OK` → OK, `FAULT`, `STALLED`, anything else → UNKNOWN), `Tags_Per_Pkg`, `Watchdog` (packed bits, LSB-first, 16 modules per word, from the *latched* watchdog), and `Handshake` (one `HandshakeStatus` code per module from `HandshakeController.getStatus()`, §3.4; written only once `index.ts` has called `attachHandshake()`). Module order is `getModuleNames()` over every tag with a module, the same order the client's `ModuleInfoTable` computes.
 - `updateTrendInfoTags()` copies `DbPipeline` and `TimescaleSizeMonitor` counters into `Trend_Info.*`.
 - `this.moduleId` is the `module` column of the HMI tags (normally `HMI`).
 
@@ -255,7 +256,8 @@ Every command carries a fresh `crypto.randomUUID()` `command_id`, `ts_utc_ms = D
 
 - **HANDSHAKE_REQUEST** → a TAG_LIST from `buildTagList(tagMap, moduleId)` (`tag-list.ts`): the module's tags from the startup tag map, as `{ tag_id, tag_name, is_setpoint }` ordered by tag_id. `tag_name` is module-relative, from `moduleRelativeTagName()` in `@caro/tag-registry-shared`, the same function the Tag Defs export uses. Every request is answered (identity is not checked yet: `verifyModuleIdentity()` is a placeholder), except a payload `module_id` that differs from the topic, a module that is not MQTT-type in the registry, or a module with no tags.
 - **CONFIRM** (only after a TAG_LIST to that module) → `missing_ids`, `unknown_tags` and `truncated` are logged; `CmdController.getModuleSetpoints()` reads every Set of the module from `commanded_setpoints` (`null` where nothing is stored); `pushSetpoints()` publishes them as one SET_VALUES with its ACK tracked; REQUEST_SNAPSHOT follows at once. An ACK changes the store only by upgrading values stored as `timeout` to `accepted` (keeping `set_by`). No ACK in time → REHANDSHAKE, at most 3 times in a row.
-- State is in memory per module (TAG_LIST outstanding, push-timeout count); CONFIRM results are logged, not shown in the HMI.
+- State is in memory per module (TAG_LIST outstanding, push-timeout count, and a `HandshakeDetails` record: last request identity, TAG_LIST size, CONFIRM lists, Set push outcome). Each step sets a `HandshakeStatus` code (`@caro/tag-registry-shared`): request → REQUESTED, CONFIRM → PUSHING, then the push settles it as BOUND, MISSING_IDS (CONFIRM had `missing_ids`) or PUSH_FAILED (no ACK, or the store could not be read). A push that settles after a newer request keeps REQUESTED. `getStatus()` gives N/A for a non-MQTT module and NONE before any request; a stall does not change it. `CONFLICT` is defined but not set yet.
+- **To the HMI:** `HmiTagSource` publishes `getStatus()` per module as `HMI.Module_Info.Handshake` (§2b.2), shown as the Handshake column of `ModuleInfoTable`; clicking a state fetches `getDetails()` through `GET /api/v1/handshake/{module_id}` (`routes/handshake.ts`, `hmi_API_spec.md` §5.4) into `HandshakeDetailsModal`.
 
 ---
 

@@ -16,6 +16,7 @@ hmi_functional_spec | CARO_MQTT_Spec | Tag Registry Functional Spec | CARO_DB_Sp
 | 1.3 | 2026-03-26 | PM / Claude | Rate limiting defaults added: 100 req/min read, 20 req/min write, both configurable (OI-02 closed). Idempotency note added: write retries are safe — telemetry loop resolves ambiguity. command_id correlation via WebSocket not required — out-of-sync detection handles outcome visibility. |
 | 1.4 | 2026-03-28 | PM / Claude | Audit log endpoint updated: tag.write split into tag.write.request and tag.write.outcome (two-row pattern with shared command_id); tag.sync.lost and tag.sync.reset added; comment no longer required on tag writes (mode save only). Sync reset endpoint added: POST /api/v1/tags/{tag_id}/sync-reset. PENDING_TABLE_EMPTY error code updated: no longer references cmd_status. |
 | 1.5 | 2026-04-14 | PM / Claude | POST /tags/write: `comment` field changed from required to optional for individual tag writes. The HMI client sends a default value but the field is not validated as required. `comment` remains required only for mode save operations (Section 8, POST /modes/{mode_id}/save). |
+| 2.2 | 2026-10-18 | PM / Claude | New §5.4 `GET /api/v1/handshake/{module_id}`: a module's last handshake as the backend saw it (request identity, TAG_LIST, CONFIRM, Set push), in memory. Error code `MODULE_NOT_FOUND` added. |
 | 2.1 | 2026-10-17 | PM / Claude | Reconciled against the implementation. New §1.1 Implementation Status (built endpoint list; auth stubbed; §3, §6, §8–§10 not built). §2.3/§2.4 marked target design. §4 `GET /tags` as built (no filtering, full TagDef, fixed pagination). New §5.3 `POST /reset`. §7 dispatch rule as built (raw-vs-bucketed by window size, `tag_samples` source, `committedThroughTs`, `min`/`max`, `prev`; no trendable check). §12 split into emitted vs target codes; `COMMAND_REJECTED` returns 500. Section 5: `POST /tags/write` response shape corrected to the built `{ devices: [{ module_id, command_id, results }] }`; validation codes as built. Section 11: transport as built (plain `ws://{host}/ws`, no session check), MODE_CHANGED marked not built, PING/PONG payloads, SUBSCRIBE semantics, TREND_DELTA sample semantics and value types. |
 | 2.0 | 2026-09-22 | PM / Claude | Section 5.2 added: GET /api/v1/config — runtime `projectRoot` for multi-system client page-tree selection and localStorage namespacing. No auth check; `databaseName` deliberately omitted (unlike Tag Registry's `/config`). |
 | 1.9 | 2026-06-02 | PM / Claude | Section 5.1 added: POST /api/v1/commands — module-type-agnostic command send. MQTT dispatches with CMD_ACK await (1s timeout). HMI dispatches RESET only; other cmd_str values return 400. Error codes added: VALIDATION_ERROR, COMMAND_NOT_SUPPORTED, COMMAND_REJECTED, TIMEOUT. |
@@ -31,7 +32,7 @@ This document defines the REST API contract between the CARO_HMI React frontend 
 
 Real-time tag values are delivered exclusively via WebSocket (see Section 11). There is no REST endpoint for reading current tag values.
 
-### 1.1 Implementation Status (as of 2026-10-17)
+### 1.1 Implementation Status (as of 2026-10-18)
 
 This document mixes the built API with the target design. The server (`apps/caro-hmi/server/src/app.ts`) mounts only these endpoints:
 
@@ -43,6 +44,7 @@ This document mixes the built API with the target design. The server (`apps/caro
 | `POST /api/v1/tags/write` | 5 |
 | `POST /api/v1/commands` | 5.1 |
 | `POST /api/v1/reset` | 5.3 |
+| `GET /api/v1/handshake/{module_id}` | 5.4 |
 | `GET /api/v1/trends/tile`, `GET /api/v1/trends/extent` | 7 |
 | WebSocket `/ws` | 11 |
 
@@ -390,6 +392,35 @@ Fires every handler registered on the server's `ResetBus`, in registration order
 ```json
 { "ok": true, "data": { "reset": ["watchdog", "module-reset"] } }
 ```
+
+---
+
+## 5.4 Module Handshake Details
+
+### GET /api/v1/handshake/{module_id}
+
+*No role check (auth stubbed).* Returns the module's last handshake as `HandshakeController` saw it (`CARO_MQTT_Spec.md` §7). The HMI's Module Status table opens it in a modal when the operator clicks a module's Handshake state. The data is in memory only: after a server restart every section is `null` until the module's next HANDSHAKE_REQUEST.
+
+```json
+{ "ok": true, "data": {
+  "module_id": "RF1",
+  "status": 4,
+  "request":  { "ts_ms": 1792298629800, "ts_utc_ms": 1792298629792, "ip": "10.0.0.133",
+                "instance_id": "66:1e:98:49:6d:87", "fw_hash": "sha256:6e48…",
+                "tag_registry_template": "Narya_RF", "tag_registry_rev": 3 },
+  "tag_list": { "ts_ms": 1792298629801, "tags": 225, "bytes": 14402 },
+  "confirm":  { "ts_ms": 1792298629950, "missing_ids": [], "unknown_tags": [], "truncated": false },
+  "push":     { "ts_ms": 1792298629990, "outcome": "acked", "sets": 12, "unpopulated": 3,
+                "rejected": [], "consecutive_timeouts": 0 }
+} }
+```
+
+- `status` — a `HandshakeStatus` code (`@caro/tag-registry-shared`), the same value as the module's entry in the `HMI.Module_Info.Handshake` tag: 1 NONE (no request since server start), 2 REQUESTED (TAG_LIST sent, waiting for CONFIRM), 3 PUSHING (CONFIRM received, waiting for the Set push ACK), 4 BOUND (push acked or no Sets, no `missing_ids`), 5 MISSING_IDS, 6 PUSH_FAILED (push not acked, or `commanded_setpoints` unreadable), 7 CONFLICT (reserved; nothing sets it yet). 0 N/A is never returned here — a non-MQTT module gets 404.
+- `ts_ms` fields are backend receive/send times. `request` fields are as the module sent them (unvalidated, may be any JSON type); `ts_utc_ms` is the request envelope's module timestamp.
+- `push.outcome` — `acked`, `timeout`, `no_sets` (the module has no Sets; only REQUEST_SNAPSHOT was sent) or `store_error`. `rejected` lists `{ tag_id, rejection_code }` from the CMD_ACK.
+- A request that arrives while a push is in flight sets `status` to REQUESTED; the push result is still recorded when it settles, without changing `status`.
+
+Errors: `MODULE_NOT_FOUND` (404) when `module_id` is not an MQTT-type module in the registry.
 
 ---
 
@@ -876,6 +907,7 @@ Codes the built server emits:
 | VALIDATION_ERROR | 400 | `/tags/write`, `/commands` | Missing or malformed body field (`values`, `module_id`, `cmd_str`). |
 | COMMAND_NOT_SUPPORTED | 400 | `POST /commands` | Non-RESET command for the HMI module. |
 | COMMAND_REJECTED | **500** | `POST /commands` | The module's CMD_ACK had an `error` field or an `accepted: false` result. The error is thrown without a status, so `errorHandler` defaults to 500. |
+| MODULE_NOT_FOUND | 404 | `GET /handshake/{module_id}` | The module is not an MQTT-type module in the registry. |
 | INVALID_TAG_IDS | 400 | `/trends/tile` | tag_ids empty, more than 8, or a non-integer / non-positive ID. Trendable membership is not checked. |
 | INVALID_RANGE | 400 | `/trends/tile` | end_time ≤ start_time, or either timestamp non-positive or not an integer. |
 | INVALID_BUCKET_COUNT | 400 | `/trends/tile` | bucket_count outside 1..2500 or non-integer. |
