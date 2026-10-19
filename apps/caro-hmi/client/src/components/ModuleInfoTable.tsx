@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useResolveAssetPath, useLiveValue, useTagMap } from '@caro/hmi-context';
 import type { TagDef } from '@caro/hmi-context';
-import { getModuleNames, packedBit, ModuleStatus, ModuleStatusLabels } from '@caro/tag-registry-shared';
+import { getModuleNames, packedBit, ModuleStatus, ModuleStatusLabels, HandshakeStatus, HandshakeStatusLabels } from '@caro/tag-registry-shared';
+import { HandshakeDetailsModal } from './HandshakeDetailsModal.js';
 
 const PR: React.CSSProperties = { paddingRight: '3rem' };
 
@@ -12,6 +13,18 @@ function statusClass(code: number | undefined): string {
     case ModuleStatus.FAULT:
     case ModuleStatus.STALLED: return 'text-red-600 font-medium';
     default:                   return 'text-gray-400';
+  }
+}
+
+function handshakeClass(code: number): string {
+  switch (code) {
+    case HandshakeStatus.BOUND:       return 'text-green-600 font-medium';
+    case HandshakeStatus.REQUESTED:
+    case HandshakeStatus.PUSHING:     return 'text-amber-600 font-medium';
+    case HandshakeStatus.MISSING_IDS:
+    case HandshakeStatus.PUSH_FAILED:
+    case HandshakeStatus.CONFLICT:    return 'text-red-600 font-medium';
+    default:                          return 'text-gray-400';
   }
 }
 
@@ -62,6 +75,7 @@ export function ModuleInfoTable() {
   const pkgRateId     = useSingleOptionalTag('HMI.Module_Info.Pkg_Rate')?.tag_id;
   const tagsPerPkgId  = useSingleOptionalTag('HMI.Module_Info.Tags_Per_Pkg')?.tag_id;
   const watchdogId    = useSingleOptionalTag('HMI.Module_Info.Watchdog')?.tag_id;
+  const handshakeId   = useSingleOptionalTag('HMI.Module_Info.Handshake')?.tag_id;
 
   const moduleCount = useLiveValue(moduleCountId).value as number | null;
   const status      = useLiveValue(statusId).value as number[] | null;
@@ -69,6 +83,10 @@ export function ModuleInfoTable() {
   const pkgRate     = useLiveValue(pkgRateId).value as number[] | null;
   const tagsPerPkg  = useLiveValue(tagsPerPkgId).value as number[] | null;
   const watchdog    = useLiveValue(watchdogId).value as number[] | null;
+  // Not part of the mismatch check: a registry applied before this tag existed has none.
+  const handshake   = useLiveValue(handshakeId).value as number[] | null;
+
+  const [detailsModule, setDetailsModule] = useState<string | null>(null);
 
   const hasMismatch = moduleCount !== null && (
     (status?.length    !== moduleCount) ||
@@ -99,6 +117,7 @@ export function ModuleInfoTable() {
           <tr>
             <th className="text-left text-xs uppercase text-gray-500 font-medium pb-2" style={PR}>Module</th>
             <th className="text-center text-xs uppercase text-gray-500 font-medium pb-2" style={PR}>Status</th>
+            <th className="text-center text-xs uppercase text-gray-500 font-medium pb-2" style={PR}>Handshake</th>
             <th className="text-center text-xs uppercase text-gray-500 font-medium pb-2" style={PR}>Packets/s</th>
             <th className="text-center text-xs uppercase text-gray-500 font-medium pb-2" style={PR}>KB/s</th>
             <th className="text-center text-xs uppercase text-gray-500 font-medium pb-2" style={PR}>Tags</th>
@@ -108,7 +127,7 @@ export function ModuleInfoTable() {
         <tbody>
           {rowCount === 0 ? (
             <tr>
-              <td colSpan={6} className="text-gray-400 text-xs py-2">No modules</td>
+              <td colSpan={7} className="text-gray-400 text-xs py-2">No modules</td>
             </tr>
           ) : (
             Array.from({ length: rowCount }, (_, i) => (
@@ -116,6 +135,21 @@ export function ModuleInfoTable() {
                 <td className="py-1.5 font-mono text-xs text-gray-800" style={PR}>{moduleNames[i]}</td>
                 <td className={`py-1.5 text-center ${statusClass(status?.[i])}`} style={PR}>
                   {ModuleStatusLabels[status?.[i] ?? 0] ?? 'UNKNOWN'}
+                </td>
+                <td className="py-1.5 text-center" style={PR}>
+                  {handshake?.[i] === undefined ? (
+                    <span className="text-gray-400">—</span>
+                  ) : handshake[i] === HandshakeStatus.NA ? (
+                    <span className={handshakeClass(handshake[i])}>{HandshakeStatusLabels[handshake[i]]}</span>
+                  ) : (
+                    <button
+                      type="button"
+                      className={`underline decoration-dotted ${handshakeClass(handshake[i])}`}
+                      onClick={() => setDetailsModule(moduleNames[i])}
+                    >
+                      {HandshakeStatusLabels[handshake[i]] ?? 'UNKNOWN'}
+                    </button>
+                  )}
                 </td>
                 <td className="py-1.5 text-center tabular-nums" style={PR}>{pkgRate?.[i] ?? 0}</td>
                 <td className="py-1.5 text-center tabular-nums" style={PR}>{(dataRate?.[i] ?? 0).toFixed(1)}</td>
@@ -130,6 +164,7 @@ export function ModuleInfoTable() {
           )}
         </tbody>
       </table>
+      <HandshakeDetailsModal moduleId={detailsModule} onClose={() => setDetailsModule(null)} />
     </>
   );
 }

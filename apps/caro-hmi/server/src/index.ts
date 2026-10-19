@@ -177,7 +177,8 @@ async function start(): Promise<void> {
   const cmdController = new CmdController({ mqttBridge, hmiTagSource: hmiTags, tagMap });
 
   // 5b'. Module handshake (answers HANDSHAKE_REQUEST, pushes Sets after CONFIRM)
-  new HandshakeController({ mqttBridge, cmdController, tagMap });
+  const handshakeController = new HandshakeController({ mqttBridge, cmdController, tagMap });
+  hmiTags.attachHandshake(handshakeController);
 
   // 5c. Reset bus (fans out reset signal to registered subsystems)
   const resetBus = new ResetBus();
@@ -185,7 +186,7 @@ async function start(): Promise<void> {
   resetBus.register('module-reset', () => cmdController.sendResetAll());
 
   // 6. Express app + HTTP server
-  const app = createApp(tagMap, cmdController, resetBus, trendableTagIds, dbPipeline);
+  const app = createApp(tagMap, cmdController, resetBus, trendableTagIds, dbPipeline, handshakeController);
   const httpServer = http.createServer(app);
 
   // 7. WS server

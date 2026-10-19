@@ -9,10 +9,12 @@ import { createResetRouter } from './routes/reset.js';
 import { createCommandsRouter } from './routes/commands.js';
 import { createTrendsRouter } from './routes/trends.js';
 import { createConfigRouter } from './routes/config.js';
+import { createHandshakeRouter } from './routes/handshake.js';
 import { authStub } from './middleware/auth-stub.js';
 import type { CmdController } from './cmd-controller.js';
 import type { ResetBus } from './reset-bus.js';
 import type { DbPipeline } from './db-pipeline.js';
+import type { HandshakeController } from './handshake-controller.js';
 
 export function createApp(
   tagMap: Map<number, TagDef>,
@@ -20,6 +22,7 @@ export function createApp(
   resetBus: ResetBus,
   trendableTagIds: Set<number>,
   dbPipeline: DbPipeline,
+  handshakeController: HandshakeController,
 ): Application {
   const app = express();
 
@@ -38,6 +41,7 @@ export function createApp(
   app.use('/api/v1/tags', createTagsRouter(tagMap, cmdController, trendableTagIds));
   app.use('/api/v1/reset', createResetRouter(resetBus));
   app.use('/api/v1/commands', createCommandsRouter(cmdController));
+  app.use('/api/v1/handshake', createHandshakeRouter(handshakeController));
 
   if (process.env.HMI_TRENDS_GZIP === '1') {
     app.use('/api/v1/trends', compression());

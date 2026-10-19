@@ -50,6 +50,16 @@
       "fields": {
         "unit": "Hz"
       }
+    },
+    {
+      "template_name": "numeric_set",
+      "asset_name": "Handshake",
+      "fields": {
+        "data_type": "i16[]",
+        "Trends": false,
+        "is_setpoint": false,
+        "format": "#"
+      }
     }
   ]
 }

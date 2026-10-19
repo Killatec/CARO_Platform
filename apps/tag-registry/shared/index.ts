@@ -19,6 +19,7 @@ export { deepEqual, deepNotEqual } from './utils.js';
 export { getModuleNames } from './moduleOrder.js';
 export { packedBit, setPackedBit } from './bitPacking.js';
 export { ModuleStatus, ModuleStatusLabels } from './enums/moduleStatus.js';
+export { HandshakeStatus, HandshakeStatusLabels } from './enums/handshakeStatus.js';
 export * from './constants.js';
 export type {
   FieldDef, ChildRef, Template, TemplateEntry,

@@ -232,6 +232,7 @@ const MI_TAG_IDS = {
   STATUS:       202,
   TAGS_PER_PKG: 203,
   WATCHDOG:     204,
+  HANDSHAKE:    205,
 };
 
 function makeModuleInfoTags(): ActiveTag[] {
@@ -241,6 +242,7 @@ function makeModuleInfoTags(): ActiveTag[] {
     makeActiveTag(MI_TAG_IDS.STATUS,       'CARO_1.HMI.Module_Info.Status',       'HMI', { data_type: 'i16[]' }),
     makeActiveTag(MI_TAG_IDS.TAGS_PER_PKG, 'CARO_1.HMI.Module_Info.Tags_Per_Pkg', 'HMI', { data_type: 'i16[]' }),
     makeActiveTag(MI_TAG_IDS.WATCHDOG,     'CARO_1.HMI.Module_Info.Watchdog',     'HMI', { data_type: 'i16[]' }),
+    makeActiveTag(MI_TAG_IDS.HANDSHAKE,    'CARO_1.HMI.Module_Info.Handshake',    'HMI', { data_type: 'i16[]' }),
   ];
 }
 
@@ -367,6 +369,24 @@ describe('HmiTagSource — Module_Info array emission', () => {
     // HMI module is included, so arrays have length 1
     expect((lkv.getValue(MI_TAG_IDS.DATA_RATE) as number[]).length).toBe(1);
     expect((lkv.getValue(MI_TAG_IDS.WATCHDOG)  as number[]).length).toBe(1);
+  });
+});
+
+describe('HmiTagSource — Module_Info.Handshake', () => {
+  it('stays unpublished until a handshake source is attached', () => {
+    const { hmiTags, lkv } = makeModuleInfoSource(['A'], [makeModuleStats('A')]);
+    hmiTags.publishNow();
+    expect(lkv.getValue(MI_TAG_IDS.HANDSHAKE)).toBeNull();
+  });
+
+  it('publishes one status code per module, in module order', () => {
+    const { hmiTags, lkv } = makeModuleInfoSource(['A', 'B'], []);
+    const codes: Record<string, number> = { A: 4, B: 2, HMI: 0 };
+    hmiTags.attachHandshake({ getStatus: (m: string) => codes[m] });
+
+    hmiTags.publishNow();
+
+    expect(lkv.getValue(MI_TAG_IDS.HANDSHAKE)).toEqual([4, 2, 0]);
   });
 });
 

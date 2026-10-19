@@ -3,6 +3,7 @@ import { HandshakeController, MAX_PUSH_RETRIES } from '../handshake-controller.j
 import type { MqttBridge } from '../mqtt-bridge.js';
 import type { CmdController, ModuleSetpoint, SetpointPushResult } from '../cmd-controller.js';
 import type { TagDef, MetaLevel } from '@caro/hmi-context';
+import { HandshakeStatus } from '@caro/tag-registry-shared';
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -47,10 +48,10 @@ function setup(push: SetpointPushResult = { outcome: 'acked', results: [{ tag_id
     requestSnapshot:    vi.fn(() => { order.push('REQUEST_SNAPSHOT'); }),
   } as unknown as CmdController;
 
-  new HandshakeController({ mqttBridge, cmdController, tagMap });
+  const controller = new HandshakeController({ mqttBridge, cmdController, tagMap });
   const send = (moduleId: string, message: unknown) => handler!(moduleId, message);
   const flush = () => new Promise(r => setTimeout(r, 0));
-  return { mqttBridge, cmdController, send, flush, order };
+  return { controller, mqttBridge, cmdController, send, flush, order };
 }
 
 beforeEach(() => {
@@ -186,5 +187,98 @@ describe('HandshakeController — CONFIRM', () => {
     await flush();
 
     expect(mqttBridge.sendRehandshake).toHaveBeenCalledTimes(MAX_PUSH_RETRIES + 1);
+  });
+});
+
+// ── Status and details ────────────────────────────────────────────────────────
+
+describe('HandshakeController — status and details', () => {
+  it('N/A for a non-MQTT module, NONE before any request; details null only for non-MQTT', () => {
+    const { controller } = setup();
+    expect(controller.getStatus('HMI')).toBe(HandshakeStatus.NA);
+    expect(controller.getStatus('Ghost')).toBe(HandshakeStatus.NA);
+    expect(controller.getStatus('RF1')).toBe(HandshakeStatus.NONE);
+    expect(controller.getDetails('HMI')).toBeNull();
+    expect(controller.getDetails('RF1')).toEqual({
+      module_id: 'RF1', status: HandshakeStatus.NONE, request: null, tag_list: null, confirm: null, push: null,
+    });
+  });
+
+  it('REQUESTED after a request, with the identity and TAG_LIST recorded', () => {
+    const { controller, send } = setup();
+    send('RF1', request());
+
+    const d = controller.getDetails('RF1')!;
+    expect(d.status).toBe(HandshakeStatus.REQUESTED);
+    expect(d.request).toMatchObject({ ts_utc_ms: 1, ip: '10.0.0.1', instance_id: 'aa', fw_hash: 'sha256:x', tag_registry_template: 'T', tag_registry_rev: 3 });
+    expect(d.tag_list).toMatchObject({ tags: 2 });
+    expect(d.tag_list!.bytes).toBeGreaterThan(0);
+  });
+
+  it('PUSHING while the Set push is unacknowledged, BOUND once acked', async () => {
+    const { controller, cmdController, send, flush } = setup();
+    let ack!: (r: { outcome: 'acked'; results: [] }) => void;
+    vi.mocked(cmdController.pushSetpoints).mockReturnValueOnce(new Promise(r => { ack = r; }));
+
+    send('RF1', request());
+    send('RF1', confirm());
+    await flush();
+    expect(controller.getStatus('RF1')).toBe(HandshakeStatus.PUSHING);
+
+    ack({ outcome: 'acked', results: [] });
+    await flush();
+    expect(controller.getStatus('RF1')).toBe(HandshakeStatus.BOUND);
+    expect(controller.getDetails('RF1')!.push).toMatchObject({ outcome: 'acked', sets: 1, unpopulated: 0, rejected: [] });
+  });
+
+  it('MISSING_IDS when CONFIRM reported missing_ids, with the lists recorded', async () => {
+    const { controller, send, flush } = setup();
+    send('RF1', request());
+    send('RF1', confirm({ missing_ids: ['Phase.Step_Mask'], unknown_tags: ['Legacy.X'], truncated: true }));
+    await flush();
+
+    expect(controller.getStatus('RF1')).toBe(HandshakeStatus.MISSING_IDS);
+    expect(controller.getDetails('RF1')!.confirm).toMatchObject({ missing_ids: ['Phase.Step_Mask'], unknown_tags: ['Legacy.X'], truncated: true });
+  });
+
+  it('PUSH_FAILED on a push timeout or an unreadable setpoint store', async () => {
+    const timeout = setup({ outcome: 'timeout' });
+    timeout.send('RF1', request());
+    timeout.send('RF1', confirm());
+    await timeout.flush();
+    expect(timeout.controller.getStatus('RF1')).toBe(HandshakeStatus.PUSH_FAILED);
+    expect(timeout.controller.getDetails('RF1')!.push).toMatchObject({ outcome: 'timeout', consecutive_timeouts: 1 });
+
+    const store = setup();
+    vi.mocked(store.cmdController.getModuleSetpoints).mockRejectedValueOnce(new Error('db down'));
+    store.send('RF1', request());
+    store.send('RF1', confirm());
+    await store.flush();
+    expect(store.controller.getStatus('RF1')).toBe(HandshakeStatus.PUSH_FAILED);
+  });
+
+  it('BOUND with no Sets to push', async () => {
+    const { controller, cmdController, send, flush } = setup();
+    vi.mocked(cmdController.getModuleSetpoints).mockResolvedValueOnce([]);
+    send('RF1', request());
+    send('RF1', confirm());
+    await flush();
+    expect(controller.getStatus('RF1')).toBe(HandshakeStatus.BOUND);
+    expect(controller.getDetails('RF1')!.push).toMatchObject({ outcome: 'no_sets' });
+  });
+
+  it('a request during an in-flight push keeps REQUESTED when the push settles', async () => {
+    const { controller, cmdController, send, flush } = setup();
+    let ack!: (r: { outcome: 'acked'; results: [] }) => void;
+    vi.mocked(cmdController.pushSetpoints).mockReturnValueOnce(new Promise(r => { ack = r; }));
+
+    send('RF1', request());
+    send('RF1', confirm());
+    await flush();
+    send('RF1', request());
+    ack({ outcome: 'acked', results: [] });
+    await flush();
+
+    expect(controller.getStatus('RF1')).toBe(HandshakeStatus.REQUESTED);
   });
 });

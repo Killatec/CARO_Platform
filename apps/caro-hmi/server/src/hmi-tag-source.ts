@@ -15,6 +15,11 @@ import type { DbPipeline } from './db-pipeline.js';
 import type { TimescaleSizeMonitor } from './timescale-size-monitor.js';
 import { getModuleNames, setPackedBit, ModuleStatus } from '@caro/tag-registry-shared';
 
+/** HandshakeController's read side, attached after construction (it is created later in index.ts). */
+export interface HandshakeStatusSource {
+  getStatus(moduleId: string): number;
+}
+
 export interface HmiTagSourceDeps {
   intake: TelemetryIntake;
   hmiPublishIntervalMs: number;
@@ -69,6 +74,7 @@ export class HmiTagSource {
   private readonly trendTagIds: TrendInfoTagIds;
   // Names absorbed by the Proxy's unknown-property path, so each is logged once.
   private readonly reportedUnknownProps = new Set<string>();
+  private handshakeSource: HandshakeStatusSource | undefined;
 
   private constructor(
     deps: HmiTagSourceDeps,
@@ -125,6 +131,11 @@ export class HmiTagSource {
     if (this.dbSizeTagId === undefined) {
       this.dbSizeTagId = this.resolveDbSizeTagId();
     }
+  }
+
+  /** Attach the handshake controller so Module_Info_Handshake is published. */
+  attachHandshake(source: HandshakeStatusSource): void {
+    this.handshakeSource = source;
   }
 
   /**
@@ -298,6 +309,10 @@ export class HmiTagSource {
     self.Module_Info_Status       = status;
     self.Module_Info_Tags_Per_Pkg = tagsPerPkg;
     self.Module_Info_Watchdog     = watchdog;
+    if (this.handshakeSource) {
+      const hs = this.handshakeSource;
+      self.Module_Info_Handshake = this.moduleNames.map(m => hs.getStatus(m));
+    }
   }
 
   private publishTick(): void {

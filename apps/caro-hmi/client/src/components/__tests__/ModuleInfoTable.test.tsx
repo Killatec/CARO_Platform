@@ -1,9 +1,9 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { MockHmiProvider } from '@caro/hmi-context/testing';
 import type { TagDef, LiveValue } from '@caro/hmi-context';
-import { ModuleStatus } from '@caro/tag-registry-shared';
+import { ModuleStatus, HandshakeStatus } from '@caro/tag-registry-shared';
 import { ModuleInfoTable } from '../ModuleInfoTable.js';
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
@@ -331,5 +331,49 @@ describe('ModuleInfoTable', () => {
         warnSpy.mockRestore();
       }
     });
+  });
+});
+
+// ─── Handshake column ────────────────────────────────────────────────────────
+
+describe('ModuleInfoTable — Handshake column', () => {
+  const TAG_HANDSHAKE = makeTagDef({ tag_id: 9007, tag_path: 'CARO_1.HMI.Module_Info.Handshake', data_type: 'i16[]' });
+  const TAGS = { ...ALL_TAGS, 9007: TAG_HANDSHAKE };
+  const LIVE = {
+    ...LIVE_4,
+    9007: { value: [HandshakeStatus.BOUND, HandshakeStatus.REQUESTED, HandshakeStatus.PUSH_FAILED, HandshakeStatus.NA] },
+  };
+
+  it('renders "—" in every row when the registry has no Handshake tag', () => {
+    render(<ModuleInfoTable />, { wrapper: wrapper(ALL_TAGS, LIVE_4) });
+    expect(screen.getAllByText('—')).toHaveLength(4);
+  });
+
+  it('renders the state labels; N/A is not clickable', () => {
+    render(<ModuleInfoTable />, { wrapper: wrapper(TAGS, LIVE) });
+    expect(screen.getByRole('button', { name: 'BOUND' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'REQUESTED' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'PUSH_FAILED' })).toBeTruthy();
+    expect(screen.getByText('N/A').tagName).toBe('SPAN');
+  });
+
+  it('clicking a state fetches the module details into a modal', async () => {
+    const details = {
+      module_id: 'RF', status: HandshakeStatus.BOUND,
+      request: { ts_ms: 1, ts_utc_ms: 1, instance_id: 'aa', ip: '10.0.0.133', fw_hash: 'sha256:x', tag_registry_template: 'Narya_RF', tag_registry_rev: 3 },
+      tag_list: null, confirm: null, push: null,
+    };
+    const fetchMock = vi.fn().mockResolvedValue({ json: () => Promise.resolve({ ok: true, data: details }) });
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      render(<ModuleInfoTable />, { wrapper: wrapper(TAGS, LIVE) });
+      fireEvent.click(screen.getByRole('button', { name: 'BOUND' }));
+
+      await waitFor(() => expect(screen.getByText('10.0.0.133')).toBeTruthy());
+      expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/handshake/RF');
+      expect(screen.getByText('Handshake — RF')).toBeTruthy();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
