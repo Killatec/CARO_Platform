@@ -19,6 +19,13 @@
       "fields": {
         "In_Tag_Name": true
       }
+    },
+    {
+      "template_name": "Narya_RF",
+      "asset_name": "RF2",
+      "fields": {
+        "In_Tag_Name": true
+      }
     }
   ]
 }
