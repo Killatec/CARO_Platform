@@ -12,7 +12,13 @@
       "template_name": "Analog_In",
       "asset_name": "Power",
       "fields": {
-        "In_Tag_Name": false
+        "In_Tag_Name": false,
+        "format": "#",
+        "unit": "#",
+        "eng_max": 32767,
+        "RSS.unit": "#",
+        "RSS.format": "#",
+        "RSS.eng_max": 32000
       }
     },
     {
@@ -27,7 +33,9 @@
         "data_type": "i16",
         "unit": "#",
         "format": "#",
-        "Trends": false
+        "Trends": false,
+        "eng_min": -32767,
+        "eng_max": 32767
       }
     },
     {
@@ -37,17 +45,9 @@
         "data_type": "i16",
         "unit": "#",
         "format": "#",
-        "Trends": false
-      }
-    },
-    {
-      "template_name": "numeric_set",
-      "asset_name": "Power_Set_1",
-      "fields": {
-        "data_type": "i16",
-        "unit": "#",
-        "format": "#",
-        "Trends": false
+        "Trends": false,
+        "eng_min": -32767,
+        "eng_max": 32767
       }
     },
     {
@@ -57,7 +57,8 @@
         "data_type": "i16",
         "unit": "#",
         "format": "#",
-        "Trends": false
+        "Trends": false,
+        "eng_max": 32767
       }
     }
   ]

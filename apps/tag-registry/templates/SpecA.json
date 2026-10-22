@@ -38,7 +38,9 @@
       "fields": {
         "format": "#",
         "eng_min": 512,
-        "eng_max": 32768
+        "eng_max": 16384,
+        "data_type": "i16",
+        "Trends": false
       }
     },
     {
@@ -98,7 +100,7 @@
       "fields": {
         "format": "#.#",
         "unit": "Hz",
-        "eng_max": 5000
+        "eng_max": 60000
       }
     },
     {
@@ -253,9 +255,11 @@
       "template_name": "numeric_mon",
       "asset_name": "Spec_Start",
       "fields": {
-        "unit": "Hz",
+        "unit": "MHz",
         "format": "#",
-        "Trends": false
+        "Trends": false,
+        "eng_min": 900,
+        "eng_max": 930
       }
     },
     {
@@ -264,7 +268,8 @@
       "fields": {
         "unit": "Hz",
         "format": "#.###",
-        "Trends": false
+        "Trends": false,
+        "eng_max": 15000
       }
     },
     {
@@ -280,7 +285,8 @@
       "fields": {
         "data_type": "i16",
         "format": "#",
-        "Trends": false
+        "Trends": false,
+        "eng_max": 32767
       }
     },
     {
@@ -318,7 +324,7 @@
         "unit": "bins",
         "format": "#",
         "eng_min": 512,
-        "eng_max": 32768
+        "eng_max": 16384
       }
     }
   ]

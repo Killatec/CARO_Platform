@@ -17,7 +17,8 @@
         "RSS.unit": "MHz/s",
         "format": "#.###",
         "eng_min": 900,
-        "eng_max": 930
+        "eng_max": 930,
+        "RSS.eng_max": 10
       }
     },
     {

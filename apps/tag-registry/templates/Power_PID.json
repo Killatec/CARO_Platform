@@ -20,7 +20,9 @@
         "data_type": "i16",
         "unit": "#",
         "format": "#",
-        "Trends": false
+        "Trends": false,
+        "eng_min": -32767,
+        "eng_max": 32767
       }
     },
     {
@@ -30,7 +32,9 @@
         "data_type": "i16",
         "unit": "#",
         "format": "#",
-        "Trends": false
+        "Trends": false,
+        "eng_min": -32767,
+        "eng_max": 32767
       }
     },
     {
@@ -40,7 +44,9 @@
         "data_type": "i16",
         "unit": "#",
         "format": "#",
-        "Trends": false
+        "Trends": false,
+        "eng_min": -32767,
+        "eng_max": 32767
       }
     },
     {
@@ -50,7 +56,9 @@
         "data_type": "i16",
         "unit": "#",
         "format": "#",
-        "Trends": false
+        "Trends": false,
+        "eng_min": -32767,
+        "eng_max": 32767
       }
     },
     {
@@ -60,7 +68,9 @@
         "data_type": "i16",
         "unit": "#",
         "format": "#",
-        "Trends": false
+        "Trends": false,
+        "eng_min": -32767,
+        "eng_max": 32767
       }
     }
   ]

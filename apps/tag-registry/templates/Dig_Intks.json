@@ -42,9 +42,9 @@
       "fields": {
         "data_type": "i16",
         "unit": "s",
-        "format": "#.#",
+        "format": "#",
         "eng_min": 0,
-        "eng_max": 32.767,
+        "eng_max": 32,
         "Trends": false
       }
     },

@@ -25,6 +25,18 @@
     "RSS.unit": {
       "field_type": "String",
       "default": "#"
+    },
+    "RSS.format": {
+      "field_type": "String",
+      "default": "#.##"
+    },
+    "RSS.eng_max": {
+      "field_type": "Numeric",
+      "default": 100
+    },
+    "RSS.eng_min": {
+      "field_type": "Numeric",
+      "default": 0
     }
   },
   "children": [
