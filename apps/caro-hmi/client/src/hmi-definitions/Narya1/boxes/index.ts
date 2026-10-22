@@ -11,3 +11,4 @@ export { Rf1PhaseXYBox } from './Rf1PhaseXYBox.js';
 export { Rf1PhasePidBox } from './Rf1PhasePidBox.js';
 export { Rf1PowerPidBox } from './Rf1PowerPidBox.js';
 export { Rf1SpecABox } from './Rf1SpecABox.js';
+export { Rf1AnalogInBox } from './Rf1AnalogInBox.js';

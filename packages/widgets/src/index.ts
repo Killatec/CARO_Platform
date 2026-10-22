@@ -4,6 +4,9 @@ export type { NumericMonProps } from './NumericMon.js';
 export { NumericSet } from './NumericSet.js';
 export type { NumericSetProps } from './NumericSet.js';
 
+export { StringMon } from './StringMon.js';
+export type { StringMonProps } from './StringMon.js';
+
 export { BooleanMon } from './BooleanMon.js';
 export type { BooleanMonProps } from './BooleanMon.js';
 

@@ -16,7 +16,6 @@ export function Rf1PhasePidBox() {
         <NumericSet assetPath="RF1.Phase.PID.Step_Mask" label="Phase Step Mask" />
         <NumericMon assetPath="RF1.Phase.PID.Phase_Error" label="Phase Error" />
         <NumericMon assetPath="RF1.Phase.Shifter_CMD" label="Shifter CMD" />
-        <NumericSet assetPath="RF1.Phase.Set_1" label="Phase Set 1" />
         <NumericSet assetPath="RF1.Phase.Set_2" label="Phase Set 2" />
       </div>
     </div>

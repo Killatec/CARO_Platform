@@ -38,6 +38,13 @@ export function Rf1SpecABox() {
           <NumericMon assetPath="RF1.SpecA.Peak_Power" label="Peak Power" />
           <NumericMon assetPath="RF1.SpecA.Noise_Floor" label="Noise Floor" />
           <NumericMon assetPath="RF1.SpecA.CNR" label="CNR" />
+          <NumericMon assetPath="RF1.SpecA.Spec_Start" label="Spec Start" />
+          <NumericMon assetPath="RF1.SpecA.Spec_Bin" label="Spec Bin" />
+          <NumericMon assetPath="RF1.SpecA.Spec_Intk_Freq_Mon" label="Spec Intk Freq" />
+          <BooleanMon assetPath="RF1.SpecA.Spec_Trace_Ok" label="Spec Trace Ok" />
+          <NumericMon assetPath="RF1.SpecA.Bytes" label="Bytes" />
+          <NumericMon assetPath="RF1.SpecA.Errors" label="Errors" />
+          <NumericMon assetPath="RF1.SpecA.Reset_Count" label="Reset Count" />
           <NumericMon assetPath="RF1.SpecA.Rate.Mon" label="Rate Mon" />
           <NumericMon assetPath="RF1.SpecA.Throughput" label="Throughput" />
           <NumericMon assetPath="RF1.SpecA.Capture_T" label="Capture T" />

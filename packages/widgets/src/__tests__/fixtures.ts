@@ -193,3 +193,24 @@ export const mockNumericTagRev: TagDef = {
     { type: 'tag', name: 'monitor', fields: {} },
   ],
 };
+
+export const mockStringTag: TagDef = {
+  tag_id: 1010,
+  tag_path: 'Plant1.Module.Module_Info.Status',
+  tag_name: null,
+  data_type: 'string',
+  is_setpoint: false,
+  trendable: false,
+  module_id: 'Module',
+  module_type: 'MQTT',
+  eng_min: null,
+  eng_max: null,
+  unit: null,
+  format: null,
+  meta: [
+    { type: 'system', name: 'Plant1', fields: {} },
+    { type: 'module', name: 'Module', fields: {} },
+    { type: 'Group', name: 'Module_Info', fields: {} },
+    { type: 'tag', name: 'Status', fields: {} },
+  ],
+};

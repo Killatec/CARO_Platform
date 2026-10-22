@@ -12,12 +12,12 @@
  *   3. Label-lookup rendering for An_Display/Dig_Display (Rf1DisplayBox
  *      renders their raw Int16 values instead of resolved text labels).
  * Also omitted: Close_App/Reboot command buttons (RF1's actual cmd_str
- * contract isn't confirmed) and RF1.Module_Info.IP/Status (String-type tags
- * — NumericMon assumes a numeric value).
+ * contract isn't confirmed).
  */
 import { PAGE_STYLE, HEADING_STYLE, MODULES_CONTAINER } from '../../shared/index.js';
 import {
   Rf1SourceBox,
+  Rf1AnalogInBox,
   Rf1PowerMonitorBox,
   Rf1InterlockBox,
   Rf1DigitalIOBox,
@@ -36,6 +36,7 @@ export function RF1Page() {
       <h1 style={HEADING_STYLE}>RF1</h1>
       <div style={MODULES_CONTAINER}>
         <Rf1SourceBox />
+        <Rf1AnalogInBox />
         <Rf1PowerMonitorBox path="Mag_1.Fwd" label="Mag 1 Fwd" />
         <Rf1PowerMonitorBox path="Mag_1.Ref" label="Mag 1 Ref" />
         <Rf1PowerMonitorBox path="Mag_2.Fwd" label="Mag 2 Fwd" />

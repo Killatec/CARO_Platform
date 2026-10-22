@@ -23,6 +23,7 @@ export function Rf1DigitalIOBox() {
         <BooleanMon assetPath="RF1.Dig_Mons.SC_Status" label="SC Status" />
         <BooleanMon assetPath="RF1.Dig_Mons.SC_Mag_1_On" label="SC Mag 1 On" />
         <BooleanMon assetPath="RF1.Dig_Mons.SC_Mag_2_On" label="SC Mag 2 On" />
+        <BooleanMon assetPath="RF1.Dig_Mons.Mag_On" label="Mag On" />
       </div>
     </div>
   );

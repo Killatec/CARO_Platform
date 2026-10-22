@@ -28,5 +28,14 @@ export const VALUE_CLASS = `${COL.value} font-mono text-sm text-gray-900 text-ri
 /** Shared value class (editable — blue to indicate clickable) */
 export const VALUE_EDITABLE_CLASS = `${COL.value} font-mono text-sm text-blue-600 text-right`;
 
+/**
+ * Text value class (StringMon) — spans the value and unit columns (plus the gap
+ * between them), so a text row's right edge lines up with numeric rows. Truncates.
+ */
+export const VALUE_TEXT_CLASS = 'w-[130px] shrink-0 font-mono text-sm text-gray-900 text-right truncate';
+
+/** Text value class, bad quality */
+export const VALUE_TEXT_BAD_CLASS = 'w-[130px] shrink-0 font-mono text-sm text-red-600 text-right';
+
 /** Shared value class (bad quality / disconnected) */
 export const VALUE_BAD_CLASS = `${COL.value} font-mono text-sm text-red-600 text-right`;

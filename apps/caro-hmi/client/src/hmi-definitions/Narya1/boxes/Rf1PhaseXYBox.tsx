@@ -17,7 +17,6 @@ export function Rf1PhaseXYBox() {
         <NumericSet assetPath="RF1.Phase.Filter_K" label="Phase Filter K" />
         <NumericMon assetPath="RF1.Phase.Phase_XY.X" label="Phase X" />
         <NumericMon assetPath="RF1.Phase.Phase_XY.Y" label="Phase Y" />
-        <NumericMon assetPath="RF1.Phase.Phase.Mon" label="Phase Mon" />
         <NumericMon assetPath="RF1.Phase.Spread" label="Phase Spread" />
       </div>
     </div>
