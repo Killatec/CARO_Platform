@@ -76,6 +76,58 @@ test.describe('Templates Tree', () => {
     await expect(po.seeChangesButton).toBeVisible();
   });
 
+  // ── Test 3b ────────────────────────────────────────────────────────────────
+  test('typing a negative number keystroke by keystroke keeps the minus sign', async ({ page }) => {
+    const name = `tag_negative_${Date.now()}`;
+    created.push(name);
+    await createTagTemplate(name, 'f32', false, {
+      eng_min: { field_type: 'Numeric', default: 0 },
+    });
+
+    await page.reload();
+    await po.expandTemplateFolder('tag');
+    await po.clickTemplateLeaf(name);
+
+    const engMinInput = po.fieldsPanel.locator('input[type="number"]').first();
+    await engMinInput.clear();
+    // A cleared field stays empty instead of snapping back to 0
+    await expect(engMinInput).toHaveValue('');
+
+    // Real keystrokes: '-' alone is partial input and must not be coerced to 0
+    await engMinInput.pressSequentially('-5');
+    await expect(engMinInput).toHaveValue('-5');
+
+    await engMinInput.blur();
+    await expect(engMinInput).toHaveValue('-5');
+    const engMinLabel = po.fieldsPanel.locator('td').filter({ hasText: /^eng_min$/ }).first();
+    await expect(engMinLabel).toHaveClass(/italic/);
+  });
+
+  // ── Test 3c ────────────────────────────────────────────────────────────────
+  test('focusing a numeric field selects its value, so typing replaces it', async ({ page }) => {
+    const name = `tag_replace_${Date.now()}`;
+    created.push(name);
+    await createTagTemplate(name, 'f32', false, {
+      eng_min: { field_type: 'Numeric', default: 42 },
+    });
+
+    await page.reload();
+    await po.expandTemplateFolder('tag');
+    await po.clickTemplateLeaf(name);
+
+    const engMinInput = po.fieldsPanel.locator('input[type="number"]').first();
+    await engMinInput.click();
+    await engMinInput.pressSequentially('-7');
+    await expect(engMinInput).toHaveValue('-7');
+    await engMinInput.blur();
+
+    // Blur shows the stored value: a leading zero typed in is tidied away
+    await engMinInput.click();
+    await engMinInput.pressSequentially('05');
+    await engMinInput.blur();
+    await expect(engMinInput).toHaveValue('5');
+  });
+
   // ── Test 4 ─────────────────────────────────────────────────────────────────
   test('creating a new template via NewTemplateModal', async ({ page }) => {
     const name = `tag_new_${Date.now()}`;

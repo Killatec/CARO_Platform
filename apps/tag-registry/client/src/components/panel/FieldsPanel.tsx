@@ -8,6 +8,7 @@ import { AddFieldModal } from '../shared/AddFieldModal.jsx';
 import { TrashIcon } from '../shared/TrashIcon.jsx';
 import { deepNotEqual, IN_TAG_NAME_FIELD } from '@caro/tag-registry-shared';
 import type { FieldDef } from '@caro/tag-registry-shared';
+import { parseNumericDraft } from '../../utils/numericDraft.js';
 
 type FieldType = 'Numeric' | 'String' | 'Boolean' | 'TagType' | 'ModuleType';
 
@@ -18,6 +19,47 @@ function coerceValue(rawValue: unknown, fieldType: FieldType): number | string |
     return isNaN(parsed) ? 0 : parsed;
   }
   return String(rawValue); // String and TagType
+}
+
+interface NumericFieldInputProps {
+  value: unknown;
+  disabled: boolean;
+  className: string;
+  onChange?: (value: number) => void;
+}
+
+/**
+ * Numeric field that keeps the typed text and commits only complete numbers, so
+ * partial input ("-", "", "1e") is not coerced to 0 and redrawn mid-keystroke.
+ * Focus selects the value, so typing replaces it; blur shows the stored value again
+ * (partial text is dropped, "05" reads "5").
+ */
+function NumericFieldInput({ value, disabled, className, onChange }: NumericFieldInputProps): React.ReactElement {
+  const stored = value != null ? String(value) : '';
+  const [draft, setDraft] = useState(stored);
+
+  // Resync when the stored value changes from outside (discard, another node), but
+  // keep text that already means that value ("1." while 1 is stored).
+  useEffect(() => {
+    setDraft(prev => (parseNumericDraft(prev) === value ? prev : stored));
+  }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <Input
+      type="number"
+      value={draft}
+      onChange={(e) => {
+        const text = (e.target as HTMLInputElement).value;
+        setDraft(text);
+        const parsed = parseNumericDraft(text);
+        if (parsed !== null) onChange?.(parsed);
+      }}
+      onFocus={(e) => e.currentTarget.select()}
+      onBlur={() => setDraft(stored)}
+      disabled={disabled}
+      className={className}
+    />
+  );
 }
 
 interface FieldTableRowProps {
@@ -129,13 +171,22 @@ function FieldTableRow({
     <tr>
       <td className={nameCellClass}>{fieldName}</td>
       <td className="py-1.5">
-        <Input
-          type={fieldType === 'Numeric' ? 'number' : 'text'}
-          value={value != null ? String(value) : ''}
-          onChange={onChange ? (e) => onChange((e.target as HTMLInputElement)?.value ?? e) : undefined}
-          disabled={readOnly}
-          className={`w-[20ch] text-sm ${colorClass}`}
-        />
+        {fieldType === 'Numeric' ? (
+          <NumericFieldInput
+            value={value}
+            onChange={onChange}
+            disabled={readOnly}
+            className={`w-[20ch] text-sm ${colorClass}`}
+          />
+        ) : (
+          <Input
+            type="text"
+            value={value != null ? String(value) : ''}
+            onChange={onChange ? (e) => onChange((e.target as HTMLInputElement)?.value ?? e) : undefined}
+            disabled={readOnly}
+            className={`w-[20ch] text-sm ${colorClass}`}
+          />
+        )}
       </td>
       <td className="py-1.5 pl-1 w-6">
         {onDelete && (
@@ -399,11 +450,19 @@ export function FieldsPanel(): React.ReactElement {
         ? coerceValue(rawValue, fieldDef.field_type as FieldType)
         : rawValue;
 
-      const updatedChildren = parent.children.map((child, i) =>
-        i === selectedSystemTreeNodeChildIndex
-          ? { ...child, fields: { ...(child.fields || {}), [fieldName]: coerced } }
-          : child
-      );
+      // A field that was inherited and is set back to the inherited value stays
+      // inherited: drop the override instead of storing one equal to the default.
+      const backToInherited = fieldDef !== undefined &&
+        !(fieldName in originalOverrides) &&
+        !deepNotEqual(coerced, fieldDef.default);
+
+      const updatedChildren = parent.children.map((child, i) => {
+        if (i !== selectedSystemTreeNodeChildIndex) return child;
+        const fields = child.fields || {};
+        if (!backToInherited) return { ...child, fields: { ...fields, [fieldName]: coerced } };
+        const { [fieldName]: _dropped, ...inheritedFields } = fields;
+        return { ...child, fields: inheritedFields };
+      });
       updateTemplate(selectedSystemTreeNodeParentTemplate!, { children: updatedChildren });
     };
 

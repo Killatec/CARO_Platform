@@ -141,6 +141,28 @@ test.describe('Fields Panel', () => {
     await expect(input).toHaveClass(/italic/);
   });
 
+  // ── Test 7b ────────────────────────────────────────────────────────────────
+  test('instance mode: setting an inherited field back to its inherited value leaves it clean', async () => {
+    await po.selectRoot(sName);
+    await po.clickSystemTreeNode('mon_channel');
+
+    const input = po.fieldsPanel.locator('tr').filter({ hasText: 'eng_min' }).locator('input');
+    await input.click();
+    await input.pressSequentially('99');
+    await expect(input).toHaveClass(/italic/);
+    await expect(po.seeChangesButton).toBeVisible();
+    await input.blur();
+
+    // Back to the template default (0): the override is dropped, not stored as 0
+    await input.click();
+    await input.pressSequentially('0');
+    await input.blur();
+    await expect(input).toHaveValue('0');
+    await expect(input).not.toHaveClass(/italic/);
+    await expect(input).not.toHaveClass(/text-blue-600/);
+    await expect(po.seeChangesButton).toBeHidden();
+  });
+
   // ── Test 8 ─────────────────────────────────────────────────────────────────
   test('Instance mode: editing asset name turns it bold italic', async () => {
     await po.selectRoot(sName);
