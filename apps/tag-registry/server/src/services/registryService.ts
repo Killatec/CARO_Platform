@@ -27,6 +27,12 @@ export async function getActiveRegistry(): Promise<ActiveTag[]> {
 export { getRevisions, getRevisionTags };
 export type { RevisionRow, RevisionTag };
 
+export interface RegistryChanges {
+  added:    NewTagInput[];
+  modified: ExistingTagInput[];
+  retired:  ExistingTagInput[];
+}
+
 /**
  * Applies the resolved registry to the database inside a SERIALIZABLE transaction.
  */
@@ -35,6 +41,26 @@ export async function applyRegistry(
   rootName: string,
   comment: string
 ): Promise<ApplyRegistryResult> {
+  const { added, modified, retired } = await classifyRegistryChanges(templateMap, rootName);
+
+  // Early return if nothing changed
+  if (added.length === 0 && modified.length === 0 && retired.length === 0) {
+    return { ok: true, registry_rev: null, message: 'No changes to apply' };
+  }
+
+  const result = await applyRegistryRevision(added, modified, retired, comment);
+  return { ok: true, ...result };
+}
+
+/**
+ * What applying rootName's templates would change in the active registry — the
+ * comparison applyRegistry writes, without writing. All three lists empty means
+ * the saved templates are exactly what is applied (the Tag Defs export relies on it).
+ */
+export async function classifyRegistryChanges(
+  templateMap: Map<string, Template>,
+  rootName: string
+): Promise<RegistryChanges> {
   // 1. Resolve proposed registry server-side — do not trust client-supplied data
   const resolved: ResolvedTag[] = resolveRegistry(templateMap, rootName);
 
@@ -79,14 +105,7 @@ export async function applyRegistry(
     }
   }
 
-  // 4. Early return if nothing changed
-  if (added.length === 0 && modified.length === 0 && retired.length === 0) {
-    return { ok: true, registry_rev: null, message: 'No changes to apply' };
-  }
-
-  // 5. Write to DB
-  const result = await applyRegistryRevision(added, modified, retired, comment);
-  return { ok: true, ...result };
+  return { added, modified, retired };
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────

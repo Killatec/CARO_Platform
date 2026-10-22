@@ -12,7 +12,7 @@ export { simulateCascade } from './simulateCascade.js';
 export { applyFieldCascade } from './applyFieldCascade.js';
 export { validateParentTypes } from './validateParentTypes.js';
 export { resolveRegistry } from './resolveRegistry.js';
-export { hashTemplate, hashTagDefs } from './hashTemplate.js';
+export { hashTemplate } from './hashTemplate.js';
 export { listMqttModuleTemplates, buildTagDefs, buildTagDefsFile, validateTagDefs, moduleRelativeTagName, TAG_DEFS_BANNER, TAG_DEF_LEAF_KEY } from './tagDefs.js';
 export type { TagDefLeaf, TagDefGroup, TagDefNode, TagDefsFile } from './tagDefs.js';
 export { deepEqual, deepNotEqual } from './utils.js';

@@ -1,5 +1,4 @@
 import { describe, it, expect } from 'vitest';
-import { createHash } from 'crypto';
 import { listMqttModuleTemplates, buildTagDefs, buildTagDefsFile, validateTagDefs, moduleRelativeTagName, TAG_DEFS_BANNER } from '../tagDefs.js';
 import type { MetaLevel, Template } from '../types.js';
 
@@ -218,57 +217,25 @@ describe('validateTagDefs', () => {
 // ── buildTagDefsFile ──────────────────────────────────────────────────────────
 
 describe('buildTagDefsFile', () => {
-  it('stamps banner, template name, and a sha256 content hash', () => {
-    const file = buildTagDefsFile(makeMap(), 'RF_Mod');
+  it('stamps banner, template name and the given registry revision, with no content hash', () => {
+    const file = buildTagDefsFile(makeMap(), 'RF_Mod', 9);
     expect(file._generated).toBe(TAG_DEFS_BANNER);
     expect(file.template_name).toBe('RF_Mod');
-    expect(file.content_hash).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(file.tag_registry_rev).toBe(9);
+    expect(file).not.toHaveProperty('content_hash');
   });
 
-  it('content_hash is reproducible from the documented canonical form of tags', () => {
-    const file = buildTagDefsFile(makeMap(), 'RF_Mod');
-    // Keys sorted at every level (code-unit order: uppercase "G" before lowercase "k"), no whitespace.
-    const canonical =
-      '{"Enable":{"data_type":"bool"},"Mag_1":{"Gain":{"data_type":"f32"},"kW":{"data_type":"i16"}}}';
-    const expected = createHash('sha256').update(canonical).digest('hex');
-    expect(file.content_hash).toBe(`sha256:${expected}`);
+  it('writes the keys in a fixed order: banner, template, revision, tags', () => {
+    expect(Object.keys(buildTagDefsFile(makeMap(), 'RF_Mod', 9)))
+      .toEqual(['_generated', 'template_name', 'tag_registry_rev', 'tags']);
   });
 
-  it('hash is stable across regenerations', () => {
-    expect(buildTagDefsFile(makeMap(), 'RF_Mod')).toEqual(buildTagDefsFile(makeMap(), 'RF_Mod'));
+  it('carries the same tags tree as buildTagDefs', () => {
+    expect(buildTagDefsFile(makeMap(), 'RF_Mod', 9).tags).toEqual(buildTagDefs(makeMap(), 'RF_Mod'));
   });
 
-  it('hash changes when a data_type changes', () => {
-    const map = makeMap();
-    map.set('boolean_set', tag('boolean_set', 'i16', true));
-    expect(buildTagDefsFile(map, 'RF_Mod').content_hash)
-      .not.toBe(buildTagDefsFile(makeMap(), 'RF_Mod').content_hash);
-  });
-
-  it('hash does not change when only Set/Mon direction changes (direction is not exported)', () => {
-    const map = makeMap();
-    map.set('boolean_set', tag('boolean_set', 'bool', false));
-    expect(buildTagDefsFile(map, 'RF_Mod').content_hash)
-      .toBe(buildTagDefsFile(makeMap(), 'RF_Mod').content_hash);
-  });
-
-  it('hash changes when a tag is renamed', () => {
-    const map = makeMap();
-    const mod = map.get('RF_Mod')!;
-    map.set('RF_Mod', { ...mod, children: [mod.children[0], { ...mod.children[1], asset_name: 'Enabled' }] });
-    expect(buildTagDefsFile(map, 'RF_Mod').content_hash)
-      .not.toBe(buildTagDefsFile(makeMap(), 'RF_Mod').content_hash);
-  });
-
-  it('hash does not change for display-only edits (unit, format, eng_max)', () => {
-    const map = makeMap();
-    map.set('numeric_set', tag('numeric_set', 'f32', true, {
-      unit:    { field_type: 'String',  default: 'W' },
-      eng_max: { field_type: 'Numeric', default: 5 },
-      format:  { field_type: 'String',  default: '#.#' },
-    }));
-    expect(buildTagDefsFile(map, 'RF_Mod').content_hash)
-      .toBe(buildTagDefsFile(makeMap(), 'RF_Mod').content_hash);
+  it('is stable across regenerations at the same revision', () => {
+    expect(buildTagDefsFile(makeMap(), 'RF_Mod', 9)).toEqual(buildTagDefsFile(makeMap(), 'RF_Mod', 9));
   });
 });
 

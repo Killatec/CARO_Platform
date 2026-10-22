@@ -3,6 +3,7 @@ import {
   createTagTemplate,
   createStructuralTemplate,
   deleteTemplates,
+  applyRegistryApi,
 } from '../helpers/api.js';
 import { createPageObjects } from '../helpers/pageObjects.js';
 
@@ -33,6 +34,7 @@ test.describe('Generate Tag Defs', () => {
     await po.selectRoot(sysName);
     await po.navigateToRegistry();
     await expect(page.locator('table')).toBeVisible({ timeout: 15000 });
+    return sysName;
   }
 
   test.afterEach(async ({ page }) => {
@@ -40,8 +42,10 @@ test.describe('Generate Tag Defs', () => {
     await deleteTemplates(created.splice(0));
   });
 
-  test('downloads a timestamped ZIP for a system with an MQTT module', async ({ page }) => {
-    await setup(page, 'MQTT');
+  test('downloads a timestamped ZIP stamped with the applied registry revision', async ({ page }) => {
+    const sysName = await setup(page, 'MQTT');
+    // The export requires the saved templates to be what the latest revision applied.
+    const { registry_rev } = await applyRegistryApi(sysName, 'e2e: Tag Defs export');
 
     const button = page.getByRole('button', { name: 'Generate Tag Defs' });
     await expect(button).toBeEnabled();
@@ -56,6 +60,19 @@ test.describe('Generate Tag Defs', () => {
     const bytes = fs.readFileSync(await download.path());
     expect(bytes.subarray(0, 2).toString('latin1')).toBe('PK'); // ZIP local-file-header magic
     await expect(page.getByTestId('tag-defs-error')).toHaveCount(0);
+
+    const { unzipSync, strFromU8 } = await import('fflate');
+    const [entry] = Object.values(unzipSync(new Uint8Array(bytes)));
+    const file = JSON.parse(strFromU8(entry));
+    expect(file.tag_registry_rev).toBe(registry_rev);
+    expect(file).not.toHaveProperty('content_hash');
+  });
+
+  test('shows an error banner when the saved templates have not been applied', async ({ page }) => {
+    await setup(page, 'MQTT');
+
+    await page.getByRole('button', { name: 'Generate Tag Defs' }).click();
+    await expect(page.getByTestId('tag-defs-error')).toContainText('apply them first', { timeout: 5000 });
   });
 
   test('shows an error banner when the system has no MQTT module', async ({ page }) => {

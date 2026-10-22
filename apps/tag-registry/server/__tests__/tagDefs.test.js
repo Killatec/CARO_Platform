@@ -2,6 +2,15 @@ import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vites
 import http from 'node:http';
 import { unzipSync, strFromU8 } from 'fflate';
 
+// The export checks the saved templates against the applied registry (no DB in tests).
+vi.mock('../src/services/registryService.ts', () => ({
+  getActiveRegistry:       vi.fn(),
+  applyRegistry:           vi.fn(),
+  classifyRegistryChanges: vi.fn(),
+  getRevisions:            vi.fn(),
+  getRevisionTags:         vi.fn(),
+}));
+
 vi.mock('../src/services/templateService.ts', () => ({
   initializeIndex: vi.fn(),
   listTemplates:   vi.fn(),
@@ -14,6 +23,7 @@ vi.mock('../src/services/templateService.ts', () => ({
 
 import { createApp } from '../src/app.ts';
 import * as templateService from '../src/services/templateService.ts';
+import * as registryService from '../src/services/registryService.ts';
 import { tagDefsZipName } from '../src/services/tagDefsService.ts';
 import { ERROR_CODES, TAG_DEFS_BANNER } from '../../shared/index.js';
 
@@ -34,8 +44,13 @@ afterAll(async () => {
   await new Promise(resolve => server.close(resolve));
 });
 
+const NO_CHANGES = { added: [], modified: [], retired: [] };
+
 beforeEach(() => {
   vi.clearAllMocks();
+  // Default: the saved templates are exactly what revision 9 applied.
+  registryService.classifyRegistryChanges.mockResolvedValue(NO_CHANGES);
+  registryService.getRevisions.mockResolvedValue([{ registry_rev: 9 }, { registry_rev: 8 }]);
 });
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -130,18 +145,36 @@ describe('GET /api/v1/tag-defs', () => {
     expect(Object.keys(entries).sort()).toEqual(['Pole.json', 'RF_Mod.json']);
   });
 
-  it('each file carries banner, hash and module-relative tags nested by segment, data_type only', async () => {
+  it('each file carries banner, registry revision and module-relative tags nested by segment, data_type only', async () => {
     templateService.loadRoot.mockResolvedValue(loadRootResult(SYS_TEMPLATES));
     const res = await fetch(`${base}/tag-defs?root=Sys`);
     const entries = unzipSync(new Uint8Array(await res.arrayBuffer()));
     const file = JSON.parse(strFromU8(entries['RF_Mod.json']));
     expect(file._generated).toBe(TAG_DEFS_BANNER);
     expect(file.template_name).toBe('RF_Mod');
-    expect(file.content_hash).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(file.tag_registry_rev).toBe(9);
+    expect(file).not.toHaveProperty('content_hash');
     expect(file.tags).toEqual({
       Gain: { data_type: 'f32' },
       kW:   { data_type: 'f32' },
     });
+  });
+
+  it('returns 409 REGISTRY_NOT_APPLIED when the saved templates differ from the applied registry', async () => {
+    templateService.loadRoot.mockResolvedValue(loadRootResult(SYS_TEMPLATES));
+    registryService.classifyRegistryChanges.mockResolvedValue({ ...NO_CHANGES, modified: [{ tag_path: 'x' }] });
+    const { status, body } = await getJson('/tag-defs?root=Sys');
+    expect(status).toBe(409);
+    expect(body.error.code).toBe(ERROR_CODES.REGISTRY_NOT_APPLIED);
+    expect(body.error.message).toMatch(/revision 9 \(0 added, 1 modified, 0 retired\)/);
+  });
+
+  it('returns 409 REGISTRY_NOT_APPLIED when no revision has been applied yet', async () => {
+    templateService.loadRoot.mockResolvedValue(loadRootResult(SYS_TEMPLATES));
+    registryService.getRevisions.mockResolvedValue([]);
+    const { status, body } = await getJson('/tag-defs?root=Sys');
+    expect(status).toBe(409);
+    expect(body.error.code).toBe(ERROR_CODES.REGISTRY_NOT_APPLIED);
   });
 
   it('returns 422 NO_MQTT_MODULES when no MQTT module is reachable', async () => {

@@ -1,5 +1,4 @@
 import { MQTT_MODULE_TYPE, IN_TAG_NAME_FIELD, ERROR_CODES } from './constants.js';
-import { hashTagDefs } from './hashTemplate.js';
 import { resolveRegistry } from './resolveRegistry.js';
 import type { MetaLevel, Template, TemplateEntry, ValidationMessage } from './types.js';
 import { extractTemplate } from './types.js';
@@ -35,16 +34,16 @@ export type TagDefNode = TagDefLeaf | TagDefGroup;
 export interface TagDefsFile {
   _generated: string;
   template_name: string;
-  /** "sha256:<hex>" over the canonical JSON of `tags`. */
-  content_hash: string;
+  /** Registry revision the export was taken at — the saved templates equal what that revision applied. */
+  tag_registry_rev: number;
   tags: TagDefGroup;
 }
 
 export const TAG_DEFS_BANNER =
   'GENERATED FILE - DO NOT EDIT. Produced by the CARO Tag Registry "Generate Tag Defs" export ' +
   '(template-level, no instance data). Regenerate instead of editing. "tags" is nested by ' +
-  'tag_name segment; a node with a "data_type" key is a leaf. content_hash is SHA-256 of the ' +
-  'canonical JSON of "tags" (keys sorted at every level, no whitespace).';
+  'tag_name segment; a node with a "data_type" key is a leaf. tag_registry_rev is the Tag Registry ' +
+  'revision the export was taken at: the saved templates matched what that revision applied.';
 
 type TemplateMapInput =
   | Map<string, Template | TemplateEntry>
@@ -224,12 +223,16 @@ export function validateTagDefs(templateMap: TemplateMapInput, moduleTemplateNam
   return errors;
 }
 
-export function buildTagDefsFile(templateMap: TemplateMapInput, moduleTemplateName: string): TagDefsFile {
-  const tags = buildTagDefs(templateMap, moduleTemplateName);
+/** tagRegistryRev: the registry revision the saved templates match (checked by the caller). */
+export function buildTagDefsFile(
+  templateMap: TemplateMapInput,
+  moduleTemplateName: string,
+  tagRegistryRev: number,
+): TagDefsFile {
   return {
     _generated: TAG_DEFS_BANNER,
     template_name: moduleTemplateName,
-    content_hash: `sha256:${hashTagDefs(tags)}`,
-    tags,
+    tag_registry_rev: tagRegistryRev,
+    tags: buildTagDefs(templateMap, moduleTemplateName),
   };
 }

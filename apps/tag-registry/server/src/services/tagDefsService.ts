@@ -12,8 +12,10 @@ import {
   validateGraph,
   ERROR_CODES,
 } from '@caro/tag-registry-shared';
+import type { Template } from '@caro/tag-registry-shared';
 import { CaroError } from '@caro/server/errorHandler';
 import { loadRoot } from './templateService.js';
+import { classifyRegistryChanges, getRevisions } from './registryService.js';
 
 export interface TagDefsZip {
   fileName: string;
@@ -28,6 +30,28 @@ export function tagDefsZipName(now: Date): string {
   const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
   const time = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
   return `TagDefs_${date}_${time}.zip`;
+}
+
+/**
+ * The latest registry revision, provided the saved templates under rootName would
+ * apply no change to it. Throws REGISTRY_NOT_APPLIED (409) otherwise, or when no
+ * revision exists yet.
+ */
+async function appliedRevision(templateMap: Map<string, Template>, rootName: string): Promise<number> {
+  const { added, modified, retired } = await classifyRegistryChanges(templateMap, rootName);
+  const [latest] = await getRevisions();
+  const pending = added.length + modified.length + retired.length;
+  if (latest && pending === 0) return latest.registry_rev;
+
+  const err = new Error(
+    latest
+      ? `The saved templates for "${rootName}" differ from registry revision ${latest.registry_rev} ` +
+        `(${added.length} added, ${modified.length} modified, ${retired.length} retired) — apply them first`
+      : 'No registry revision has been applied yet — apply the registry first'
+  ) as CaroError;
+  err.status = 409;
+  err.code = ERROR_CODES.REGISTRY_NOT_APPLIED;
+  throw err;
 }
 
 /**
@@ -69,9 +93,13 @@ export async function generateTagDefsZip(rootName: string, now: Date = new Date(
     throw err;
   }
 
+  // The file's tag_registry_rev must describe its tags: refuse unless the saved
+  // templates are exactly what the latest revision applied.
+  const tagRegistryRev = await appliedRevision(templateMap, rootName);
+
   const files: Zippable = {};
   for (const name of templateNames) {
-    files[`${name}.json`] = strToU8(JSON.stringify(buildTagDefsFile(templateMap, name), null, 2) + '\n');
+    files[`${name}.json`] = strToU8(JSON.stringify(buildTagDefsFile(templateMap, name, tagRegistryRev), null, 2) + '\n');
   }
 
   return { fileName: tagDefsZipName(now), zip: zipSync(files, { mtime: now }), templateNames };
