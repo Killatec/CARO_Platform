@@ -90,8 +90,7 @@ The shared module exports:
 - `ModuleStatus` / `ModuleStatusLabels` — const enum (`UNKNOWN=0`, `OK=1`, `WARNING=2`, `FAULT=3`, `STALLED=4`) and display-label map. Shared between producer and widget.
 - `constants` — error codes, `DEFAULT_DATA_TYPE`, `MAX_TAG_PATH_LENGTH` (the constant 100 — not read from the environment), `MAX_TAG_NAME_LENGTH`, `UNIQUE_ANCESTOR_TYPES`, the type sets.
 - `deepEqual(a, b)` / `deepNotEqual(a, b)` — recursive structural equality, insensitive to object key order (`utils.ts`).
-- `hashTagDefs(tags)` — SHA-256 (full hex) over the same canonical JSON as `hashTemplate`, applied to the nested `tags` tree. Used for the Tag Defs `content_hash` (§12.1).
-- `listMqttModuleTemplates(templateMap)` / `buildTagDefs(templateMap, moduleTemplateName)` / `buildTagDefsFile(templateMap, moduleTemplateName)` / `validateTagDefs(templateMap, moduleTemplateName)` — Tag Defs export builders (nested `tags` tree) and module-relative name validation (§12.1).
+- `listMqttModuleTemplates(templateMap)` / `buildTagDefs(templateMap, moduleTemplateName)` / `buildTagDefsFile(templateMap, moduleTemplateName, tagRegistryRev)` / `validateTagDefs(templateMap, moduleTemplateName)` — Tag Defs export builders (nested `tags` tree) and module-relative name validation (§12.1).
 
 ### 4.3 Client-Side Template Graph
 
@@ -397,7 +396,7 @@ A **Generate Tag Defs** button on the Registry page, beside **Export to CSV**, d
 {
   "_generated": "GENERATED FILE - DO NOT EDIT. ...",
   "template_name": "Narya_RF",
-  "content_hash": "sha256:372b1e3c…",
+  "tag_registry_rev": 13,
   "tags": {
     "Mag_1": { "Fwd": {
       "Gain": { "data_type": "f32" },
@@ -415,10 +414,13 @@ A **Generate Tag Defs** button on the Registry page, beside **Export to CSV**, d
 - **Handshake contract.** The MQTT handshake's `TAG_LIST` identifies tags by this same module-relative `tag_name` (`CARO_MQTT_Spec.md` §7.1, §7.4). A module built from this export binds ids by name, so the export and the backend's `TAG_LIST` assembly derive the name with one shared function, `moduleRelativeTagName(meta)` in `shared/tagDefs.ts`: the levels below the first `module` level whose `In_Tag_Name` is true. Here `meta[0]` is the module; the backend passes registry rows whose `meta` starts at the system root.
 - Each leaf's `data_type` is the resolved `data_type`.
 - **Only `data_type` per leaf.** `direction` (Set/Mon) was dropped on 2026-10-01: compile-time name addressing does not need it. It remains in the registry's own data model as `is_setpoint`. `tag_id`, `unit`, `eng_min`, `eng_max`, `trends`, `scale`, `offset`, `format` and `is_setpoint` are deliberately excluded (D32 records why for each). Do not add them. The file has no instance dependency, so commissioning an instance or editing display metadata never changes it.
-- `content_hash` is SHA-256 of the canonical JSON of the `tags` tree, using the same canonicalisation as `hashTemplate`: keys sorted at every level in code-unit order (reproducible with `strcmp`), no whitespace. There is no separate entry order to define; a tree's canonical order is its per-level key sort. The written file also lists keys in that order, except that integer-like keys (none today) would print first, as JS objects enumerate them that way. This affects layout only, not the hash. A consumer can recompute it from the file to detect a stale or hand-edited copy.
-- No generation timestamp goes inside the files. The timestamp is in the ZIP name only, so regenerating an unchanged template yields a byte-identical file and no diff churn in the consuming repo.
+- **`tag_registry_rev`** (integer, since 2026-10-21; replaces `content_hash`) is the database's latest `registry_rev` at export time. The module sends it as `tag_registry_rev` in its `HANDSHAKE_REQUEST` (`CARO_MQTT_Spec.md` §7.2). The export guarantees that the file's `tags` are what that revision applied (see Gating). It is a database-wide number, not a per-template one: it goes up on every apply, for any template, so a re-export can carry a new revision with identical `tags`. The Tag Registry has no per-template revision (`CARO_MQTT_Spec.md` Open Questions).
+- Keys are written in a fixed order: `_generated`, `template_name`, `tag_registry_rev`, `tags`. Within `tags`, keys are inserted in code-unit order (reproducible with `strcmp`), except that integer-like keys (none today) would print first, as JS objects enumerate them that way.
+- No generation timestamp goes inside the files. The timestamp is in the ZIP name only, so regenerating an unchanged template at the same revision yields a byte-identical file and no diff churn in the consuming repo.
 
-**Gating.** The export reads **saved** templates from disk, not the client's in-memory graph. The button is therefore disabled while `isDirty`, with the tooltip "Save or discard changes before generating Tag Defs — the export reads saved templates". The export is not gated by `PROJECT_ROOT`, because it is read-only and never touches the database. Server errors, such as `NO_MQTT_MODULES` or a graph `VALIDATION_ERROR`, show in a red banner above the table.
+**Gating.** The export reads **saved** templates from disk, not the client's in-memory graph. The button is therefore disabled while `isDirty`, with the tooltip "Save or discard changes before generating Tag Defs — the export reads saved templates".
+
+The saved templates must also be **applied**: the server runs the same comparison as apply (`classifyRegistryChanges` in `registryService.ts`) and refuses with `409 REGISTRY_NOT_APPLIED` unless it finds nothing to add, modify or retire. It also refuses when no revision exists yet. So the order is save, apply (Update DB), then Generate Tag Defs. This is what makes `tag_registry_rev` describe the file's `tags`. The export is read-only and not gated by `PROJECT_ROOT`. Server errors, such as `REGISTRY_NOT_APPLIED`, `NO_MQTT_MODULES` or a graph `VALIDATION_ERROR`, show in a red banner above the table.
 
 ---
 
@@ -581,6 +583,7 @@ Occupies the bottom portion of the right panel. Displays the name and editable f
 - Read-only metadata: Template Name, Template Type.
 - Editable: Asset Name (not shown for root node). Changes written via `updateTemplate()`.
 - All template fields shown, all editable. Fields with an instance override are shown in `text-blue-600`. Fields showing the inherited template default show in normal weight.
+- Setting a field that had no override back to its inherited value removes the override instead of storing one equal to the default, so the node returns to clean. An existing override is always kept, even when it equals the default; an override equal to the default can therefore not be created by typing it.
 - A `+` button in the panel header opens `AddFieldModal` — not shown in instance mode (fields are defined at the template level).
 
 **Template selected via Templates Tree:**
@@ -588,6 +591,8 @@ Occupies the bottom portion of the right panel. Displays the name and editable f
 - All template default fields shown, all editable. Fields that are new or changed from the `originalTemplateMap` baseline use the dirty style.
 - A `+` button in the panel header opens `AddFieldModal` to add a new field.
 - A trash icon on each field row deletes the field from `template.fields` via `updateTemplate()`.
+
+**Numeric fields** (both modes): focusing the input selects its value, so typing replaces it. The typed text is kept while editing and committed only when it is a complete number (`parseNumericDraft` in `client/src/utils/numericDraft.ts`), so partial input such as `-` or an empty field is not turned into `0`. On blur the input shows the stored value again, which drops partial text and normalises it (`05` reads `5`).
 
 **Dirty field indicator:** `font-semibold italic text-gray-700` on the field name label and input. Existing unchanged overrides use `text-blue-600`. Inherited clean defaults use `text-gray-700`.
 
@@ -692,5 +697,5 @@ The RegistryTable includes a `tag_name` column (3rd column, index 2, between `ta
 | Revision history | `registry_revisions` table + History page |
 | Retired tags | Detected during apply; shown in diff as red rows |
 | Stale conflict on save | Re-fetch full root, discard local changes (merge not supported) |
-| Tag Defs export | `GET /api/v1/tag-defs?root=` → ZIP of one JSON per MQTT module template (`tags` tree nested by `tag_name` segment, leaves `{ data_type }` + banner + SHA-256 `content_hash`); Registry page "Generate Tag Defs" button (§12.1) |
+| Tag Defs export | `GET /api/v1/tag-defs?root=` → ZIP of one JSON per MQTT module template (`tags` tree nested by `tag_name` segment, leaves `{ data_type }` + banner + `tag_registry_rev`; refused with 409 `REGISTRY_NOT_APPLIED` unless the saved templates are applied); Registry page "Generate Tag Defs" button (§12.1) |
 

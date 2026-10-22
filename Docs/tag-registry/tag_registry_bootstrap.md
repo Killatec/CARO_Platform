@@ -19,7 +19,7 @@ apps/tag-registry/
     resolveRegistry.ts           resolveRegistry + resolveDisplayField
     simulateCascade.ts
     applyFieldCascade.ts
-    hashTemplate.ts              hashTemplate (6-char SHA-1), hashTagDefs (SHA-256) — one canonicalJSON
+    hashTemplate.ts              hashTemplate (6-char SHA-1) over canonicalJSON
     tagDefs.ts                   Tag Defs export builders (listMqttModuleTemplates, buildTagDefs, buildTagDefsFile, validateTagDefs) and moduleRelativeTagName
     moduleOrder.ts               getModuleNames
     bitPacking.ts                packedBit / setPackedBit
@@ -38,8 +38,8 @@ apps/tag-registry/
         tagDefs.ts               GET /tag-defs?root= — Tag Defs ZIP download
       services/
         templateService.ts       in-memory template index + file I/O
-        registryService.ts       registry apply (resolve, classify, write)
-        tagDefsService.ts        builds the Tag Defs ZIP (fflate) from saved templates
+        registryService.ts       registry apply (resolve, classify, write); classifyRegistryChanges shared with the Tag Defs export
+        tagDefsService.ts        builds the Tag Defs ZIP (fflate) from saved templates; 409 REGISTRY_NOT_APPLIED unless they are applied
       types/cors.d.ts
   client/
     tailwind.config.js
@@ -73,6 +73,7 @@ apps/tag-registry/
         exportRegistryCsv.ts
         exportTree.ts
         dragTypes.ts             drag payload types + module-level active-drag tracker for HTML5 DnD
+        numericDraft.ts          parseNumericDraft — commits typed numeric text only once it is a complete number
       pages/
         EditorPage.tsx
         RegistryPage.tsx
@@ -165,11 +166,8 @@ Returns `[{ tag_path, tag_name, module, module_type, data_type, is_setpoint, tre
 **`hashTemplate(template)`**
 Returns 6-character hex SHA-1 string.
 
-**`hashTagDefs(tags)`**
-Returns full 64-character hex SHA-256 over the same canonical JSON as `hashTemplate` (keys sorted at every level, no whitespace). Input is the nested `tags` tree, so insertion order does not affect it. SHA-256 rather than truncated SHA-1 because the hash leaves the app for firmware-side comparison.
-
-**`listMqttModuleTemplates(templateMap)`** / **`buildTagDefs(templateMap, moduleTemplateName)`** / **`buildTagDefsFile(templateMap, moduleTemplateName)`** — `tagDefs.ts`
-Tag Defs export (spec §12.1). `listMqttModuleTemplates` returns `template_type: "module"` templates whose own `Module_Type` default is `MQTT_MODULE_TYPE`, code-unit sorted. `buildTagDefs` resolves the module template on its own via `resolveRegistry` (module as root) and returns a `TagDefGroup` tree nested by the module-relative name's segments (from `moduleRelativeTagName`, below). Leaves are `{ data_type }` (`TAG_DEF_LEAF_KEY`), and nodes are prototype-less so a `__proto__` segment is an ordinary key. Keys are inserted in code-unit order, and it throws on a leaf-and-group or reserved-segment name. `validateTagDefs(templateMap, moduleTemplateName)` returns `TAG_NAME_EMPTY` / `DUPLICATE_TAG_NAME` / `TAG_NAME_LEAF_AND_GROUP` (both case-insensitive) / `TAG_NAME_RESERVED_SEGMENT` messages for those names; the server refuses the export on any. `buildTagDefsFile` wraps that as `{ _generated: TAG_DEFS_BANNER, template_name, content_hash: "sha256:<hashTagDefs(tags)>", tags }`.
+**`listMqttModuleTemplates(templateMap)`** / **`buildTagDefs(templateMap, moduleTemplateName)`** / **`buildTagDefsFile(templateMap, moduleTemplateName, tagRegistryRev)`** — `tagDefs.ts`
+Tag Defs export (spec §12.1). `listMqttModuleTemplates` returns `template_type: "module"` templates whose own `Module_Type` default is `MQTT_MODULE_TYPE`, code-unit sorted. `buildTagDefs` resolves the module template on its own via `resolveRegistry` (module as root) and returns a `TagDefGroup` tree nested by the module-relative name's segments (from `moduleRelativeTagName`, below). Leaves are `{ data_type }` (`TAG_DEF_LEAF_KEY`), and nodes are prototype-less so a `__proto__` segment is an ordinary key. Keys are inserted in code-unit order, and it throws on a leaf-and-group or reserved-segment name. `validateTagDefs(templateMap, moduleTemplateName)` returns `TAG_NAME_EMPTY` / `DUPLICATE_TAG_NAME` / `TAG_NAME_LEAF_AND_GROUP` (both case-insensitive) / `TAG_NAME_RESERVED_SEGMENT` messages for those names; the server refuses the export on any. `buildTagDefsFile` wraps that as `{ _generated: TAG_DEFS_BANNER, template_name, tag_registry_rev, tags }`; the caller (`tagDefsService`) passes the latest `registry_rev` after checking the saved templates are applied.
 
 **`moduleRelativeTagName(meta): string | null`** — `tagDefs.ts`
 The dot-joined `name`s of the `meta` levels below the first `type: 'module'` level whose `In_Tag_Name` is true; the module level itself is never included. `null` when `meta` has no module level. Shared by the Tag Defs export (where `meta[0]` is the module) and the CARO HMI's handshake TAG_LIST (`apps/caro-hmi/server/src/tag-list.ts`, registry rows whose `meta` starts at the system root), so the names a module is compiled with and the names it is bound by cannot drift apart.
@@ -352,6 +350,8 @@ Runs `validateTemplate`, `validateGraph`, `validateParentTypes`, and `validateRe
 - **Template mode:** `data_type` (field_type `TagType`) and `is_setpoint` (field_type `Boolean`) are entries inside `fields{}`, rendered via the tag-types dropdown and boolean toggle respectively. `Module_Type` (field_type `ModuleType`) renders as a dropdown populated from `useModuleTypesStore`. Same pattern as `TagType` / `useTagTypesStore`.
 - **Instance mode:** child lookup uses `children[selectedSystemTreeNodeChildIndex]` (index-based, not asset_name match).
 - `isDirtyField` color: dirty → `font-semibold italic text-gray-700`; non-dirty override → `text-blue-600`; default → `text-gray-700`.
+- **Numeric inputs:** `NumericFieldInput` (local to `FieldsPanel.tsx`) keeps the typed text in its own state and calls `onChange` only when `parseNumericDraft` returns a number. `onFocus` selects the value (`select()`); `onBlur` resets the text to the stored value. An effect resyncs the text when the stored value changes from outside, unless the text already parses to it.
+- **Instance revert:** `handleInstanceFieldChange` removes the override key when the field had none in `originalOverrides` and the new value deep-equals the template default, so the parent template deep-equals its original and leaves `dirtySet`. Kept overrides keep their key position (no JSON reorder).
 - `FieldTableRow` is a `<tr>`-based component local to `FieldsPanel.tsx`. Distinct from `FieldRow.tsx` (div/flex). `FieldRow` is not used inside `FieldsPanel`.
 
 ### `CascadeDiffContent`

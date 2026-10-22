@@ -1,5 +1,5 @@
 # CARO_Widget_Spec — HMI Widget Specification
-**Date:** 2026-03-26
+**Date:** 2026-10-21
 **Companion Documents**
 
 hmi_functional_spec | hmi_API_spec | CARO_DB_Spec
@@ -22,6 +22,7 @@ hmi_functional_spec | hmi_API_spec | CARO_DB_Spec
 | 1.9 | 2026-04-14 | PM / Claude | Spec text fixes: removed erroneous useTagWriter reference from NumericMon NOTE; corrected BooleanSet pending-state reference from useTagWriter.isPending to useWriteGuard; clarified disabled vs readOnly in Section 4.2; fixed BooleanMon bad-quality description (label always shown); clarified write() is single-tag for widgets, batch at server level; documented Boolean 2-column layout in Section 4.4. |
 | 2.0 | 2026-04-14 | PM / Claude | Added useTagGroup utility (Section 3.6). Added Analog_In composite widget (Section 5). First multi-tag widget in the catalog. |
 | 2.1 | 2026-04-19 | PM / Claude | §3.5: TagPathIndex-backed resolution noted (O(1) per call). §3.6: useTagGroup complexity noted as O(children). Matches perf commits be308f5 and cceb114. |
+| 2.3 | 2026-10-21 | PM / Claude | StringMon added (§5, §3.1): read-only text display for String-type tags. |
 | 2.2 | 2026-10-17 | PM / Claude | Reconciled with the code: dependencies (uplot runtime dep, @caro/ui peer); hmi-context exports; `write()` never rejects (errors via `error(tagId)`), no batch form; TagDef shape and format resolution from registry columns; BooleanMon ignores trueLabel/falseLabel; BooleanSet confirm uses @caro/ui Modal; Timer and SpectrumChart added to the catalog; MockHmiProvider props; Open Questions answered by the implementation. |
 
 ---
@@ -69,7 +70,7 @@ Widgets in `@caro/widgets` use two custom hooks provided by the `@caro/hmi-conte
 | Package | Exports |
 |---|---|
 | `@caro/hmi-context` | HmiContextProvider, MockHmiProvider (also at `@caro/hmi-context/testing`), useLiveValue, useTagWriter, useCommandSender, useTagMap, useTagSubtree, useResolveAssetPath, useWsStats, useProjectRoot, useHmiContext, scopedKey / useScopedKey, and types |
-| `@caro/widgets` | NumericMon, NumericSet, BooleanMon, BooleanSet, AnalogIn, Timer, SpectrumChart, with their `*Props` types |
+| `@caro/widgets` | NumericMon, NumericSet, StringMon, BooleanMon, BooleanSet, AnalogIn, Timer, SpectrumChart, with their `*Props` types |
 
 ### 3.2 useLiveValue
 
@@ -297,6 +298,32 @@ Editable numeric setpoint widget for f32 tags. Displays the confirmed device val
 
 ```jsx
 <NumericSet assetPath="RF_Fwd.setpoint" label="Power Setpoint" />
+```
+
+---
+
+### MON String_Mon
+
+Read-only display of a text tag value (`string`), such as a firmware version, an IP address or a status string. No user interaction.
+
+**Props**
+
+| Prop | Type | Required | Default | Description |
+|---|---|---|---|---|
+| assetPath | string | Yes | — | Dot-separated path identifying the tag. Resolved via useResolveAssetPath. Abbreviated paths supported. |
+| label | string | No | — | Display label override. If omitted, the last segment of `assetPath` is used. |
+
+**Behavior**
+
+- Resolves tag via `useResolveAssetPath(assetPath)` (must match exactly one tag) and subscribes with `useLiveValue(tag.tag_id)`.
+- Displays the value as received, with no formatting and no unit column. A non-string value (for example a number from a module that has not been regenerated) is shown via `String(value)` rather than failing.
+- The value spans the value and unit columns (`VALUE_TEXT_CLASS`, 130 px), so a text row's right edge lines up with numeric rows. Longer text is truncated; the full text is in the element's `title`.
+- value === null: shows `---` in red. Non-null: normal display.
+
+**Usage Example**
+
+```jsx
+<StringMon assetPath="RF1.Module_Info.IP" label="IP" />
 ```
 
 ---

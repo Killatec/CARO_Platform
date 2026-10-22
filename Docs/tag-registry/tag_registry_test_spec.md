@@ -163,20 +163,22 @@ await page.getByRole('button', { name: /history/i }).click();
 
 ## 4. Test Files and Coverage
 
-### 4.1 tests/templates.spec.js — Templates Tree (6 tests)
+### 4.1 tests/templates.spec.js — Templates Tree (8 tests)
 
 | # | Test |
 |---|---|
 | 1 | displays a template leaf in the Templates Tree after API creation |
 | 2 | clicking a template leaf populates the Fields Panel |
 | 3 | editing a template default field value marks it dirty (bold italic) |
+| 3b | typing a negative number keystroke by keystroke keeps the minus sign (cleared field stays empty, `-5` committed) |
+| 3c | focusing a numeric field selects its value, so typing replaces it; blur shows the stored value (`05` → `5`) |
 | 4 | creating a new template via NewTemplateModal |
 | 5 | deleting a new unsaved template removes it instantly without Save |
 | 6 | deleting a saved template queues it as pending and shows Save bar |
 
 **Setup:** Creates one tag template via API in `beforeEach`.
 
-### 4.2 tests/fields-panel.spec.js — Fields Panel (10 tests)
+### 4.2 tests/fields-panel.spec.js — Fields Panel (11 tests)
 
 | # | Test |
 |---|---|
@@ -187,6 +189,7 @@ await page.getByRole('button', { name: /history/i }).click();
 | 5 | instance mode: clicking a system tree node shows asset name input |
 | 6 | instance mode: editing asset name does not clear the panel on each keystroke |
 | 7 | instance mode: override value shown in blue, dirty override shown in bold italic |
+| 7b | instance mode: setting an inherited field back to its inherited value leaves it clean (no italic, no `text-blue-600`, See Changes hidden) |
 | 8 | Instance mode: editing asset name turns it bold italic |
 | 9 | template mode: In_Tag_Name pinned row is visible and toggleable |
 | 10 | template mode: AddFieldModal shows reserved-name error for In_Tag_Name |
@@ -370,12 +373,13 @@ function metaModal(page, tagPath) {
 
 ---
 
-#### 4.8.8 tests/tag-defs.spec.js — Generate Tag Defs (2 tests)
+#### 4.8.8 tests/tag-defs.spec.js — Generate Tag Defs (3 tests)
 
 | # | Test |
 |---|---|
-| 1 | downloads a timestamped ZIP for a system with an MQTT module |
-| 2 | shows an error banner when the system has no MQTT module |
+| 1 | downloads a timestamped ZIP stamped with the applied registry revision (applies via API first; `tag_registry_rev` equals the apply's `registry_rev`, no `content_hash`) |
+| 2 | shows an error banner when the saved templates have not been applied (`REGISTRY_NOT_APPLIED`) |
+| 3 | shows an error banner when the system has no MQTT module |
 
 #### 4.8.9 tests/tree-reorder.spec.js — Tree reorder and reparenting (8 tests)
 
@@ -687,13 +691,13 @@ Fetches all registry revisions ordered by `registry_rev DESC`. Returns the revis
 
 ## 9. Results Baseline
 
-Current baseline (2026-10-01, after the `i32` data type and nested Tag Defs work):
+Current baseline (2026-10-21, after the Tag Defs `tag_registry_rev` and Properties-panel numeric input work):
 
 | Metric | Value |
 |---|---|
-| Unit total (shared 241 + client 173 + server 120) | 534 |
-| E2E (Chromium) | 92 |
-| **Combined total** | **626** |
+| Unit total (shared 244 + client 176 + server 122) | 542 |
+| E2E (Chromium) | 96 |
+| **Combined total** | **638** |
 | Failed | 0 |
 
 Firefox and WebKit are not run on this machine (browsers not installed); Chromium is the reliable baseline. If a run produces a different total, investigate before reporting done. `apps/tag-registry/CLAUDE.md` carries the same baseline and the commands. Earlier baselines and per-change test-count notes are in git history.
@@ -720,25 +724,26 @@ Note: the client package runs Vitest from the monorepo root `node_modules/.bin` 
 
 Counts below are from `vitest run --reporter=json` on 2026-10-17.
 
-### 10.3 shared/ unit tests (241 tests, 13 files)
+### 10.3 shared/ unit tests (244 tests, 14 files)
 
 | File | Tests |
 |---|---|
 | `__tests__/applyFieldCascade.test.js` | 7 |
 | `__tests__/bitPacking.test.ts` | 13 |
-| `__tests__/hashTemplate.test.js` | 11 |
+| `__tests__/handshakeStatus.test.ts` | 2 |
+| `__tests__/hashTemplate.test.js` | 8 |
 | `__tests__/moduleOrder.test.ts` | 6 |
 | `__tests__/moduleStatus.test.ts` | 4 |
 | `__tests__/resolveRegistry.test.js` | 57 |
 | `__tests__/simulateCascade.test.js` | 10 |
-| `__tests__/tagDefs.test.ts` | 26 |
+| `__tests__/tagDefs.test.ts` | 30 |
 | `__tests__/utils.test.js` | 20 |
 | `__tests__/validateGraph.test.js` | 12 |
 | `__tests__/validateParentTypes.test.js` | 10 |
 | `__tests__/validateResolvedTags.test.ts` | 23 |
 | `__tests__/validateTemplate.test.js` | 42 |
 
-### 10.4 server/ unit tests (120 tests, 9 files)
+### 10.4 server/ unit tests (122 tests, 9 files)
 
 `templateService` tests use real temporary directories (`mkdtemp`); `@caro/db` is mocked (`getTagTypes`, `getModuleTypes`, registry functions). Route tests use `node:http.createServer(createApp())` and global `fetch` — no supertest.
 
@@ -751,10 +756,10 @@ Counts below are from `vitest run --reporter=json` on 2026-10-17.
 | `__tests__/loadRoot.test.js` | 9 |
 | `__tests__/registry.test.js` | 22 |
 | `__tests__/registryService.test.js` | 21 |
-| `__tests__/tagDefs.test.js` | 10 |
+| `__tests__/tagDefs.test.js` | 12 |
 | `__tests__/validateAll.test.js` | 5 |
 
-### 10.5 client/ unit tests (173 tests, 14 files)
+### 10.5 client/ unit tests (176 tests, 15 files)
 
 Store tests use `vi.mock()` for the API modules and reset `useTemplateGraphStore` via `setState()` in `beforeEach`.
 
@@ -773,4 +778,5 @@ Store tests use `vi.mock()` for the API modules and reset `useTemplateGraphStore
 | `src/utils/dragTypes.test.ts` | 6 |
 | `src/utils/exportRegistryCsv.test.ts` | 14 |
 | `src/utils/exportTree.test.ts` | 11 |
+| `src/utils/numericDraft.test.ts` | 3 |
 | `src/utils/registryRows.test.ts` | 10 |

@@ -307,7 +307,7 @@ Partial validation failure response (some tags invalid before any MQTT command i
 }
 ```
 
-> *NOTE: All tags are validated before any MQTT command is sent. A validation failure returns 422 and no commands are issued. `TYPE_MISMATCH` is returned only for a value that is not a number, boolean or numeric string (detail: `{ tag_id, code, message }`). Device-side rejections arrive synchronously in `results` (above), not over the WebSocket.*
+> *NOTE: All tags are validated before any MQTT command is sent. A validation failure returns 422 and no commands are issued. `TYPE_MISMATCH` is returned only for a value that is not a number, boolean or numeric string (detail: `{ tag_id, code, message }`). `null` is rejected this way too, so an operator cannot clear a Set (make it unpopulated) through this endpoint; a `null` reaches a module only through the post-CONFIRM Set push of an unpopulated store row (CARO_MQTT_Spec §6.3). String and array Sets are not writable either. Device-side rejections arrive synchronously in `results` (above), not over the WebSocket.*
 
 ### POST /api/v1/tags/{tag_id}/sync-reset
 *Not built* (the out-of-sync latch does not exist yet).
@@ -918,6 +918,8 @@ Codes the built server emits:
 Target-design codes not produced by the built server (their endpoints are not built — §1.1): INVALID_CREDENTIALS, INVALID_MFA_CODE, ACCOUNT_LOCKED, SESSION_EXPIRED, FORBIDDEN (401/403), MODE_NOT_FOUND, REVISION_NOT_FOUND, REVISION_IMMUTABLE, ALREADY_ACTIVE, ALREADY_VALIDATED, DEVICE_NOT_READY, INVALID_CHALLENGE_TOKEN, PENDING_TABLE_EMPTY.
 
 ## Open Questions
+
+- Should an operator be able to clear a Set (write `null`, making it unpopulated)? `POST /tags/write` rejects `null` today (§5); found in the Phase 6 rig test (`Docs/platform/Phase6_RF1_Rig_Test_Report_2026-10-21.md`, finding 2).
 
 - Should `challenge_token` be stored in-memory or derived via HMAC?
 - Can activated revisions be cloned (REVISION_IMMUTABLE policy)?

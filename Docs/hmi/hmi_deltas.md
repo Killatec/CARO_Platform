@@ -4,4 +4,4 @@
 
 ---
 
-**Last cleared:** 2026-10-18. Propagated entries live in their target docs; earlier propagation notes are in git history.
+**Last cleared:** 2026-10-21. Propagated entries live in their target docs; earlier propagation notes are in git history.

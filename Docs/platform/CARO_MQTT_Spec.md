@@ -2,7 +2,7 @@
 
 MQTT Interface Specification
 
-Date: 2026-10-18
+Date: 2026-10-21
 
 **Companion Documents**
 
@@ -33,6 +33,7 @@ hmi_functional_spec \| hmi_API_spec \| CARO_DB_Spec
   1.9           2026-10-01   PM / Claude   Handshake identifies tags by module-relative tag_name instead of truncated tag_path: TAG_LIST entries are { tag_id, tag_name }; Section 7.4 rewritten (tag_name derivation, uniqueness). Matches the Tag Registry "Generate Tag Defs" export the module's definitions are generated from.
   2.1           2026-10-18   PM / Claude   Module handshake implemented to the module-side contract (CARO_MQTT_Interface): topics renamed by publisher (handshake_backend / handshake_module); module-initiated HANDSHAKE_REQUEST carrying identity; TAG_LIST entries gain is_setpoint; CONFIRM carries missing_ids / unknown_tags / truncated instead of hashes; new REHANDSHAKE. Section 6.3 rewritten: the only Set delivery is the post-CONFIRM push from commanded_setpoints; startup and recovery re-delivery removed. REQUEST_SNAPSHOT now follows each CONFIRM and watchdog recovery, not the broker connect. Section 7 rewritten as built; identity verification still target.
   2.2           2026-10-18   PM / Claude   Section 6.3: size rule — a SET_VALUES must fit the module's receive buffer and its CMD_ACK its transmit buffer (not enforced by the backend). Open Question added: binding modules with small MQTT buffers (deferred until a small target is chosen; CARO_MQTT_Interface HANDSHAKE_INTEGRATION.md §10.1).
+  2.3           2026-10-21   PM / Claude   Section 7.2: tag_registry_template and tag_registry_rev come from the Tag Defs export, whose tag_registry_rev is the registry_rev it was taken at (refused unless the saved templates are applied). Section 6.3: a module should publish an unpopulated Set as null in telemetry (RF_Control P67). Open Question on tag_registry_rev updated.
   2.0           2026-10-17   PM / Claude   Reconciled against the implementation. New Section 1.1 Implementation Status. Sections 4/5: the backend currently decodes JSON telemetry only; backend handling of each telemetry field and REQUEST_SNAPSHOT triggers stated as built. Section 6: custom command types, optional top-level CMD_ACK error field, backend ACK handling (1 s timeout), backend-generated rejection codes (TIMEOUT, MODULE_TYPE_NOT_SUPPORTED), DUPLICATE marked module-evaluated. New Section 6.3 Setpoint Re-delivery. Section 7 marked not yet implemented. Open Questions updated.
   ------------- ------------ ------------- ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
@@ -44,7 +45,7 @@ The CARO_HMI backend is the sole MQTT client on the broker side --- it subscribe
 
 For HMI system architecture, user roles, tag data model, WebSocket API, and REST API --- see hmi_functional_spec. For what the backend does with each message once received (Last-Known-Value cache, watchdog, historian, WebSocket), see `Docs/platform/CARO_Telemetry_Path_Reference.md`.
 
-**1.1 Implementation Status (as of 2026-10-18)**
+**1.1 Implementation Status (as of 2026-10-21)**
 
 This document is the target contract, and not all of it is built yet. Firmware written today must work with what the current backend (`apps/caro-hmi/server`) actually does:
 
@@ -303,6 +304,8 @@ After every CONFIRM (Section 7) the backend sends the module **every** one of it
 
 Modules must accept a SET_VALUES at any time after binding, including one that repeats values they already hold and one that carries `null`.
 
+A module that publishes its Sets in telemetry should publish an unpopulated Set as `null` (bad quality) rather than the value it holds internally, so the HMI shows it as unpopulated. RF_Control does this (CARO_MQTT_Interface P67, verified on the rig 2026-10-21): the `null` goes out in the next frame after the populated state changes, even when the value is unchanged.
+
 **Size rule.** A SET_VALUES must fit the module's receive buffer, and its CMD_ACK must fit the module's transmit buffer. The ACK is the larger of the two: about 33 B per result against about 29 B per value (RF1's push: 127 values, 3 709 B; its ACK, 4 183 B). A module whose ACK does not fit applies the values, drops the ACK and logs `[Caro] Ack dropped`; the backend then sees a timeout and re-binds (Section 7.5), up to its retry limit. The backend does not know a module's buffer sizes and does not enforce this; RF1's 32 KB buffers hold its whole push. Splitting the push for smaller modules is deferred (Open Questions).
 
 **7. Module Handshake**
@@ -340,7 +343,7 @@ HANDSHAKE_REQUEST (Step 1, module → backend):
                "fw_hash": "sha256:6e48e7f3…", "tag_registry_template": "Narya_RF", "tag_registry_rev": 3 } }
 ```
 
-`fw_hash` is `sha256:` plus 64 lowercase hex digits of the running image, or `"Firmware_Hash_Not_Available"`. `tag_registry_template` and `tag_registry_rev` name the Tag Registry template and revision the module's tag definitions were generated from. `instance_id` and `ip` are opaque host strings (RF_Control derives `instance_id` from a MAC address that is random per boot). Strings are at most 127 bytes.
+`fw_hash` is `sha256:` plus 64 lowercase hex digits of the running image, or `"Firmware_Hash_Not_Available"`. `tag_registry_template` and `tag_registry_rev` name the Tag Registry template and revision the module's tag definitions were generated from. Both are in the Tag Defs export file the definitions are generated from (`template_name`, `tag_registry_rev`; tag_registry_spec §12.1). The export's `tag_registry_rev` is the database `registry_rev` it was taken at, and the export refuses unless the saved templates are applied, so the revision always describes the exported tags. `instance_id` and `ip` are opaque host strings (RF_Control derives `instance_id` from a MAC address that is random per boot). Strings are at most 127 bytes.
 
 TAG_LIST (Step 2, backend → module):
 
@@ -424,7 +427,7 @@ The schema is hardcoded in module firmware. It is not delivered over the wire du
 ## Open Questions
 
 - What is the final heartbeat interval and watchdog timeout value? (Current defaults: 1000 ms each --- `HEARTBEAT_INTERVAL_MS`, `WATCHDOG_TIMEOUT_MS`.)
-- What does the backend compare `fw_hash`, `tag_registry_template` and `tag_registry_rev` against, and when is `tag_registry_rev` verified? The Tag Registry has no per-template revision yet, and the database `registry_rev` changes on any apply and is numbered per database.
+- What does the backend compare `fw_hash`, `tag_registry_template` and `tag_registry_rev` against, and when is `tag_registry_rev` verified? The Tag Registry has no per-template revision yet. The Tag Defs export stamps the database `registry_rev` (since 2026-10-21), which changes on any apply, for any template, and is numbered per database.
 - What is the correct behavior on an identity mismatch — withhold the TAG_LIST, or bind but withhold the Set push? Requires HSE input.
 - `OUT_OF_RANGE` is listed as evaluated by the module (Section 6.2), but the module library never range-checks. Which side owns range checks?
 - There is no rejection code for a SET_VALUES value of the wrong JSON kind; the module library uses `UNKNOWN_TAG`. Add a code?

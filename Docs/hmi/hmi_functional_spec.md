@@ -148,7 +148,7 @@ The client is organized in four layers. Machine-specific code is confined to `hm
 | Layer | Path | Description |
 |---|---|---|
 | Shell | `client/src/shell/` | App chrome — Header (global Reset button), sidebar nav, content area. Generic; no machine-specific knowledge. |
-| Widgets | `@caro/widgets` | Monitoring and setpoint widgets (NumericMon, NumericSet, BooleanMon, BooleanSet, AnalogIn, Timer, SpectrumChart). Each widget self-wraps with an error boundary via the `withErrorBoundary` HOC — page definitions require no explicit error boundary wrappers. |
+| Widgets | `@caro/widgets` | Monitoring and setpoint widgets (NumericMon, NumericSet, StringMon, BooleanMon, BooleanSet, AnalogIn, Timer, SpectrumChart). Each widget self-wraps with an error boundary via the `withErrorBoundary` HOC — page definitions require no explicit error boundary wrappers. |
 | Shared building blocks | `hmi-definitions/shared/` | Reusable layout constants (`styles.ts`) and composite boxes (e.g. RfModuleBox, HmiStatusBox, TrendStatusBox, ModuleStatusBox, PoleBox, SpecABox) built from widgets and shared styles. `ModuleStatusBox` renders `ModuleInfoTable` (WS-driven, §8.8). System-specific boxes live in `hmi-definitions/<system>/boxes/` (Narya1). |
 | Page definitions | `hmi-definitions/<system>/pages/` | Pure layout — compose shared building blocks. No business logic. |
 

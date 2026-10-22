@@ -1,5 +1,5 @@
 # CARO_Platform — Start Here
-**Updated:** 2026-10-18 | **Root:** `C:\KillaTec\CARO_Platform` | **GitHub:** `Killatec/CARO_Platform` | **Branch:** `dev`
+**Updated:** 2026-10-21 | **Root:** `C:\KillaTec\CARO_Platform` | **GitHub:** `Killatec/CARO_Platform` | **Branch:** `dev`
 
 This is the single entry point to the platform documentation. It holds the cross-app facts and rules, and tells you which detail doc to read next. App-level and subsystem detail lives in the folders listed under [Where to read next](#where-to-read-next).
 
@@ -50,7 +50,7 @@ Related: [hmi/trend-viewer/hmi_trend_viewer_reference.md](hmi/trend-viewer/hmi_t
 | `@caro/server` | `packages/server/` | Shared Express middleware (`asyncWrap`, `errorHandler`) plus `./env`: `loadEnv()` (two-layer env loading) and `findWorkspaceRoot()` | — |
 | `@caro/proto` | `packages/proto/` | Shared Protobuf schemas (`tag.proto`) | [platform/CARO_MQTT_Spec.md](platform/CARO_MQTT_Spec.md) |
 | `@caro/hmi-context` | `packages/hmi-context/` | HMI React context, live-value hooks, `projectRoot`, scoped localStorage keys | `apps/caro-hmi/CLAUDE.md` § Shared Packages |
-| `@caro/widgets` | `packages/widgets/` | HMI widgets (NumericMon/Set, BooleanMon/Set, AnalogIn, Timer, SpectrumChart) | `apps/caro-hmi/CLAUDE.md` § Shared Packages; [hmi/hmi_widget_spec.md](hmi/hmi_widget_spec.md) |
+| `@caro/widgets` | `packages/widgets/` | HMI widgets (NumericMon/Set, StringMon, BooleanMon/Set, AnalogIn, Timer, SpectrumChart) | `apps/caro-hmi/CLAUDE.md` § Shared Packages; [hmi/hmi_widget_spec.md](hmi/hmi_widget_spec.md) |
 | `@caro/trend-chart` | `packages/trend-chart/` | Trend viewer UI (tile cache, live tail, mode machine, uPlot chart, tag picker) | [hmi_trend_viewer_handoff.md](hmi/trend-viewer/hmi_trend_viewer_handoff.md) §2 |
 | `@caro/tag-registry-shared` | `apps/tag-registry/shared/` | Tag Registry validation, types, resolver, cascade simulation | [tag_registry_bootstrap.md](tag-registry/tag_registry_bootstrap.md) §3 |
 
@@ -181,6 +181,7 @@ Apps connect to their databases at startup and never change target at runtime; t
 | [multi_project_runbook.md](platform/multi_project_runbook.md) | How to create and switch projects; observed errors; known issues. |
 | [CARO_MQTT_Spec.md](platform/CARO_MQTT_Spec.md) | MQTT interface spec (ICD): topics, payloads, CMD/CMD_ACK, the post-handshake Set push, the module handshake; §1.1 says what is built. |
 | [CARO_Telemetry_Path_Reference.md](platform/CARO_Telemetry_Path_Reference.md) | Telemetry path from producer to pixel, stage by stage, plus the outbound command path, config and known gaps. |
+| [Phase6_RF1_Rig_Test_Report_2026-10-21.md](platform/Phase6_RF1_Rig_Test_Report_2026-10-21.md), [Phase6_RF1_Rig_Test_Rerun_2026-10-21.md](platform/Phase6_RF1_Rig_Test_Rerun_2026-10-21.md) | RF1 rig acceptance tests for the handshake (Phase 6, T1–T6) and the re-run of T4/T6 on library `2d3d105`. Evidence for RF_Control `CARO_MIGRATION.md` §6.1. |
 
 **[db/](db/)** — Postgres + TimescaleDB
 | File | What it is |
