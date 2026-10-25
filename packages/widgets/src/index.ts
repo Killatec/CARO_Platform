@@ -21,3 +21,6 @@ export type { TimerProps } from './Timer.js';
 
 export { SpectrumChart } from './SpectrumChart.js';
 export type { SpectrumChartProps } from './SpectrumChart.js';
+
+export { SpecAChart } from './SpecAChart.js';
+export type { SpecAChartProps } from './SpecAChart.js';

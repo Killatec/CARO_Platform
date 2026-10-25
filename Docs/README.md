@@ -1,5 +1,5 @@
 # CARO_Platform — Start Here
-**Updated:** 2026-10-21 | **Root:** `C:\KillaTec\CARO_Platform` | **GitHub:** `Killatec/CARO_Platform` | **Branch:** `dev`
+**Updated:** 2026-10-24 | **Root:** `C:\KillaTec\CARO_Platform` | **GitHub:** `Killatec/CARO_Platform` | **Branch:** `dev`
 
 This is the single entry point to the platform documentation. It holds the cross-app facts and rules, and tells you which detail doc to read next. App-level and subsystem detail lives in the folders listed under [Where to read next](#where-to-read-next).
 
@@ -50,7 +50,7 @@ Related: [hmi/trend-viewer/hmi_trend_viewer_reference.md](hmi/trend-viewer/hmi_t
 | `@caro/server` | `packages/server/` | Shared Express middleware (`asyncWrap`, `errorHandler`) plus `./env`: `loadEnv()` (two-layer env loading) and `findWorkspaceRoot()` | — |
 | `@caro/proto` | `packages/proto/` | Shared Protobuf schemas (`tag.proto`) | [platform/CARO_MQTT_Spec.md](platform/CARO_MQTT_Spec.md) |
 | `@caro/hmi-context` | `packages/hmi-context/` | HMI React context, live-value hooks, `projectRoot`, scoped localStorage keys | `apps/caro-hmi/CLAUDE.md` § Shared Packages |
-| `@caro/widgets` | `packages/widgets/` | HMI widgets (NumericMon/Set, StringMon, BooleanMon/Set, AnalogIn, Timer, SpectrumChart) | `apps/caro-hmi/CLAUDE.md` § Shared Packages; [hmi/hmi_widget_spec.md](hmi/hmi_widget_spec.md) |
+| `@caro/widgets` | `packages/widgets/` | HMI widgets (NumericMon/Set, StringMon, BooleanMon/Set, AnalogIn, Timer, SpectrumChart, SpecAChart) | `apps/caro-hmi/CLAUDE.md` § Shared Packages; [hmi/hmi_widget_spec.md](hmi/hmi_widget_spec.md) |
 | `@caro/trend-chart` | `packages/trend-chart/` | Trend viewer UI (tile cache, live tail, mode machine, uPlot chart, tag picker) | [hmi_trend_viewer_handoff.md](hmi/trend-viewer/hmi_trend_viewer_handoff.md) §2 |
 | `@caro/tag-registry-shared` | `apps/tag-registry/shared/` | Tag Registry validation, types, resolver, cascade simulation | [tag_registry_bootstrap.md](tag-registry/tag_registry_bootstrap.md) §3 |
 

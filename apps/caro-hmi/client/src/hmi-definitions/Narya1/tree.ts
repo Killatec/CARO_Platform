@@ -1,6 +1,7 @@
 import type { TreeNode } from '../../shell/types.js';
 import { SystemOverviewPage } from './pages/SystemOverviewPage.js';
 import { RF1Page } from './pages/RF1Page.js';
+import { Rf1SpecAPage } from './pages/Rf1SpecAPage.js';
 // The two Dev pages are generic diagnostics, not demo-specific — reused
 // directly rather than duplicated. Revisit if/when demo/ is retired.
 import { TrendsPerfTestPage } from '../demo/pages/TrendsPerfTestPage.js';
@@ -16,6 +17,11 @@ export const tree: TreeNode[] = [
     id: 'rf1',
     label: 'RF1',
     page: RF1Page,
+  },
+  {
+    id: 'rf1-speca',
+    label: 'RF1 Spec A',
+    page: Rf1SpecAPage,
   },
   {
     id: 'dev-trends-perf',

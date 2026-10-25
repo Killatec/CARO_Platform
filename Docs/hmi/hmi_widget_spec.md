@@ -23,6 +23,7 @@ hmi_functional_spec | hmi_API_spec | CARO_DB_Spec
 | 2.0 | 2026-04-14 | PM / Claude | Added useTagGroup utility (Section 3.6). Added Analog_In composite widget (Section 5). First multi-tag widget in the catalog. |
 | 2.1 | 2026-04-19 | PM / Claude | §3.5: TagPathIndex-backed resolution noted (O(1) per call). §3.6: useTagGroup complexity noted as O(children). Matches perf commits be308f5 and cceb114. |
 | 2.3 | 2026-10-21 | PM / Claude | StringMon added (§5, §3.1): read-only text display for String-type tags. |
+| 2.4 | 2026-10-24 | PM / Claude | SpecAChart added (§5, §3.1): frequency-mapped spectrum-analyser chart for a SpecA block (MHz axis, dBFS, live/offender traces, interlock zone, Clear button). |
 | 2.2 | 2026-10-17 | PM / Claude | Reconciled with the code: dependencies (uplot runtime dep, @caro/ui peer); hmi-context exports; `write()` never rejects (errors via `error(tagId)`), no batch form; TagDef shape and format resolution from registry columns; BooleanMon ignores trueLabel/falseLabel; BooleanSet confirm uses @caro/ui Modal; Timer and SpectrumChart added to the catalog; MockHmiProvider props; Open Questions answered by the implementation. |
 
 ---
@@ -53,7 +54,7 @@ As built (`packages/widgets/package.json`): one runtime dependency, `uplot` (for
 
 > *NOTE: `@caro/widgets` may import primitives from `@caro/ui` (Button, Input, Badge) and Tailwind utility classes for styling. It must never import from `@caro/db` or any server-side module.*
 
-> *NOTE: `@caro/widgets` includes composite multi-tag widgets (AnalogIn, Timer) and a chart widget (SpectrumChart) alongside the foundational single-tag widgets.*
+> *NOTE: `@caro/widgets` includes composite multi-tag widgets (AnalogIn, Timer) and two chart widgets (SpectrumChart, SpecAChart) alongside the foundational single-tag widgets.*
 
 > *NOTE: Several widget behaviors are implemented via internal shared utilities in `packages/widgets/src/shared/`. These are not exported from `@caro/widgets` but are important for contributors: `useNumericInput` (focus/blur/write state for numeric inputs — shared by NumericSet and AnalogIn NumericSetCell), `ToggleSwitch` (toggle button component — shared by BooleanSet and AnalogIn BooleanSetCell), `colorMap` (boolean color constants keyed by name — shared across BooleanMon, BooleanSet, and AnalogIn), `useWriteGuard`, `useSingleTag`, `useTagGroup`, `withErrorBoundary` (every exported widget is wrapped in it), `WidgetLabel`, `widgetStyles`.*
 
@@ -70,7 +71,7 @@ Widgets in `@caro/widgets` use two custom hooks provided by the `@caro/hmi-conte
 | Package | Exports |
 |---|---|
 | `@caro/hmi-context` | HmiContextProvider, MockHmiProvider (also at `@caro/hmi-context/testing`), useLiveValue, useTagWriter, useCommandSender, useTagMap, useTagSubtree, useResolveAssetPath, useWsStats, useProjectRoot, useHmiContext, scopedKey / useScopedKey, and types |
-| `@caro/widgets` | NumericMon, NumericSet, StringMon, BooleanMon, BooleanSet, AnalogIn, Timer, SpectrumChart, with their `*Props` types |
+| `@caro/widgets` | NumericMon, NumericSet, StringMon, BooleanMon, BooleanSet, AnalogIn, Timer, SpectrumChart, SpecAChart, with their `*Props` types |
 
 ### 3.2 useLiveValue
 
@@ -235,7 +236,7 @@ Widgets use shared fixed column widths (label, value, unit) from `widgetStyles.t
 
 ## 5. Widget Catalog
 
-The catalog has four foundational single-tag widgets, two composite widgets (Analog_In, Timer) and one chart widget (SpectrumChart). All follow the same useLiveValue / useTagWriter hook contract. The trend chart is a separate package, `@caro/trend-chart`.
+The catalog has four foundational single-tag widgets, two composite widgets (Analog_In, Timer) and two chart widgets (SpectrumChart, SpecAChart). All follow the same useLiveValue / useTagWriter hook contract. The trend chart is a separate package, `@caro/trend-chart`.
 
 ### MON Numeric_Mon
 
@@ -450,6 +451,27 @@ Line chart of one `number[]` tag (e.g. an FFT spectrum), drawn with uPlot. The X
 | yMin / yMax | number | No | −1000 / 1000 | Fixed Y range (the tag has no eng limits to derive one from). |
 
 Drag selects a zoom box on both axes (custom select hook; uPlot's own drag-to-zoom is disabled); double-click resets to the full range. Live data comes through `useLiveValue` like any other widget.
+
+### CHART SpecAChart
+
+Frequency-mapped spectrum-analyser chart for one SpecA block (RF_Control's `SpecA` tag group), drawn with uPlot. Composite: `assetPath` is the block's base path and the widget resolves seven children with `useTagGroup` — `Spectrum` (int16 array, dB × 10), `Spec_Start` (MHz), `Spec_Bin` (Hz, display bin), `Spec_Trace_Ok`, `Spec_Intk_Level_Mon` (dBFS), `Spec_Intk_Band_Mon` (kHz), `Spec_Intk_Freq_Mon` (MHz).
+
+**Props**
+
+| Prop | Type | Required | Default | Description |
+|---|---|---|---|---|
+| assetPath | string | Yes | — | SpecA base path, e.g. `RF1.SpecA`. Each child must resolve to exactly one tag. |
+| label | string | No | last segment of `assetPath` | Display label. |
+| height | number | No | 400 | Pixel height. Width fills the container (`ResizeObserver`). |
+
+**Behaviour**
+
+- X axis in MHz: `Spec_Start + i · Spec_Bin / 1e6`, auto-ranged to the data on every frame (X scale `auto: true` — with `auto: false` uPlot keeps the previous range, which is null on mount). Y axis fixed at −110 … 0 dBFS; each value is divided by 10.
+- Two traces: live (blue) and offender (red). A frame with `Spec_Trace_Ok === false` replaces the offender and clears the live trace; any other frame replaces the live trace. The offender keeps the frequency axis it was captured on (the two traces are merged onto one X with `uPlot.join`, `spanGaps` bridging the alignment gaps) and persists until Clear.
+- An empty `Spectrum` array (how the module signals "no frame", with `Spec_Start`/`Spec_Bin` sent as 0) or a null one blanks the live trace only, keeps the offender, hides the zone and ignores `Spec_Trace_Ok`. A null spectrum also shows `---`.
+- Interlock zone, drawn in a uPlot `draw` hook over the traces at low alpha, from `Spec_Intk_Level_Mon` up to 0 dBFS: red detection flanks across the frame's range and a green guard band of total width `Spec_Intk_Band_Mon` centred on `Spec_Intk_Freq_Mon`. A flank is omitted when the guard band runs past that end; the guard band is clipped to the frame.
+- Clear button (header row, `@caro/ui` `Button`) wipes both traces in the browser only; nothing is sent to the module. There is no `Reset_Count` handling.
+- Drag-to-zoom on both axes and double-click reset, as in SpectrumChart.
 
 ---
 
