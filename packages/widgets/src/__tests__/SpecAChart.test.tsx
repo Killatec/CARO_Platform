@@ -134,9 +134,21 @@ describe('SpecAChart', () => {
     expect(lastData()).toEqual([[912.5, 912.505], [-90, -23], [null, null]]);
   });
 
-  it('draws a bad frame on the offender trace and clears the live trace', () => {
+  it('draws a Spec_Trace_Ok=false frame on the offender trace', () => {
     renderChart({ ...FRAME, Spec_Trace_Ok: false });
     expect(lastData()).toEqual([[912.5, 912.505], [null, null], [-90, -23]]);
+  });
+
+  it('a red frame does not clear the live trace (Spec_Trace_Ok is a colour only)', () => {
+    const { update } = renderChart(FRAME);
+    update({ ...FRAME, Spectrum: [-800, -700], Spec_Trace_Ok: false });
+    expect(lastData()).toEqual([[912.5, 912.505], [-90, -23], [-80, -70]]);
+  });
+
+  it('a later red frame replaces the earlier one', () => {
+    const { update } = renderChart({ ...FRAME, Spec_Trace_Ok: false });
+    update({ ...FRAME, Spectrum: [-800, -700], Spec_Trace_Ok: false });
+    expect(lastData()).toEqual([[912.5, 912.505], [null, null], [-80, -70]]);
   });
 
   it('keeps the offender when a later clean frame arrives', () => {
@@ -162,6 +174,13 @@ describe('SpecAChart', () => {
     const { update } = renderChart({ ...FRAME, Spec_Trace_Ok: false });
     update({ ...FRAME, Spectrum: [-800, -700] });
     fireEvent.click(screen.getByText('Clear'));
+    expect(lastData()).toEqual([[], [], []]);
+  });
+
+  it('a zone-tag change after Clear does not redraw the cleared frame', () => {
+    const { update } = renderChart({ ...FRAME, Spec_Trace_Ok: false });
+    fireEvent.click(screen.getByText('Clear'));
+    update({ ...FRAME, Spec_Trace_Ok: false, Spec_Intk_Level_Mon: -50 });
     expect(lastData()).toEqual([[], [], []]);
   });
 

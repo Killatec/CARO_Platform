@@ -229,11 +229,13 @@ function buildConfig(opts: BuildConfigOpts): uPlot.Options {
 }
 
 /**
- * Frequency-mapped spectrum-analyser chart. Two traces: the live trace (every
- * clean frame) and the offender (a frame whose Spec_Trace_Ok is false). The
- * offender keeps the axis it was captured on and persists until Clear, which
- * wipes both traces in the browser only. The interlock zone is drawn while a
- * frame is present.
+ * Frequency-mapped spectrum-analyser chart. Spec_Trace_Ok is only a colour: an
+ * array with false replaces the red (offender) trace, any other replaces the
+ * blue (live) one, and neither clears the other. RF_Control decides which
+ * frames are red (it sends the first failing frame once). The offender keeps
+ * the axis it was captured on and persists until Clear, which wipes both
+ * traces in the browser only. The interlock zone is drawn while a frame is
+ * present.
  */
 function SpecAChartInner({ assetPath, label, height = DEFAULT_HEIGHT }: SpecAChartProps) {
   const tags = useTagGroup(assetPath, SPECA_CHART_CHILDREN, 'SpecAChart');
@@ -254,6 +256,8 @@ function SpecAChartInner({ assetPath, label, height = DEFAULT_HEIGHT }: SpecACha
   const zoneRef = useRef<Zone | null>(null);
   const liveRef = useRef<Trace | null>(null);
   const offenderRef = useRef<Trace | null>(null);
+  const lastSpectrumRef = useRef<unknown>(undefined);
+  const lastTraceOkRef = useRef<unknown>(undefined);
 
   const badQuality = spectrum === null;
 
@@ -290,16 +294,21 @@ function SpecAChartInner({ assetPath, label, height = DEFAULT_HEIGHT }: SpecACha
 
   useEffect(() => {
     const frame = buildTrace(spectrum, specStart, specBin);
+    // Assign a trace only for a new array (or a late Spec_Trace_Ok for it), so
+    // a zone-tag change cannot redraw a frame the operator just cleared.
+    const isNewFrame = spectrum !== lastSpectrumRef.current || traceOk !== lastTraceOkRef.current;
+    lastSpectrumRef.current = spectrum;
+    lastTraceOkRef.current = traceOk;
     if (!frame) {
       // No frame: blank the live trace only — the offender is deliberately kept.
       liveRef.current = null;
       zoneRef.current = null;
     } else {
-      if (traceOk === false) {
-        offenderRef.current = frame;
-        liveRef.current = null;
-      } else {
-        liveRef.current = frame;
+      // Spec_Trace_Ok is a colour only: false draws red, anything else blue.
+      // Each array replaces only its own trace.
+      if (isNewFrame) {
+        if (traceOk === false) offenderRef.current = frame;
+        else liveRef.current = frame;
       }
       const n = frame.x.length;
       const x0 = frame.x[0];
