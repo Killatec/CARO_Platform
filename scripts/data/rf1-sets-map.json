@@ -139,7 +139,7 @@
       "evidence": "traced"
     },
     "Power_Set_1": {
-      "tag_name": "Phase.PhPower.Power_Set_1",
+      "tag_name": "Phase.PhPower.Set",
       "evidence": "traced"
     },
     "Power_Set_2": {
@@ -164,10 +164,6 @@
     },
     "Power_KD": {
       "tag_name": "Phase.PhPower.KD",
-      "evidence": "traced"
-    },
-    "Power_D_Fil": {
-      "tag_name": "Phase.PhPower.D_Fil",
       "evidence": "traced"
     },
     "Pwr_SIM_A": {
@@ -351,7 +347,7 @@
       "evidence": "traced"
     },
     "Phase_Set_1": {
-      "tag_name": "Phase.Set_1",
+      "tag_name": "Phase.Set",
       "evidence": "name-only"
     },
     "Phase_Set_2": {
