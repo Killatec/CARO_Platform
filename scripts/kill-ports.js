@@ -1,12 +1,23 @@
 /**
  * Kill processes listening on CARO_Platform dev ports.
- * Usage: node scripts/kill-ports.js
+ * Usage: node scripts/kill-ports.js [port ...]
+ *
+ * With no arguments, kills all six dev ports. With arguments, kills only those
+ * (e.g. `npm run hmi` passes 3003 5175 so a co-hosted process on 3001 survives).
  *
  * Works on Windows (netstat + taskkill) and Linux/macOS (lsof + kill).
  */
 import { execSync } from 'node:child_process';
 
-const PORTS = [3001, 3002, 3003, 5173, 5174, 5175];
+const DEFAULT_PORTS = [3001, 3002, 3003, 5173, 5174, 5175];
+
+const args = process.argv.slice(2);
+const bad = args.filter((a) => !/^\d+$/.test(a));
+if (bad.length) {
+  console.error(`kill-ports: not a port number: ${bad.join(', ')}`);
+  process.exit(1);
+}
+const PORTS = args.length ? args.map(Number) : DEFAULT_PORTS;
 
 function killOnWindows(port) {
   try {
