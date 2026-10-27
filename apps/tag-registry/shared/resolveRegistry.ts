@@ -69,10 +69,21 @@ type TemplateMapInput =
   | null
   | undefined;
 
+export interface ResolveRegistryOptions {
+  /**
+   * Also record each meta level's template_name. Off by default: apply
+   * deep-compares meta against the DB, so the default output must not change.
+   * Used by the Tag Defs export to find template instances.
+   */
+  withTemplateNames?: boolean;
+}
+
 export function resolveRegistry(
   templateMap: TemplateMapInput,
   rootName: string | null | undefined,
+  options: ResolveRegistryOptions = {},
 ): ResolvedTag[] {
+  const withTemplateNames = options.withTemplateNames === true;
   if (!templateMap || !rootName) return [];
 
   let workingMap: Map<string, Template | TemplateEntry>;
@@ -119,6 +130,7 @@ export function resolveRegistry(
           type: template.template_type,
           name: assetPath[assetPath.length - 1] ?? rootName,
           fields: resolvedFields,
+          ...(withTemplateNames ? { template_name: templateName } : {}),
         },
       ];
 
@@ -170,6 +182,7 @@ export function resolveRegistry(
           type: template.template_type,
           name: assetPath[assetPath.length - 1] ?? rootName,
           fields: resolvedFields,
+          ...(withTemplateNames ? { template_name: templateName } : {}),
         };
 
         const childDirectFields = (child.fields as Record<string, unknown>) || {};

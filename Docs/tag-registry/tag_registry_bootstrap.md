@@ -1,5 +1,5 @@
 # Tag Registry Admin Tool — Bootstrap
-**Updated:** 2026-10-18
+**Updated:** 2026-10-26
 Companion docs: `tag_registry_spec.md` | `tag_registry_api_spec.md` | `tag_registry_test_spec.md`
 
 ---
@@ -147,12 +147,13 @@ Returns updated `templateMap`. Pure — does not mutate input.
 Returns `{ errors: [], warnings: [] }`.
 Options: `{ requiredParentTypes: string[], uniqueParentTypes: boolean }`.
 
-**`resolveRegistry(templateMap, rootName)`**
+**`resolveRegistry(templateMap, rootName, options?)`**
 Returns `[{ tag_path, tag_name, module, module_type, data_type, is_setpoint, trends, unit, format, eng_min, eng_max, meta }]`.
 - `tag_name` is the dot-joined `asset_name`s of meta levels where `In_Tag_Name === true`, root→leaf. `In_Tag_Name` is a reserved Boolean field seeded into all templates: true for `parameter` and `tag` types, false for others.
 - First segment of every `tag_path` is `rootName` (not the literal string `'root'`).
 - A tag whose `tag_path` is longer than `MAX_TAG_PATH_LENGTH` (100) is **skipped silently**: no error, absent from the result.
 - References to missing templates are skipped silently.
+- `options.withTemplateNames: true` adds `template_name` to every meta level (used by the Tag Defs export). Off by default: apply deep-compares `meta`, so the default output must not change.
 - Extracts `.default` from field definitions before merging with instance overrides.
 - `module` is the `asset_name` of the nearest ancestor with `template_type: "module"` (null if none). `module_type` is the `Module_Type` field value from that ancestor (null if none).
 - Display columns `unit`, `format`, `eng_min`, `eng_max` are resolved by `resolveDisplayField` (see below). They are `null` for tags whose `data_type` is not in `TYPES_WITH_UNIT` (`shared/constants.ts`: `new Set(['f32', 'i16', 'i32', 'f32[]', 'i16[]'])`).
@@ -167,7 +168,7 @@ Returns `[{ tag_path, tag_name, module, module_type, data_type, is_setpoint, tre
 Returns 6-character hex SHA-1 string.
 
 **`listMqttModuleTemplates(templateMap)`** / **`buildTagDefs(templateMap, moduleTemplateName)`** / **`buildTagDefsFile(templateMap, moduleTemplateName, tagRegistryRev)`** — `tagDefs.ts`
-Tag Defs export (spec §12.1). `listMqttModuleTemplates` returns `template_type: "module"` templates whose own `Module_Type` default is `MQTT_MODULE_TYPE`, code-unit sorted. `buildTagDefs` resolves the module template on its own via `resolveRegistry` (module as root) and returns a `TagDefGroup` tree nested by the module-relative name's segments (from `moduleRelativeTagName`, below). Leaves are `{ data_type }` (`TAG_DEF_LEAF_KEY`), and nodes are prototype-less so a `__proto__` segment is an ordinary key. Keys are inserted in code-unit order, and it throws on a leaf-and-group or reserved-segment name. `validateTagDefs(templateMap, moduleTemplateName)` returns `TAG_NAME_EMPTY` / `DUPLICATE_TAG_NAME` / `TAG_NAME_LEAF_AND_GROUP` (both case-insensitive) / `TAG_NAME_RESERVED_SEGMENT` messages for those names; the server refuses the export on any. `buildTagDefsFile` wraps that as `{ _generated: TAG_DEFS_BANNER, template_name, tag_registry_rev, tags }`; the caller (`tagDefsService`) passes the latest `registry_rev` after checking the saved templates are applied.
+Tag Defs export (spec §12.1). `listMqttModuleTemplates` returns `template_type: "module"` templates whose own `Module_Type` default is `MQTT_MODULE_TYPE`, code-unit sorted. `buildTagDefs` resolves the module template on its own via `resolveRegistry` (module as root) and returns a `TagDefGroup` tree nested by the module-relative name's segments (from `moduleRelativeTagName`, below). Leaves are `{ data_type }` (`TAG_DEF_LEAF_KEY`), and nodes are prototype-less so a `__proto__` segment is an ordinary key. A group node that is exactly one template instance gets `_template` (`TAG_DEF_TEMPLATE_KEY`) as its first key (rules in spec §12.1; instances found via `resolveRegistry`'s `withTemplateNames`). Keys are otherwise inserted in code-unit order, and it throws on a leaf-and-group or reserved-segment name. `validateTagDefs(templateMap, moduleTemplateName)` returns `TAG_NAME_EMPTY` / `DUPLICATE_TAG_NAME` / `TAG_NAME_LEAF_AND_GROUP` (both case-insensitive) / `TAG_NAME_RESERVED_SEGMENT` (`data_type` or `_template`) / `TEMPLATE_NAME_INVALID` (a marking template name that is not a C identifier) messages; the server refuses the export on any. `buildTagDefsFile` wraps that as `{ _generated: TAG_DEFS_BANNER, template_name, tag_registry_rev, tags }`; the caller (`tagDefsService`) passes the latest `registry_rev` after checking the saved templates are applied.
 
 **`moduleRelativeTagName(meta): string | null`** — `tagDefs.ts`
 The dot-joined `name`s of the `meta` levels below the first `type: 'module'` level whose `In_Tag_Name` is true; the module level itself is never included. `null` when `meta` has no module level. Shared by the Tag Defs export (where `meta[0]` is the module) and the CARO HMI's handshake TAG_LIST (`apps/caro-hmi/server/src/tag-list.ts`, registry rows whose `meta` starts at the system root), so the names a module is compiled with and the names it is bound by cannot drift apart.

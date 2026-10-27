@@ -95,6 +95,8 @@ export interface MetaLevel {
   type: string;
   name: string;
   fields: Record<string, unknown>;
+  /** The template this level is an instance of — only with resolveRegistry's `withTemplateNames`. */
+  template_name?: string;
 }
 
 export interface ResolvedTag {

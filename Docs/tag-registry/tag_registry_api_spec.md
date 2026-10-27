@@ -535,11 +535,12 @@ Downloads the template-level Tag Defs export (functional spec §12.1; design dec
 1. `loadRoot(root)` loads every template reachable from `root`.
 2. `validateGraph` runs on that set. Any error → 422 `VALIDATION_ERROR` with the messages in `details`. `resolveRegistry` skips broken references silently, so the server refuses rather than emit a file with tags quietly missing.
 3. `listMqttModuleTemplates` selects `template_type: "module"` templates whose own `Module_Type` default is `MQTT`. None → 422 `NO_MQTT_MODULES`.
-4. `validateTagDefs` runs per selected template. Any of the following → 422 `VALIDATION_ERROR`, with `TAG_NAME_EMPTY` / `DUPLICATE_TAG_NAME` / `TAG_NAME_LEAF_AND_GROUP` / `TAG_NAME_RESERVED_SEGMENT` messages in `details`:
+4. `validateTagDefs` runs per selected template. Any of the following → 422 `VALIDATION_ERROR`, with `TAG_NAME_EMPTY` / `DUPLICATE_TAG_NAME` / `TAG_NAME_LEAF_AND_GROUP` / `TAG_NAME_RESERVED_SEGMENT` / `TEMPLATE_NAME_INVALID` messages in `details`:
    - an empty module-relative name;
    - a case-insensitively duplicated name;
    - a name that is also the parent of another name;
-   - a segment equal to `data_type`.
+   - a segment equal to `data_type` or `_template`;
+   - a template that would mark a node (`_template`, spec §12.1) whose name is not a C identifier.
 5. `classifyRegistryChanges(templateMap, root)` (the comparison apply uses, §5) must find nothing to add, modify or retire, and a revision must exist. Otherwise → 409 `REGISTRY_NOT_APPLIED`, with the counts in the message (`… differ from registry revision 9 (0 added, 1 modified, 0 retired) — apply them first`).
 6. `buildTagDefsFile(templateMap, name, latest registry_rev)` runs for each selected template, and the results are zipped (`fflate`).
 
@@ -607,7 +608,8 @@ Codes marked *not emitted* are declared in `shared/constants.ts` (or only listed
 | NO_MQTT_MODULES | 422 | `GET /api/v1/tag-defs` (§7): no `module` template with `Module_Type: "MQTT"` is reachable from `root`. |
 | REGISTRY_NOT_APPLIED | 409 | `GET /api/v1/tag-defs` (§7): the saved templates under `root` differ from the latest registry revision, or no revision exists. Apply first. |
 | TAG_NAME_LEAF_AND_GROUP | — | `details` entry under 422 `VALIDATION_ERROR` from `GET /api/v1/tag-defs` (§7): a module-relative name is also the parent of another name (case-insensitive). |
-| TAG_NAME_RESERVED_SEGMENT | — | `details` entry under 422 `VALIDATION_ERROR` from `GET /api/v1/tag-defs` (§7): a module-relative name has a segment equal to `data_type`, the leaf key. |
+| TAG_NAME_RESERVED_SEGMENT | — | `details` entry under 422 `VALIDATION_ERROR` from `GET /api/v1/tag-defs` (§7): a module-relative name has a segment equal to `data_type` (the leaf key) or `_template` (the template key). |
+| TEMPLATE_NAME_INVALID | — | `details` entry under 422 `VALIDATION_ERROR` from `GET /api/v1/tag-defs` (§7): a template that marks a node with `_template` has a name that is not a C identifier (`[A-Za-z_][A-Za-z0-9_]*`). `ref.child_template` names it. |
 | PROJECT_ROOT_MISMATCH | 403 | `POST /api/v1/registry/apply`'s `rootName` doesn't match the server's configured `PROJECT_ROOT` (§2.6, §5.3) — including when `PROJECT_ROOT` is unset/empty, which refuses every apply. |
 
 ---

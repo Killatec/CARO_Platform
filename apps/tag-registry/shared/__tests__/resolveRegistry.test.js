@@ -872,3 +872,27 @@ describe('tag_name resolution', () => {
     expect(resolveRegistry(map, 'M')[0].tag_name).toBe('M.setpoint');
   });
 });
+// ── withTemplateNames ────────────────────────────────────────────────────────
+
+describe('withTemplateNames option', () => {
+  const map = {
+    M: wrap(makeStruct('M', 'module', [{ template_name: 'P', asset_name: 'chan', fields: {} }])),
+    P: wrap(makeStruct('P', 'parameter', [{ template_name: 'T', asset_name: 'setpoint', fields: {} }])),
+    T: wrap(makeTag('T')),
+  };
+
+  it('is off by default: no meta level carries template_name (apply deep-compares meta)', () => {
+    const [tag] = resolveRegistry(map, 'M');
+    for (const level of tag.meta) expect('template_name' in level).toBe(false);
+  });
+
+  it('records each meta level\'s template when on, and changes nothing else', () => {
+    const [plain] = resolveRegistry(map, 'M');
+    const [named] = resolveRegistry(map, 'M', { withTemplateNames: true });
+    expect(named.meta.map(l => l.template_name)).toEqual(['M', 'P', 'T']);
+    const { meta: namedMeta, ...namedRest } = named;
+    const { meta: plainMeta, ...plainRest } = plain;
+    expect(namedRest).toEqual(plainRest);
+    expect(namedMeta.map(({ template_name, ...l }) => l)).toEqual(plainMeta);
+  });
+});

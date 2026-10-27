@@ -691,13 +691,13 @@ Fetches all registry revisions ordered by `registry_rev DESC`. Returns the revis
 
 ## 9. Results Baseline
 
-Current baseline (2026-10-21, after the Tag Defs `tag_registry_rev` and Properties-panel numeric input work):
+Current baseline (unit 2026-10-26, after the Tag Defs `_template` marks; E2E last run 2026-10-21):
 
 | Metric | Value |
 |---|---|
-| Unit total (shared 244 + client 176 + server 122) | 542 |
+| Unit total (shared 255 + client 176 + server 122) | 553 |
 | E2E (Chromium) | 96 |
-| **Combined total** | **638** |
+| **Combined total** | **649** |
 | Failed | 0 |
 
 Firefox and WebKit are not run on this machine (browsers not installed); Chromium is the reliable baseline. If a run produces a different total, investigate before reporting done. `apps/tag-registry/CLAUDE.md` carries the same baseline and the commands. Earlier baselines and per-change test-count notes are in git history.
@@ -724,7 +724,7 @@ Note: the client package runs Vitest from the monorepo root `node_modules/.bin` 
 
 Counts below are from `vitest run --reporter=json` on 2026-10-17.
 
-### 10.3 shared/ unit tests (244 tests, 14 files)
+### 10.3 shared/ unit tests (255 tests, 14 files)
 
 | File | Tests |
 |---|---|
@@ -734,9 +734,9 @@ Counts below are from `vitest run --reporter=json` on 2026-10-17.
 | `__tests__/hashTemplate.test.js` | 8 |
 | `__tests__/moduleOrder.test.ts` | 6 |
 | `__tests__/moduleStatus.test.ts` | 4 |
-| `__tests__/resolveRegistry.test.js` | 57 |
+| `__tests__/resolveRegistry.test.js` | 59 |
 | `__tests__/simulateCascade.test.js` | 10 |
-| `__tests__/tagDefs.test.ts` | 30 |
+| `__tests__/tagDefs.test.ts` | 39 |
 | `__tests__/utils.test.js` | 20 |
 | `__tests__/validateGraph.test.js` | 12 |
 | `__tests__/validateParentTypes.test.js` | 10 |

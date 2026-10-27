@@ -21,12 +21,24 @@ import { extractTemplate } from './types.js';
 /** The key that marks a tree node as a leaf. Reserved — no tag_name segment may use it. */
 export const TAG_DEF_LEAF_KEY = 'data_type';
 
+/**
+ * The key that names the template a group node is exactly one instance of
+ * (CARO_MQTT_Interface P70). Reserved — no tag_name segment may use it. The
+ * consumer's generator emits one C type, caro_tpl_<name>_t, per template.
+ */
+export const TAG_DEF_TEMPLATE_KEY = '_template';
+
+const RESERVED_SEGMENTS = [TAG_DEF_LEAF_KEY, TAG_DEF_TEMPLATE_KEY];
+
+const C_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
 export interface TagDefLeaf {
   data_type: string;
 }
 
+/** Child nodes by segment, plus an optional `_template` string (TAG_DEF_TEMPLATE_KEY). */
 export interface TagDefGroup {
-  [segment: string]: TagDefNode;
+  [segment: string]: TagDefNode | string;
 }
 
 export type TagDefNode = TagDefLeaf | TagDefGroup;
@@ -42,7 +54,9 @@ export interface TagDefsFile {
 export const TAG_DEFS_BANNER =
   'GENERATED FILE - DO NOT EDIT. Produced by the CARO Tag Registry "Generate Tag Defs" export ' +
   '(template-level, no instance data). Regenerate instead of editing. "tags" is nested by ' +
-  'tag_name segment; a node with a "data_type" key is a leaf. tag_registry_rev is the Tag Registry ' +
+  'tag_name segment; a node with a "data_type" key is a leaf. A group node with a "_template" key is ' +
+  'exactly one instance of that registry template, and every node marked with one template has the ' +
+  'same members. tag_registry_rev is the Tag Registry ' +
   'revision the export was taken at: the saved templates matched what that revision applied.';
 
 type TemplateMapInput =
@@ -99,6 +113,10 @@ interface ResolvedTagDef {
   dataType: string;
   /** Full asset path from the module root — for error messages only, never exported. */
   sourcePath: string;
+  /** Every container instance the tag sits inside, below the module, by asset path relative to the module. */
+  instancePaths: string[];
+  /** The instances among those whose own level has In_Tag_Name true, i.e. that own a tree node. */
+  namedInstances: { nodePath: string; instancePath: string; templateName: string }[];
 }
 
 /**
@@ -107,13 +125,60 @@ interface ResolvedTagDef {
  * (moduleRelativeTagName); this export has no instance dependency.
  */
 function resolveTagDefs(templateMap: TemplateMapInput, moduleTemplateName: string): ResolvedTagDef[] {
-  return resolveRegistry(templateMap, moduleTemplateName)
-    .map(tag => ({
-      tagName: moduleRelativeTagName(tag.meta) ?? '',
-      dataType: tag.data_type,
-      sourcePath: tag.tag_path,
-    }))
+  return resolveRegistry(templateMap, moduleTemplateName, { withTemplateNames: true })
+    .map(tag => {
+      // meta[0] is the module and the last level is the tag; the levels between
+      // are container instances. meta[i].name is asset path segment i.
+      const instancePaths: string[] = [];
+      const namedInstances: ResolvedTagDef['namedInstances'] = [];
+      const nameSegments: string[] = [];
+      for (let i = 1; i < tag.meta.length - 1; i++) {
+        const level = tag.meta[i];
+        const instancePath = tag.meta.slice(1, i + 1).map(l => l.name).join('.');
+        instancePaths.push(instancePath);
+        if (level.fields?.[IN_TAG_NAME_FIELD] === true) {
+          nameSegments.push(level.name);
+          namedInstances.push({ nodePath: nameSegments.join('.'), instancePath, templateName: level.template_name ?? '' });
+        }
+      }
+      return {
+        tagName: moduleRelativeTagName(tag.meta) ?? '',
+        dataType: tag.data_type,
+        sourcePath: tag.tag_path,
+        instancePaths,
+        namedInstances,
+      };
+    })
     .sort((a, b) => compareCodeUnits(a.tagName, b.tagName));
+}
+
+/**
+ * Tree node path -> template name, for every group node that is exactly one
+ * template instance: the instance's own level has In_Tag_Name true (otherwise
+ * it has no node — its children merged into the parent), it is the only
+ * instance mapped to that node, and every leaf under the node comes from
+ * inside it (descendants flattened in by In_Tag_Name false levels count).
+ * A node that mixes in content from elsewhere is not marked.
+ */
+function findTemplateNodes(resolved: ResolvedTagDef[]): Map<string, string> {
+  const owners = new Map<string, Map<string, string>>(); // nodePath -> instancePath -> template
+  for (const r of resolved) {
+    for (const n of r.namedInstances) {
+      const m = owners.get(n.nodePath) ?? new Map<string, string>();
+      m.set(n.instancePath, n.templateName);
+      owners.set(n.nodePath, m);
+    }
+  }
+  const marks = new Map<string, string>();
+  for (const [nodePath, instances] of owners) {
+    if (instances.size !== 1) continue;
+    const [[instancePath, templateName]] = [...instances];
+    const under = resolved.filter(r => r.tagName.startsWith(`${nodePath}.`));
+    if (under.length > 0 && under.every(r => r.instancePaths.includes(instancePath))) {
+      marks.set(nodePath, templateName);
+    }
+  }
+  return marks;
 }
 
 /**
@@ -126,22 +191,38 @@ function resolveTagDefs(templateMap: TemplateMapInput, moduleTemplateName: strin
  * the reserved leaf key as a segment — validateTagDefs reports both first.
  */
 export function buildTagDefs(templateMap: TemplateMapInput, moduleTemplateName: string): TagDefGroup {
+  return buildTree(resolveTagDefs(templateMap, moduleTemplateName), moduleTemplateName);
+}
+
+function buildTree(resolved: ResolvedTagDef[], moduleTemplateName: string): TagDefGroup {
+  const marks = findTemplateNodes(resolved);
   // Prototype-less nodes: asset_names only forbid dots, so a segment such as
   // "__proto__" or "constructor" must land as an ordinary own key.
-  const newGroup = (): TagDefGroup => Object.create(null) as TagDefGroup;
-  const root = newGroup();
-  for (const { tagName, dataType } of resolveTagDefs(templateMap, moduleTemplateName)) {
+  // A marked node gets `_template` as its first key, when it is created.
+  const newGroup = (nodePath: string): TagDefGroup => {
+    const g = Object.create(null) as TagDefGroup;
+    const templateName = marks.get(nodePath);
+    if (templateName !== undefined) g[TAG_DEF_TEMPLATE_KEY] = templateName;
+    return g;
+  };
+  const root = Object.create(null) as TagDefGroup;
+  for (const { tagName, dataType } of resolved) {
     const segments = tagName.split('.');
     const leafName = segments.pop()!;
     let group = root;
-    for (const segment of segments) {
-      const next = (group[segment] ??= newGroup());
-      if (TAG_DEF_LEAF_KEY in next) {
+    for (let i = 0; i < segments.length; i++) {
+      const segment = segments[i];
+      const next = (group[segment] ??= newGroup(segments.slice(0, i + 1).join('.')));
+      if (typeof next === 'string' || TAG_DEF_LEAF_KEY in next) {
         throw new Error(`Tag Defs "${moduleTemplateName}": "${tagName}" is below leaf "${segment}"`);
       }
       group = next as TagDefGroup;
     }
-    if (leafName in group || segments.includes(TAG_DEF_LEAF_KEY) || leafName === TAG_DEF_LEAF_KEY) {
+    if (
+      leafName in group ||
+      segments.some(seg => RESERVED_SEGMENTS.includes(seg)) ||
+      RESERVED_SEGMENTS.includes(leafName)
+    ) {
       throw new Error(`Tag Defs "${moduleTemplateName}": "${tagName}" cannot be placed as a leaf`);
     }
     group[leafName] = { data_type: dataType };
@@ -159,8 +240,14 @@ export function buildTagDefs(templateMap: TemplateMapInput, moduleTemplateName: 
  * - no name is a strict prefix of another, e.g. `Comb.Fwd` beside
  *   `Comb.Fwd.Gain` — the node would have to be leaf and group at once
  *   (TAG_NAME_LEAF_AND_GROUP). Case-insensitive, like the duplicate rule;
- * - no segment equals the leaf key `data_type`, which would make a group node
- *   indistinguishable from a leaf (TAG_NAME_RESERVED_SEGMENT).
+ * - no segment equals the leaf key `data_type` or the template key `_template`,
+ *   which would make a node ambiguous (TAG_NAME_RESERVED_SEGMENT);
+ * - every template name a node is marked with is a C identifier
+ *   (TEMPLATE_NAME_INVALID) — the consumer's generator rejects anything else.
+ *
+ * No shape check is needed for `_template`: instance overrides only touch the
+ * instance's own level, and a node mixing in outside content is never marked,
+ * so every node marked with one template has the same members by construction.
  */
 export function validateTagDefs(templateMap: TemplateMapInput, moduleTemplateName: string): ValidationMessage[] {
   const resolved = resolveTagDefs(templateMap, moduleTemplateName);
@@ -175,13 +262,16 @@ export function validateTagDefs(templateMap: TemplateMapInput, moduleTemplateNam
         message: `"${r.sourcePath}": no level below module "${moduleTemplateName}" has ${IN_TAG_NAME_FIELD} set to true`,
         ref: ref(r),
       });
-    } else if (r.tagName.split('.').includes(TAG_DEF_LEAF_KEY)) {
-      errors.push({
-        severity: 'error',
-        code: ERROR_CODES.TAG_NAME_RESERVED_SEGMENT,
-        message: `tag_name "${r.tagName}" in "${moduleTemplateName}" uses the reserved segment "${TAG_DEF_LEAF_KEY}" — resolved by: ${r.sourcePath}`,
-        ref: ref(r),
-      });
+    } else {
+      const reserved = r.tagName.split('.').find(seg => RESERVED_SEGMENTS.includes(seg));
+      if (reserved !== undefined) {
+        errors.push({
+          severity: 'error',
+          code: ERROR_CODES.TAG_NAME_RESERVED_SEGMENT,
+          message: `tag_name "${r.tagName}" in "${moduleTemplateName}" uses the reserved segment "${reserved}" — resolved by: ${r.sourcePath}`,
+          ref: ref(r),
+        });
+      }
     }
   }
 
@@ -218,6 +308,21 @@ export function validateTagDefs(templateMap: TemplateMapInput, moduleTemplateNam
         ref: ref(r),
       });
     }
+  }
+
+  // One error per template name that would mark a node but is not a C identifier.
+  const byTemplate = new Map<string, string[]>();
+  for (const [nodePath, templateName] of findTemplateNodes(resolved)) {
+    byTemplate.set(templateName, [...(byTemplate.get(templateName) ?? []), nodePath]);
+  }
+  for (const [templateName, nodePaths] of byTemplate) {
+    if (C_IDENTIFIER.test(templateName)) continue;
+    errors.push({
+      severity: 'error',
+      code: ERROR_CODES.TEMPLATE_NAME_INVALID,
+      message: `template "${templateName}" (marking ${nodePaths.join(', ')} in "${moduleTemplateName}") is not a C identifier — the Tag Defs consumer names its type caro_tpl_<template>_t`,
+      ref: { template_name: moduleTemplateName, child_template: templateName },
+    });
   }
 
   return errors;

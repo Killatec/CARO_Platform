@@ -101,7 +101,7 @@ describe('buildTagDefs', () => {
   it('nests module-relative tag_names (In_Tag_Name levels only) by segment', () => {
     expect(buildTagDefs(makeMap(), 'RF_Mod')).toEqual({
       Enable: { data_type: 'bool' },
-      Mag_1:  { Gain: { data_type: 'f32' }, kW: { data_type: 'i16' } },
+      Mag_1:  { _template: 'RF_Pwr', Gain: { data_type: 'f32' }, kW: { data_type: 'i16' } },
     });
   });
 
@@ -112,10 +112,10 @@ describe('buildTagDefs', () => {
     }
   });
 
-  it('inserts keys in code-unit order at every level', () => {
+  it('inserts keys in code-unit order at every level, _template first in a marked node', () => {
     const tags = buildTagDefs(makeMap(), 'RF_Mod');
     expect(Object.keys(tags)).toEqual(['Enable', 'Mag_1']);
-    expect(Object.keys(tags.Mag_1)).toEqual(['Gain', 'kW']);
+    expect(Object.keys(tags.Mag_1)).toEqual(['_template', 'Gain', 'kW']);
   });
 
   it('places a "__proto__" segment as an ordinary key', () => {
@@ -211,6 +211,123 @@ describe('validateTagDefs', () => {
     const errors = validateTagDefs(map, 'RF_Mod');
     expect(errors.map(e => e.code)).toEqual(['TAG_NAME_RESERVED_SEGMENT']);
     expect(errors[0].ref).toEqual({ template_name: 'RF_Mod', tag_path: 'RF_Mod.data_type' });
+  });
+
+  it('reports TAG_NAME_RESERVED_SEGMENT for a segment named _template', () => {
+    const map = makeMap();
+    const mod = map.get('RF_Mod')!;
+    map.set('RF_Mod', { ...mod, children: [mod.children[0], { ...mod.children[1], asset_name: '_template' }] });
+    const errors = validateTagDefs(map, 'RF_Mod');
+    expect(errors.map(e => e.code)).toEqual(['TAG_NAME_RESERVED_SEGMENT']);
+    expect(errors[0].message).toContain('"_template"');
+  });
+
+  it('reports TEMPLATE_NAME_INVALID once per marked template that is not a C identifier', () => {
+    const map = makeMap();
+    const rfPwr = map.get('RF_Pwr')!;
+    map.delete('RF_Pwr');
+    map.set('RF-Pwr', { ...rfPwr, template_name: 'RF-Pwr' });
+    const pwrMon = map.get('Pwr_Mon')!;
+    map.set('Pwr_Mon', {
+      ...pwrMon,
+      children: [
+        { template_name: 'RF-Pwr', asset_name: 'Mag_1', fields: { In_Tag_Name: true } },
+        { template_name: 'RF-Pwr', asset_name: 'Mag_2', fields: { In_Tag_Name: true } },
+      ],
+    });
+    const errors = validateTagDefs(map, 'RF_Mod');
+    expect(errors.map(e => e.code)).toEqual(['TEMPLATE_NAME_INVALID']);
+    expect(errors[0].message).toContain('Mag_1, Mag_2');
+    expect(errors[0].ref).toEqual({ template_name: 'RF_Mod', child_template: 'RF-Pwr' });
+  });
+
+  it('does not check names of templates that mark no node', () => {
+    const map = makeMap();
+    const rfPwr = map.get('RF_Pwr')!;
+    map.delete('RF_Pwr');
+    map.set('RF-Pwr', { ...rfPwr, template_name: 'RF-Pwr' });
+    const pwrMon = map.get('Pwr_Mon')!;
+    // In_Tag_Name false: no node of its own, so the name never reaches the export.
+    map.set('Pwr_Mon', { ...pwrMon, children: [{ template_name: 'RF-Pwr', asset_name: 'Mag_1', fields: {} }] });
+    expect(validateTagDefs(map, 'RF_Mod')).toEqual([]);
+  });
+});
+
+// ── _template marks ───────────────────────────────────────────────────────────
+
+describe('buildTagDefs — _template marks', () => {
+  function withPwrMonChildren(children: Template['children']): Map<string, Template> {
+    const map = makeMap();
+    map.set('Pwr_Mon', { ...map.get('Pwr_Mon')!, children });
+    return map;
+  }
+
+  it('marks two instances of one template, with identical members', () => {
+    const tags = buildTagDefs(withPwrMonChildren([
+      { template_name: 'RF_Pwr', asset_name: 'Mag_1', fields: { In_Tag_Name: true } },
+      { template_name: 'RF_Pwr', asset_name: 'Mag_2', fields: { In_Tag_Name: true } },
+    ]), 'RF_Mod');
+    expect(tags.Mag_1).toEqual({ _template: 'RF_Pwr', Gain: { data_type: 'f32' }, kW: { data_type: 'i16' } });
+    expect(tags.Mag_2).toEqual(tags.Mag_1);
+  });
+
+  it('never marks the root or a leaf', () => {
+    const tags = buildTagDefs(makeMap(), 'RF_Mod');
+    expect('_template' in tags).toBe(false);
+    expect(Object.keys(tags.Enable)).toEqual(['data_type']);
+  });
+
+  it('does not mark an instance whose own level has In_Tag_Name false (its children merge into the parent)', () => {
+    const tags = buildTagDefs(withPwrMonChildren([
+      { template_name: 'RF_Pwr', asset_name: 'Mag_1', fields: {} },
+    ]), 'RF_Mod');
+    expect(tags).toEqual({ Enable: { data_type: 'bool' }, Gain: { data_type: 'f32' }, kW: { data_type: 'i16' } });
+  });
+
+  it('marks an instance that contains In_Tag_Name false levels, and its nested instances', () => {
+    const map = makeMap();
+    // Coupler (named) -> Grp (In_Tag_Name false, flattened) -> Fwd (RF_Pwr, named)
+    map.set('Grp', {
+      template_name: 'Grp', template_type: 'Group', fields: { In_Tag_Name: { field_type: 'Boolean', default: false } },
+      children: [{ template_name: 'RF_Pwr', asset_name: 'Fwd', fields: { In_Tag_Name: true } }],
+    });
+    map.set('Coupler', {
+      template_name: 'Coupler', template_type: 'RF', fields: { In_Tag_Name: { field_type: 'Boolean', default: false } },
+      children: [
+        { template_name: 'Grp', asset_name: 'Grp', fields: {} },
+        { template_name: 'numeric_mon', asset_name: 'Att', fields: {} },
+      ],
+    });
+    map.set('Pwr_Mon', { ...map.get('Pwr_Mon')!, children: [{ template_name: 'Coupler', asset_name: 'Comb', fields: { In_Tag_Name: true } }] });
+    const tags = buildTagDefs(map, 'RF_Mod');
+    expect(tags.Comb).toEqual({
+      _template: 'Coupler',
+      Att: { data_type: 'f32' },
+      Fwd: { _template: 'RF_Pwr', Gain: { data_type: 'f32' }, kW: { data_type: 'i16' } },
+    });
+  });
+
+  it('does not mark a node that mixes in content from outside the instance', () => {
+    const map = makeMap();
+    // A second, unrelated "Mag_1" level, flattened in from an In_Tag_Name false group.
+    map.set('Extra_Mag', {
+      template_name: 'Extra_Mag', template_type: 'Group', fields: { In_Tag_Name: { field_type: 'Boolean', default: true } },
+      children: [{ template_name: 'numeric_mon', asset_name: 'Att', fields: {} }],
+    });
+    map.set('Extra', {
+      template_name: 'Extra', template_type: 'Group', fields: { In_Tag_Name: { field_type: 'Boolean', default: false } },
+      children: [{ template_name: 'Extra_Mag', asset_name: 'Mag_1', fields: {} }],
+    });
+    const mod = map.get('RF_Mod')!;
+    map.set('RF_Mod', { ...mod, children: [...mod.children, { template_name: 'Extra', asset_name: 'Extra', fields: {} }] });
+    const tags = buildTagDefs(map, 'RF_Mod');
+    expect(tags.Mag_1).toEqual({ Att: { data_type: 'f32' }, Gain: { data_type: 'f32' }, kW: { data_type: 'i16' } });
+    expect(validateTagDefs(map, 'RF_Mod')).toEqual([]);
+  });
+
+  it('is unchanged by validation: the file carries the same marks', () => {
+    expect(buildTagDefsFile(makeMap(), 'RF_Mod', 7).tags).toEqual(buildTagDefs(makeMap(), 'RF_Mod'));
+    expect(TAG_DEFS_BANNER).toContain('"_template"');
   });
 });
 
